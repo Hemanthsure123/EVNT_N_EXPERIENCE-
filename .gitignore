@@ -1,0 +1,41 @@
+# --- Python / Django ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+staticfiles/
+media/
+*.sqlite3
+backend/**/migrations/**/*.pyc
+
+# --- Secrets (never commit) ---
+secrets/*.json
+!secrets/.gitkeep
+*.pem
+*.key
+
+# --- Node / Next.js (frontend, added later) ---
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Docker volumes / local data ---
+.docker-data/

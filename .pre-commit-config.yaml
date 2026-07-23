@@ -1,0 +1,44 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^backend/
+        # black ignores its own [tool.black] extend-exclude when files are
+        # passed explicitly (which pre-commit always does) — exclude here too.
+        exclude: ^backend/.*/migrations/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-yaml
+      - id: check-json
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      # Runs against the project's own venv (not a pre-commit managed one) —
+      # mypy needs the real django-stubs plugin wired up via
+      # backend/pyproject.toml, and the project's installed dependencies to
+      # resolve imports. Tries the Windows layout first, then POSIX.
+      - id: mypy
+        name: mypy
+        entry: >-
+          bash -c 'cd backend &&
+          (test -f .venv/Scripts/python.exe && .venv/Scripts/python.exe -m mypy . ||
+          .venv/bin/python -m mypy .)'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false

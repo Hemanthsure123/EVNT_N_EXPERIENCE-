@@ -1,0 +1,186 @@
+"""Base settings shared by every environment.
+
+Nothing in this file (or any settings file) should hard-code a vendor
+credential or branch on ENVIRONMENT directly for business logic — that
+belongs in config/di.py, which reads the *_BACKEND switches below to decide
+which adapter to build. Settings only exposes configuration values; it never
+imports a concrete adapter.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from pathlib import Path
+
+import environ
+
+# backend/config/settings/base.py -> backend/ -> repo root
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = BASE_DIR.parent
+
+env = environ.Env()
+environ.Env.read_env(str(REPO_ROOT / ".env"))
+
+ENVIRONMENT = env.str("ENVIRONMENT", default="development")
+SECRET_KEY = env.str("SECRET_KEY")
+DEBUG = env.bool("DEBUG", default=False)
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    # third-party
+    "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
+    "drf_spectacular",
+    "corsheaders",
+    # shared kernel (owns the outbox / audit-log tables)
+    "core",
+    # business modules
+    "apps.accounts",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "core.middleware.RequestIDMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "config.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
+
+DATABASES = {"default": env.db_url("DATABASE_URL")}
+
+AUTH_USER_MODEL = "accounts.User"
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- REST framework -----------------------------------------------------
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.DefaultPagination",
+    "PAGE_SIZE": 20,
+    "EXCEPTION_HANDLER": "core.errors.exception_handler",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "TEST_REQUEST_DEFAULT_FORMAT": "json",
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env.int("ACCESS_TOKEN_LIFETIME_MIN", default=15)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=env.int("REFRESH_TOKEN_LIFETIME_DAYS", default=30)),
+    "SIGNING_KEY": env.str("JWT_SIGNING_KEY"),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Event & Experience Platform API",
+    "DESCRIPTION": "Ticketing & experience platform — public REST API.",
+    "VERSION": "0.1.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+}
+
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
+
+# --- Vendor selection (ports & adapters) --------------------------------
+# These switches are the ONLY thing config/di.py needs to decide which
+# adapter to build for each port. Real credentials below are only ever read
+# by the matching real adapter; local/fake adapters ignore them entirely.
+PAYMENTS_BACKEND = env.str("PAYMENTS_BACKEND", default="fake")
+STORAGE_BACKEND = env.str("STORAGE_BACKEND", default="local")
+QUEUE_BACKEND = env.str("QUEUE_BACKEND", default="local")
+EVENT_BUS_BACKEND = env.str("EVENT_BUS_BACKEND", default="inprocess")
+EMAIL_PROVIDER = env.str("EMAIL_PROVIDER", default="console")
+SMS_PROVIDER = env.str("SMS_PROVIDER", default="console")
+CACHE_BACKEND = env.str("CACHE_BACKEND", default="redis")
+
+REDIS_URL = env.str("REDIS_URL", default="redis://localhost:6379/0")
+
+# Razorpay
+RAZORPAY_KEY_ID = env.str("RAZORPAY_KEY_ID", default="")
+RAZORPAY_KEY_SECRET = env.str("RAZORPAY_KEY_SECRET", default="")
+RAZORPAY_WEBHOOK_SECRET = env.str("RAZORPAY_WEBHOOK_SECRET", default="")
+RAZORPAY_ROUTE_ENABLED = env.bool("RAZORPAY_ROUTE_ENABLED", default=True)
+PLATFORM_FEE_PER_TICKET = env.int("PLATFORM_FEE_PER_TICKET", default=10)
+
+# Google OAuth
+GOOGLE_OAUTH_CLIENT_ID = env.str("GOOGLE_OAUTH_CLIENT_ID", default="")
+GOOGLE_OAUTH_CLIENT_SECRET = env.str("GOOGLE_OAUTH_CLIENT_SECRET", default="")
+GOOGLE_OAUTH_REDIRECT_URI = env.str("GOOGLE_OAUTH_REDIRECT_URI", default="")
+
+# Email
+EMAIL_API_KEY = env.str("EMAIL_API_KEY", default="")
+EMAIL_FROM = env.str("EMAIL_FROM", default="tickets@example.com")
+EMAIL_API_BASE_URL = env.str("EMAIL_API_BASE_URL", default="")
+
+# SMS (+ India DLT)
+SMS_API_KEY = env.str("SMS_API_KEY", default="")
+SMS_SENDER_ID = env.str("SMS_SENDER_ID", default="")
+SMS_DLT_ENTITY_ID = env.str("SMS_DLT_ENTITY_ID", default="")
+SMS_DLT_TEMPLATE_ID = env.str("SMS_DLT_TEMPLATE_ID", default="")
+SMS_API_BASE_URL = env.str("SMS_API_BASE_URL", default="")
+
+# Google Cloud
+GCP_PROJECT_ID = env.str("GCP_PROJECT_ID", default="")
+GCS_BUCKET_NAME = env.str("GCS_BUCKET_NAME", default="")
+GOOGLE_APPLICATION_CREDENTIALS = env.str("GOOGLE_APPLICATION_CREDENTIALS", default="")
+PUBSUB_TOPIC_EVENTS = env.str("PUBSUB_TOPIC_EVENTS", default="platform-events")
+CLOUD_TASKS_QUEUE = env.str("CLOUD_TASKS_QUEUE", default="default-queue")
+CLOUD_TASKS_LOCATION = env.str("CLOUD_TASKS_LOCATION", default="")
+
+# --- Logging -------------------------------------------------------------
+from core.logging import build_logging_config  # noqa: E402
+
+LOGGING = build_logging_config(debug=DEBUG)
