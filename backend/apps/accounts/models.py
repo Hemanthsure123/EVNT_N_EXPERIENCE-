@@ -45,6 +45,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     full_name = models.CharField(max_length=150, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    # Granted the moment a user creates their first organization (see
+    # apps.organizations.services.OrganizationService.create_organization).
+    # Membership/teams (multiple organizers per org) are a later module —
+    # this single flag is all "organizer" means until then.
+    is_organizer = models.BooleanField(default=False)
     date_joined = models.DateTimeField(auto_now_add=True)
 
     objects = UserManager()

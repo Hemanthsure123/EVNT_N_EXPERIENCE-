@@ -15,7 +15,19 @@ class FakePaymentAdapter(PaymentPort):
     def __init__(self) -> None:
         self._order_ids = itertools.count(1)
         self._transfer_ids = itertools.count(1)
+        self._linked_account_ids = itertools.count(1)
         self.orders: dict[str, dict] = {}
+        self.linked_accounts: dict[str, dict] = {}
+
+    def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
+        account_id = f"fake_linked_account_{next(self._linked_account_ids)}"
+        self.linked_accounts[account_id] = {
+            "reference_id": reference_id,
+            "name": name,
+            "email": email,
+        }
+        logger.info("fake_payment.linked_account_created", extra={"account_id": account_id})
+        return account_id
 
     def create_order(self, *, amount_minor: int, currency: str, receipt: str, notes: dict) -> str:
         order_id = f"fake_order_{next(self._order_ids)}"

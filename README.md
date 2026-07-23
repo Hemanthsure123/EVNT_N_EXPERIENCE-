@@ -4,12 +4,14 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** — a clean, modular backend architecture plus one complete
-vertical slice (`accounts`) proving the whole stack works end to end.
+**foundation** plus two complete modules (`accounts`, `organizations`)
+proving the whole stack works end to end — architecture, caching, and
+performance discipline included.
 
 ## Stack
 
-- **Backend**: Python 3.12, Django 5 + Django REST Framework, PostgreSQL, Redis.
+- **Backend**: Python 3.12, Django 5 + Django REST Framework, PostgreSQL
+  (behind a transaction-mode connection pooler), Redis (over TLS).
 - **Frontend**: Next.js + TypeScript + Tailwind + shadcn/ui — not started yet
   (see `frontend/README.md`); comes after more backend modules exist.
 - **Tooling**: ruff (lint), black (format), mypy + django-stubs (types),
@@ -25,14 +27,20 @@ cp .env.example .env      # already has safe dummy values, edit if you like
 docker compose up -d
 ```
 
-This builds the backend image, starts Postgres + Redis, waits for them to
-be healthy, runs migrations, and starts the dev server on
-`http://localhost:8000`.
+This builds the backend image and starts Postgres, a PgBouncer in front of
+it (transaction-pooling mode, TLS required — a local stand-in for Neon's
+pooled connection), Redis with a TLS listener (a local stand-in for
+Upstash), waits for them to be healthy, runs migrations, and starts the
+dev server on `http://localhost:8000`.
 
 - Health check: `GET /health/`
 - OpenAPI schema: `GET /api/schema/` — Swagger UI: `/api/docs/`
 - Accounts API: `POST /api/v1/auth/register`, `/login`, `/refresh`,
   `/logout`, `GET /api/v1/auth/me`
+- Organizations API: `POST /api/v1/organizations/`, `GET /api/v1/organizations/{id}`,
+  `PATCH /api/v1/organizations/{id}`, `GET /api/v1/organizations/` (mine,
+  cursor-paginated), `POST /api/v1/organizations/{id}/verification`,
+  `POST /api/v1/organizations/{id}/payout-account`
 
 ### Option B — local venv (faster iteration)
 
@@ -64,8 +72,17 @@ cd backend
 ```
 
 Tests need Postgres + Redis running (`docker compose up -d postgres redis`
-from the repo root) — pytest-django creates and tears down its own test
-database against that same server.
+from the repo root; add `pgbouncer` too if you want the pooled path
+exercised, though tests connect directly via `DIRECT_DATABASE_URL` and
+don't need it) — pytest-django creates and tears down its own test database
+against Postgres directly, bypassing the pooler (see CLAUDE.md's dev
+infrastructure section for why). One test suite (`test_redis_adapter.py`)
+talks to real Redis to verify cache serialization; everything else uses
+the local/fake adapters.
+
+Want a deep per-request profiler instead of the built-in slow-request log?
+Set `ENABLE_SILK=true` in `.env` and hit `/silk/` — off by default even in
+dev, since it has real overhead.
 
 Install the git hooks once so these run automatically before every commit:
 
@@ -99,7 +116,8 @@ backend/
                      unit of work, outbox, audit, errors, pagination, logging
   apps/
     accounts/        reference module — copy this shape for every new module
-    (organizations, events, ticketing, booking, payments, checkin,
-     notifications, settlements — not built yet)
+    organizations/   orgs/brands, verification, payout-account linking, caching
+    (events, ticketing, booking, payments, checkin, notifications,
+     settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

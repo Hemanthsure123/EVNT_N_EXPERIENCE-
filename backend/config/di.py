@@ -31,6 +31,7 @@ from core.ports.task_queue_port import TaskQueuePort
 
 if TYPE_CHECKING:
     from apps.accounts.services import AuthService
+    from apps.organizations.services import OrganizationService
 
 
 # --- Port factories -------------------------------------------------------
@@ -171,3 +172,17 @@ def build_auth_service() -> AuthService:
     from apps.accounts.services import AuthService
 
     return AuthService(users=UserRepository(), email=email_port(), task_queue=task_queue_port())
+
+
+def build_organization_service() -> OrganizationService:
+    from apps.accounts.repositories import UserRepository
+    from apps.organizations.repositories import OrganizationRepository
+    from apps.organizations.services import OrganizationService
+
+    return OrganizationService(
+        organizations=OrganizationRepository(),
+        users=UserRepository(),
+        storage=storage_port(),
+        payments=payment_port(),
+        task_queue=task_queue_port(),
+    )

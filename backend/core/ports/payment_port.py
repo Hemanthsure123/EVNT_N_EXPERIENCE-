@@ -22,6 +22,12 @@ class SplitTransferResult:
 
 class PaymentPort(ABC):
     @abstractmethod
+    def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
+        """Create a linked/connected account (Razorpay Route linked account)
+        that a future split_transfer can pay out to. Returns the vendor's
+        linked-account id."""
+
+    @abstractmethod
     def create_order(self, *, amount_minor: int, currency: str, receipt: str, notes: dict) -> str:
         """Create a payment order with the vendor and return its order id."""
 

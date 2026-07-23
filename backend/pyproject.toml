@@ -28,6 +28,7 @@ dev = [
   "pytest-django>=4.9,<4.10",
   "pytest-cov>=5.0,<6.0",
   "pre-commit>=3.8,<4.0",
+  "django-silk>=5.1,<6.0",
 ]
 # Real cloud/vendor adapters are optional installs — only needed when that
 # backend is actually selected (STORAGE_BACKEND=gcs, PAYMENTS_BACKEND=razorpay, ...).
@@ -59,6 +60,15 @@ ignore = ["DJ001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["config", "core", "apps"]
+
+[tool.ruff.lint.per-file-ignores]
+# dev/staging/prod/test settings all do `from .base import *` by design —
+# names like `env` and `DATABASES` are intentionally star-imported, not
+# missing.
+"config/settings/dev.py" = ["F405"]
+"config/settings/staging.py" = ["F405"]
+"config/settings/prod.py" = ["F405"]
+"config/settings/test.py" = ["F405"]
 
 [tool.black]
 line-length = 100

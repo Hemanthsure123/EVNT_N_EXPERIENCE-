@@ -11,5 +11,5 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
-if not env.list("ALLOWED_HOSTS", default=[]):  # noqa: F405
+if not env.list("ALLOWED_HOSTS", default=[]):
     raise RuntimeError("ALLOWED_HOSTS must be set explicitly in production")

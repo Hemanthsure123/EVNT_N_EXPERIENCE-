@@ -24,6 +24,7 @@ secrets/*.json
 !secrets/.gitkeep
 *.pem
 *.key
+docker/dev-tls/certs/
 
 # --- Node / Next.js (frontend, added later) ---
 node_modules/

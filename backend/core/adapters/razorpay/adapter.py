@@ -23,6 +23,20 @@ class RazorpayPaymentAdapter(PaymentPort):
         self._client = razorpay.Client(auth=(key_id, key_secret))
         self._webhook_secret = webhook_secret
 
+    def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
+        account = self._client.account.create(
+            {
+                "email": email,
+                "phone": "",
+                "type": "route",
+                "reference_id": reference_id,
+                "legal_business_name": name,
+                "business_type": "individual",
+                "contact_name": name,
+            }
+        )
+        return account["id"]
+
     def create_order(self, *, amount_minor: int, currency: str, receipt: str, notes: dict) -> str:
         order = self._client.order.create(
             {"amount": amount_minor, "currency": currency, "receipt": receipt, "notes": notes}

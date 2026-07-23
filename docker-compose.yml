@@ -16,11 +16,54 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local stand-in for Neon's pooled connection: a real PgBouncer in
+  # transaction-pooling mode with TLS required, so app<->pooler config
+  # (DISABLE_SERVER_SIDE_CURSORS, CONN_MAX_AGE=0, sslmode=require) is
+  # exercised for real. Swapping to Neon in staging/prod is a DATABASE_URL
+  # change only — no code changes.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
+      POOL_MODE: transaction
+      AUTH_TYPE: plain
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: 6432
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 20
+      ADMIN_USERS: app
+      CLIENT_TLS_SSLMODE: require
+      CLIENT_TLS_KEY_FILE: /tls/pgbouncer.key
+      CLIENT_TLS_CERT_FILE: /tls/pgbouncer.crt
+      CLIENT_TLS_CA_FILE: /tls/ca.crt
+    volumes:
+      - ./docker/dev-tls/certs:/tls:ro
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Local stand-in for Upstash: stock Redis with its built-in TLS listener
+  # enabled on a second port, so REDIS_URL=rediss://... is exercised for
+  # real. Plain port stays open for the healthcheck only.
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: >
+      redis-server
+      --port 6379
+      --tls-port 6380
+      --tls-cert-file /tls/redis.crt
+      --tls-key-file /tls/redis.key
+      --tls-ca-cert-file /tls/ca.crt
+      --tls-auth-clients no
+    volumes:
+      - ./docker/dev-tls/certs:/tls:ro
     ports:
       - "6379:6379"
+      - "6380:6380"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,13 +77,16 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgres://app:app@pgbouncer:6432/eventsdb?sslmode=require
+      REDIS_URL: rediss://redis:6380/0?ssl_cert_reqs=none
+      DISABLE_SERVER_SIDE_CURSORS: "true"
+      CONN_MAX_AGE: "0"
+      CACHE_BACKEND: redis
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
     volumes:

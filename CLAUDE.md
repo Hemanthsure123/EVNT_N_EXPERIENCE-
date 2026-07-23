@@ -40,14 +40,17 @@ apps/<module>/
   permissions.py          DRF permission classes (object-level checks)
   exceptions.py            DomainError subclasses specific to this module
   urls.py                   urlpatterns, included from config/urls.py
-  apps.py                    AppConfig; subscribe event handlers in ready()
+  apps.py                    AppConfig; subscribe event handlers + register tasks in ready()
+  tasks.py (if any)           @register_task background handlers (see core/tasks.py)
   admin.py (optional)         django admin registration, if operators need it
   migrations/
   tests/
     test_repositories.py
     test_services.py
+    test_selectors.py (if the module caches anything)
     test_api.py
     test_handlers.py (if the module has any)
+    test_tasks.py (if the module has any)
 ```
 
 New modules go in `INSTALLED_APPS` (`config/settings/base.py`) as
@@ -106,6 +109,38 @@ by side. Views and services depend on abstractions and get instances from
 factory functions here (`build_<module>_service()`) — never from a
 hand-rolled global singleton inside business code.
 
+## Dev infrastructure: pooled Postgres + TLS Redis (simulating Neon/Upstash)
+
+Local dev/CI run against a **transaction-mode PgBouncer** and a **TLS-enabled
+Redis** in `docker-compose.yml` — local stand-ins for Neon's pooled
+connection and Upstash's `rediss://` endpoint, proving the config-only
+portability story for real instead of just in theory. Swapping to actual
+Neon/Upstash in staging/prod is a `DATABASE_URL`/`REDIS_URL` change only.
+
+- `docker/dev-tls/generate-certs.sh` creates a throwaway self-signed CA +
+  leaf certs for `redis` and `pgbouncer` (gitignored — regenerate any time).
+- **Two Postgres URLs, on purpose:**
+  - `DATABASE_URL` — pooled, via PgBouncer (port 6432, `sslmode=require`).
+    Used for the app's normal runtime queries.
+  - `DIRECT_DATABASE_URL` — straight to Postgres (port 5432), no pooler.
+    **Required** for anything that needs a database PgBouncer's static
+    `[databases]` list doesn't know about — concretely, pytest-django's
+    on-the-fly `test_<dbname>`. `config/settings/test.py` always uses this
+    one, falling back to `DATABASE_URL` if unset (e.g. CI, which has no
+    pooler in front of Postgres at all). This mirrors Neon's own guidance:
+    pooled connection for the app, direct connection for migrations/admin/
+    test tooling.
+  - `DATABASES["default"]["CONN_MAX_AGE"]` and
+    `["DISABLE_SERVER_SIDE_CURSORS"]` are read from env
+    (`CONN_MAX_AGE`, `DISABLE_SERVER_SIDE_CURSORS`) — `0`/`true` behind a
+    transaction pooler, since it already manages connection reuse and
+    server-side cursors need session affinity pooling doesn't provide.
+- `REDIS_URL=rediss://...?ssl_cert_reqs=none` — the `ssl_cert_reqs=none` is
+  **only** because the local cert is self-signed; a real Upstash cert is
+  CA-signed, so drop that query param outside local dev.
+- `CACHE_BACKEND=redis` even in dev (not faked) — caching is exercised for
+  real against this Redis, not skipped.
+
 ## Unit of Work + Outbox
 
 Multi-step writes that must succeed or fail together go inside
@@ -159,20 +194,148 @@ handler, which normalizes them into the same envelope).
   and the response/error envelope shape, not on side effects (side effects
   belong in service/handler tests).
 
+## Performance checklist (every module must satisfy this)
+
+Established alongside the `organizations` module and binding on every module
+after it. Application performance and low latency are an overriding
+priority for this project — performance comes from good design applied
+consistently, not from shortcuts that break the layering above.
+
+1. **No N+1 queries.** Repositories use `.only()`/`.defer()` for lean reads
+   and `select_related`/`prefetch_related` the moment a query crosses an FK.
+   `organizations` has no FK traversals yet (owner_id is read straight off
+   the row), so it doesn't need select_related — don't add it speculatively
+   ahead of an actual join.
+2. **Add the DB index the query actually needs, in the same migration.**
+   Look at the WHERE/ORDER BY the repository method issues and index
+   exactly that — see `Organization.Meta.indexes`'s `(owner, created_at)`
+   compound index with a `deleted_at__isnull` condition, which exists
+   because `list_active_by_owner` filters and sorts by precisely those
+   columns.
+3. **Selectors return only what the response needs**, never a blindly
+   serialized full model. `get_organization_detail_payload` and the list
+   endpoint both go through `.only(...)`-restricted querysets.
+4. **Cache-aside caching via CachePort, with documented keys/TTLs and
+   invalidation on every write:**
+   - `org:{organization_id}` — 60s TTL — the org detail payload
+     (`selectors.ORG_DETAIL_TTL_SECONDS`).
+   - `orgs:owner:{owner_id}` — 30s TTL — the *first page only* of a user's
+     org list, cached as the fully-rendered response body including DRF's
+     own cursor-encoded `next` link (`selectors.ORG_LIST_TTL_SECONDS`).
+     Replicating DRF's cursor token format by hand to cache raw rows
+     instead would be fragile — deeper pages (`?cursor=...` present) always
+     hit the DB, which is an accepted tradeoff since first-page access
+     dominates real usage.
+   - Every write path (`create_organization`, `update_organization`,
+     `submit_verification`, `link_payout_account`, and the
+     `process_verification` task) calls
+     `selectors.invalidate_organization_cache(org_id, owner_id)` inside
+     `transaction.on_commit(...)` — never before commit, or a concurrent
+     reader could repopulate the cache with stale pre-write data in the
+     race window before the write actually lands.
+   - Stampede protection is a short non-blocking `CachePort.lock()`: only
+     the request that wins it writes the cache entry, but every concurrent
+     miss still reads the DB directly rather than queueing. This is
+     "basic" protection, not full elimination — proportionate because a
+     detail-by-PK/list-by-owner read is already a cheap, index-backed
+     query, not the expensive case stampede protection usually guards.
+     Reach for something stronger (stale-while-revalidate, a blocking
+     retry loop) only when caching something genuinely expensive to
+     rebuild.
+5. **External I/O outside the transaction.** Storage uploads and payment-
+   provider API calls (e.g. creating a Razorpay linked account) happen
+   *before* `with UnitOfWork():` opens, never inside it — a DB transaction
+   should hold connections/locks for as short a time as possible, and
+   neither call needs to be atomic with the DB write (if the external call
+   succeeds but the write then fails, the transaction rolls back and the
+   orphaned external side effect is harmless).
+6. **HTTP performance:** `GZipMiddleware` compresses every response.
+   Cacheable GETs set `ETag` + `Cache-Control` (`core.http_caching`) and
+   return 304 on a matching `If-None-Match`. **Always `private`** for any
+   response whose content depends on who's asking (an ownership/permission
+   check gates it) — a shared/CDN cache must never serve one user's cached
+   response to another. Reserve `public` for genuinely unauthenticated-safe
+   reads (none exist yet).
+7. **List endpoints use cursor pagination**
+   (`core.pagination.CursorPagination`, subclassed per view with `ordering`
+   set to match that query's actual index — see
+   `apps/organizations/pagination.py`), not the page-number
+   `DefaultPagination`. No `COUNT(*)` query, stable under concurrent
+   inserts/deletes. `DefaultPagination` still exists for the rare endpoint
+   that genuinely needs a total count.
+8. **Heavy/slow work goes through `TaskQueuePort`,** not inline in the
+   request. `submit_verification` creates a PENDING record and returns
+   immediately; the actual "processing" runs in
+   `apps/organizations/tasks.process_verification`, registered via
+   `core.tasks.register_task` (see "TaskQueuePort now has a registry"
+   below).
+9. **Performance observability in dev:** `core.middleware.
+   PerformanceLoggingMiddleware` logs wall-clock time + DB query count per
+   request (warns above 200ms), gated on `DEBUG` since query logging has
+   real overhead. `ENABLE_SILK=true` turns on django-silk at `/silk/` for a
+   much deeper per-query breakdown — off by default even in dev.
+10. **Lock the query budget in with tests.** Use pytest-django's
+    `django_assert_num_queries` on both list and detail endpoints — cold
+    (cache miss) and warm (cache hit) — so an N+1 regression fails CI
+    instead of surfacing in production. Also test an actual cache
+    hit (second call issues fewer queries than the first) and an actual
+    invalidation (a write followed by a GET reflects the write, not stale
+    cached data).
+
+**Query budget observed for `organizations`** (local dev, warm process):
+`GET /organizations/{id}` — 2 queries cold (JWT auth user lookup + the org
+`SELECT`), 1 query warm (auth lookup only; the org itself comes from
+Redis). `GET /organizations/` (list, first page) — 2 queries cold, 1 query
+warm, same pattern. Both measured directly via `django_assert_num_queries`
+in `apps/organizations/tests/test_api.py` and
+`apps/organizations/tests/test_selectors.py` — these numbers are enforced
+by CI, not just observed once.
+
+### TaskQueuePort now has a registry
+
+The foundation slice deliberately shipped `TaskQueuePort` with no task-name
+registry (nothing needed async execution). `organizations.submit_verification`
+is the first real consumer, so `core/tasks.py` (a `register_task`/`run_task`
+registry) was added alongside it — this is the "add it when the first real
+consumer needs it" moment the foundation's CLAUDE.md called out in advance.
+`SyncTaskQueueAdapter.enqueue()` now actually runs the registered task
+synchronously (catching and logging any exception rather than propagating —
+a bug in background work must never break the request that enqueued it, in
+any environment). Modules register their tasks via `@register_task` in
+their own `tasks.py`, imported from `AppConfig.ready()` so registration
+always happens before a request could enqueue one (see
+`apps/organizations/apps.py`). The Cloud Tasks real adapter's internal HTTP
+endpoint still doesn't exist — that's a separate, later concern for whenever
+`QUEUE_BACKEND=cloud_tasks` is actually deployed.
+
+### Object-level ownership checks live in the service, not a DRF permission
+
+`update_organization`/`submit_verification`/`link_payout_account` all load
+the `Organization` row and check `owner_id` inside the **service**, not via
+a DRF `has_object_permission` on a separately `get_object()`-fetched
+instance — the latter would mean fetching the same row twice per request.
+`permissions.py` still exists (per the module shape) with an `IsOrganizationOwner`
+class, documented as unused for this reason, kept ready for a future
+endpoint built around DRF's own `get_object()` flow where that redundancy
+wouldn't apply.
+
 ## What's deliberately NOT built yet (don't add it speculatively)
 
-- **`TaskQueuePort` has no task-name registry.** No module needs async
-  execution yet. Add a registry alongside the first real consumer (e.g.
-  settlement payouts, reminder emails), not before.
-- **`StoragePort` and `SmsPort` are wired up but unused** — no module needs
-  file uploads or SMS yet. That's fine; the port + local adapter existing
-  from day one is the requirement, not that something calls it immediately.
+- **`TaskQueuePort` has a registry now** (`core/tasks.py`, added alongside
+  `organizations`'s verification flow — see the Performance checklist
+  above), but the Cloud Tasks real adapter's internal HTTP dispatch
+  endpoint still doesn't exist. Add it when `QUEUE_BACKEND=cloud_tasks` is
+  actually deployed, not before.
+- **`SmsPort` is wired up but unused** — no module needs SMS yet. That's
+  fine; the port + local adapter existing from day one is the requirement,
+  not that something calls it immediately. (`StoragePort` is now used by
+  `organizations` for logo uploads.)
 - Future modules explicitly deferred until their turn: `teams`,
   `communities`/collaboration, `venues`/seat-maps, `marketing`.
 
 ## Build order
 
-`accounts` (done) → `organizations` → `events` → `ticketing` → `booking` →
+`accounts` (done) → `organizations` (done) → `events` → `ticketing` → `booking` →
 `payments` → `checkin` → `notifications` → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)

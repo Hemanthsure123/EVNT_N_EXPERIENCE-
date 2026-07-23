@@ -42,19 +42,35 @@ INSTALLED_APPS = [
     "core",
     # business modules
     "apps.accounts",
+    "apps.organizations",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Compresses responses; placed early so its process_response (which runs
+    # last, since middleware unwinds in reverse) compresses the final body
+    # after every other middleware has already touched it.
+    "django.middleware.gzip.GZipMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "core.middleware.RequestIDMiddleware",
+    "core.middleware.PerformanceLoggingMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# Lightweight per-request profiler (django-silk), OFF by default even in
+# dev — it has real overhead (its own DB tables, per-query capture) and
+# should be switched on deliberately, not run all the time. Requires the
+# `dev` extra (`pip install -e ".[dev]"`) and a `migrate` afterwards to
+# create its tables.
+ENABLE_SILK = env.bool("ENABLE_SILK", default=False)
+if ENABLE_SILK:
+    INSTALLED_APPS += ["silk"]
+    MIDDLEWARE += ["silk.middleware.SilkyMiddleware"]
 
 ROOT_URLCONF = "config.urls"
 
@@ -77,7 +93,18 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+# CONN_MAX_AGE=0 and DISABLE_SERVER_SIDE_CURSORS=True are the two settings
+# Django needs to sit behind a transaction-mode pooler (PgBouncer locally,
+# Neon's pooled endpoint in staging/prod): server-side cursors need session
+# affinity that transaction pooling doesn't provide, and Django shouldn't
+# hold its own long-lived connections on top of an external pool. sslmode
+# (e.g. ?sslmode=require) travels inside DATABASE_URL itself and is parsed
+# straight into OPTIONS by django-environ.
 DATABASES = {"default": env.db_url("DATABASE_URL")}
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("CONN_MAX_AGE", default=60)
+DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = env.bool(
+    "DISABLE_SERVER_SIDE_CURSORS", default=False
+)
 
 AUTH_USER_MODEL = "accounts.User"
 

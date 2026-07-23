@@ -8,3 +8,8 @@ from __future__ import annotations
 
 # apps.accounts
 USER_REGISTERED = "accounts.user_registered"
+
+# apps.organizations
+ORGANIZATION_CREATED = "organizations.organization_created"
+ORGANIZATION_VERIFIED = "organizations.organization_verified"
+PAYOUT_ACCOUNT_LINKED = "organizations.payout_account_linked"
