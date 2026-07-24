@@ -433,6 +433,22 @@ class BookingService:
         )
         return ConfirmResult(booking=booking, issued=True, reason="issued", tickets=tickets)
 
+    def void_tickets_for_booking(self, *, booking_id: uuid.UUID | str) -> int:
+        """Void a booking's still-active tickets so a refunded ticket can't
+        enter the gate. Called by `payments` from inside the refund transaction
+        (booking owns Ticket, so the void lives here, not in payments).
+        IDEMPOTENT: a booking with no active tickets — never confirmed, or
+        already voided — is a safe no-op. This is defense in depth: `checkin`
+        denies non-active tickets by status regardless, but voiding on refund
+        means a refunded ticket is dead at the source. Returns the count voided.
+        """
+        voided = self._tickets.void_active_for_booking(booking_id)
+        if voided:
+            logger.info(
+                "booking.tickets_voided", extra={"booking_id": str(booking_id), "count": voided}
+            )
+        return voided
+
     def _issue_tickets(self, booking: Booking, items: list[BookingItem]) -> list[Ticket]:
         tickets: list[Ticket] = []
         for item in items:

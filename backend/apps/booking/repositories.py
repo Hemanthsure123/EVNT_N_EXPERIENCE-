@@ -13,6 +13,11 @@ from core.base_repository import BaseRepository
 
 from .models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
 
+# Columns the check-in gate path needs from a ticket — deliberately tiny so the
+# per-ticket locked section stays as small and fast as possible (see the
+# `checkin` module's verify contract in CLAUDE.md).
+_CHECKIN_LOCK_FIELDS = ("id", "status", "used_at", "gate")
+
 
 class BookingRepository(BaseRepository[Booking]):
     model = Booking
@@ -108,4 +113,52 @@ class TicketRepository(BaseRepository[Ticket]):
             Ticket.objects.select_related("ticket_type", "booking__event")
             .filter(booking__user_id=user_id, status=TicketStatus.ACTIVE)
             .order_by("-created_at", "id")
+        )
+
+    # --- check-in path (checkin verifies at the gate; booking owns Ticket) ---
+
+    def get_for_checkin(self, ticket_id: uuid.UUID | str) -> Ticket | None:
+        """Ticket + its event id + tier name in ONE query, for the check-in
+        pre-lock checks (wrong-event / not-active / scan-window). No lock — the
+        authoritative admit decision re-reads the row under `lock_for_update`."""
+        return (
+            Ticket.objects.select_related("booking", "ticket_type")
+            .only("id", "status", "used_at", "gate", "booking__event_id", "ticket_type__name")
+            .filter(pk=ticket_id)
+            .first()
+        )
+
+    def lock_for_update(self, ticket_id: uuid.UUID | str) -> Ticket | None:
+        """SELECT ... FOR UPDATE on the single ticket row — the coordination
+        point that makes one-scan entry correct: two simultaneous scans of the
+        same ticket serialise here, so exactly one sees it un-used and admits.
+        MUST run inside the caller's transaction. Locks only the ticket row (no
+        join), keeping the critical section tiny."""
+        return (
+            Ticket.objects.select_for_update()
+            .only(*_CHECKIN_LOCK_FIELDS)
+            .filter(pk=ticket_id)
+            .first()
+        )
+
+    def mark_used(self, ticket: Ticket, *, used_at: datetime, gate: str) -> None:
+        """Persist only the check-in columns — the tiny write inside the lock."""
+        ticket.status = TicketStatus.USED
+        ticket.used_at = used_at
+        ticket.gate = gate
+        ticket.save(update_fields=["status", "used_at", "gate"])
+
+    def count_used_for_event(self, event_id: uuid.UUID | str) -> int:
+        """The authoritative admitted count for an event (source of truth for
+        the live-attendance display, which the cache only accelerates)."""
+        return Ticket.objects.filter(booking__event_id=event_id, status=TicketStatus.USED).count()
+
+    def void_active_for_booking(self, booking_id: uuid.UUID | str) -> int:
+        """Void a booking's still-active tickets in one conditional UPDATE, so a
+        refunded ticket can't enter the gate. Returns how many were voided —
+        0 (a safe no-op) when the booking never issued tickets or they're
+        already used/void. The `WHERE status=active` guard means a ticket that
+        was admitted a moment earlier stays `used`, never silently reverted."""
+        return Ticket.objects.filter(booking_id=booking_id, status=TicketStatus.ACTIVE).update(
+            status=TicketStatus.VOID
         )

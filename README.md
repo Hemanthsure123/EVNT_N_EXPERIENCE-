@@ -4,12 +4,13 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus six complete modules (`accounts`, `organizations`,
-`events`, `ticketing`, `booking`, `payments`) proving the whole stack works
-end to end — architecture, caching, full-text search, correct-under-
-concurrency reservations, the reserve→hold→confirm→pay money-path lifecycle
-with signature-verified webhooks and automatic refunds, and performance
-discipline included.
+**foundation** plus seven complete modules (`accounts`, `organizations`,
+`events`, `ticketing`, `booking`, `payments`, `checkin`) proving the whole
+stack works end to end — architecture, caching, full-text search, correct-
+under-concurrency reservations, the reserve→hold→confirm→pay money-path
+lifecycle with signature-verified webhooks and automatic refunds, one-scan
+gate entry that can't admit a ticket twice, and performance discipline
+included.
 
 ## Stack
 
@@ -68,6 +69,13 @@ dev server on `http://localhost:8000`.
   Route split (organizer share on-hold until the event; platform fee retained);
   hold-expired/amount-mismatch payments auto-refund — money is never kept
   without a ticket.
+- Check-in API (organizer-only, `private, no-store`):
+  `POST /api/v1/checkin/verify` (verify a signed QR at the gate and mark the
+  ticket used exactly once — a per-ticket row lock makes double-entry
+  impossible even under simultaneous scans; forged/wrong-event/void/expired
+  scans are denied and audited), `GET /api/v1/events/{id}/attendance` (live
+  admitted-vs-capacity, cached for display but reconciled from the DB). Reuses
+  booking's signed-token verifier; a refund voids the ticket so it can't enter.
 
 ### Option B — local venv (faster iteration)
 
@@ -152,6 +160,8 @@ backend/
                      reserve, auto-release sweeper, signed-QR ticket issuance
     payments/        signature-verified Razorpay webhooks, idempotency ledger,
                      Route split (on-hold), auto-refunds when unfulfillable
-    (checkin, notifications, settlements — not built yet)
+    checkin/         one-scan gate entry under a per-ticket row lock, live
+                     attendance (cache the count, trust the DB), scan audit log
+    (notifications, settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

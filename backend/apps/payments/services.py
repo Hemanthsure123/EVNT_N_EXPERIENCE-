@@ -252,6 +252,11 @@ class PaymentService:
                 amount_minor=locked.amount_minor,
                 reason=reason,
             )
+            # A refunded ticket must not enter the gate: void the booking's
+            # still-active tickets in the SAME transaction as the refund record
+            # (booking owns Ticket, so the void lives there). A no-op when the
+            # booking never issued tickets (hold_expired / amount_mismatch).
+            self._booking_service.void_tickets_for_booking(booking_id=locked.booking_id)
             uow.publish(
                 PAYMENT_REFUNDED,
                 {"payment_id": str(payment_id), "reason": reason},

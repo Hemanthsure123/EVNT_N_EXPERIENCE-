@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from apps.booking.models import Booking, BookingStatus, Ticket
+from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
 from apps.payments.exceptions import InvalidWebhookSignatureError
 from apps.payments.models import Payment, PaymentStatus, ProcessedWebhook, Refund
 from apps.payments.tests.conftest import signed_webhook
@@ -190,6 +190,22 @@ def test_refund_is_idempotent_never_double_refunds(payment_service, fake_payment
     assert Refund.objects.filter(payment_id=payment.id).count() == 1
     assert len(fake_payment.refunds_by_key) == 1
     assert OutboxEvent.objects.filter(event_type="payments.payment_refunded").exists()
+
+
+@pytest.mark.django_db
+def test_refund_voids_the_bookings_tickets(payment_service, booking_service, a_booking):
+    # Confirm the booking so real tickets are issued, then refund it.
+    result = booking_service.confirm_booking(booking_id=a_booking.id, payment_ref="pay_paid_1")
+    assert result.issued is True
+    assert Ticket.objects.filter(booking_id=a_booking.id, status=TicketStatus.ACTIVE).count() == 2
+
+    payment = _make_paid_payment(a_booking)
+    assert payment_service.execute_refund(payment_id=payment.id, reason="organizer_refund") is True
+
+    # A refunded ticket can't enter the gate: every active ticket is now void
+    # (checkin then denies by status — defense in depth).
+    assert Ticket.objects.filter(booking_id=a_booking.id, status=TicketStatus.ACTIVE).count() == 0
+    assert Ticket.objects.filter(booking_id=a_booking.id, status=TicketStatus.VOID).count() == 2
 
 
 @pytest.mark.django_db

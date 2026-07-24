@@ -34,3 +34,6 @@ TICKET_ISSUED = "booking.ticket_issued"
 PAYMENT_CONFIRMED = "payments.payment_confirmed"
 PAYMENT_FAILED = "payments.payment_failed"
 PAYMENT_REFUNDED = "payments.payment_refunded"
+
+# apps.checkin
+TICKET_CHECKED_IN = "checkin.ticket_checked_in"

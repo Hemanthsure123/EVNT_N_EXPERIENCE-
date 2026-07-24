@@ -32,6 +32,7 @@ from core.ports.task_queue_port import TaskQueuePort
 if TYPE_CHECKING:
     from apps.accounts.services import AuthService
     from apps.booking.services import BookingService
+    from apps.checkin.services import CheckinService
     from apps.events.services import EventService
     from apps.organizations.services import OrganizationService
     from apps.payments.services import PaymentService
@@ -260,4 +261,23 @@ def build_payment_service() -> PaymentService:
         booking_service=build_booking_service(),
         payments_port=payment_port(),
         task_queue=task_queue_port(),
+    )
+
+
+def build_checkin_service() -> CheckinService:
+    from apps.booking.repositories import TicketRepository
+    from apps.checkin.repositories import ScanLogRepository
+    from apps.checkin.services import CheckinService
+    from apps.events.repositories import EventRepository
+    from apps.ticketing.repositories import TicketTypeRepository
+
+    return CheckinService(
+        scans=ScanLogRepository(),
+        tickets=TicketRepository(),
+        ticket_types=TicketTypeRepository(),
+        events=EventRepository(),
+        cache=cache_port(),
+        qr_secret=settings.TICKET_QR_SIGNING_KEY,
+        window_opens_before_minutes=settings.CHECKIN_WINDOW_OPENS_BEFORE_MINUTES,
+        window_grace_after_minutes=settings.CHECKIN_WINDOW_GRACE_AFTER_MINUTES,
     )

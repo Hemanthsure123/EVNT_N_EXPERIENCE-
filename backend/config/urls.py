@@ -22,6 +22,8 @@ urlpatterns = [
     path("api/v1/", include("apps.booking.urls")),
     # payments' /payments/webhook, /payments/{id}, /payments/{id}/refund.
     path("api/v1/", include("apps.payments.urls")),
+    # checkin's /checkin/verify and /events/{id}/attendance, under /api/v1/.
+    path("api/v1/", include("apps.checkin.urls")),
 ]
 
 if settings.ENABLE_SILK:

@@ -228,6 +228,27 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def get_for_checkin(self, event_id: uuid.UUID | str) -> Event | None:
+        """Load the minimal event context the check-in gate needs: the
+        organizer owner id (for the per-event authorization check) and the
+        start/end times (for the scan window). One query, org joined, fat text
+        columns excluded. Soft-deleted events are invisible — you can't check in
+        to a deleted event."""
+        return (
+            self.get_queryset()
+            .select_related("organization")
+            .filter(pk=event_id, deleted_at__isnull=True)
+            .only(
+                "id",
+                "organization_id",
+                "organization__owner_id",
+                "starts_at",
+                "ends_at",
+                "status",
+            )
+            .first()
+        )
+
     def get_organizer_payout_account(self, event_id: uuid.UUID | str) -> str:
         """The event organization's Razorpay linked-account id (or "" if none
         linked yet). One scalar query joining event -> organization — used by

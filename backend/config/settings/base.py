@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.ticketing",
     "apps.booking",
     "apps.payments",
+    "apps.checkin",
 ]
 
 MIDDLEWARE = [
@@ -194,8 +195,15 @@ PLATFORM_FEE_PER_TICKET = env.int("PLATFORM_FEE_PER_TICKET", default=10)
 # the sweeper auto-releases it. Short, so unpaid holds don't starve inventory.
 BOOKING_HOLD_MINUTES = env.int("BOOKING_HOLD_MINUTES", default=10)
 # Server secret for signing ticket QR tokens (HMAC). Rotatable independently
-# of SECRET_KEY. checkin will verify tokens with this same key.
+# of SECRET_KEY. checkin verifies tokens with this same key.
 TICKET_QR_SIGNING_KEY = env.str("TICKET_QR_SIGNING_KEY", default="")
+
+# Check-in scan window: a ticket may be scanned from this many minutes BEFORE
+# the event starts until this many minutes AFTER it ends (or after it starts,
+# if no end time is set). A scan well outside the window is denied — a ticket
+# can't be used days early or long after the event.
+CHECKIN_WINDOW_OPENS_BEFORE_MINUTES = env.int("CHECKIN_WINDOW_OPENS_BEFORE_MINUTES", default=180)
+CHECKIN_WINDOW_GRACE_AFTER_MINUTES = env.int("CHECKIN_WINDOW_GRACE_AFTER_MINUTES", default=360)
 
 # Google OAuth
 GOOGLE_OAUTH_CLIENT_ID = env.str("GOOGLE_OAUTH_CLIENT_ID", default="")

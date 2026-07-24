@@ -558,6 +558,94 @@ a persistent dev DB.
 **No card data is ever stored** — only Razorpay reference ids (order id,
 payment id, refund id) and amounts.
 
+## Check-in: fast, correct one-scan entry (cache the count, decide under the lock)
+
+`checkin` is the gate. People are physically queuing, so a scan must be
+low-latency; and the same ticket must NEVER admit two people, even if scanned
+at two gates in the same millisecond. Both matter; neither is sacrificed. It
+REUSES booking's signed-token verifier and Ticket record — it never mints
+tokens or tickets. It's the door analog of ticketing's no-oversell rule:
+
+> **Attendance *display* is cached and fast. The admit *decision* is ALWAYS
+> made under a per-ticket database row lock, never from a cache.**
+
+**The VerifyAndMarkUsed flow** (`POST /checkin/verify` — `{event_id, qr_token,
+gate}`; `event_id` is the event this gate is stationed for, driving both the
+authorization and the wrong-event checks):
+
+1. **Verify the signature** with `apps.booking.qr.verify_ticket_token` (same
+   `TICKET_QR_SIGNING_KEY`; constant-time; never raises). A forged/tampered
+   token → `denied_invalid` with **zero DB access** — the fast reject, and the
+   only denial not written to the audit trail (there's no trustworthy ticket to
+   attribute it to).
+2. **Authorize**: only the event's organizer (or an admin) may verify for it.
+   The check loads the event once (`EventRepository.get_for_checkin`) and
+   compares `organization.owner_id` — the same in-service ownership pattern the
+   other modules use. (Delegated gate-staff permissions arrive with `teams`
+   later — `permissions.py`'s `IsEventOrganizer` is the clean seam, kept unused
+   for now.)
+3. **Lock-free denials** (a single audited insert each): the ticket's event ≠
+   the gate's event → `denied_wrong_event`; already-used (a re-scan or a
+   screenshot of a used ticket) → `denied_already_used`; void/refunded →
+   `denied_not_active`; well outside the configurable scan window
+   (`CHECKIN_WINDOW_OPENS_BEFORE_MINUTES` before start …
+   `CHECKIN_WINDOW_GRACE_AFTER_MINUTES` after end) → `denied_out_of_window`.
+4. **The admit decision, under the per-ticket lock.** In ONE short transaction:
+   `SELECT ... FOR UPDATE` the ticket row (`TicketRepository.lock_for_update`),
+   re-read status (closing every race — a concurrent admit that got there first,
+   or a refund that voided it after the pre-check), `mark_used` (status/used_at/
+   gate), append the `ScanLog(allowed)`, publish `TICKET_CHECKED_IN` to the
+   outbox — then commit. **Nothing slow inside the lock**; it's a single-row
+   lock plus two small writes. The live-count increment happens AFTER commit.
+
+Returns a structured `VerifyResult(allowed, reason, ticket_id, event_id,
+ticket_type, used_at, gate)` — mirroring booking's `ConfirmResult` so the
+frontend has one clean contract. `reason` is a `ScanResult` value; a denial is
+a valid 200 result (`allowed: false`), not an HTTP error — only bad auth
+(403/404) raises.
+
+**Concurrency is proven, not asserted.** `test_concurrency.py`
+(`@pytest.mark.django_db(transaction=True)` + a thread pool) fires N real
+simultaneous scans at ONE unused ticket and asserts EXACTLY ONE returns
+`allowed` and the rest `denied_already_used` — the door equivalent of
+ticketing's oversell test, and the module's most important test. The mark-used
+write IS the idempotency guard, so re-scans/copies are deterministically denied.
+
+**Live attendance: cache the count, trust the DB.** `GET /events/{id}/attendance`
+(organizer-only, `private, no-store`) returns `admitted` vs `capacity`. The fast
+path is a Redis counter (`checkin:admitted:{event_id}`, `CachePort.incr` on each
+admit); the SOURCE OF TRUTH is the DB (`TicketRepository.count_used_for_event` —
+the authoritative used-ticket count; capacity = `TicketTypeRepository.
+total_quantity_for_event`). A short freshness marker
+(`ATTENDANCE_FRESH_TTL_SECONDS`) drives periodic reconcile: within TTL the read
+is served entirely from cache (0 DB queries), and every reconcile resets the
+counter to the DB truth — so a lost/drifted increment self-heals and the cache
+can never become authoritative. `ScanLog(allowed)` count is a parallel audit
+source that must always agree.
+
+**Refunded tickets can't enter.** A refund voids the booking's still-active
+tickets in the SAME transaction as the refund record: `payments.execute_refund`
+calls `booking.void_tickets_for_booking` (booking owns Ticket) →
+`TicketRepository.void_active_for_booking` (one conditional `UPDATE ... WHERE
+status=active`, so a ticket admitted a moment earlier stays `used`, never
+reverted). Idempotent — a no-op for a booking that never issued tickets
+(hold_expired / amount_mismatch). check-in still denies by status regardless;
+the void is defense in depth at the source.
+
+**ScanLog is the append-only audit trail** (`ticket`, `event`, `scanned_by`,
+`scanned_at`, `gate`, `result`) — one row per scan that reached a real ticket,
+never updated or deleted, indexed on `(event, scanned_at)` and `ticket`.
+
+**Query budget** (local dev, warm process): `GET /events/{id}/attendance` — 4
+cold / 2 warm (auth + the 2-query DB reconcile cold; auth + 1 read-side query
+warm, count from Redis). `POST /checkin/verify` (allowed) — a fixed, N+1-free
+9 statements (auth, event load, pre-lock ticket load, then the tiny locked
+section: `SELECT ... FOR UPDATE`, mark-used `UPDATE`, `ScanLog` insert, outbox
+insert — plus the transaction's SAVEPOINT/RELEASE in test mode). All enforced
+via `django_assert_num_queries`. Warm attendance is ~20ms server-side; the
+verify path is a single indexed lookup + a tiny single-row locked write — among
+the fastest write endpoints in the system.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -603,10 +691,14 @@ wouldn't apply.
 - **Relevance-ranked search ordering is deferred.** Search filters, then
   orders by `starts_at` (keeps it index-backed + cursor-paginatable). A
   `sort=relevance` mode (SearchRank) can come later if product wants it.
-- **`checkin` is next, not started.** It verifies the QR
-  (`apps.booking.qr.verify_ticket_token`, same `TICKET_QR_SIGNING_KEY`) and
-  marks tickets `used` under a row lock (one scan, reuse denied, every scan
-  audited). booking only issues the token + provides `verify`.
+- **`checkin` is done** (see the check-in section above) — signature-verified
+  one-scan entry under a per-ticket row lock, live attendance (cache the count,
+  trust the DB), append-only `ScanLog`, refund-voids-tickets. **`notifications`
+  is next, not started**: it reacts to existing domain events
+  (`USER_REGISTERED`, `BOOKING_CONFIRMED`/`TICKET_ISSUED`, `PAYMENT_*`,
+  `TICKET_CHECKED_IN`) via the outbox → event bus, sending through the existing
+  `EmailPort`/`SmsPort` (SMS is already wired but unused) — it adds no new
+  money-path logic and OWNS no new authoritative state.
 - **`settlements` (later)** releases the ON-HOLD organizer transfer after the
   event, records the settlement, and reconciles refunds. The split is already
   defined at order time (payments); settlements only releases the hold. Do NOT
@@ -617,8 +709,8 @@ wouldn't apply.
 ## Build order
 
 `accounts` (done) → `organizations` (done) → `events` (done) →
-`ticketing` (done) → `booking` (done) → `payments` (done) → `checkin` →
-`notifications` → `settlements`.
+`ticketing` (done) → `booking` (done) → `payments` (done) →
+`checkin` (done) → `notifications` → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

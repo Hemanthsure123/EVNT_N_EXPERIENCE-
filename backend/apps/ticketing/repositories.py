@@ -82,6 +82,17 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         """Backs the events publish gate ('an event needs >= 1 ticket type')."""
         return self.get_queryset().filter(event_id=event_id, deleted_at__isnull=True).exists()
 
+    def total_quantity_for_event(self, event_id: uuid.UUID | str) -> int:
+        """The event's total sellable capacity = sum of its live tiers'
+        quantities. Backs the check-in attendance display's "admitted / capacity"
+        denominator. One aggregate query, no rows materialized."""
+        agg = (
+            self.get_queryset()
+            .filter(event_id=event_id, deleted_at__isnull=True)
+            .aggregate(total=Sum("quantity"))
+        )
+        return agg["total"] or 0
+
     def aggregate_event_availability(self, event_id: uuid.UUID | str) -> dict:
         """The event's denormalized ticketing fields, recomputed from the
         authoritative tier rows: cheapest active price + total remaining."""
