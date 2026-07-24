@@ -12,6 +12,9 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/organizations/", include("apps.organizations.urls")),
+    # events + organizer routes both live under /api/v1/ (see apps/events/urls.py);
+    # listed after the more specific prefixes above so they match first.
+    path("api/v1/", include("apps.events.urls")),
 ]
 
 if settings.ENABLE_SILK:

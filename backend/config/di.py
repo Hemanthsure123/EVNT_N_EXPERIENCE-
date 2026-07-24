@@ -31,6 +31,7 @@ from core.ports.task_queue_port import TaskQueuePort
 
 if TYPE_CHECKING:
     from apps.accounts.services import AuthService
+    from apps.events.services import EventService
     from apps.organizations.services import OrganizationService
 
 
@@ -184,5 +185,20 @@ def build_organization_service() -> OrganizationService:
         users=UserRepository(),
         storage=storage_port(),
         payments=payment_port(),
+        task_queue=task_queue_port(),
+    )
+
+
+def build_event_service() -> EventService:
+    from apps.accounts.repositories import UserRepository
+    from apps.events.repositories import EventRepository
+    from apps.events.services import EventService
+    from apps.organizations.repositories import OrganizationRepository
+
+    return EventService(
+        events=EventRepository(),
+        organizations=OrganizationRepository(),
+        users=UserRepository(),
+        storage=storage_port(),
         task_queue=task_queue_port(),
     )

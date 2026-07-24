@@ -32,14 +32,30 @@ class CachePort(ABC):
         The primitive building block for short-lived reservation locks."""
 
     @abstractmethod
+    def incr(self, key: str, *, delta: int = 1) -> int:
+        """Atomically add `delta` to the integer at `key` (treating a missing
+        key as 0) and return the new value. The building block for a cache
+        *generation* counter: bumping one integer atomically invalidates every
+        cache entry whose key embeds the old generation, without having to
+        track and delete each of those (hash-keyed) entries individually."""
+
+    @abstractmethod
     def ping(self) -> bool:
         """Return True if the backing store is reachable (used by the health check)."""
 
     @contextmanager
-    def lock(self, key: str, *, timeout_seconds: int = 10) -> Iterator[bool]:
+    def lock(
+        self, key: str, *, timeout_seconds: int = 10, blocking_timeout_seconds: float = 0
+    ) -> Iterator[bool]:
         """Best-effort mutual-exclusion lock built on `add`/`delete`.
-        Yields True if the lock was acquired. Adapters may override this with a
-        native locking primitive (e.g. redis-py's Lock) for stronger guarantees."""
+
+        Yields True if the lock was acquired. With `blocking_timeout_seconds > 0`
+        a caller that loses the race waits up to that long for the holder to
+        release — the basis for single-flight cache rebuilds (only one request
+        rebuilds a hot key; the rest wait briefly, then read the freshly-cached
+        value). This add-based fallback can't truly block, so it always makes a
+        single non-blocking attempt regardless; real adapters (see the Redis
+        adapter) override this with a native blocking lock."""
         acquired = self.add(f"lock:{key}", "1", timeout_seconds=timeout_seconds)
         try:
             yield acquired

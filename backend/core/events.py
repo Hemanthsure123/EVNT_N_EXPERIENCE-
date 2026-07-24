@@ -13,3 +13,8 @@ USER_REGISTERED = "accounts.user_registered"
 ORGANIZATION_CREATED = "organizations.organization_created"
 ORGANIZATION_VERIFIED = "organizations.organization_verified"
 PAYOUT_ACCOUNT_LINKED = "organizations.payout_account_linked"
+
+# apps.events
+EVENT_CREATED = "events.event_created"
+EVENT_UPDATED = "events.event_updated"
+EVENT_PUBLISHED = "events.event_published"

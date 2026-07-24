@@ -254,8 +254,12 @@ consistently, not from shortcuts that break the layering above.
    return 304 on a matching `If-None-Match`. **Always `private`** for any
    response whose content depends on who's asking (an ownership/permission
    check gates it) — a shared/CDN cache must never serve one user's cached
-   response to another. Reserve `public` for genuinely unauthenticated-safe
-   reads (none exist yet).
+   response to another. Use `public` (with `s-maxage` + `stale-while-
+   revalidate`) ONLY for genuinely unauthenticated-safe reads — the public
+   `events` browse/detail endpoints are the first: identical for everyone,
+   so a CDN can absorb the bulk of discovery traffic (the single biggest
+   frontend-latency win). Owner/draft-bearing responses are `private,
+   no-store`.
 7. **List endpoints use cursor pagination**
    (`core.pagination.CursorPagination`, subclassed per view with `ordering`
    set to match that query's actual index — see
@@ -290,6 +294,70 @@ warm, same pattern. Both measured directly via `django_assert_num_queries`
 in `apps/organizations/tests/test_api.py` and
 `apps/organizations/tests/test_selectors.py` — these numbers are enforced
 by CI, not just observed once.
+
+**Query budget observed for `events`** (the public read path is
+unauthenticated, so there's no JWT user lookup to pay for): `GET /events/{id}`
+and `GET /events` (list/search, first page) are both **1 query cold** (the
+event/list `SELECT`) and **0 queries warm** (served entirely from Redis).
+`GET /organizer/events` is 2 cold (auth + list). All enforced via
+`django_assert_num_queries` in `apps/events/tests/test_api.py`. Local-dev
+latency (5k-row table, DEBUG on, TLS Redis): detail ~7-8ms warm / ~22ms
+cold; list ~8ms warm / ~60ms cold; a 20-card page is 6.4KB → 1.3KB gzipped.
+
+### The public read path (events): full-text search, edge cache, single-flight
+
+The `events` module is the discovery surface and hottest read path; four
+patterns there are now the standard for any read-heavy public endpoint:
+
+1. **Postgres full-text search, never `ILIKE '%...%'`.** `Event.search_vector`
+   is a `tsvector` kept in sync by a DB **trigger** (see
+   `apps/events/migrations/0001_initial.py`) with weights — title `A`,
+   venue/city `B`, description `C` — and a **GIN index**. Queries use
+   `SearchQuery(..., search_type="websearch")` (never raises on arbitrary
+   user input). The trigger (`BEFORE INSERT`; `BEFORE UPDATE OF title,
+   venue, city, description`) means the vector is always consistent with
+   zero application code and isn't recomputed on a status-only/poster
+   update. Verified with `EXPLAIN ANALYZE`: a selective term is a
+   `Bitmap Index Scan on event_search_vector_gin`; a common term + `ORDER
+   BY starts_at LIMIT` is an index scan on `(status, starts_at)` with a
+   filter — both index-backed, never a seq scan.
+2. **Two DTOs, never the whole model.** A tiny `EventCard` for lists/search
+   and a fuller `EventDetail`, both from `.only(...)`-restricted querysets
+   with `select_related("organization")` so a card never N+1s on the org
+   name. Public visibility (`status=live`, not deleted, upcoming) is
+   enforced in the repository queryset, not the view.
+3. **Single-flight detail caching.** `event:{id}` is rebuilt under a
+   *blocking* `CachePort.lock` (`blocking_timeout_seconds > 0`): on a hot-key
+   expiry exactly one request rebuilds while the rest wait briefly for it,
+   instead of all stampeding the DB. This is the stronger protection the
+   `organizations` checklist said to reach for "only when caching something
+   genuinely expensive" — here justified by a viral event, not rebuild cost.
+4. **Generation-based list-cache invalidation.** Listing/search caches are
+   keyed `events:list:v{gen}:{filter_hash}` — there are unboundedly many
+   filter hashes, so instead of tracking and deleting each, a single
+   `events:list:gen` counter (`CachePort.incr`, atomic) is bumped on every
+   publicly-visible write; every prior-generation key is orphaned at once
+   and TTLs out. Detail caches (keyed by id) are still deleted directly.
+   Both invalidations run in `transaction.on_commit`, and only fire for
+   changes that are actually public (a live event or a publish) — editing a
+   draft touches no public cache.
+
+**Cross-module denormalization.** `Event.from_price_minor` /
+`tickets_available` are columns the (later) `ticketing` module will own and
+keep current, so an event card shows "from ₹X" without joining/aggregating
+ticket rows. Null until then — the clean spot to populate, documented so
+ticketing knows where to write.
+
+**Extensible publish gate.** `apps/events/publish_checks.py` holds a list
+of readiness checks run before draft→live; `register_publish_check(...)`
+lets a module add one from its `AppConfig.ready()` without editing `events`
+(ticketing will add "has ≥1 ticket type"). Dependencies point one way:
+ticketing→events, never the reverse.
+
+**Optimistic locking.** Content edits go through a single race-free
+conditional `UPDATE ... WHERE version = :expected` (`update_if_version_
+matches` / `publish_if_draft`), not read-modify-write — concurrent editors
+can't clobber each other; a mismatch is `409 stale_event_version`.
 
 ### TaskQueuePort now has a registry
 
@@ -328,15 +396,20 @@ wouldn't apply.
   actually deployed, not before.
 - **`SmsPort` is wired up but unused** — no module needs SMS yet. That's
   fine; the port + local adapter existing from day one is the requirement,
-  not that something calls it immediately. (`StoragePort` is now used by
-  `organizations` for logo uploads.)
+  not that something calls it immediately. (`StoragePort` is used by
+  `organizations` for logo uploads and `events` for posters.)
+- **`Event.from_price_minor` / `tickets_available` are null placeholders**
+  for `ticketing` to fill — don't populate them from a fake source now.
+- **Relevance-ranked search ordering is deferred.** Search filters, then
+  orders by `starts_at` (keeps it index-backed + cursor-paginatable). A
+  `sort=relevance` mode (SearchRank) can come later if product wants it.
 - Future modules explicitly deferred until their turn: `teams`,
   `communities`/collaboration, `venues`/seat-maps, `marketing`.
 
 ## Build order
 
-`accounts` (done) → `organizations` (done) → `events` → `ticketing` → `booking` →
-`payments` → `checkin` → `notifications` → `settlements`.
+`accounts` (done) → `organizations` (done) → `events` (done) → `ticketing` →
+`booking` → `payments` → `checkin` → `notifications` → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

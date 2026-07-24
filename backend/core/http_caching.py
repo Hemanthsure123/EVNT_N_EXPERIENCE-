@@ -33,9 +33,30 @@ def is_not_modified(request: Request, etag: str) -> bool:
 
 
 def with_cache_headers(
-    response: Response, *, etag: str, max_age_seconds: int, private: bool = True
+    response: Response,
+    *,
+    etag: str,
+    max_age_seconds: int,
+    private: bool = True,
+    s_maxage_seconds: int | None = None,
+    stale_while_revalidate_seconds: int | None = None,
 ) -> Response:
+    """Attach an ETag + Cache-Control to a cacheable GET response.
+
+    `max_age_seconds` governs the browser cache. For genuinely public,
+    unauthenticated-safe reads (`private=False`), `s_maxage_seconds` governs a
+    shared/CDN cache separately — usually set a bit higher than max-age so the
+    edge absorbs most traffic while browsers revalidate sooner — and
+    `stale_while_revalidate_seconds` lets the edge serve a just-expired copy
+    while it refreshes in the background (no request ever waits on a rebuild).
+    `s-maxage`/`stale-while-revalidate` are meaningless (and must not be sent)
+    on `private` responses, so they're only emitted when `private=False`.
+    """
     response["ETag"] = etag
-    visibility = "private" if private else "public"
-    response["Cache-Control"] = f"{visibility}, max-age={max_age_seconds}"
+    directives = ["private" if private else "public", f"max-age={max_age_seconds}"]
+    if not private and s_maxage_seconds is not None:
+        directives.append(f"s-maxage={s_maxage_seconds}")
+    if not private and stale_while_revalidate_seconds is not None:
+        directives.append(f"stale-while-revalidate={stale_while_revalidate_seconds}")
+    response["Cache-Control"] = ", ".join(directives)
     return response

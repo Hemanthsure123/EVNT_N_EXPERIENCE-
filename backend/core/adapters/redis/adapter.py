@@ -8,7 +8,7 @@ import decimal
 import json
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, cast
 
 import redis
@@ -58,15 +58,33 @@ class RedisCacheAdapter(CachePort):
             )
         )
 
+    def incr(self, key: str, *, delta: int = 1) -> int:
+        # Redis INCRBY is atomic and creates the key at 0 if missing. Its
+        # integer string is also valid JSON, so a later get() (which json.loads)
+        # reads it back as an int without special-casing.
+        return int(cast(int, self._client.incrby(key, delta)))
+
     def ping(self) -> bool:
         return bool(self._client.ping())
 
     @contextmanager
-    def lock(self, key: str, *, timeout_seconds: int = 10) -> Iterator[bool]:
-        lock = self._client.lock(f"lock:{key}", timeout=timeout_seconds, blocking_timeout=0)
-        acquired = lock.acquire()
+    def lock(
+        self, key: str, *, timeout_seconds: int = 10, blocking_timeout_seconds: float = 0
+    ) -> Iterator[bool]:
+        # blocking_timeout_seconds > 0 → a loser waits up to that long for the
+        # winner to release (single-flight rebuild); 0 → one non-blocking try.
+        lock = self._client.lock(
+            f"lock:{key}",
+            timeout=timeout_seconds,
+            blocking_timeout=blocking_timeout_seconds or None,
+        )
+        acquired = lock.acquire(blocking=blocking_timeout_seconds > 0)
         try:
             yield acquired
         finally:
             if acquired:
-                lock.release()
+                # A slow rebuild can outlast the lock's own timeout; releasing a
+                # lock we no longer hold raises LockNotOwnedError, which is
+                # harmless here (the point of releasing is just to let waiters in).
+                with suppress(redis.exceptions.LockError):
+                    lock.release()

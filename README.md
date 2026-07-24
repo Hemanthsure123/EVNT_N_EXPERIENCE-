@@ -4,9 +4,9 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus two complete modules (`accounts`, `organizations`)
-proving the whole stack works end to end — architecture, caching, and
-performance discipline included.
+**foundation** plus three complete modules (`accounts`, `organizations`,
+`events`) proving the whole stack works end to end — architecture, caching,
+full-text search, and performance discipline included.
 
 ## Stack
 
@@ -41,6 +41,11 @@ dev server on `http://localhost:8000`.
   `PATCH /api/v1/organizations/{id}`, `GET /api/v1/organizations/` (mine,
   cursor-paginated), `POST /api/v1/organizations/{id}/verification`,
   `POST /api/v1/organizations/{id}/payout-account`
+- Events API — public discovery (unauthenticated, CDN-cacheable):
+  `GET /api/v1/events` (browse + full-text search `?q=` + `?city=` filter,
+  cursor-paginated), `GET /api/v1/events/{id}`. Organizer (authenticated):
+  `POST /api/v1/events` (draft), `PATCH /api/v1/events/{id}` (optimistic-
+  locked), `POST /api/v1/events/{id}/publish`, `GET /api/v1/organizer/events`.
 
 ### Option B — local venv (faster iteration)
 
@@ -117,7 +122,9 @@ backend/
   apps/
     accounts/        reference module — copy this shape for every new module
     organizations/   orgs/brands, verification, payout-account linking, caching
-    (events, ticketing, booking, payments, checkin, notifications,
+    events/          public discovery: full-text search, edge caching,
+                     single-flight detail cache, optimistic-locked edits
+    (ticketing, booking, payments, checkin, notifications,
      settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

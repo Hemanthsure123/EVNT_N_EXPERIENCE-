@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # third-party
+    "django.contrib.postgres",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
@@ -43,6 +44,7 @@ INSTALLED_APPS = [
     # business modules
     "apps.accounts",
     "apps.organizations",
+    "apps.events",
 ]
 
 MIDDLEWARE = [

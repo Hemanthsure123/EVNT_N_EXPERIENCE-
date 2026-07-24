@@ -38,5 +38,13 @@ class LocMemCacheAdapter(CachePort):
         self.set(key, value, timeout_seconds=timeout_seconds)
         return True
 
+    def incr(self, key: str, *, delta: int = 1) -> int:
+        current = self.get(key)
+        new_value = (int(current) if current is not None else 0) + delta
+        # Preserve any existing TTL semantics loosely: generation counters are
+        # long-lived, so keep this key without an expiry (matches Redis INCR).
+        self.set(key, new_value)
+        return new_value
+
     def ping(self) -> bool:
         return True
