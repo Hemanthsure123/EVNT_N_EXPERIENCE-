@@ -31,6 +31,7 @@ from core.ports.task_queue_port import TaskQueuePort
 
 if TYPE_CHECKING:
     from apps.accounts.services import AuthService
+    from apps.booking.services import BookingService
     from apps.events.services import EventService
     from apps.organizations.services import OrganizationService
     from apps.ticketing.services import TicketingService
@@ -216,4 +217,24 @@ def build_ticketing_service() -> TicketingService:
         ticket_types=ticket_types,
         events=EventRepository(),
         reservation=RowLockReservationStrategy(ticket_types=ticket_types),
+    )
+
+
+def build_booking_service() -> BookingService:
+    from apps.booking.repositories import BookingRepository, TicketRepository
+    from apps.booking.services import BookingService
+    from apps.events.repositories import EventRepository
+    from apps.ticketing.repositories import TicketTypeRepository
+
+    return BookingService(
+        bookings=BookingRepository(),
+        tickets=TicketRepository(),
+        ticket_types=TicketTypeRepository(),
+        ticketing=build_ticketing_service(),
+        events=EventRepository(),
+        payments=payment_port(),
+        cache=cache_port(),
+        qr_secret=settings.TICKET_QR_SIGNING_KEY,
+        hold_minutes=settings.BOOKING_HOLD_MINUTES,
+        platform_fee_per_ticket=settings.PLATFORM_FEE_PER_TICKET,
     )

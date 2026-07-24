@@ -18,6 +18,8 @@ urlpatterns = [
     # ticketing's /events/{id}/ticket-types and /ticket-types/{id} also live
     # under /api/v1/; distinct path segments, so no clash with the events routes.
     path("api/v1/", include("apps.ticketing.urls")),
+    # booking's /bookings and /me/tickets, likewise under /api/v1/.
+    path("api/v1/", include("apps.booking.urls")),
 ]
 
 if settings.ENABLE_SILK:

@@ -4,10 +4,11 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus four complete modules (`accounts`, `organizations`,
-`events`, `ticketing`) proving the whole stack works end to end —
+**foundation** plus five complete modules (`accounts`, `organizations`,
+`events`, `ticketing`, `booking`) proving the whole stack works end to end —
 architecture, caching, full-text search, correct-under-concurrency
-reservations, and performance discipline included.
+reservations, the reserve→hold→confirm money-path lifecycle, and performance
+discipline included.
 
 ## Stack
 
@@ -51,7 +52,13 @@ dev server on `http://localhost:8000`.
   (tiers + live availability, short-TTL cached). Organizer:
   `POST /api/v1/events/{id}/ticket-types`, `PATCH /api/v1/ticket-types/{id}`.
   The `reserve`/`release`/`confirm_sold` primitives (per-tier row lock, zero
-  oversell) are an internal service API `booking` will call — not HTTP yet.
+  oversell) are an internal service API `booking` calls — not HTTP.
+- Booking API (authenticated): `POST /api/v1/bookings` (reserve all items
+  all-or-nothing, hold, create payment order; honours an `Idempotency-Key`
+  header), `GET /api/v1/bookings/{id}`, `POST /api/v1/bookings/{id}/cancel`,
+  `GET /api/v1/me/tickets`. `ConfirmBooking` (issue signed-QR tickets,
+  idempotent) is an internal service API `payments` will call from the
+  verified webhook — not HTTP yet. A sweeper task auto-releases expired holds.
 
 ### Option B — local venv (faster iteration)
 
@@ -132,7 +139,8 @@ backend/
                      single-flight detail cache, optimistic-locked edits
     ticketing/       tiers + authoritative availability; per-tier row-lock
                      reserve/release/confirm primitives (zero oversell)
-    (booking, payments, checkin, notifications,
-     settlements — not built yet)
+    booking/         reserve→hold→confirm money-path lifecycle; all-or-nothing
+                     reserve, auto-release sweeper, signed-QR ticket issuance
+    (payments, checkin, notifications, settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

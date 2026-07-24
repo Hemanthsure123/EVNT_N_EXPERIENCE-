@@ -23,3 +23,9 @@ EVENT_PUBLISHED = "events.event_published"
 TICKET_TYPE_ADDED = "ticketing.ticket_type_added"
 TICKET_TYPE_UPDATED = "ticketing.ticket_type_updated"
 TICKET_TYPE_SOLD_OUT = "ticketing.ticket_type_sold_out"
+
+# apps.booking
+BOOKING_CREATED = "booking.booking_created"
+BOOKING_CONFIRMED = "booking.booking_confirmed"
+BOOKING_CANCELLED = "booking.booking_cancelled"
+TICKET_ISSUED = "booking.ticket_issued"

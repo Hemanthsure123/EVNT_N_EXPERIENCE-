@@ -424,6 +424,78 @@ authoritative tier rows in `on_commit` and written through
 invalidated so the fast events read path reflects the change. These are also
 display denormals: the reserve decision never reads them.
 
+## Booking: the money-path lifecycle + the ConfirmBooking contract
+
+`booking` orchestrates the money path on top of ticketing's primitives.
+Lifecycle: **reserved → (paid | cancelled | expired)**. The invariant: every
+reserved ticket ends up EITHER paid (a Ticket issued, tier `reserved`→`sold`)
+OR released (tier `reserved` freed) — never stuck, leaked, or double-issued.
+
+Two rules, binding on every money-path module:
+
+1. **All-or-nothing reserve.** CreateBooking reserves every item inside ONE
+   `UnitOfWork`; if any single `ticketing.reserve` fails, the whole
+   transaction rolls back, which *automatically* releases everything already
+   reserved. A partial reservation can never persist — the atomicity does the
+   "release on partial failure" for free.
+2. **No DB lock across an external call.** The `PaymentPort.create_order`
+   call happens AFTER the reserve transaction commits — never while a tier or
+   booking row is locked. The reserve/confirm/release lock windows stay tiny;
+   a caller (booking here, payments next) must keep the enclosing transaction
+   short, with no network call inside it.
+
+**Authoritative hold = the DB** (`status == reserved AND hold_expires_at` in
+the future). A Redis hold key was deliberately NOT added — confirm/cancel/
+sweep already read the booking row, so a hint would earn nothing, and the
+**sweeper is the reliability backstop**: `booking.release_expired`
+(TaskQueuePort, scheduler-fired in prod) finds lapsed reserved holds,
+releases their inventory via `ticketing.release`, and marks them `expired` —
+each in its own short transaction under a booking-row lock, re-checked after
+locking. Inventory is freed even if every best-effort signal is missed.
+
+**Lock ordering** to avoid deadlocks: confirm/cancel/sweep always lock the
+*booking* row first (`SELECT ... FOR UPDATE`), then tier rows (via ticketing).
+CreateBooking locks only tier rows (the booking doesn't exist yet).
+
+**Idempotency, two layers:**
+- CreateBooking accepts a client `Idempotency-Key` (header → a `(user,
+  idempotency_key)` unique constraint). A retry returns the original booking.
+  Race-safe: a concurrent same-key insert hits the unique constraint, its
+  reserves roll back with the transaction, and it returns the winner. A short
+  `CachePort.lock` on the key is a best-effort optimization to avoid the
+  wasted reserve+rollback — correctness is the DB constraint, not the lock.
+- ConfirmBooking is idempotent on the booking itself (a webhook can fire
+  twice): once `paid`, it returns the SAME tickets, never re-issues.
+
+**The ConfirmBooking contract `payments` will consume** (called from the
+verified webhook, in payments' own transaction):
+
+`confirm_booking(booking_id, payment_ref) -> ConfirmResult(issued, reason, tickets)`
+- `issued=True` → tickets freshly issued (`tickets` populated); tier
+  `reserved`→`sold`; outbox `BOOKING_CONFIRMED` + `TICKET_ISSUED`.
+- `issued=False, reason="already_confirmed"` → idempotent replay; the SAME
+  tickets returned, nothing re-issued.
+- `issued=False, reason="hold_expired"` → the hold lapsed (cancelled/expired,
+  or reserved-but-past-expiry); NO tickets issued. The caller should REFUND
+  (payments/settlements) — booking does not.
+
+It runs entirely under the booking-row lock in one transaction: mark paid →
+`ticketing.confirm_sold` per item → create `Ticket` rows (each a signed QR
+token) → write the outbox. Ticket issuance is the confirm's own step, so it
+can never happen without the sale being recorded.
+
+**Signed QR tokens** (`qr.py`): `v1.<payload>.<hmac>` where payload is compact
+JSON of ids only (ticket + event) — NO PII. HMAC-SHA256 with
+`TICKET_QR_SIGNING_KEY`; `verify_ticket_token` constant-time-compares and
+returns the ids or `None` (never raises). Any tamper invalidates it. `checkin`
+will verify with the same key.
+
+**Reads are private, never cached.** A booking and a user's tickets are
+per-user, security-sensitive data → `private, no-store`. GET /bookings/{id}
+(booking+event+items in a fixed 3 queries incl. auth) and GET /me/tickets
+(auth + one joined query) both avoid N+1, enforced by
+`django_assert_num_queries`.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -469,17 +541,21 @@ wouldn't apply.
 - **Relevance-ranked search ordering is deferred.** Search filters, then
   orders by `starts_at` (keeps it index-backed + cursor-paginatable). A
   `sort=relevance` mode (SearchRank) can come later if product wants it.
-- **`booking` is next, not started.** It — not ticketing — owns holds, the
-  hold expiry timer, orders, and the orchestration that CALLS ticketing's
-  `reserve`/`release`/`confirm_sold`. Ticketing has no notion of an order.
+- **`payments` is next, not started.** It owns Razorpay webhook
+  verification, payment-layer idempotency, the Route split, and refunds; it
+  will CALL `booking.confirm_booking` from the verified webhook (contract
+  above). Do NOT build the webhook/signature/split/refund in booking.
+- **`checkin` (later)** verifies the QR (`verify_ticket_token`) and marks
+  tickets `used` under a row lock; booking only issues the token + provides
+  `verify`.
 - Future modules explicitly deferred until their turn: `teams`,
   `communities`/collaboration, `venues`/seat-maps, `marketing`.
 
 ## Build order
 
 `accounts` (done) → `organizations` (done) → `events` (done) →
-`ticketing` (done) → `booking` → `payments` → `checkin` → `notifications` →
-`settlements`.
+`ticketing` (done) → `booking` (done) → `payments` → `checkin` →
+`notifications` → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

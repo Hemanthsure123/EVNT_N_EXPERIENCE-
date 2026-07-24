@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "apps.organizations",
     "apps.events",
     "apps.ticketing",
+    "apps.booking",
 ]
 
 MIDDLEWARE = [
@@ -183,7 +184,17 @@ RAZORPAY_KEY_ID = env.str("RAZORPAY_KEY_ID", default="")
 RAZORPAY_KEY_SECRET = env.str("RAZORPAY_KEY_SECRET", default="")
 RAZORPAY_WEBHOOK_SECRET = env.str("RAZORPAY_WEBHOOK_SECRET", default="")
 RAZORPAY_ROUTE_ENABLED = env.bool("RAZORPAY_ROUTE_ENABLED", default=True)
+# Platform's per-ticket fee, in MINOR units (paise) — kept integer like every
+# other money value. The organizer receives (total - platform_fee) at
+# settlement; the platform never holds their funds beyond that split.
 PLATFORM_FEE_PER_TICKET = env.int("PLATFORM_FEE_PER_TICKET", default=10)
+
+# Booking hold window: how long a reservation is held awaiting payment before
+# the sweeper auto-releases it. Short, so unpaid holds don't starve inventory.
+BOOKING_HOLD_MINUTES = env.int("BOOKING_HOLD_MINUTES", default=10)
+# Server secret for signing ticket QR tokens (HMAC). Rotatable independently
+# of SECRET_KEY. checkin will verify tokens with this same key.
+TICKET_QR_SIGNING_KEY = env.str("TICKET_QR_SIGNING_KEY", default="")
 
 # Google OAuth
 GOOGLE_OAUTH_CLIENT_ID = env.str("GOOGLE_OAUTH_CLIENT_ID", default="")
