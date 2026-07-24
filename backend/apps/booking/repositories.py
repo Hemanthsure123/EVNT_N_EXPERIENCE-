@@ -153,6 +153,19 @@ class TicketRepository(BaseRepository[Ticket]):
         the live-attendance display, which the cache only accelerates)."""
         return Ticket.objects.filter(booking__event_id=event_id, status=TicketStatus.USED).count()
 
+    def list_holder_user_ids_for_event(self, event_id: uuid.UUID | str) -> list[uuid.UUID]:
+        """Distinct ids of users holding a live (active/used) ticket for this
+        event — the recipient set for an event reminder. One query, ids only;
+        the caller loads the users in a single `list_by_ids` fetch (no N+1)."""
+        return list(
+            Ticket.objects.filter(
+                booking__event_id=event_id,
+                status__in=(TicketStatus.ACTIVE, TicketStatus.USED),
+            )
+            .values_list("booking__user_id", flat=True)
+            .distinct()
+        )
+
     def void_active_for_booking(self, booking_id: uuid.UUID | str) -> int:
         """Void a booking's still-active tickets in one conditional UPDATE, so a
         refunded ticket can't enter the gate. Returns how many were voided —

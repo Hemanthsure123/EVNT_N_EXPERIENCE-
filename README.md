@@ -4,13 +4,13 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus seven complete modules (`accounts`, `organizations`,
-`events`, `ticketing`, `booking`, `payments`, `checkin`) proving the whole
-stack works end to end — architecture, caching, full-text search, correct-
-under-concurrency reservations, the reserve→hold→confirm→pay money-path
-lifecycle with signature-verified webhooks and automatic refunds, one-scan
-gate entry that can't admit a ticket twice, and performance discipline
-included.
+**foundation** plus eight complete modules (`accounts`, `organizations`,
+`events`, `ticketing`, `booking`, `payments`, `checkin`, `notifications`)
+proving the whole stack works end to end — architecture, caching, full-text
+search, correct-under-concurrency reservations, the reserve→hold→confirm→pay
+money-path lifecycle with signature-verified webhooks and automatic refunds,
+one-scan gate entry that can't admit a ticket twice, event-driven exactly-once
+email/SMS delivery, and performance discipline included.
 
 ## Stack
 
@@ -76,6 +76,14 @@ dev server on `http://localhost:8000`.
   scans are denied and audited), `GET /api/v1/events/{id}/attendance` (live
   admitted-vs-capacity, cached for display but reconciled from the DB). Reuses
   booking's signed-token verifier; a refund voids the ticket so it can't enter.
+- Notifications — **no public API** (internal, event- and job-driven): it
+  subscribes to domain events (`USER_REGISTERED`, `BOOKING_CONFIRMED`,
+  `PAYMENT_REFUNDED`, `EVENT_PUBLISHED`) and sends templated email/SMS through
+  `EmailPort`/`SmsPort`. Delivery is fully async (off the request path via the
+  task queue), **exactly-once** (a unique `dedupe_key` + claim-before-send row
+  lock), with retry → dead-letter. The ticket-delivery email (event + booking
+  reference + QR) and OTP SMS (India DLT template per type) live here; the
+  welcome email was consolidated in from `accounts`.
 
 ### Option B — local venv (faster iteration)
 
@@ -162,6 +170,8 @@ backend/
                      Route split (on-hold), auto-refunds when unfulfillable
     checkin/         one-scan gate entry under a per-ticket row lock, live
                      attendance (cache the count, trust the DB), scan audit log
-    (notifications, settlements — not built yet)
+    notifications/   event-driven email/SMS: exactly-once (unique dedupe_key +
+                     claim-before-send), retry + dead-letter, templated + DLT
+    (settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

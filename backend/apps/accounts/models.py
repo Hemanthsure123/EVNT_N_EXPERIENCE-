@@ -43,6 +43,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=150, blank=True)
+    # Optional destination for SMS notifications (booking confirmation, OTP).
+    # Blank when unknown — SMS sends are skipped cleanly rather than failing.
+    # A phone-based sign-in flow that populates/verifies this is a later concern.
+    phone = models.CharField(max_length=20, blank=True, default="")
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     # Granted the moment a user creates their first organization (see

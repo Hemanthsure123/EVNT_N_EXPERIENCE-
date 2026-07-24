@@ -24,7 +24,7 @@ class HttpSmsAdapter(SmsPort):
         self._dlt_template_id = dlt_template_id
         self._api_base_url = api_base_url.rstrip("/")
 
-    def send(self, *, to: str, message: str) -> None:
+    def send(self, *, to: str, message: str, dlt_template_id: str = "") -> str:
         response = requests.post(
             f"{self._api_base_url}/send",
             headers={"Authorization": f"Bearer {self._api_key}"},
@@ -33,8 +33,11 @@ class HttpSmsAdapter(SmsPort):
                 "message": message,
                 "sender_id": self._sender_id,
                 "dlt_entity_id": self._dlt_entity_id,
-                "dlt_template_id": self._dlt_template_id,
+                # Per-message DLT template id (the caller maps type -> approved
+                # template); fall back to the configured default when blank.
+                "dlt_template_id": dlt_template_id or self._dlt_template_id,
             },
             timeout=10,
         )
         response.raise_for_status()
+        return str(response.json().get("id", "")) if response.content else ""

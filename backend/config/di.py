@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from apps.booking.services import BookingService
     from apps.checkin.services import CheckinService
     from apps.events.services import EventService
+    from apps.notifications.services import NotificationService, ReminderService
     from apps.organizations.services import OrganizationService
     from apps.payments.services import PaymentService
     from apps.ticketing.services import TicketingService
@@ -280,4 +281,34 @@ def build_checkin_service() -> CheckinService:
         qr_secret=settings.TICKET_QR_SIGNING_KEY,
         window_opens_before_minutes=settings.CHECKIN_WINDOW_OPENS_BEFORE_MINUTES,
         window_grace_after_minutes=settings.CHECKIN_WINDOW_GRACE_AFTER_MINUTES,
+    )
+
+
+def build_notification_service() -> NotificationService:
+    from apps.notifications.repositories import NotificationLogRepository
+    from apps.notifications.services import NotificationService
+    from apps.notifications.templates import TemplateService
+
+    return NotificationService(
+        logs=NotificationLogRepository(),
+        templates=TemplateService(),
+        email=email_port(),
+        sms=sms_port(),
+        task_queue=task_queue_port(),
+        max_attempts=settings.NOTIFICATION_MAX_ATTEMPTS,
+        retry_backoff_seconds=settings.NOTIFICATION_RETRY_BACKOFF_SECONDS,
+    )
+
+
+def build_reminder_service() -> ReminderService:
+    from apps.accounts.repositories import UserRepository
+    from apps.booking.repositories import TicketRepository
+    from apps.events.repositories import EventRepository
+    from apps.notifications.services import ReminderService
+
+    return ReminderService(
+        notifications=build_notification_service(),
+        tickets=TicketRepository(),
+        users=UserRepository(),
+        events=EventRepository(),
     )

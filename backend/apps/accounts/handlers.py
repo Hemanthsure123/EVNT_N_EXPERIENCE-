@@ -1,20 +1,11 @@
-"""Observers reacting to this module's own domain events, dispatched via the
-outbox -> event bus (see core/outbox.py, core/adapters/local/inprocess_event_bus.py).
-Wired up in apps.py AppConfig.ready()."""
+"""accounts has no domain-event observers of its own.
+
+The welcome email that used to live here now belongs to the `notifications`
+module: accounts EMITS `USER_REGISTERED` (see services.AuthService.register),
+and notifications subscribes to it and owns rendering, delivery, dedupe and
+logging — one home for all user messaging. This file is kept as the module
+shape's placeholder; add a handler here only if accounts needs to react to
+another module's event.
+"""
 
 from __future__ import annotations
-
-import logging
-
-logger = logging.getLogger(__name__)
-
-
-def handle_user_registered(payload: dict) -> None:
-    from config.di import email_port
-
-    email_port().send(
-        to=payload["email"],
-        subject="Welcome to Event & Experience Platform",
-        body=f"Hi {payload.get('full_name') or payload['email']}, your account is ready.",
-    )
-    logger.info("accounts.welcome_email_sent", extra={"user_id": payload["user_id"]})

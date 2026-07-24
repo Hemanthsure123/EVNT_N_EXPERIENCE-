@@ -17,7 +17,7 @@ class HttpEmailAdapter(EmailPort):
         self._from_address = from_address
         self._api_base_url = api_base_url.rstrip("/")
 
-    def send(self, *, to: str, subject: str, body: str) -> None:
+    def send(self, *, to: str, subject: str, body: str) -> str:
         response = requests.post(
             f"{self._api_base_url}/send",
             headers={"Authorization": f"Bearer {self._api_key}"},
@@ -25,3 +25,6 @@ class HttpEmailAdapter(EmailPort):
             timeout=10,
         )
         response.raise_for_status()
+        # Return the provider's message id when present (shape varies by vendor),
+        # so notifications can store a real provider_ref for tracing.
+        return str(response.json().get("id", "")) if response.content else ""

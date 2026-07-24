@@ -646,6 +646,81 @@ via `django_assert_num_queries`. Warm attendance is ~20ms server-side; the
 verify path is a single indexed lookup + a tiny single-row locked write — among
 the fastest write endpoints in the system.
 
+## Notifications: reliable, idempotent, fully-async delivery
+
+`notifications` is the CONSUMER of the domain events the other modules already
+emit via the outbox/event bus. It renders, dispatches and logs every user
+message — email + SMS — and is the ONE home for all messaging (templates,
+delivery, dedupe, logging). Three rules govern it:
+
+> **1. Fully async.** Nothing user-facing ever blocks on a send — every send is
+> handed to `TaskQueuePort` and happens off the request path.
+> **2. Exactly-once.** Every message is delivered at-least-once with retry +
+> dead-letter, and the SAME message is NEVER sent twice.
+> **3. Loud, never silent.** A missing template raises at render time; a send
+> that exhausts its retries is dead-lettered (recorded), never dropped.
+
+**The `NotificationLog` is the audit trail AND the idempotency ledger** — one
+row per logical message, keyed by a stable **UNIQUE `dedupe_key`**
+(`{event/aggregate}:{type}:{channel}:{recipient}`). That uniqueness is the
+backbone of exactly-once.
+
+**The one entry point — `NotificationService.notify(type, recipient, context,
+dedupe_key, delay_seconds=0)`** — orchestrates, cleanly separated from render
+and dispatch (render / dispatch / orchestrate):
+1. **Dedupe:** a log already exists for the key → return it, DON'T re-enqueue.
+2. **Render** via `TemplateService` (pure, no I/O — safe on the request path).
+   `TemplateMissingError` is raised HERE, before any claim (never a silent
+   no-send).
+3. **Claim:** insert the `pending` row. A concurrent claim collides on the
+   unique key (`IntegrityError`, caught in its own savepoint) → the winner
+   enqueues, the loser returns it. So a message is CLAIMED exactly once.
+4. **Enqueue** the dispatch task. No recipient (e.g. an SMS to a user with no
+   phone) → a clean skip returning `None`, never a failed send.
+
+**`dispatch(notification_id)` — claim-before-send under a row lock:** loads the
+log, no-ops if it's already `sent`/`failed` (redelivery-safe), then under
+`SELECT ... FOR UPDATE` on the log row re-checks `status == pending` and sends
+through the channel port. Two dispatchers of the same claim serialise on the
+row, so exactly one sends. On provider failure it increments `attempts` and
+re-enqueues with exponential backoff; after `NOTIFICATION_MAX_ATTEMPTS` it
+**dead-letters** (`status=failed`, `error` recorded, logged). The send is made
+under the lock deliberately: the log row is uncontended (nothing competes for it
+but a duplicate dispatch, which SHOULD wait), unlike a hot inventory row — the
+"external I/O outside the lock" rule guards lock *contention*, which doesn't
+apply here. **Concurrency is proven** (`test_concurrency.py`,
+`transaction=True` + threads): two dispatchers of one claim send exactly once.
+
+**Notification types wired** (from events the other modules emit): `USER_REGISTERED`
+→ welcome email (**consolidated here from accounts** — accounts emits, this
+module sends); `BOOKING_CONFIRMED` → the **ticket delivery email** (event +
+booking reference + the QR) *and* an SMS (the most important message); OTP →
+SMS OTP, dispatched **promptly** (`delay_seconds=0`, the fast path — not the
+slow polling worker — but still through this same async pipeline); `PAYMENT_REFUNDED`
+→ refund confirmation email + SMS; `EVENT_PUBLISHED` → **schedules** a reminder
+via `TaskQueuePort` for `NOTIFICATION_EVENT_REMINDER_HOURS_BEFORE` before the
+event; the reminder job fans out to current ticket holders (loaded in one query,
+idempotent per `(event, user)`).
+
+**Templating + India DLT.** `TemplateService.render(type, channel, context)` is
+a Factory over pure per-type template functions returning `RenderedMessage(subject,
+body)`. The **channel is derived from the type** (`channel_for_type`), and for
+SMS the **DLT-approved template id is mapped per type** (`dlt_template_id_for_type`
+→ `settings.NOTIFICATION_SMS_DLT_TEMPLATE_IDS`, falling back to the single
+`SMS_DLT_TEMPLATE_ID`), passed per-message to `SmsPort.send(..., dlt_template_id=)`.
+India's DLT regime approves a distinct template per message type, so this
+mapping is what makes real SMS compliant the moment the provider is switched on.
+
+**Port evolution (the first real consumer needs it):** `EmailPort.send` /
+`SmsPort.send` now RETURN a provider reference (stored as `NotificationLog.
+provider_ref` for tracing; console adapters return a synthetic id, real adapters
+the vendor's id), and `SmsPort.send` takes an optional per-message
+`dlt_template_id`. A nullable `User.phone` was added — SMS's destination; blank
+→ SMS is skipped cleanly. This module is **internal** (event/job-driven): no
+public HTTP endpoints (`urls.py` empty, not mounted); operator visibility is the
+Django admin + selectors. Backends stay `EMAIL_PROVIDER=console` /
+`SMS_PROVIDER=console` in dev/test.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -681,10 +756,9 @@ wouldn't apply.
   above), but the Cloud Tasks real adapter's internal HTTP dispatch
   endpoint still doesn't exist. Add it when `QUEUE_BACKEND=cloud_tasks` is
   actually deployed, not before.
-- **`SmsPort` is wired up but unused** — no module needs SMS yet. That's
-  fine; the port + local adapter existing from day one is the requirement,
-  not that something calls it immediately. (`StoragePort` is used by
-  `organizations` for logo uploads and `events` for posters.)
+- **`SmsPort` is now used by `notifications`** (booking confirmation, OTP,
+  refund SMS), routed per-type through India DLT template ids. (`StoragePort`
+  is used by `organizations` for logo uploads and `events` for posters.)
 - **`Event.from_price_minor` / `tickets_available` are now populated by
   `ticketing`** (see the ticketing section above) — they're display denormals
   kept current from the authoritative tier rows.
@@ -693,13 +767,17 @@ wouldn't apply.
   `sort=relevance` mode (SearchRank) can come later if product wants it.
 - **`checkin` is done** (see the check-in section above) — signature-verified
   one-scan entry under a per-ticket row lock, live attendance (cache the count,
-  trust the DB), append-only `ScanLog`, refund-voids-tickets. **`notifications`
-  is next, not started**: it reacts to existing domain events
-  (`USER_REGISTERED`, `BOOKING_CONFIRMED`/`TICKET_ISSUED`, `PAYMENT_*`,
-  `TICKET_CHECKED_IN`) via the outbox → event bus, sending through the existing
-  `EmailPort`/`SmsPort` (SMS is already wired but unused) — it adds no new
-  money-path logic and OWNS no new authoritative state.
-- **`settlements` (later)** releases the ON-HOLD organizer transfer after the
+  trust the DB), append-only `ScanLog`, refund-voids-tickets.
+- **`notifications` is done** (see the notifications section above) —
+  event-driven, exactly-once (unique `dedupe_key` + claim-before-send row
+  lock), fully-async (retry + dead-letter via `TaskQueuePort`), templated
+  email/SMS with per-type India DLT ids, welcome consolidated from accounts.
+  **`settlements` is next, not started** (see below). It does NOT subscribe to a
+  payout event yet — that event doesn't exist until settlements emits it;
+  notifications can subscribe to it THEN. User notification preferences /
+  opt-out and WhatsApp are future — the channel abstraction is the seam, don't
+  build them now.
+- **`settlements` (next)** releases the ON-HOLD organizer transfer after the
   event, records the settlement, and reconciles refunds. The split is already
   defined at order time (payments); settlements only releases the hold. Do NOT
   build settlements in payments.
@@ -710,7 +788,7 @@ wouldn't apply.
 
 `accounts` (done) → `organizations` (done) → `events` (done) →
 `ticketing` (done) → `booking` (done) → `payments` (done) →
-`checkin` (done) → `notifications` → `settlements`.
+`checkin` (done) → `notifications` (done) → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

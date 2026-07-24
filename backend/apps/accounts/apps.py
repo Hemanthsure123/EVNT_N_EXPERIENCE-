@@ -6,10 +6,5 @@ class AccountsConfig(AppConfig):
     name = "apps.accounts"
     label = "accounts"
 
-    def ready(self) -> None:
-        from config.di import event_bus_port
-        from core import events
-
-        from . import handlers
-
-        event_bus_port().subscribe(events.USER_REGISTERED, handlers.handle_user_registered)
+    # No AppConfig.ready(): accounts emits USER_REGISTERED but subscribes to
+    # nothing — the welcome email is owned by the notifications module now.

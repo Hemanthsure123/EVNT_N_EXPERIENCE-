@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "apps.booking",
     "apps.payments",
     "apps.checkin",
+    "apps.notifications",
 ]
 
 MIDDLEWARE = [
@@ -221,6 +222,20 @@ SMS_SENDER_ID = env.str("SMS_SENDER_ID", default="")
 SMS_DLT_ENTITY_ID = env.str("SMS_DLT_ENTITY_ID", default="")
 SMS_DLT_TEMPLATE_ID = env.str("SMS_DLT_TEMPLATE_ID", default="")
 SMS_API_BASE_URL = env.str("SMS_API_BASE_URL", default="")
+
+# Notifications
+# Per-notification-type India DLT template ids ("type=template_id,..."). Each
+# SMS type has its OWN DLT-approved template in production; every type not
+# listed here falls back to the single SMS_DLT_TEMPLATE_ID above.
+NOTIFICATION_SMS_DLT_TEMPLATE_IDS = env.dict("NOTIFICATION_SMS_DLT_TEMPLATE_IDS", default={})
+# Delivery reliability: retry a failed send up to this many attempts with
+# exponential backoff, then dead-letter it (status=failed).
+NOTIFICATION_MAX_ATTEMPTS = env.int("NOTIFICATION_MAX_ATTEMPTS", default=5)
+NOTIFICATION_RETRY_BACKOFF_SECONDS = env.int("NOTIFICATION_RETRY_BACKOFF_SECONDS", default=30)
+# How long before an event its reminder is scheduled to fire.
+NOTIFICATION_EVENT_REMINDER_HOURS_BEFORE = env.int(
+    "NOTIFICATION_EVENT_REMINDER_HOURS_BEFORE", default=24
+)
 
 # Google Cloud
 GCP_PROJECT_ID = env.str("GCP_PROJECT_ID", default="")
