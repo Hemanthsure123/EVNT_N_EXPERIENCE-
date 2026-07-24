@@ -15,6 +15,9 @@ urlpatterns = [
     # events + organizer routes both live under /api/v1/ (see apps/events/urls.py);
     # listed after the more specific prefixes above so they match first.
     path("api/v1/", include("apps.events.urls")),
+    # ticketing's /events/{id}/ticket-types and /ticket-types/{id} also live
+    # under /api/v1/; distinct path segments, so no clash with the events routes.
+    path("api/v1/", include("apps.ticketing.urls")),
 ]
 
 if settings.ENABLE_SILK:

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from apps.accounts.services import AuthService
     from apps.events.services import EventService
     from apps.organizations.services import OrganizationService
+    from apps.ticketing.services import TicketingService
 
 
 # --- Port factories -------------------------------------------------------
@@ -201,4 +202,18 @@ def build_event_service() -> EventService:
         users=UserRepository(),
         storage=storage_port(),
         task_queue=task_queue_port(),
+    )
+
+
+def build_ticketing_service() -> TicketingService:
+    from apps.events.repositories import EventRepository
+    from apps.ticketing.repositories import TicketTypeRepository
+    from apps.ticketing.services import TicketingService
+    from apps.ticketing.strategies import RowLockReservationStrategy
+
+    ticket_types = TicketTypeRepository()
+    return TicketingService(
+        ticket_types=ticket_types,
+        events=EventRepository(),
+        reservation=RowLockReservationStrategy(ticket_types=ticket_types),
     )

@@ -359,6 +359,71 @@ conditional `UPDATE ... WHERE version = :expected` (`update_if_version_
 matches` / `publish_if_draft`), not read-modify-write — concurrent editors
 can't clobber each other; a mismatch is `409 stale_event_version`.
 
+## Ticketing: cache-for-display, decide-under-lock (the money-path rule)
+
+`ticketing` is the first module where a bug costs real money (overselling =
+selling tickets that don't exist). The governing rule, binding on every
+money-path module after it:
+
+> **Availability *display* is cached and fast. The reserve *decision* is
+> ALWAYS made under a per-row database lock, never from a cache.**
+
+- **Per-tier pessimistic lock.** `reserve`/`release`/`confirm_sold` each do
+  `SELECT ... FOR UPDATE` on the single `TicketType` row
+  (`TicketTypeRepository.lock_for_update`), check the invariant + sale window
+  + max-per-order against the *freshly locked row*, write the counters, and
+  commit. Each tier is its own row, so buying Gold never waits on Basic.
+- **Hard DB backstop.** A `CheckConstraint` — `sold >= 0 AND reserved >= 0
+  AND sold + reserved <= quantity` (`ticket_type_no_oversell`) — makes
+  overselling physically impossible even if app logic has a bug. Defense in
+  depth, verified by a test that tries to oversell via a raw `UPDATE` and
+  gets an `IntegrityError`.
+- **The locked section is tiny.** Lock → check → update counters → commit.
+  No I/O, no cross-table work, nothing slow while the lock is held —
+  contention during a ticket rush stays low. Display refresh (the tiers
+  cache + the event's denormalized `from_price`/`tickets_available`) happens
+  in `transaction.on_commit`, AFTER the lock is released.
+- **The Strategy pattern** (`strategies.py`, `ReservationStrategy` ->
+  `RowLockReservationStrategy`) encapsulates the locked decision so it's
+  pluggable and unit-testable apart from the service that orchestrates
+  events/caches.
+
+**The reservation contract `booking` will consume** (each is one atomic,
+retry-safe operation; the service opens a `UnitOfWork`, so wrapping a call in
+your own `UnitOfWork` nests it as a savepoint — keep the enclosing
+transaction short, i.e. no payment call while a lock is held):
+
+- `reserve(ticket_type_id, quantity)` → holds `quantity` into `reserved`;
+  raises `SaleNotStarted` / `SaleClosed` / `ExceedsMaxPerOrder` / `SoldOut` /
+  `TicketTypeNotFound`. Publishes `TICKET_TYPE_SOLD_OUT` (in the same txn)
+  when it takes the last tickets.
+- `release(ticket_type_id, quantity)` → frees up to `quantity` from
+  `reserved`. Clamped to what's reserved, so a duplicate/expired-hold release
+  is a safe no-op.
+- `confirm_sold(ticket_type_id, quantity)` → moves up to `quantity` from
+  `reserved` to `sold` (availability unchanged). Clamped to `reserved`, so a
+  retried confirm can't double-count a sale.
+
+Exactly-once accounting (which hold maps to which release/confirm) is the
+CALLER's job — `booking` owns holds, timers, and orders; ticketing owns only
+these primitives and the authoritative counters.
+
+**Concurrency is proven, not asserted.** `test_concurrency.py` uses
+`@pytest.mark.django_db(transaction=True)` + a thread pool to fire N real
+concurrent reserves at the last tickets and asserts exactly the right number
+succeed with zero oversell — plus release-restores and confirm-converts. This
+is the module's most important test; every money-path module needs its
+equivalent.
+
+**Closed events loops.** Ticketing registers the "event needs ≥ 1 ticket
+type" publish check (`publish_gate.py`, via events' `register_publish_check`)
+and keeps `Event.from_price_minor` (cheapest active tier) /
+`tickets_available` (total remaining) current — recomputed from the
+authoritative tier rows in `on_commit` and written through
+`EventRepository.set_ticketing_fields`, then the event's public caches are
+invalidated so the fast events read path reflects the change. These are also
+display denormals: the reserve decision never reads them.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -398,18 +463,23 @@ wouldn't apply.
   fine; the port + local adapter existing from day one is the requirement,
   not that something calls it immediately. (`StoragePort` is used by
   `organizations` for logo uploads and `events` for posters.)
-- **`Event.from_price_minor` / `tickets_available` are null placeholders**
-  for `ticketing` to fill — don't populate them from a fake source now.
+- **`Event.from_price_minor` / `tickets_available` are now populated by
+  `ticketing`** (see the ticketing section above) — they're display denormals
+  kept current from the authoritative tier rows.
 - **Relevance-ranked search ordering is deferred.** Search filters, then
   orders by `starts_at` (keeps it index-backed + cursor-paginatable). A
   `sort=relevance` mode (SearchRank) can come later if product wants it.
+- **`booking` is next, not started.** It — not ticketing — owns holds, the
+  hold expiry timer, orders, and the orchestration that CALLS ticketing's
+  `reserve`/`release`/`confirm_sold`. Ticketing has no notion of an order.
 - Future modules explicitly deferred until their turn: `teams`,
   `communities`/collaboration, `venues`/seat-maps, `marketing`.
 
 ## Build order
 
-`accounts` (done) → `organizations` (done) → `events` (done) → `ticketing` →
-`booking` → `payments` → `checkin` → `notifications` → `settlements`.
+`accounts` (done) → `organizations` (done) → `events` (done) →
+`ticketing` (done) → `booking` → `payments` → `checkin` → `notifications` →
+`settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

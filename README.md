@@ -4,9 +4,10 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus three complete modules (`accounts`, `organizations`,
-`events`) proving the whole stack works end to end — architecture, caching,
-full-text search, and performance discipline included.
+**foundation** plus four complete modules (`accounts`, `organizations`,
+`events`, `ticketing`) proving the whole stack works end to end —
+architecture, caching, full-text search, correct-under-concurrency
+reservations, and performance discipline included.
 
 ## Stack
 
@@ -46,6 +47,11 @@ dev server on `http://localhost:8000`.
   cursor-paginated), `GET /api/v1/events/{id}`. Organizer (authenticated):
   `POST /api/v1/events` (draft), `PATCH /api/v1/events/{id}` (optimistic-
   locked), `POST /api/v1/events/{id}/publish`, `GET /api/v1/organizer/events`.
+- Ticketing API — public availability: `GET /api/v1/events/{id}/ticket-types`
+  (tiers + live availability, short-TTL cached). Organizer:
+  `POST /api/v1/events/{id}/ticket-types`, `PATCH /api/v1/ticket-types/{id}`.
+  The `reserve`/`release`/`confirm_sold` primitives (per-tier row lock, zero
+  oversell) are an internal service API `booking` will call — not HTTP yet.
 
 ### Option B — local venv (faster iteration)
 
@@ -124,7 +130,9 @@ backend/
     organizations/   orgs/brands, verification, payout-account linking, caching
     events/          public discovery: full-text search, edge caching,
                      single-flight detail cache, optimistic-locked edits
-    (ticketing, booking, payments, checkin, notifications,
+    ticketing/       tiers + authoritative availability; per-tier row-lock
+                     reserve/release/confirm primitives (zero oversell)
+    (booking, payments, checkin, notifications,
      settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

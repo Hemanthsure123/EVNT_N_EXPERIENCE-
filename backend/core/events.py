@@ -18,3 +18,8 @@ PAYOUT_ACCOUNT_LINKED = "organizations.payout_account_linked"
 EVENT_CREATED = "events.event_created"
 EVENT_UPDATED = "events.event_updated"
 EVENT_PUBLISHED = "events.event_published"
+
+# apps.ticketing
+TICKET_TYPE_ADDED = "ticketing.ticket_type_added"
+TICKET_TYPE_UPDATED = "ticketing.ticket_type_updated"
+TICKET_TYPE_SOLD_OUT = "ticketing.ticket_type_sold_out"

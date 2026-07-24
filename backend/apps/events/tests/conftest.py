@@ -96,3 +96,24 @@ def make_event(organization):
         return event
 
     return _make
+
+
+@pytest.fixture
+def add_ticket_type():
+    """Give an event a ticket type. Needed to satisfy the "an event needs >= 1
+    ticket type" publish gate that the ticketing module registers (see
+    apps/ticketing/apps.py) — after ticketing exists, an event genuinely can't
+    be published without one, so the events publish tests must reflect that."""
+
+    def _add(event, *, name="General Admission", price_minor=1000, quantity=100):
+        from apps.ticketing.models import TicketType
+
+        return TicketType.objects.create(
+            event_id=event.id,
+            name=name,
+            price_minor=price_minor,
+            quantity=quantity,
+            max_per_order=10,
+        )
+
+    return _add

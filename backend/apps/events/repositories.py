@@ -228,6 +228,26 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def set_ticketing_fields(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        from_price_minor: int | None,
+        tickets_available: int | None,
+    ) -> bool:
+        """The documented write-point for the `ticketing` module's denormals
+        (from_price_minor = cheapest active tier; tickets_available = total
+        remaining). Not part of the version/optimistic-lock scheme and doesn't
+        touch updated_at or the tsvector — these are system-maintained display
+        columns, recomputed from the authoritative ticket rows by ticketing,
+        not user edits."""
+        updated = (
+            self.get_queryset()
+            .filter(pk=event_id, deleted_at__isnull=True)
+            .update(from_price_minor=from_price_minor, tickets_available=tickets_available)
+        )
+        return updated == 1
+
     def publish_if_draft(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
         """Transition draft -> live under the same optimistic-lock guard."""
         updated = (

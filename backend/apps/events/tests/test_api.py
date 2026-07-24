@@ -284,8 +284,9 @@ def test_patch_live_event_invalidates_detail_cache(
 
 
 @pytest.mark.django_db
-def test_publish_transitions_draft_to_live(authed_client, make_event):
+def test_publish_transitions_draft_to_live(authed_client, make_event, add_ticket_type):
     event = make_event(status=EventStatus.DRAFT)
+    add_ticket_type(event)  # ticketing publish gate
 
     resp = authed_client.post(f"/api/v1/events/{event.id}/publish", format="json")
 
@@ -295,9 +296,10 @@ def test_publish_transitions_draft_to_live(authed_client, make_event):
 
 @pytest.mark.django_db
 def test_publishing_makes_the_event_publicly_visible(
-    authed_client, api_client, make_event, django_capture_on_commit_callbacks
+    authed_client, api_client, make_event, add_ticket_type, django_capture_on_commit_callbacks
 ):
     event = make_event(title="Soon Live", status=EventStatus.DRAFT)
+    add_ticket_type(event)  # ticketing publish gate
     api_client.get("/api/v1/events")  # warm the (empty) public list cache
 
     with django_capture_on_commit_callbacks(execute=True):

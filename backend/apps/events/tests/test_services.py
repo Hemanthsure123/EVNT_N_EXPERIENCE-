@@ -167,8 +167,9 @@ def test_update_event_missing_event(service, owner):
 
 
 @pytest.mark.django_db
-def test_publish_event_transitions_draft_to_live(service, make_event, owner):
+def test_publish_event_transitions_draft_to_live(service, make_event, owner, add_ticket_type):
     event = make_event(status=EventStatus.DRAFT)
+    add_ticket_type(event)  # satisfy the ticketing publish gate
 
     published = service.publish_event(event_id=event.id, actor_id=owner.id)
 
@@ -194,11 +195,12 @@ def test_publish_event_runs_readiness_checks(service, make_event, owner):
 
 
 @pytest.mark.django_db
-def test_publish_checks_are_extensible(service, make_event, owner):
+def test_publish_checks_are_extensible(service, make_event, owner, add_ticket_type):
     event = make_event(status=EventStatus.DRAFT)
+    add_ticket_type(event)  # pass the ticketing gate so _always_fails is what fires
 
     def _always_fails(_event):
-        raise EventNotPublishableError("needs a ticket type")
+        raise EventNotPublishableError("custom gate")
 
     publish_checks.register_publish_check(_always_fails)
     try:
