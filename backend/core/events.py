@@ -29,3 +29,8 @@ BOOKING_CREATED = "booking.booking_created"
 BOOKING_CONFIRMED = "booking.booking_confirmed"
 BOOKING_CANCELLED = "booking.booking_cancelled"
 TICKET_ISSUED = "booking.ticket_issued"
+
+# apps.payments
+PAYMENT_CONFIRMED = "payments.payment_confirmed"
+PAYMENT_FAILED = "payments.payment_failed"
+PAYMENT_REFUNDED = "payments.payment_refunded"

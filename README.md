@@ -4,10 +4,11 @@ A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
 tickets get checked in at the door. This repo currently contains the
-**foundation** plus five complete modules (`accounts`, `organizations`,
-`events`, `ticketing`, `booking`) proving the whole stack works end to end —
-architecture, caching, full-text search, correct-under-concurrency
-reservations, the reserve→hold→confirm money-path lifecycle, and performance
+**foundation** plus six complete modules (`accounts`, `organizations`,
+`events`, `ticketing`, `booking`, `payments`) proving the whole stack works
+end to end — architecture, caching, full-text search, correct-under-
+concurrency reservations, the reserve→hold→confirm→pay money-path lifecycle
+with signature-verified webhooks and automatic refunds, and performance
 discipline included.
 
 ## Stack
@@ -57,8 +58,16 @@ dev server on `http://localhost:8000`.
   all-or-nothing, hold, create payment order; honours an `Idempotency-Key`
   header), `GET /api/v1/bookings/{id}`, `POST /api/v1/bookings/{id}/cancel`,
   `GET /api/v1/me/tickets`. `ConfirmBooking` (issue signed-QR tickets,
-  idempotent) is an internal service API `payments` will call from the
-  verified webhook — not HTTP yet. A sweeper task auto-releases expired holds.
+  idempotent) is an internal service API `payments` calls from the verified
+  webhook. A sweeper task auto-releases expired holds.
+- Payments API: `POST /api/v1/payments/webhook` (Razorpay only — no user
+  token, authenticated by HMAC signature over the raw body; verifies →
+  dedupes → amount-checks → confirms the booking → 200 fast, refunds
+  offloaded), `GET /api/v1/payments/{id}` (owner/organizer),
+  `POST /api/v1/payments/{id}/refund` (organizer/admin). The order carries a
+  Route split (organizer share on-hold until the event; platform fee retained);
+  hold-expired/amount-mismatch payments auto-refund — money is never kept
+  without a ticket.
 
 ### Option B — local venv (faster iteration)
 
@@ -141,6 +150,8 @@ backend/
                      reserve/release/confirm primitives (zero oversell)
     booking/         reserve→hold→confirm money-path lifecycle; all-or-nothing
                      reserve, auto-release sweeper, signed-QR ticket issuance
-    (payments, checkin, notifications, settlements — not built yet)
+    payments/        signature-verified Razorpay webhooks, idempotency ledger,
+                     Route split (on-hold), auto-refunds when unfulfillable
+    (checkin, notifications, settlements — not built yet)
 frontend/            placeholder, see frontend/README.md
 ```

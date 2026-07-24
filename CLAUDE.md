@@ -496,6 +496,68 @@ per-user, security-sensitive data → `private, no-store`. GET /bookings/{id}
 (auth + one joined query) both avoid N+1, enforced by
 `django_assert_num_queries`.
 
+## Payments: the signed webhook is the only source of truth
+
+`payments` is the security boundary of the money path. Two absolute rules:
+
+> **1. Never trust anything unsigned.** The browser redirect is NOT proof of
+> payment. The signed, server-to-server webhook is the ONLY source of truth.
+> **2. Never take money without delivering a ticket.** If tickets can't be
+> issued (the hold lapsed, or the amount was tampered), the customer is
+> AUTOMATICALLY refunded.
+
+**The webhook flow** (`POST /payments/webhook`, no user token — the signature
+IS the credential; verified over the RAW request body, never the re-parsed
+data):
+1. **Verify the HMAC signature** (`RAZORPAY_WEBHOOK_SECRET`). Missing/forged →
+   `400`, nothing happens. This runs before anything else touches the DB.
+2. **Idempotency.** Dedupe on `{event}:{payment_id}` via the `ProcessedWebhook`
+   ledger — written in the SAME transaction as the processing it guards, so a
+   rollback un-records it and Razorpay's retry reprocesses rather than being
+   swallowed. A concurrent duplicate is caught by the unique constraint.
+3. **Amount check.** The captured amount must equal `booking.total_amount_minor`
+   — a mismatch is recorded but NOT confirmed; it's refunded.
+4. **Confirm.** Call `booking.confirm_booking(booking_id, payment_ref=rzp_
+   payment_id)` (itself idempotent). `issued`/`already_confirmed` → emit
+   `PAYMENT_CONFIRMED`; `hold_expired` → schedule an auto-refund.
+5. **Return 200 fast** once safely recorded. The external refund is offloaded
+   to `TaskQueuePort` — no slow work runs inline or inside a transaction/lock.
+
+**Idempotency is layered** and correctness never rests on one mechanism: the
+`ProcessedWebhook` ledger dedupes deliveries, AND booking's confirm dedupes on
+`payment_ref`, AND the refund dedupes on `refund:{payment_id}`. A ticket is
+never double-issued; a refund never double-runs.
+
+**Refunds** (`PaymentService.execute_refund`, run via the queue for retry +
+dead-letter): idempotent and concurrency-safe — a payment already refunded is
+a no-op; the external `PaymentPort.refund` carries an `idempotency_key` so the
+vendor never double-refunds; the record step re-checks under a row lock. The
+external call happens OUTSIDE any lock. `hold_expired` / `amount_mismatch`
+auto-refund; the organizer refund endpoint (`POST /payments/{id}/refund`,
+organizer/admin only) refunds a paid payment on demand.
+
+**The Route split (define at payment, release after the event).**
+`create_order` carries `transfers=[OrderTransfer(account_id, amount_minor,
+on_hold=True)]`: the organizer's share (total − platform fee) is transferred
+to their linked account (`organizations.payout_account_id`) ON HOLD until
+`settlements` releases it after the event; the platform fee is retained by
+simply not transferring it. The platform never holds the organizer's funds,
+and the organizer isn't paid before the event. Booking builds the transfer
+when it creates the order (resolving the linked account via
+`EventRepository.get_organizer_payout_account`) — the one, minimal booking↔
+payments integration point.
+
+**The fake adapter verifies signatures for real.** Signature verification is
+pure HMAC (no network), so `FakePaymentAdapter` does exactly what production
+does — real HMAC with the configured secret. That keeps the security-critical
+path honest under `PAYMENTS_BACKEND=fake`: tests build a correctly-signed
+webhook (it passes) and a mis-signed one (it's rejected). Fake order ids are
+uuid-based (like real Razorpay ids), so they never collide across restarts in
+a persistent dev DB.
+
+**No card data is ever stored** — only Razorpay reference ids (order id,
+payment id, refund id) and amounts.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -541,20 +603,21 @@ wouldn't apply.
 - **Relevance-ranked search ordering is deferred.** Search filters, then
   orders by `starts_at` (keeps it index-backed + cursor-paginatable). A
   `sort=relevance` mode (SearchRank) can come later if product wants it.
-- **`payments` is next, not started.** It owns Razorpay webhook
-  verification, payment-layer idempotency, the Route split, and refunds; it
-  will CALL `booking.confirm_booking` from the verified webhook (contract
-  above). Do NOT build the webhook/signature/split/refund in booking.
-- **`checkin` (later)** verifies the QR (`verify_ticket_token`) and marks
-  tickets `used` under a row lock; booking only issues the token + provides
-  `verify`.
+- **`checkin` is next, not started.** It verifies the QR
+  (`apps.booking.qr.verify_ticket_token`, same `TICKET_QR_SIGNING_KEY`) and
+  marks tickets `used` under a row lock (one scan, reuse denied, every scan
+  audited). booking only issues the token + provides `verify`.
+- **`settlements` (later)** releases the ON-HOLD organizer transfer after the
+  event, records the settlement, and reconciles refunds. The split is already
+  defined at order time (payments); settlements only releases the hold. Do NOT
+  build settlements in payments.
 - Future modules explicitly deferred until their turn: `teams`,
   `communities`/collaboration, `venues`/seat-maps, `marketing`.
 
 ## Build order
 
 `accounts` (done) → `organizations` (done) → `events` (done) →
-`ticketing` (done) → `booking` (done) → `payments` → `checkin` →
+`ticketing` (done) → `booking` (done) → `payments` (done) → `checkin` →
 `notifications` → `settlements`.
 
 ## Money-path rules (bake in when building ticketing/booking/payments)

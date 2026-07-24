@@ -42,7 +42,7 @@ from core.events import (
     TICKET_ISSUED,
 )
 from core.ports.cache_port import CachePort
-from core.ports.payment_port import PaymentPort
+from core.ports.payment_port import OrderTransfer, PaymentPort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
@@ -244,10 +244,24 @@ class BookingService:
             currency=_CURRENCY,
             receipt=str(booking.id),
             notes={"booking_id": str(booking.id)},
+            transfers=self._build_transfers(booking),
         )
         booking.payment_order_id = order_id
         self._bookings.save(booking)
         return booking
+
+    def _build_transfers(self, booking: Booking) -> list[OrderTransfer] | None:
+        """The Route split for this order: the organizer's share (total minus
+        the platform fee) transferred to their linked account, ON HOLD until
+        `settlements` releases it after the event. The platform fee is retained
+        by simply not transferring it — the platform never holds the
+        organizer's funds. No linked account yet → no split (the fee/hold
+        policy for that case is a settlements concern)."""
+        account_id = self._events.get_organizer_payout_account(booking.event_id)
+        if not account_id:
+            return None
+        organizer_amount = booking.total_amount_minor - booking.platform_fee_minor
+        return [OrderTransfer(account_id=account_id, amount_minor=organizer_amount, on_hold=True)]
 
     def _creation_result(self, booking: Booking) -> BookingCreationResult:
         return BookingCreationResult(

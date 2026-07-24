@@ -13,7 +13,7 @@ import logging
 
 import razorpay
 
-from core.ports.payment_port import PaymentPort, SplitTransferResult
+from core.ports.payment_port import OrderTransfer, PaymentPort, SplitTransferResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,51 @@ class RazorpayPaymentAdapter(PaymentPort):
         )
         return account["id"]
 
-    def create_order(self, *, amount_minor: int, currency: str, receipt: str, notes: dict) -> str:
-        order = self._client.order.create(
-            {"amount": amount_minor, "currency": currency, "receipt": receipt, "notes": notes}
-        )
+    def create_order(
+        self,
+        *,
+        amount_minor: int,
+        currency: str,
+        receipt: str,
+        notes: dict,
+        transfers: list[OrderTransfer] | None = None,
+    ) -> str:
+        params: dict = {
+            "amount": amount_minor,
+            "currency": currency,
+            "receipt": receipt,
+            "notes": notes,
+        }
+        if transfers:
+            # Route split defined at order time: the organizer's share moves to
+            # their linked account (on_hold until settlements releases it after
+            # the event); the platform fee is retained by not transferring it.
+            params["transfers"] = [
+                {
+                    "account": t.account_id,
+                    "amount": t.amount_minor,
+                    "currency": currency,
+                    "on_hold": 1 if t.on_hold else 0,
+                }
+                for t in transfers
+            ]
+        order = self._client.order.create(params)
         return order["id"]
 
     def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
         expected = hmac.new(self._webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
+
+    def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
+        # Razorpay reverses any Route transfers when it refunds. The
+        # Idempotency-Key header makes a retry/concurrent call return the same
+        # refund instead of creating a second one.
+        refund = self._client.payment.refund(
+            payment_id,
+            {"amount": amount_minor},
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return refund["id"]
 
     def split_transfer(
         self,

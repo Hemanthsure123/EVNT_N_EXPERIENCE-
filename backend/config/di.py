@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from apps.booking.services import BookingService
     from apps.events.services import EventService
     from apps.organizations.services import OrganizationService
+    from apps.payments.services import PaymentService
     from apps.ticketing.services import TicketingService
 
 
@@ -46,7 +47,9 @@ def payment_port() -> PaymentPort:
     if backend == "fake":
         from core.adapters.local.fake_payment import FakePaymentAdapter
 
-        return FakePaymentAdapter()
+        # The fake still verifies webhook signatures for real (pure HMAC), so
+        # it needs the same secret production uses.
+        return FakePaymentAdapter(webhook_secret=settings.RAZORPAY_WEBHOOK_SECRET)
     if backend == "razorpay":
         from core.adapters.razorpay.adapter import RazorpayPaymentAdapter
 
@@ -237,4 +240,24 @@ def build_booking_service() -> BookingService:
         qr_secret=settings.TICKET_QR_SIGNING_KEY,
         hold_minutes=settings.BOOKING_HOLD_MINUTES,
         platform_fee_per_ticket=settings.PLATFORM_FEE_PER_TICKET,
+    )
+
+
+def build_payment_service() -> PaymentService:
+    from apps.booking.repositories import BookingRepository
+    from apps.payments.repositories import (
+        PaymentRepository,
+        ProcessedWebhookRepository,
+        RefundRepository,
+    )
+    from apps.payments.services import PaymentService
+
+    return PaymentService(
+        payments=PaymentRepository(),
+        refunds=RefundRepository(),
+        webhooks=ProcessedWebhookRepository(),
+        bookings=BookingRepository(),
+        booking_service=build_booking_service(),
+        payments_port=payment_port(),
+        task_queue=task_queue_port(),
     )

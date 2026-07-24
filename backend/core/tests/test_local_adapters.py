@@ -9,14 +9,39 @@ from core.adapters.local.locmem_cache import LocMemCacheAdapter
 from core.adapters.local.sync_task_queue import SyncTaskQueueAdapter
 
 
-def test_fake_payment_creates_orders_verifies_signatures_and_splits_transfers():
+def test_fake_payment_verifies_real_hmac_signatures():
+    import hashlib
+    import hmac
+
+    secret = "test-webhook-secret"
+    adapter = FakePaymentAdapter(webhook_secret=secret)
+    body = b'{"event":"payment.captured"}'
+    good = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    assert adapter.verify_webhook_signature(payload=body, signature=good) is True
+    assert adapter.verify_webhook_signature(payload=body, signature="deadbeef") is False
+    # A tampered body no longer matches the signature.
+    assert adapter.verify_webhook_signature(payload=b'{"event":"forged"}', signature=good) is False
+
+
+def test_fake_payment_orders_carry_transfers_and_refunds_are_idempotent():
+    from core.ports.payment_port import OrderTransfer
+
     adapter = FakePaymentAdapter()
 
-    order_id = adapter.create_order(amount_minor=10000, currency="INR", receipt="r1", notes={})
-    assert order_id in adapter.orders
+    transfers = [OrderTransfer(account_id="acc_1", amount_minor=9000, on_hold=True)]
+    order_id = adapter.create_order(
+        amount_minor=10000, currency="INR", receipt="r1", notes={}, transfers=transfers
+    )
+    assert adapter.orders[order_id]["transfers"] == transfers
 
-    assert adapter.verify_webhook_signature(payload=b"{}", signature="fake-sig:abc") is True
-    assert adapter.verify_webhook_signature(payload=b"{}", signature="not-a-fake-sig") is False
+    r1 = adapter.refund(payment_id="pay_1", amount_minor=10000, idempotency_key="refund:pay_1")
+    r2 = adapter.refund(payment_id="pay_1", amount_minor=10000, idempotency_key="refund:pay_1")
+    assert r1 == r2  # same key -> same refund, never double-refunded
+
+
+def test_fake_payment_splits_transfers():
+    adapter = FakePaymentAdapter()
 
     result = adapter.split_transfer(
         payment_id="pay_1",

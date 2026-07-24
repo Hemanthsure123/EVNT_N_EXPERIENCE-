@@ -60,6 +60,11 @@ class BookingRepository(BaseRepository[Booking]):
     ) -> Booking | None:
         return Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key).first()
 
+    def get_by_payment_order_id(self, rzp_order_id: str) -> Booking | None:
+        """Resolve the booking behind a payment order id — how `payments` maps
+        a Razorpay webhook (which carries the order id) back to our booking."""
+        return Booking.objects.filter(payment_order_id=rzp_order_id).first()
+
     def get_detail(self, booking_id: uuid.UUID | str) -> Booking | None:
         """Booking + event + items(+tier) in a fixed number of queries, for
         GET /bookings/{id}."""

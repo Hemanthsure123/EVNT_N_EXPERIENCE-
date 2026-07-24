@@ -1,6 +1,10 @@
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 
 from apps.accounts.repositories import UserRepository
+from apps.organizations.models import Organization
 from apps.organizations.repositories import OrganizationRepository
 
 
@@ -40,6 +44,12 @@ def test_get_active_by_id_excludes_soft_deleted(repo, owner):
 def test_list_active_by_owner_orders_newest_first(repo, owner):
     first = repo.create(owner_id=owner.id, name="First")
     second = repo.create(owner_id=owner.id, name="Second")
+    # Force distinct timestamps: two creates can land in the same microsecond,
+    # and the list orders by created_at, so "newest first" is only unambiguous
+    # when the times genuinely differ.
+    now = timezone.now()
+    Organization.objects.filter(pk=first.id).update(created_at=now - timedelta(seconds=2))
+    Organization.objects.filter(pk=second.id).update(created_at=now)
 
     results = list(repo.list_active_by_owner(owner.id))
 

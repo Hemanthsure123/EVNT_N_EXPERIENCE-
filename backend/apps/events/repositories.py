@@ -228,6 +228,18 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def get_organizer_payout_account(self, event_id: uuid.UUID | str) -> str:
+        """The event organization's Razorpay linked-account id (or "" if none
+        linked yet). One scalar query joining event -> organization — used by
+        booking to build the Route split when creating a payment order."""
+        account = (
+            self.get_queryset()
+            .filter(pk=event_id)
+            .values_list("organization__payout_account_id", flat=True)
+            .first()
+        )
+        return account or ""
+
     def set_ticketing_fields(
         self,
         *,
