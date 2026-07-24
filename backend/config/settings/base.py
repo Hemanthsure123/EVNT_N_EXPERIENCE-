@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.checkin",
     "apps.notifications",
+    "apps.settlements",
 ]
 
 MIDDLEWARE = [
@@ -236,6 +237,15 @@ NOTIFICATION_RETRY_BACKOFF_SECONDS = env.int("NOTIFICATION_RETRY_BACKOFF_SECONDS
 NOTIFICATION_EVENT_REMINDER_HOURS_BEFORE = env.int(
     "NOTIFICATION_EVENT_REMINDER_HOURS_BEFORE", default=24
 )
+
+# Settlements
+# The organizer payout is released only after the event has ended AND this
+# refund window has closed — so `net` is final and there's nothing to claw back.
+SETTLEMENT_REFUND_WINDOW_HOURS = env.int("SETTLEMENT_REFUND_WINDOW_HOURS", default=48)
+# Payout reliability: retry a failed release up to this many attempts with
+# exponential backoff, then dead-letter it (status=failed; still owed).
+SETTLEMENT_MAX_ATTEMPTS = env.int("SETTLEMENT_MAX_ATTEMPTS", default=5)
+SETTLEMENT_RETRY_BACKOFF_SECONDS = env.int("SETTLEMENT_RETRY_BACKOFF_SECONDS", default=60)
 
 # Google Cloud
 GCP_PROJECT_ID = env.str("GCP_PROJECT_ID", default="")

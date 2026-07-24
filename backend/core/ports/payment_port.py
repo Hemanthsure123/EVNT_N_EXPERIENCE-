@@ -79,3 +79,12 @@ class PaymentPort(ABC):
         """Split a captured payment after the fact (an alternative to order-time
         transfers). Kept for `settlements`; the primary split is defined at
         order time via `create_order(transfers=...)`."""
+
+    @abstractmethod
+    def release_payout(self, *, account_id: str, amount_minor: int, idempotency_key: str) -> str:
+        """Release the organizer's ON-HOLD Route payout to their linked account
+        after the event + refund window (`settlements` calls this). `payments`
+        created the transfer `on_hold=True`; this settles `amount_minor` to
+        `account_id`. Returns the vendor payout reference. `idempotency_key`
+        makes it safe to retry and safe under concurrency — the vendor must
+        never pay out twice for the same key."""

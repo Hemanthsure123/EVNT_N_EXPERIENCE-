@@ -124,6 +124,25 @@ def handle_payment_refunded(payload: dict) -> None:
     )
 
 
+def handle_payout_released(payload: dict) -> None:
+    """PAYOUT_RELEASED -> the organizer's payout confirmation email. Self-
+    contained: settlements carries the owner email + title + amount in the
+    event, so no cross-module load is needed here."""
+    from config.di import build_notification_service
+
+    owner_email = payload.get("owner_email", "")
+    build_notification_service().notify(
+        notification_type=NotificationType.PAYOUT_RELEASED,
+        recipient=owner_email,
+        context={
+            "event_title": payload["event_title"],
+            "amount_display": _amount_display(payload["amount_minor"]),
+            "provider_ref": payload["provider_ref"],
+        },
+        dedupe_key=f"payout_released:{payload['settlement_id']}:email:{owner_email}",
+    )
+
+
 def handle_event_published(payload: dict) -> None:
     """EVENT_PUBLISHED -> SCHEDULE the reminder job for a configurable time
     before the event, via TaskQueuePort (Cloud Tasks fires it near event time

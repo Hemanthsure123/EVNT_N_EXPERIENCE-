@@ -18,3 +18,5 @@ class NotificationsConfig(AppConfig):
         bus.subscribe(events.BOOKING_CONFIRMED, handlers.handle_booking_confirmed)
         bus.subscribe(events.PAYMENT_REFUNDED, handlers.handle_payment_refunded)
         bus.subscribe(events.EVENT_PUBLISHED, handlers.handle_event_published)
+        # settlements' seam: the organizer's payout confirmation.
+        bus.subscribe(events.PAYOUT_RELEASED, handlers.handle_payout_released)

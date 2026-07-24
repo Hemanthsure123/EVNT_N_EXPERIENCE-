@@ -28,12 +28,14 @@ class FakePaymentAdapter(PaymentPort):
         self._transfer_ids = itertools.count(1)
         self._linked_account_ids = itertools.count(1)
         self._refund_ids = itertools.count(1)
+        self._payout_ids = itertools.count(1)
         self._webhook_secret = webhook_secret
         self.orders: dict[str, dict] = {}
         self.linked_accounts: dict[str, dict] = {}
-        # Idempotency ledger: one refund id per key, so a repeat call with the
-        # same key returns the same id (mirrors Razorpay's idempotency).
+        # Idempotency ledgers: one id per key, so a repeat call with the same
+        # key returns the same id (mirrors Razorpay's idempotency).
         self.refunds_by_key: dict[str, str] = {}
+        self.payouts_by_key: dict[str, dict] = {}
 
     def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
         account_id = f"fake_linked_account_{next(self._linked_account_ids)}"
@@ -82,6 +84,24 @@ class FakePaymentAdapter(PaymentPort):
         self.refunds_by_key[idempotency_key] = refund_id
         logger.info("fake_payment.refunded", extra={"payment_id": payment_id})
         return refund_id
+
+    def release_payout(self, *, account_id: str, amount_minor: int, idempotency_key: str) -> str:
+        # Idempotent: the same key always maps to the same payout, so a retried
+        # or concurrent release never pays out twice. Records the payout so a
+        # test can assert the amount/account released.
+        if idempotency_key in self.payouts_by_key:
+            return self.payouts_by_key[idempotency_key]["payout_id"]
+        payout_id = f"fake_payout_{next(self._payout_ids)}"
+        self.payouts_by_key[idempotency_key] = {
+            "payout_id": payout_id,
+            "account_id": account_id,
+            "amount_minor": amount_minor,
+        }
+        logger.info(
+            "fake_payment.payout_released",
+            extra={"account_id": account_id, "amount_minor": amount_minor, "payout_id": payout_id},
+        )
+        return payout_id
 
     def split_transfer(
         self,

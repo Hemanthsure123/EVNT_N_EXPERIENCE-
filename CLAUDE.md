@@ -721,6 +721,69 @@ public HTTP endpoints (`urls.py` empty, not mounted); operator visibility is the
 Django admin + selectors. Backends stay `EMAIL_PROVIDER=console` /
 `SMS_PROVIDER=console` in dev/test.
 
+## Settlements: close the money loop (recompute under lock, pay after the window)
+
+`settlements` is the LAST backend module — it releases the ON-HOLD Route
+transfer `payments` created (organizer share held by Razorpay until after the
+event). Its overriding concern is FINANCIAL INTEGRITY: the organizer is paid the
+RIGHT amount, EXACTLY ONCE, ONLY after the event and its refund window, with
+refunds fully reconciled. Four rules, all enforced:
+
+> **1. Source of truth = payment records.** Running totals (updated from
+> `PaymentConfirmed`/`PaymentRefunded`) are for fast DISPLAY only. At RELEASE
+> time `net` is RECOMPUTED AUTHORITATIVELY from the actual paid/refunded
+> payments, under the settlement-row lock — the cached totals never get to be
+> authoritative.
+> **2. Only after the event + refund window.** A payout releases only once the
+> event has ended AND `SETTLEMENT_REFUND_WINDOW_HOURS` has passed
+> (`EventNotFinished` otherwise). Because payout is that late, `net` is FINAL —
+> nothing to claw back.
+> **3. Exactly once, under a lock.** Release locks the settlement row
+> (`SELECT ... FOR UPDATE`), no-ops if already `paid`, and the vendor call
+> carries an idempotency key — so a retry or concurrent attempt never
+> double-pays.
+> **4. Reliable + off the request path.** The primary release path is a
+> scheduled job (`TaskQueuePort`); on failure it retries with backoff and after
+> `SETTLEMENT_MAX_ATTEMPTS` dead-letters (`status=failed`, `PayoutFailed`
+> emitted) — the settlement STAYS OWED, never lost.
+
+**One Settlement per event** (`event` OneToOne, unique) holds `gross /
+platform_fee / refunds / net` and the payout lifecycle. `net = gross −
+platform_fee − refunds` (a signed int; the platform fee is counted at capture
+and refunds subtract the refunded amount). **Running totals** are atomic `F()`
+updates (`SettlementRepository.add_confirmed`/`add_refund`) fed by handlers on
+`PAYMENT_CONFIRMED`/`PAYMENT_REFUNDED` — no lock, no lost updates, DISPLAY only.
+
+**The release flow** (`release_payout(settlement_id)` — the scheduled job's
+`release_due_payouts` enqueues one task per due settlement; the admin endpoint
+`POST /admin/settlements/{id}/release` only *triggers* it, pre-checking finished
+so `EventNotFinished` surfaces synchronously while the payout still runs
+off-request): lock the row → skip if `paid` → re-verify event finished →
+**recompute `net` authoritatively from the payment records** (`PaymentRepository.
+aggregate_event_settlement`) → if `net <= 0` settle to zero (no external call, no
+notification) → else `PaymentPort.release_payout(account_id, net, idempotency_
+key="settlement:{id}")` **under the lock** (the settlement row is uncontended —
+like notifications' dispatch, the "I/O outside the lock" rule guards *contention*,
+which doesn't apply) → on success mark `paid` + record a `PayoutAttempt` + emit
+`PAYOUT_RELEASED`; on failure increment attempts, record a failed `PayoutAttempt`,
+and retry-with-backoff or dead-letter. Concurrency is proven
+(`test_concurrency.py`, `transaction=True` + threads): N racing releases pay
+exactly once.
+
+**`PayoutAttempt`** is the append-only financial audit trail (one row per
+attempt); a refund arriving AFTER payout is the exceptional case — not silently
+applied, but flagged as an `ADJUSTMENT` attempt for manual reconciliation.
+
+**PaymentPort gained `release_payout`** (the fake simulates it idempotently by
+key; the real Razorpay adapter releases the on-hold Route transfer). Settlements
+emits `PAYOUT_RELEASED` (→ notifications' organizer payout email, via the seam it
+left) and `PAYOUT_FAILED`. **Reads are `private, no-store`** (per-organizer money
+data): `GET /organizer/settlements` (own settlements, cursor-paginated) and
+`GET /organizer/settlements/{event_id}` — the list filters to the caller's own
+events (an organizer sees only their own), 2 queries and N+1-free (enforced;
+`provider_ref` is in the lean field set so the serializer never triggers a
+deferred re-fetch). Never cache money as authoritative.
+
 ### TaskQueuePort now has a registry
 
 The foundation slice deliberately shipped `TaskQueuePort` with no task-name
@@ -777,18 +840,23 @@ wouldn't apply.
   notifications can subscribe to it THEN. User notification preferences /
   opt-out and WhatsApp are future — the channel abstraction is the seam, don't
   build them now.
-- **`settlements` (next)** releases the ON-HOLD organizer transfer after the
-  event, records the settlement, and reconciles refunds. The split is already
-  defined at order time (payments); settlements only releases the hold. Do NOT
-  build settlements in payments.
-- Future modules explicitly deferred until their turn: `teams`,
-  `communities`/collaboration, `venues`/seat-maps, `marketing`.
+- **`settlements` is done** (see the settlements section above) — the LAST
+  backend module: it releases the on-hold organizer transfer after the event +
+  refund window, recomputing `net` authoritatively under a row lock, paying
+  exactly once with retry/dead-letter, and reconciling refunds. **The backend
+  feature set is now complete.**
+- Future modules explicitly deferred until their turn (NOT part of the core
+  backend; build only when explicitly requested): `teams` (organizer sub-users —
+  the clean authZ seam is in each module's `permissions.py`),
+  `communities`/collaboration, `venues`/seat-maps, `marketing`. The frontend
+  (Next.js) also remains unbuilt (see `frontend/README.md`).
 
 ## Build order
 
 `accounts` (done) → `organizations` (done) → `events` (done) →
 `ticketing` (done) → `booking` (done) → `payments` (done) →
-`checkin` (done) → `notifications` (done) → `settlements`.
+`checkin` (done) → `notifications` (done) → `settlements` (done).
+**Backend complete.**
 
 ## Money-path rules (bake in when building ticketing/booking/payments)
 

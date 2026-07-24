@@ -228,6 +228,29 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def get_for_settlement(self, event_id: uuid.UUID | str) -> Event | None:
+        """The minimal event context `settlements` needs to release a payout:
+        the start/end times (the event-finished + refund-window guard), and the
+        organizer's owner id + email + linked payout account (for the payout and
+        the PayoutReleased notification). One query, org + owner joined."""
+        return (
+            self.get_queryset()
+            .select_related("organization", "organization__owner")
+            .filter(pk=event_id)
+            .only(
+                "id",
+                "title",
+                "starts_at",
+                "ends_at",
+                "status",
+                "organization_id",
+                "organization__owner_id",
+                "organization__payout_account_id",
+                "organization__owner__email",
+            )
+            .first()
+        )
+
     def get_for_checkin(self, event_id: uuid.UUID | str) -> Event | None:
         """Load the minimal event context the check-in gate needs: the
         organizer owner id (for the per-event authorization check) and the

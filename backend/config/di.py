@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from apps.notifications.services import NotificationService, ReminderService
     from apps.organizations.services import OrganizationService
     from apps.payments.services import PaymentService
+    from apps.settlements.services import SettlementService
     from apps.ticketing.services import TicketingService
 
 
@@ -311,4 +312,23 @@ def build_reminder_service() -> ReminderService:
         tickets=TicketRepository(),
         users=UserRepository(),
         events=EventRepository(),
+    )
+
+
+def build_settlement_service() -> SettlementService:
+    from apps.events.repositories import EventRepository
+    from apps.payments.repositories import PaymentRepository
+    from apps.settlements.repositories import PayoutAttemptRepository, SettlementRepository
+    from apps.settlements.services import SettlementService
+
+    return SettlementService(
+        settlements=SettlementRepository(),
+        attempts=PayoutAttemptRepository(),
+        payments=PaymentRepository(),
+        events=EventRepository(),
+        payments_port=payment_port(),
+        task_queue=task_queue_port(),
+        refund_window_hours=settings.SETTLEMENT_REFUND_WINDOW_HOURS,
+        max_attempts=settings.SETTLEMENT_MAX_ATTEMPTS,
+        retry_backoff_seconds=settings.SETTLEMENT_RETRY_BACKOFF_SECONDS,
     )

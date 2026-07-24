@@ -49,6 +49,7 @@ CHANNEL_BY_TYPE: dict[str, str] = {
     NotificationType.REFUND_CONFIRMATION_SMS: NotificationChannel.SMS,
     NotificationType.OTP: NotificationChannel.SMS,
     NotificationType.EVENT_REMINDER: NotificationChannel.EMAIL,
+    NotificationType.PAYOUT_RELEASED: NotificationChannel.EMAIL,
 }
 
 
@@ -144,6 +145,17 @@ def _event_reminder(ctx: dict) -> RenderedMessage:
     )
 
 
+def _payout_released(ctx: dict) -> RenderedMessage:
+    return RenderedMessage(
+        subject=f"You've been paid out for {ctx['event_title']}",
+        body=(
+            f"Hi {ctx.get('name') or 'there'}, your payout of {ctx['amount_display']} for "
+            f"{ctx['event_title']} has been released to your linked account "
+            f"(reference {ctx['provider_ref']}). Thanks for hosting on the platform!"
+        ),
+    )
+
+
 _TEMPLATES: dict[str, Callable[[dict], RenderedMessage]] = {
     NotificationType.WELCOME: _welcome,
     NotificationType.TICKET_DELIVERY: _ticket_delivery,
@@ -151,6 +163,7 @@ _TEMPLATES: dict[str, Callable[[dict], RenderedMessage]] = {
     NotificationType.REFUND_CONFIRMATION: _refund_confirmation,
     NotificationType.REFUND_CONFIRMATION_SMS: _refund_confirmation_sms,
     NotificationType.OTP: _otp,
+    NotificationType.PAYOUT_RELEASED: _payout_released,
     NotificationType.EVENT_REMINDER: _event_reminder,
 }
 

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import uuid
 
+from django.db.models import Sum
+
 from core.base_repository import BaseRepository
 
 from .models import Payment, PaymentStatus, ProcessedWebhook, Refund
@@ -16,6 +18,28 @@ class PaymentRepository(BaseRepository[Payment]):
 
     def get_by_order_id(self, rzp_order_id: str) -> Payment | None:
         return Payment.objects.filter(rzp_order_id=rzp_order_id).first()
+
+    def aggregate_event_settlement(self, event_id: uuid.UUID | str) -> dict:
+        """The AUTHORITATIVE settlement figures for an event, derived from the
+        payment records (the source of truth `settlements` recomputes under lock
+        at release time — never from a running total that could drift):
+        - gross        = sum of every captured payment (paid + refunded);
+        - platform_fee = sum of those bookings' platform fees;
+        - refunds      = sum of the recorded refund amounts.
+        net = gross - platform_fee - refunds is computed by the caller.
+        """
+        captured = Payment.objects.filter(
+            booking__event_id=event_id,
+            status__in=(PaymentStatus.PAID, PaymentStatus.REFUNDED),
+        ).aggregate(gross=Sum("amount_minor"), platform_fee=Sum("booking__platform_fee_minor"))
+        refunds = Refund.objects.filter(payment__booking__event_id=event_id).aggregate(
+            total=Sum("amount_minor")
+        )
+        return {
+            "gross": captured["gross"] or 0,
+            "platform_fee": captured["platform_fee"] or 0,
+            "refunds": refunds["total"] or 0,
+        }
 
     def lock_for_update(self, payment_id: uuid.UUID | str) -> Payment | None:
         """SELECT ... FOR UPDATE — serialises the refund record step so two

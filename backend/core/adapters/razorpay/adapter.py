@@ -83,6 +83,20 @@ class RazorpayPaymentAdapter(PaymentPort):
         )
         return refund["id"]
 
+    def release_payout(self, *, account_id: str, amount_minor: int, idempotency_key: str) -> str:
+        # Release the organizer's on-hold Route share after the event + refund
+        # window. In Razorpay Route the held share is settled to the linked
+        # account by releasing its on-hold transfer(s) (on_hold -> 0); the
+        # Idempotency-Key header makes a retry/concurrent call return the same
+        # payout instead of paying out twice. The concrete Route call is wired
+        # here when PAYMENTS_BACKEND=razorpay is actually deployed — the fake
+        # adapter is what the tests and the dev proof exercise.
+        result = self._client.transfer.create(
+            {"account": account_id, "amount": amount_minor, "currency": "INR", "on_hold": 0},
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return result["id"]
+
     def split_transfer(
         self,
         *,

@@ -3,14 +3,16 @@
 A production-track event ticketing & experience platform (Eventbrite/Meetup
 class): organizers create events and ticket tiers, attendees book and pay,
 the platform takes a fee per ticket and splits the rest to the organizer,
-tickets get checked in at the door. This repo currently contains the
-**foundation** plus eight complete modules (`accounts`, `organizations`,
-`events`, `ticketing`, `booking`, `payments`, `checkin`, `notifications`)
-proving the whole stack works end to end — architecture, caching, full-text
-search, correct-under-concurrency reservations, the reserve→hold→confirm→pay
-money-path lifecycle with signature-verified webhooks and automatic refunds,
-one-scan gate entry that can't admit a ticket twice, event-driven exactly-once
-email/SMS delivery, and performance discipline included.
+tickets get checked in at the door. This repo contains the **foundation** plus
+the **complete backend feature set** — nine modules (`accounts`,
+`organizations`, `events`, `ticketing`, `booking`, `payments`, `checkin`,
+`notifications`, `settlements`) proving the whole stack works end to end:
+architecture, caching, full-text search, correct-under-concurrency
+reservations, the reserve→hold→confirm→pay money-path lifecycle with
+signature-verified webhooks and automatic refunds, one-scan gate entry that
+can't admit a ticket twice, event-driven exactly-once email/SMS delivery, and
+organizer payouts that close the money loop (reconciled, released once, only
+after the event) — with performance discipline throughout.
 
 ## Stack
 
@@ -78,12 +80,20 @@ dev server on `http://localhost:8000`.
   booking's signed-token verifier; a refund voids the ticket so it can't enter.
 - Notifications — **no public API** (internal, event- and job-driven): it
   subscribes to domain events (`USER_REGISTERED`, `BOOKING_CONFIRMED`,
-  `PAYMENT_REFUNDED`, `EVENT_PUBLISHED`) and sends templated email/SMS through
-  `EmailPort`/`SmsPort`. Delivery is fully async (off the request path via the
-  task queue), **exactly-once** (a unique `dedupe_key` + claim-before-send row
-  lock), with retry → dead-letter. The ticket-delivery email (event + booking
-  reference + QR) and OTP SMS (India DLT template per type) live here; the
-  welcome email was consolidated in from `accounts`.
+  `PAYMENT_REFUNDED`, `EVENT_PUBLISHED`, `PAYOUT_RELEASED`) and sends templated
+  email/SMS through `EmailPort`/`SmsPort`. Delivery is fully async (off the
+  request path via the task queue), **exactly-once** (a unique `dedupe_key` +
+  claim-before-send row lock), with retry → dead-letter. The ticket-delivery
+  email (event + booking reference + QR) and OTP SMS (India DLT template per
+  type) live here; the welcome email was consolidated in from `accounts`.
+- Settlements API (organizer, `private, no-store`): `GET /api/v1/organizer/settlements`
+  (own settlements, cursor-paginated), `GET /api/v1/organizer/settlements/{event_id}`,
+  `POST /api/v1/admin/settlements/{id}/release` (staff-only manual trigger).
+  Closes the money loop: it reconciles each event's `gross − fee − refunds =
+  net` from the payment records and releases the on-hold organizer payout —
+  recomputed authoritatively under a row lock, **exactly once**, and **only
+  after the event + refund window** — with retry → dead-letter (the payout runs
+  off the request path via a scheduled job).
 
 ### Option B — local venv (faster iteration)
 
@@ -172,6 +182,8 @@ backend/
                      attendance (cache the count, trust the DB), scan audit log
     notifications/   event-driven email/SMS: exactly-once (unique dedupe_key +
                      claim-before-send), retry + dead-letter, templated + DLT
-    (settlements — not built yet)
+    settlements/     closes the money loop: reconcile gross/fee/refunds/net from
+                     payment records, release organizer payout once after the
+                     event (recompute under lock, retry + dead-letter)
 frontend/            placeholder, see frontend/README.md
 ```

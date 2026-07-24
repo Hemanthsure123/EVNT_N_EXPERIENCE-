@@ -37,3 +37,7 @@ PAYMENT_REFUNDED = "payments.payment_refunded"
 
 # apps.checkin
 TICKET_CHECKED_IN = "checkin.ticket_checked_in"
+
+# apps.settlements
+PAYOUT_RELEASED = "settlements.payout_released"
+PAYOUT_FAILED = "settlements.payout_failed"

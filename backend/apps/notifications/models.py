@@ -40,6 +40,7 @@ class NotificationType(models.TextChoices):
     REFUND_CONFIRMATION_SMS = "refund_confirmation_sms", "Refund confirmation SMS"
     OTP = "otp", "OTP SMS"
     EVENT_REMINDER = "event_reminder", "Event reminder email"
+    PAYOUT_RELEASED = "payout_released", "Payout released email"
 
 
 class NotificationLog(models.Model):
