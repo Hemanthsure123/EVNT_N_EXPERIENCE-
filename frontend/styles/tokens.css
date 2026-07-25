@@ -1,0 +1,237 @@
+/*
+ * DESIGN TOKENS — the SINGLE SOURCE OF TRUTH.
+ *
+ * This is the ONLY file in the codebase that contains raw colour/size values.
+ * Everything downstream (Tailwind theme, components) references these tokens by
+ * name, never a raw hex or px — enforced by the no-raw-values lint rules. Swap a
+ * value here and the whole app reskins, in any environment.
+ *
+ * Colours are stored as SPACE-SEPARATED RGB CHANNELS (not hex) so Tailwind can
+ * apply opacity: `rgb(var(--token) / <alpha-value>)` powers utilities like
+ * `bg-primary/10`. (There is deliberately zero hex anywhere in the repo.)
+ *
+ * Two layers:
+ *   1. PRIMITIVES  — the raw brand ramp (violet/pink/slate/...), theme-independent.
+ *   2. SEMANTIC    — role tokens (background, foreground, primary, border, ...),
+ *                    remapped per theme. Components use ONLY these.
+ */
+
+:root {
+  /* ---------------------------------------------------------------------- */
+  /* 1. PRIMITIVES — from the Design System doc (§4). Theme-independent.     */
+  /* ---------------------------------------------------------------------- */
+
+  /* Brand — Violet (600 = primary) */
+  --violet-50: 245 243 255;
+  --violet-100: 237 233 254;
+  --violet-200: 221 214 254;
+  --violet-300: 196 181 253;
+  --violet-400: 167 139 250;
+  --violet-500: 139 92 246;
+  --violet-600: 124 58 237;
+  --violet-700: 109 40 217;
+  --violet-800: 91 33 182;
+  --violet-900: 76 29 149;
+
+  /* Accent — Magenta / Pink (500 = accent) */
+  --pink-50: 253 242 248;
+  --pink-300: 249 168 212;
+  --pink-500: 236 72 153;
+  --pink-600: 219 39 119;
+
+  /* Indigo — used only as the Royal gradient stop */
+  --indigo-600: 79 70 229;
+
+  /* Neutrals — Slate */
+  --slate-50: 248 250 252;
+  --slate-100: 241 245 249;
+  --slate-200: 226 232 240;
+  --slate-300: 203 213 225;
+  --slate-400: 148 163 184;
+  --slate-500: 100 116 139;
+  --slate-600: 71 85 105;
+  --slate-700: 51 65 85;
+  --slate-800: 30 41 59;
+  --slate-900: 15 23 42;
+  --white: 255 255 255;
+
+  /* Semantic base hues (§4.5) */
+  --success-600: 22 163 74;
+  --warning-500: 245 158 11;
+  --error-600: 220 38 38;
+  --info-600: 37 99 235;
+
+  /* Accessible tint pairs (extend §4.5 so text-on-tint always meets AA) */
+  --success-tint: 220 252 231; /* success 100 */
+  --success-strong: 22 101 52; /* green 800 */
+  --warning-tint: 254 243 199; /* warning 100 */
+  --warning-strong: 146 64 14; /* amber 800 */
+  --error-tint: 254 226 226; /* error 100 */
+  --error-strong: 185 28 28; /* red 700 */
+  --info-tint: 219 234 254; /* blue 100 */
+  --info-strong: 29 78 216; /* blue 700 */
+
+  /* Dark surfaces (§4.7) — referenced by the .dark semantic layer below */
+  --dark-bg: 11 16 32;
+  --dark-surface: 17 24 39;
+  --dark-elevated: 30 41 59;
+  --dark-border: 51 65 85;
+
+  /* ---------------------------------------------------------------------- */
+  /* 2. SEMANTIC — LIGHT theme (default). Components reference ONLY these.   */
+  /* ---------------------------------------------------------------------- */
+
+  --background: var(--slate-50);
+  --foreground: var(--slate-900);
+
+  --surface: var(--white);
+  --surface-foreground: var(--slate-900);
+  --elevated: var(--white);
+
+  --muted: var(--slate-100);
+  /* slate-600 (not 500) so secondary text clears AA 4.5:1 even on the muted
+     tint (e.g. inactive tab labels on bg-muted). */
+  --muted-foreground: var(--slate-600);
+
+  --border: var(--slate-200);
+  --input: var(--slate-300);
+  --ring: var(--violet-600);
+
+  --primary: var(--violet-600);
+  --primary-foreground: var(--white);
+  --primary-hover: var(--violet-500);
+  --primary-active: var(--violet-700);
+
+  --secondary: var(--violet-100);
+  --secondary-foreground: var(--violet-700);
+
+  --accent: var(--pink-500);
+  /* dark text on the vibrant pink accent clears AA for small text (white on
+     pink-500 is only 3.52:1). */
+  --accent-foreground: var(--slate-900);
+  --accent-hover: var(--pink-600);
+
+  --success: var(--success-600);
+  --success-foreground: var(--white);
+  --success-subtle: var(--success-tint);
+  --success-subtle-foreground: var(--success-strong);
+
+  --warning: var(--warning-500);
+  --warning-foreground: var(--slate-900);
+  --warning-subtle: var(--warning-tint);
+  --warning-subtle-foreground: var(--warning-strong);
+
+  --destructive: var(--error-600);
+  --destructive-foreground: var(--white);
+  --destructive-subtle: var(--error-tint);
+  --destructive-subtle-foreground: var(--error-strong);
+
+  --info: var(--info-600);
+  --info-foreground: var(--white);
+  --info-subtle: var(--info-tint);
+  --info-subtle-foreground: var(--info-strong);
+
+  --overlay: var(--slate-900);
+
+  /* Gradients (§4.6) — brand moments only; overlay before body text. */
+  --gradient-brand: linear-gradient(135deg, rgb(var(--violet-600)), rgb(var(--pink-500)));
+  --gradient-royal: linear-gradient(135deg, rgb(var(--violet-700)), rgb(var(--indigo-600)));
+  --gradient-sunset: linear-gradient(135deg, rgb(var(--pink-500)), rgb(var(--warning-500)));
+
+  /* --------------------------------------------------------------------- */
+  /* 3. NON-COLOUR TOKENS — theme-independent (shadows deepen in dark).     */
+  /* --------------------------------------------------------------------- */
+
+  /* Radius (§7) — canonical card radius is xl / 20px */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+
+  /* Elevation (§8) — soft, cool-tinted (slate 900), never harsh black */
+  --shadow-sm: 0 1px 2px rgb(var(--slate-900) / 0.06);
+  --shadow-md: 0 4px 12px rgb(var(--slate-900) / 0.08);
+  --shadow-lg: 0 12px 32px rgb(var(--slate-900) / 0.1);
+  --shadow-xl: 0 24px 64px rgb(var(--slate-900) / 0.14);
+  --shadow-glow: 0 8px 24px rgb(var(--violet-600) / 0.28);
+
+  /* Motion (§10) */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --duration-page: 400ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  color-scheme: light;
+}
+
+/* ------------------------------------------------------------------------ */
+/* SEMANTIC — DARK theme. Only role tokens change; primitives stay constant. */
+/* ------------------------------------------------------------------------ */
+.dark {
+  --background: var(--dark-bg);
+  --foreground: var(--slate-50);
+
+  --surface: var(--dark-surface);
+  --surface-foreground: var(--slate-50);
+  --elevated: var(--dark-elevated);
+
+  --muted: var(--slate-800);
+  --muted-foreground: var(--slate-400);
+
+  --border: var(--dark-border);
+  --input: var(--slate-700);
+  --ring: var(--violet-400);
+
+  /* Primary lifts to Violet 400 for contrast on dark (§4.7) */
+  --primary: var(--violet-400);
+  --primary-foreground: var(--slate-900);
+  --primary-hover: var(--violet-300);
+  --primary-active: var(--violet-500);
+
+  --secondary: var(--violet-900);
+  --secondary-foreground: var(--violet-200);
+
+  --accent: var(--pink-500);
+  /* dark text on the vibrant pink accent clears AA for small text (white on
+     pink-500 is only 3.52:1). */
+  --accent-foreground: var(--slate-900);
+  --accent-hover: var(--pink-600);
+
+  --success: var(--success-600);
+  --success-foreground: var(--white);
+  --success-subtle: 5 46 22;
+  --success-subtle-foreground: 134 239 172;
+
+  --warning: var(--warning-500);
+  --warning-foreground: var(--slate-900);
+  --warning-subtle: 69 26 3;
+  --warning-subtle-foreground: 252 211 77;
+
+  --destructive: var(--error-600);
+  --destructive-foreground: var(--white);
+  --destructive-subtle: 69 10 10;
+  --destructive-subtle-foreground: 252 165 165;
+
+  --info: var(--info-600);
+  --info-foreground: var(--white);
+  --info-subtle: 23 37 84;
+  --info-subtle-foreground: 147 197 253;
+
+  --overlay: 2 4 12;
+
+  /* Gradients mute slightly in dark; shadows deepen + pair with a border. */
+  --gradient-brand: linear-gradient(135deg, rgb(var(--violet-700)), rgb(var(--pink-600)));
+  --gradient-royal: linear-gradient(135deg, rgb(var(--violet-800)), rgb(var(--indigo-600)));
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
+  --shadow-xl: 0 24px 64px rgb(0 0 0 / 0.6);
+  --shadow-glow: 0 8px 24px rgb(var(--violet-500) / 0.35);
+
+  color-scheme: dark;
+}
