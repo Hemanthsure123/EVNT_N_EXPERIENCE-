@@ -17,7 +17,7 @@ import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primiti
 import { Button, Input } from '@/components/ui';
 import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
-import { NeedsSavedDraft, NotStored, Section, StepHeader } from './fields';
+import { NeedsSavedDraft, NotStored, Section, StepHeader, type DraftSave } from './fields';
 import { missingForSave } from './details-step';
 
 /**
@@ -86,10 +86,13 @@ export function MediaStep({
   draft,
   onPoster,
   posterFile,
+  save,
 }: {
   draft: Draft;
   onPoster: (file: File | null) => void;
   posterFile: File | null;
+  /** The save engine's health, for the gallery panel's honest closing line. */
+  save?: DraftSave;
 }) {
   const eventId = draft.eventId;
   const client = useQueryClient();
@@ -218,6 +221,7 @@ export function MediaStep({
             title="The gallery unlocks once the draft is saved"
             what="Gallery images are stored against the event, so it has to exist first. The cover image above works right now — it uploads with the next save."
             missing={missingForSave(draft)}
+            save={save}
           />
         </Section>
       ) : (

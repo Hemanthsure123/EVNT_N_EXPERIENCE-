@@ -36,15 +36,30 @@ def _no_store(response: Response) -> Response:
     return response
 
 
+def _to_service_phases(phases: list[dict] | None) -> list[dict] | None:
+    """Map each submitted phase's `price` (minor units) onto the model's
+    `price_minor`. `None` (absent from the request) stays `None` — an empty
+    list means "clear the schedule" and must survive as one."""
+    if phases is None:
+        return None
+    return [
+        {
+            "name": phase["name"],
+            "price_minor": phase["price"],
+            "ends_at": phase.get("ends_at"),
+            "quantity": phase.get("quantity"),
+        }
+        for phase in phases
+    ]
+
+
 def _to_service_changes(validated: dict) -> dict:
     """Map the API's money fields (minor units) onto their model field names."""
     changes = dict(validated)
-    for api_name, model_name in (
-        ("price", "price_minor"),
-        ("early_bird_price", "early_bird_price_minor"),
-    ):
-        if api_name in changes:
-            changes[model_name] = changes.pop(api_name)
+    if "price" in changes:
+        changes["price_minor"] = changes.pop("price")
+    if "phases" in changes:
+        changes["phases"] = _to_service_phases(changes["phases"])
     return changes
 
 
@@ -87,9 +102,7 @@ class TicketTypeListCreateView(APIView):
             sale_start=data.get("sale_start"),
             sale_end=data.get("sale_end"),
             max_per_order=data["max_per_order"],
-            early_bird_price_minor=data.get("early_bird_price"),
-            early_bird_ends_at=data.get("early_bird_ends_at"),
-            early_bird_quantity=data.get("early_bird_quantity"),
+            phases=_to_service_phases(data.get("phases")),
         )
         return _no_store(
             Response(TicketTypeSerializer(ticket_type).data, status=status.HTTP_201_CREATED)

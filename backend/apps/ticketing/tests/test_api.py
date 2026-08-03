@@ -106,18 +106,20 @@ def test_public_tier_list_query_budget_cold_then_warm(
     make_ticket_type(name="B", price_minor=2000)
     url = f"/api/v1/events/{event.id}/ticket-types"
 
-    with django_assert_num_queries(1):  # unauthenticated: just the tier list
+    # Unauthenticated: the tier list + ONE prefetch for every tier's phase
+    # schedule — a fixed 2 however many tiers there are, never per-tier.
+    with django_assert_num_queries(2):
         assert api_client.get(url).status_code == 200
 
     with django_assert_num_queries(0):  # served from cache
         assert api_client.get(url).status_code == 200
 
 
-# --- early bird on the wire ------------------------------------------------
+# --- the phase schedule on the wire ------------------------------------------
 
 
 @pytest.mark.django_db
-def test_create_ticket_type_accepts_early_bird_fields(authed_client, event):
+def test_create_ticket_type_accepts_a_phase_schedule(authed_client, event):
     ends_at = (timezone.now() + timedelta(days=3)).isoformat()
 
     resp = authed_client.post(
@@ -126,27 +128,43 @@ def test_create_ticket_type_accepts_early_bird_fields(authed_client, event):
             "name": "Gold",
             "price": 50000,
             "quantity": 50,
-            "early_bird_price": 30000,
-            "early_bird_ends_at": ends_at,
-            "early_bird_quantity": 10,
+            "phases": [
+                {"name": "Early bird", "price": 30000, "ends_at": ends_at, "quantity": 10},
+                {"name": "Phase 2", "price": 40000, "quantity": 25},
+            ],
         },
         format="json",
     )
 
     assert resp.status_code == 201
     body = resp.json()
-    assert body["price"] == 50000  # the normal price is still reported
+    assert body["price"] == 50000  # the face price is still reported
     assert body["effective_price"] == 30000
-    assert body["early_bird_active"] is True
-    assert body["early_bird_remaining"] == 10
-    assert body["early_bird_ends_at"] is not None
+    assert body["current_phase"] == {
+        "name": "Early bird",
+        "ends_at": body["phases"][0]["ends_at"],
+        "remaining": 10,
+    }
+    assert body["next_price"] == 40000
+    # The full schedule, ascending position — array order became position.
+    assert [(p["name"], p["price"], p["position"]) for p in body["phases"]] == [
+        ("Early bird", 30000, 0),
+        ("Phase 2", 40000, 1),
+    ]
+    assert body["phases"][1]["ends_at"] is None
+    assert body["phases"][1]["quantity"] == 25
 
 
 @pytest.mark.django_db
-def test_create_ticket_type_rejects_early_bird_above_price(authed_client, event):
+def test_create_ticket_type_rejects_a_phase_above_the_price(authed_client, event):
     resp = authed_client.post(
         f"/api/v1/events/{event.id}/ticket-types",
-        {"name": "Gold", "price": 50000, "quantity": 50, "early_bird_price": 60000},
+        {
+            "name": "Gold",
+            "price": 50000,
+            "quantity": 50,
+            "phases": [{"name": "Early bird", "price": 60000, "quantity": 5}],
+        },
         format="json",
     )
 
@@ -154,7 +172,26 @@ def test_create_ticket_type_rejects_early_bird_above_price(authed_client, event)
 
 
 @pytest.mark.django_db
-def test_tier_list_reports_the_effective_price_and_remaining_seats(
+def test_create_ticket_type_rejects_an_invalid_schedule_as_a_domain_error(authed_client, event):
+    # Structurally valid JSON, domain-invalid schedule (no bound at all) —
+    # the service's error envelope, not a serializer 400.
+    resp = authed_client.post(
+        f"/api/v1/events/{event.id}/ticket-types",
+        {
+            "name": "Gold",
+            "price": 50000,
+            "quantity": 50,
+            "phases": [{"name": "Forever bird", "price": 30000}],
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "invalid_phase_schedule"
+
+
+@pytest.mark.django_db
+def test_tier_list_reports_the_current_phase_and_remaining_seats(
     api_client, event, make_ticket_type
 ):
     make_ticket_type(
@@ -162,95 +199,121 @@ def test_tier_list_reports_the_effective_price_and_remaining_seats(
         price_minor=50000,
         quantity=50,
         sold=3,
-        early_bird_price_minor=30000,
-        early_bird_quantity=10,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 10}],
     )
 
     tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
 
     assert tier["price"] == 50000
-    assert tier["early_bird_price"] == 30000
     assert tier["effective_price"] == 30000
-    assert tier["early_bird_active"] is True
-    assert tier["early_bird_remaining"] == 7  # 10 allocated, 3 already sold
+    assert tier["current_phase"] == {"name": "Early bird", "ends_at": None, "remaining": 7}
+    assert tier["next_price"] == 50000  # nothing scheduled after → face price
 
 
 @pytest.mark.django_db
-def test_tier_list_reports_no_remaining_count_for_an_uncapped_early_bird(
+def test_tier_list_reports_no_remaining_count_for_a_seat_unbounded_phase(
     api_client, event, make_ticket_type
 ):
-    """An uncapped early bird has no seat count to report, and the platform
+    """A phase with no seat threshold has no count to report, and the platform
     does not invent one — the deadline is what bounds it."""
     make_ticket_type(
         price_minor=50000,
-        early_bird_price_minor=30000,
-        early_bird_ends_at=timezone.now() + timedelta(days=1),
+        phases=[
+            {
+                "name": "Early bird",
+                "price_minor": 30000,
+                "ends_at": timezone.now() + timedelta(days=1),
+            }
+        ],
     )
 
     tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
 
-    assert tier["early_bird_active"] is True
-    assert tier["early_bird_remaining"] is None
+    assert tier["current_phase"]["name"] == "Early bird"
+    assert tier["current_phase"]["remaining"] is None
+    assert tier["current_phase"]["ends_at"] is not None
 
 
 @pytest.mark.django_db
-def test_tier_list_reports_a_lapsed_early_bird_as_the_normal_price(
-    api_client, event, make_ticket_type
-):
+def test_tier_list_reports_a_lapsed_schedule_as_the_face_price(api_client, event, make_ticket_type):
     make_ticket_type(
         price_minor=50000,
-        early_bird_price_minor=30000,
-        early_bird_ends_at=timezone.now() - timedelta(minutes=1),
-        early_bird_quantity=10,
+        phases=[
+            {
+                "name": "Early bird",
+                "price_minor": 30000,
+                "ends_at": timezone.now() - timedelta(minutes=1),
+                "quantity": 10,
+            }
+        ],
     )
 
     tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
 
-    assert tier["early_bird_active"] is False
+    assert tier["current_phase"] is None
     assert tier["effective_price"] == 50000
-    assert tier["early_bird_remaining"] == 0  # none will be sold at that price
+    assert tier["next_price"] is None  # no phase is active → nothing comes next
+    # The schedule itself is still reported in full — it is the organizer's
+    # configured history, not the live decision.
+    assert [p["name"] for p in tier["phases"]] == ["Early bird"]
 
 
 @pytest.mark.django_db
-def test_tier_list_query_budget_is_unchanged_by_early_bird(
+def test_tier_list_query_budget_is_a_fixed_two_with_phases(
     api_client, event, make_ticket_type, django_assert_num_queries
 ):
-    """The rule reads only columns already on the row, so pricing costs no
-    extra query cold and none warm."""
-    make_ticket_type(price_minor=50000, early_bird_price_minor=30000, early_bird_quantity=5)
+    """The schedule rides the prefetch: tiers + ONE phases query cold, zero
+    warm — never a phases query per tier."""
+    make_ticket_type(
+        name="A",
+        price_minor=50000,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 5}],
+    )
+    make_ticket_type(
+        name="B",
+        price_minor=60000,
+        phases=[{"name": "Early bird", "price_minor": 40000, "quantity": 5}],
+    )
     url = f"/api/v1/events/{event.id}/ticket-types"
 
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):
         assert api_client.get(url).status_code == 200
     with django_assert_num_queries(0):
         assert api_client.get(url).status_code == 200
 
 
 @pytest.mark.django_db
-def test_patch_can_clear_an_early_bird(authed_client, make_ticket_type):
-    tt = make_ticket_type(price_minor=50000, early_bird_price_minor=30000)
+def test_patch_can_clear_a_schedule(authed_client, make_ticket_type):
+    tt = make_ticket_type(
+        price_minor=50000,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 5}],
+    )
 
     resp = authed_client.patch(
         f"/api/v1/ticket-types/{tt.id}",
-        {"version": 1, "early_bird_price": None},
+        {"version": 1, "phases": []},
         format="json",
     )
 
     assert resp.status_code == 200
-    assert resp.json()["early_bird_active"] is False
+    assert resp.json()["current_phase"] is None
     assert resp.json()["effective_price"] == 50000
+    assert resp.json()["phases"] == []
 
 
 @pytest.mark.django_db
-def test_patch_rejects_dropping_the_price_below_a_live_early_bird(authed_client, make_ticket_type):
-    tt = make_ticket_type(price_minor=50000, early_bird_price_minor=30000)
+def test_patch_rejects_dropping_the_price_below_a_live_phase(authed_client, make_ticket_type):
+    tt = make_ticket_type(
+        price_minor=50000,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 5}],
+    )
 
     resp = authed_client.patch(
         f"/api/v1/ticket-types/{tt.id}", {"version": 1, "price": 20000}, format="json"
     )
 
     assert resp.status_code == 422
-    assert resp.json()["error"]["code"] == "early_bird_price_above_price"
+    assert resp.json()["error"]["code"] == "phase_price_above_price"
 
 
 # --- patch tier ------------------------------------------------------------

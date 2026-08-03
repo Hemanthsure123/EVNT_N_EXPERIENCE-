@@ -414,6 +414,14 @@ export function validate(draft: Draft, now = new Date()): Issue[] {
  * button that fails. The server still enforces it — this is a mirror, not a
  * replacement, and if a check is added server-side the API will still refuse.
  */
+/**
+ * The unsaved-draft blocker, exported by name so the Review step can recognise
+ * it and append the live CAUSE (the save error, the missing field, or
+ * "offline") underneath. The string itself stays static here — this module is
+ * pure and has no access to the save engine's state.
+ */
+export const UNSAVED_DRAFT_BLOCKER = 'The draft has not been saved yet.';
+
 export function publishBlockers(
   draft: Draft,
   /** The caller's organisations, with the level the server gates on. Optional
@@ -423,7 +431,7 @@ export function publishBlockers(
   organizations?: readonly { id: string; name: string; verified_level: string }[],
 ): string[] {
   const blockers: string[] = [];
-  if (!draft.eventId) blockers.push('The draft has not been saved yet.');
+  if (!draft.eventId) blockers.push(UNSAVED_DRAFT_BLOCKER);
 
   // THE GATE THE SERVER APPLIES FIRST, AND THE ONE THIS USED TO MISS.
   //
@@ -650,11 +658,17 @@ export function priceSummary(tiers: DraftTier[]): PriceSummary {
     };
   }
   const prices = priced.map((tier) => tier.price);
+  const capacity = priced.reduce((sum, tier) => sum + (tier.qty || 0), 0);
+  const potentialMinor = priced.reduce((sum, tier) => sum + tier.price * (tier.qty || 0), 0);
   return {
     lowestMinor: Math.min(...prices),
     highestMinor: Math.max(...prices),
-    averageMinor: Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length),
-    capacity: priced.reduce((sum, tier) => sum + (tier.qty || 0), 0),
-    potentialMinor: priced.reduce((sum, tier) => sum + tier.price * (tier.qty || 0), 0),
+    // Quantity-weighted: the average price of a TICKET, not of a tier label.
+    // Ten gold at ₹999 over nine hundred basic at ₹99 averages ~₹109; the
+    // unweighted mean said ₹549, a number no attendee would ever pay. Null
+    // until some tier has a quantity, because 0/0 is not an average.
+    averageMinor: capacity > 0 ? Math.round(potentialMinor / capacity) : null,
+    capacity,
+    potentialMinor,
   };
 }

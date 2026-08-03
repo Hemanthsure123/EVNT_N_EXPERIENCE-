@@ -1,6 +1,6 @@
-"""Ticketing business rules: organizer tier CRUD, plus the reservation
-primitives (`reserve` / `release` / `confirm_sold`) that the future
-`booking` module will call.
+"""Ticketing business rules: organizer tier CRUD (including the named
+sale-phase schedule), plus the reservation primitives (`reserve` /
+`release` / `confirm_sold`) that the `booking` module calls.
 
 THE RESERVATION CONTRACT (see CLAUDE.md for the canonical version):
 
@@ -14,9 +14,17 @@ THE RESERVATION CONTRACT (see CLAUDE.md for the canonical version):
   short (no payment call while the lock is held).
 - `release`/`confirm_sold` clamp to the currently-reserved amount, so a
   retry is a safe no-op; exactly-once accounting is the caller's job.
-- `reserve` also decides the PRICE under that same lock (early bird or
-  normal) and returns it as `ReservationOutcome.unit_price_minor`. That is
-  the number to bill — see `pricing.py`.
+- `reserve` also decides the PRICE under that same lock (the active sale
+  phase, or face price) and returns it as `ReservationOutcome.
+  unit_price_minor` + `phase_name`. That is the number to bill — see
+  `pricing.py`.
+
+Schedule edits and reserves share the same serialisation point: EVERY tier
+edit — including a phases-only one — goes through the version-bump UPDATE on
+the tier row, and the phase delete+recreate runs in that same transaction.
+The UPDATE waits on any in-flight reserve's row lock, and any later reserve
+waits on the edit's — so a locked reserve can never price against a
+half-replaced schedule.
 
 Availability display (cache + the event's denormalized from_price/
 tickets_available) is refreshed AFTER commit, outside the lock — display is
@@ -38,14 +46,15 @@ from core.events import TICKET_TYPE_ADDED, TICKET_TYPE_SOLD_OUT, TICKET_TYPE_UPD
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
-    EarlyBirdPriceAbovePriceError,
+    InvalidPhaseScheduleError,
     InvalidReservationQuantityError,
     NotTicketTypeOwnerError,
+    PhasePriceAbovePriceError,
     QuantityBelowCommittedError,
     StaleTicketTypeVersionError,
     TicketTypeNotFoundError,
 )
-from .models import EARLY_BIRD_PRICE_CONSTRAINT, TicketType
+from .models import TicketType
 from .repositories import TicketTypeRepository
 from .strategies import ReservationOutcome, ReservationStrategy
 
@@ -58,10 +67,45 @@ _EDITABLE_TIER_FIELDS = (
     "sale_start",
     "sale_end",
     "max_per_order",
-    "early_bird_price_minor",
-    "early_bird_ends_at",
-    "early_bird_quantity",
 )
+
+MAX_PHASES = 5
+
+
+def _validate_phase_schedule(phases: list[dict], *, face_price_minor: int) -> None:
+    """The schedule's structural rules, enforced HERE (not only in the
+    serializer) because a service caller deserves the domain error. Each
+    phase dict carries `name` / `price_minor` / `ends_at` / `quantity`; array
+    order is position.
+
+    - max 5 phases — a schedule is a handful of named steps, not a curve;
+    - names non-blank — an unnamed phase can't be shown or recorded;
+    - each price at or below the face price — a "phase" dearer than the
+      normal price would silently OVERCHARGE every buyer who hits it;
+    - prices NON-DECREASING across positions — earlier is cheaper; a later
+      cheaper phase would mean the straddle rule (see pricing.py) bills a
+      straddling order MORE than the phase it fell out of promised;
+    - at least one bound per phase — a phase with no deadline and no
+      threshold never ends, so everything after it is unreachable decoration.
+    """
+    if len(phases) > MAX_PHASES:
+        raise InvalidPhaseScheduleError(f"A ticket type can have at most {MAX_PHASES} sale phases.")
+    previous_price: int | None = None
+    for phase in phases:
+        if not str(phase.get("name") or "").strip():
+            raise InvalidPhaseScheduleError("Every sale phase needs a name.")
+        price = phase["price_minor"]
+        if price > face_price_minor:
+            raise PhasePriceAbovePriceError()
+        if previous_price is not None and price < previous_price:
+            raise InvalidPhaseScheduleError(
+                "Sale phase prices can't decrease from one phase to the next."
+            )
+        previous_price = price
+        if phase.get("ends_at") is None and phase.get("quantity") is None:
+            raise InvalidPhaseScheduleError(
+                "Every sale phase needs an end time or a seat threshold (or both)."
+            )
 
 
 class TicketingService:
@@ -114,20 +158,15 @@ class TicketingService:
         sale_start: datetime | None = None,
         sale_end: datetime | None = None,
         max_per_order: int = 10,
-        early_bird_price_minor: int | None = None,
-        early_bird_ends_at: datetime | None = None,
-        early_bird_quantity: int | None = None,
+        phases: list[dict] | None = None,
     ) -> TicketType:
         event = self._events.get_active_for_write(event_id)
         if event is None:
             raise EventNotFoundError(str(event_id))
         if str(event.organization.owner_id) != str(actor_id):
             raise NotTicketTypeOwnerError()
-        # The rule lives here, not only in the serializer: the DB CHECK is the
-        # backstop, but a service caller deserves the domain error, not an
-        # IntegrityError.
-        if early_bird_price_minor is not None and early_bird_price_minor > price_minor:
-            raise EarlyBirdPriceAbovePriceError()
+        if phases:
+            _validate_phase_schedule(phases, face_price_minor=price_minor)
 
         with UnitOfWork() as uow:
             tt = self._ticket_types.create(
@@ -138,10 +177,9 @@ class TicketingService:
                 sale_start=sale_start,
                 sale_end=sale_end,
                 max_per_order=max_per_order,
-                early_bird_price_minor=early_bird_price_minor,
-                early_bird_ends_at=early_bird_ends_at,
-                early_bird_quantity=early_bird_quantity,
             )
+            if phases:
+                self._ticket_types.set_phases(ticket_type_id=tt.id, phases=phases)
             uow.publish(
                 TICKET_TYPE_ADDED,
                 {"ticket_type_id": str(tt.id), "event_id": str(event_id), "name": tt.name},
@@ -172,20 +210,36 @@ class TicketingService:
         if str(tt.event.organization.owner_id) != str(actor_id):
             raise NotTicketTypeOwnerError()
 
+        # `phases` is not a tier column — it is the schedule replacement,
+        # applied in the SAME transaction as the version-bump UPDATE below.
+        # `None` means "not in this PATCH"; an empty list clears the schedule.
+        phases: list[dict] | None = changes.get("phases")
         applied = {k: v for k, v in changes.items() if k in _EDITABLE_TIER_FIELDS}
         # Fast pre-check against the currently-known committed count; the CHECK
         # constraint is the race-proof backstop for a reserve that sneaks in
         # between this read and the update below.
         if "quantity" in applied and applied["quantity"] < (tt.sold + tt.reserved):
             raise QuantityBelowCommittedError()
-        # Both prices are editable and either may be absent from this PATCH, so
-        # the rule is checked against the MERGED row — cutting the face price
-        # below an existing early-bird price is the same error as raising the
-        # early-bird price above it.
+        # Face price and schedule are both editable and either may be absent
+        # from this PATCH, so the price rules are checked against the MERGED
+        # row — cutting the face price below an existing phase's price is the
+        # same error as submitting a phase priced above it.
         merged_price = applied.get("price_minor", tt.price_minor)
-        merged_early_bird = applied.get("early_bird_price_minor", tt.early_bird_price_minor)
-        if merged_early_bird is not None and merged_early_bird > merged_price:
-            raise EarlyBirdPriceAbovePriceError()
+        merged_phases = (
+            phases
+            if phases is not None
+            else [
+                {
+                    "name": p.name,
+                    "price_minor": p.price_minor,
+                    "ends_at": p.ends_at,
+                    "quantity": p.quantity,
+                }
+                for p in tt.phases.all()
+            ]
+        )
+        if merged_phases:
+            _validate_phase_schedule(merged_phases, face_price_minor=merged_price)
 
         with UnitOfWork() as uow:
             try:
@@ -195,18 +249,18 @@ class TicketingService:
                     changes=applied,
                 )
             except IntegrityError as exc:
-                # A CHECK fired between the pre-checks above and this UPDATE.
-                # Which one matters: they tell the organizer to do different
-                # things, so the constraint name (the only thing that
-                # distinguishes them at this point) picks the message.
-                if EARLY_BIRD_PRICE_CONSTRAINT in str(exc):
-                    # A concurrent edit moved the other price under us.
-                    raise EarlyBirdPriceAbovePriceError() from exc
-                # no_oversell CHECK fired: a concurrent reserve pushed committed
-                # tickets above the new quantity between the pre-check and here.
+                # The no_oversell CHECK fired between the pre-check above and
+                # this UPDATE: a concurrent reserve pushed committed tickets
+                # above the new quantity.
                 raise QuantityBelowCommittedError() from exc
             if not ok:
                 raise StaleTicketTypeVersionError()
+            if phases is not None:
+                # AFTER the version-bump UPDATE on purpose: that UPDATE is the
+                # statement that waits on any in-flight reserve's row lock, so
+                # the schedule swap lands strictly between two locked reserves,
+                # never interleaved with one.
+                self._ticket_types.set_phases(ticket_type_id=ticket_type_id, phases=phases)
 
             uow.publish(
                 TICKET_TYPE_UPDATED,
@@ -226,18 +280,19 @@ class TicketingService:
             raise TicketTypeNotFoundError(str(ticket_type_id))
         return refreshed
 
-    # --- reservation primitives (booking will call these) ------------------
+    # --- reservation primitives (booking calls these) ----------------------
 
     def reserve(self, *, ticket_type_id: uuid.UUID | str, quantity: int) -> ReservationOutcome:
         """Hold `quantity` tickets: quantity moves into `reserved`. Raises
         SaleNotStarted/SaleClosed/ExceedsMaxPerOrder/SoldOut/TicketTypeNotFound.
         Atomic; decided under the tier's row lock.
 
-        The outcome carries `unit_price_minor` — the price this locked decision
-        actually settled on, early bird or normal. Callers that bill for the
-        hold MUST use it rather than a price they read off the tier separately:
-        that read wasn't serialised with anyone else's, so under contention it
-        can quote a discount this reserve did not get.
+        The outcome carries `unit_price_minor` (+ `phase_name`) — the price
+        this locked decision actually settled on, a sale phase or face price.
+        Callers that bill for the hold MUST use it rather than a price they
+        read off the tier separately: that read wasn't serialised with anyone
+        else's, so under contention it can quote a phase this reserve did not
+        get.
         """
         if quantity < 1:
             raise InvalidReservationQuantityError()

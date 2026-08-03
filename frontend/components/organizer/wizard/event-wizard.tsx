@@ -101,6 +101,13 @@ export function EventWizard() {
     ready: authStatus === 'authenticated' && organizationsQuery.isSuccess,
   });
   const { draft, update, setTiers } = wizard;
+  // The save engine's health, handed to the steps that render a
+  // NeedsSavedDraft panel and to Review — one object, so the badge, the
+  // panels and the blocker card all repeat the SAME truth.
+  const save = React.useMemo(
+    () => ({ state: wizard.state, error: wizard.error }),
+    [wizard.state, wizard.error],
+  );
 
   const [step, setStep] = React.useState<StepId>('basics');
   const [previewOpen, setPreviewOpen] = React.useState(false);
@@ -322,7 +329,7 @@ export function EventWizard() {
             ) : step === 'venue' ? (
               <VenueStep draft={draft} update={update} issues={issues} />
             ) : step === 'schedule' ? (
-              <ScheduleStep draft={draft} update={update} issues={issues} />
+              <ScheduleStep draft={draft} update={update} issues={issues} save={save} />
             ) : step === 'tickets' ? (
               <div className="flex flex-col gap-block">
                 <header className="flex flex-col gap-1.5">
@@ -335,9 +342,9 @@ export function EventWizard() {
                 <TicketBuilder tiers={draft.tiers} onChange={setTiers} issues={tierIssues} />
               </div>
             ) : step === 'media' ? (
-              <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} />
+              <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} save={save} />
             ) : step === 'details' ? (
-              <DetailsStep draft={draft} update={update} issues={issues} />
+              <DetailsStep draft={draft} update={update} issues={issues} save={save} />
             ) : step === 'seo' ? (
               <SeoStep draft={draft} update={update} issues={issues} />
             ) : (
@@ -350,6 +357,9 @@ export function EventWizard() {
                 publishError={publishError}
                 organizationName={orgs.find((org) => org.id === draft.organizationId)?.name ?? ''}
                 organizations={orgs}
+                saveState={wizard.state}
+                saveError={wizard.error}
+                onSaveNow={() => void wizard.saveNow()}
               />
             )}
 
@@ -557,7 +567,10 @@ function SaveBadge({
       icon: <Check className="size-3.5" aria-hidden />,
     },
     offline: {
-      label: 'Offline — changes stored on this device, will sync automatically',
+      // A flush that failed to reach the server also lands here, with its own
+      // message — showing the fixed label over a stored cause would be the
+      // badge knowing more than it says.
+      label: error ?? 'Offline — changes stored on this device, will sync automatically',
       tone: 'text-warning-subtle-foreground',
       icon: <CloudOff className="size-3.5" aria-hidden />,
     },

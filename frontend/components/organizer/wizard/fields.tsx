@@ -11,6 +11,7 @@ import {
   SelectValue,
   Textarea,
 } from '@/components/ui';
+import type { SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -298,6 +299,9 @@ export function NotStored({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** The save engine's health, as a server-backed step needs to know it. */
+export type DraftSave = { state: SaveState; error: string | null };
+
 /**
  * The panel a server-backed step shows before the draft exists.
  *
@@ -306,15 +310,24 @@ export function NotStored({ children }: { children: React.ReactNode }) {
  * will issue one. So these steps genuinely cannot work yet — and the honest
  * response is a sentence saying which fields unlock them, not a disabled form
  * that looks broken or an upload that 404s.
+ *
+ * When nothing is missing, the closing line is the SaveBadge's truth rather
+ * than a fixed "Saving now": a save that failed, or a browser that is offline,
+ * used to render as "this unlocks in a moment" — a promise the engine already
+ * knew it could not keep.
  */
 export function NeedsSavedDraft({
   title,
   what,
   missing,
+  save,
 }: {
   title: string;
   what: string;
   missing: string[];
+  /** Optional so callers without the wizard in reach keep working; absent, the
+   *  optimistic line is all this panel can honestly say. */
+  save?: DraftSave;
 }) {
   return (
     <div className="flex flex-col gap-stack rounded-xl border border-dashed border-border bg-sunken p-card-lg">
@@ -329,6 +342,14 @@ export function NeedsSavedDraft({
             </li>
           ))}
         </ul>
+      ) : save?.state === 'error' ? (
+        <p className="text-caption text-destructive" role="alert">
+          {save.error ?? 'The last save failed.'} Your work is safe on this device.
+        </p>
+      ) : save?.state === 'offline' ? (
+        <p className="text-caption text-warning-subtle-foreground">
+          {save.error ?? 'You are offline — the draft saves itself when the connection returns.'}
+        </p>
       ) : (
         <p className="text-caption text-muted-foreground">Saving now — this unlocks in a moment.</p>
       )}

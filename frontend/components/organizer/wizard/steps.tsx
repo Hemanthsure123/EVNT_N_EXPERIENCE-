@@ -23,6 +23,7 @@ import {
   StepHeader,
   TextArea,
   TextField,
+  type DraftSave,
 } from './fields';
 import { missingForSave } from './details-step';
 import { RunningOrder } from './running-order';
@@ -31,6 +32,9 @@ type StepProps = {
   draft: Draft;
   update: (patch: Partial<Draft>) => void;
   issues: Issue[];
+  /** The save engine's health, for a NeedsSavedDraft panel's honest closing
+   *  line. Only the steps that render one receive it. */
+  save?: DraftSave;
 };
 
 const errorFor = (issues: Issue[], field: string) =>
@@ -210,7 +214,7 @@ export function VenueStep({ draft, update, issues }: StepProps) {
 
 /* ─────────────────────────────── schedule ───────────────────────────── */
 
-export function ScheduleStep({ draft, update, issues }: StepProps) {
+export function ScheduleStep({ draft, update, issues, save }: StepProps) {
   const starts = draft.startsAt ? new Date(draft.startsAt) : null;
   const ends = draft.endsAt ? new Date(draft.endsAt) : null;
   const valid = starts && !Number.isNaN(starts.valueOf());
@@ -292,6 +296,7 @@ export function ScheduleStep({ draft, update, issues }: StepProps) {
             title="The running order unlocks once the draft is saved"
             what="Each entry is stored against the event, so it has to exist first. Nothing above is lost in the meantime — it is all held on this device."
             missing={missingForSave(draft)}
+            save={save}
           />
         )}
       </Section>

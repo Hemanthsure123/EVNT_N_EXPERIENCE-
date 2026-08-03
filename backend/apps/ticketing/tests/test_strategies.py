@@ -85,68 +85,88 @@ def test_reserve_unknown_tier_raises_not_found(strategy):
 
 
 @pytest.mark.django_db
-def test_reserve_reports_the_normal_price_when_there_is_no_early_bird(strategy, make_ticket_type):
+def test_reserve_reports_the_face_price_when_there_are_no_phases(strategy, make_ticket_type):
     tt = make_ticket_type(quantity=10, price_minor=50_000)
 
     outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
 
     assert outcome.unit_price_minor == 50_000
-    assert outcome.early_bird_applied is False
+    assert outcome.phase_name is None
 
 
 @pytest.mark.django_db
-def test_reserve_charges_the_early_bird_price_while_it_is_live(strategy, make_ticket_type):
+def test_reserve_charges_the_phase_price_while_it_is_live(strategy, make_ticket_type):
     tt = make_ticket_type(
         quantity=10,
         price_minor=50_000,
-        early_bird_price_minor=30_000,
-        early_bird_ends_at=timezone.now() + timedelta(days=1),
+        phases=[
+            {
+                "name": "Early bird",
+                "price_minor": 30_000,
+                "ends_at": timezone.now() + timedelta(days=1),
+            }
+        ],
     )
 
     outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
 
     assert outcome.unit_price_minor == 30_000
-    assert outcome.early_bird_applied is True
+    assert outcome.phase_name == "Early bird"
 
 
 @pytest.mark.django_db
-def test_reserve_charges_the_normal_price_after_the_deadline(strategy, make_ticket_type):
+def test_reserve_charges_the_face_price_after_the_deadline(strategy, make_ticket_type):
     tt = make_ticket_type(
         quantity=10,
         price_minor=50_000,
-        early_bird_price_minor=30_000,
-        early_bird_ends_at=timezone.now() - timedelta(minutes=1),
+        phases=[
+            {
+                "name": "Early bird",
+                "price_minor": 30_000,
+                "ends_at": timezone.now() - timedelta(minutes=1),
+            }
+        ],
     )
 
     outcome = strategy.reserve(ticket_type_id=tt.id, quantity=1)
 
     assert outcome.unit_price_minor == 50_000
-    assert outcome.early_bird_applied is False
+    assert outcome.phase_name is None
 
 
 @pytest.mark.django_db
-def test_reserve_stops_discounting_once_the_allocation_is_taken(strategy, make_ticket_type):
-    # 3 discounted seats; 3 are already held, so this buyer is the fourth.
+def test_reserve_moves_to_the_next_phase_once_the_threshold_is_crossed(strategy, make_ticket_type):
+    # A 3-seat first phase, then a dearer second phase; the fourth seat is
+    # priced by the second phase, not face.
     tt = make_ticket_type(
-        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=3
+        quantity=10,
+        price_minor=50_000,
+        phases=[
+            {"name": "Early bird", "price_minor": 30_000, "quantity": 3},
+            {"name": "Phase 2", "price_minor": 40_000, "quantity": 8},
+        ],
     )
 
     first = strategy.reserve(ticket_type_id=tt.id, quantity=3)
     assert first.unit_price_minor == 30_000
+    assert first.phase_name == "Early bird"
 
     second = strategy.reserve(ticket_type_id=tt.id, quantity=1)
-    assert second.unit_price_minor == 50_000
-    assert second.early_bird_applied is False
+    assert second.unit_price_minor == 40_000
+    assert second.phase_name == "Phase 2"
 
 
 @pytest.mark.django_db
 def test_reserve_prices_from_the_counters_as_they_stand_before_this_hold(
     strategy, make_ticket_type
 ):
-    """The order taking the LAST discounted seats still gets them — the
-    allocation counts seats already committed, not the ones being taken."""
+    """The order taking the LAST seats inside the threshold still gets the
+    phase price — the threshold counts seats already committed, not the ones
+    being taken."""
     tt = make_ticket_type(
-        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=2
+        quantity=10,
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 2}],
     )
 
     outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
@@ -165,15 +185,17 @@ def test_release_and_confirm_report_no_price(strategy, make_ticket_type):
 
 
 @pytest.mark.django_db
-def test_released_holds_return_their_seats_to_the_early_bird_allocation(strategy, make_ticket_type):
-    """The allocation is measured against `sold + reserved` as they stand, so
+def test_released_holds_return_their_seats_to_the_phase_threshold(strategy, make_ticket_type):
+    """The threshold is measured against `sold + reserved` as they stand, so
     it needs no bookkeeping of its own: when holds lapse and `booking`'s
-    sweeper releases them, those seats are early-bird seats again. It also
-    means an UNDISCOUNTED hold occupies an allocation slot while it lives —
-    the allocation is "the first k seats of this tier", which is what
-    `sold + reserved < early_bird_quantity` says."""
+    sweeper releases them, those seats are back inside the phase. It also
+    means a FACE-PRICED hold occupies a threshold slot while it lives — the
+    threshold is cumulative, "the first k seats of this tier", which is what
+    `sold + reserved < quantity` says."""
     tt = make_ticket_type(
-        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=1
+        quantity=10,
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 1}],
     )
     assert strategy.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor == 30_000
     assert strategy.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor == 50_000
@@ -186,22 +208,27 @@ def test_released_holds_return_their_seats_to_the_early_bird_allocation(strategy
 @pytest.mark.django_db
 def test_reserve_prices_the_locked_row_not_the_display_cache(strategy, make_ticket_type):
     """The cached tier payload can be stale by its TTL; the charge can't. Warm
-    the display cache with the discount live, expire the discount underneath
-    it, and the next reserve must still bill the normal price."""
-    from apps.ticketing.models import TicketType
+    the display cache with the phase live, expire the phase underneath it,
+    and the next reserve must still bill the face price."""
+    from apps.ticketing.models import SalePhase
     from apps.ticketing.selectors import get_event_tiers_payload
 
     tt = make_ticket_type(
         quantity=10,
         price_minor=50_000,
-        early_bird_price_minor=30_000,
-        early_bird_ends_at=timezone.now() + timedelta(hours=1),
+        phases=[
+            {
+                "name": "Early bird",
+                "price_minor": 30_000,
+                "ends_at": timezone.now() + timedelta(hours=1),
+            }
+        ],
     )
     cached = get_event_tiers_payload(tt.event_id)
     assert cached[0]["effective_price"] == 30_000
 
-    TicketType.objects.filter(pk=tt.id).update(
-        early_bird_ends_at=timezone.now() - timedelta(minutes=1)
+    SalePhase.objects.filter(ticket_type_id=tt.id).update(
+        ends_at=timezone.now() - timedelta(minutes=1)
     )
 
     outcome = strategy.reserve(ticket_type_id=tt.id, quantity=1)

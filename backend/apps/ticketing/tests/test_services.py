@@ -8,9 +8,10 @@ from django.utils import timezone
 from apps.events.exceptions import EventNotFoundError
 from apps.events.repositories import EventRepository
 from apps.ticketing.exceptions import (
-    EarlyBirdPriceAbovePriceError,
+    InvalidPhaseScheduleError,
     InvalidReservationQuantityError,
     NotTicketTypeOwnerError,
+    PhasePriceAbovePriceError,
     QuantityBelowCommittedError,
     StaleTicketTypeVersionError,
 )
@@ -110,11 +111,11 @@ def test_update_ticket_type_cannot_drop_quantity_below_committed(
         )
 
 
-# --- early bird on the organizer write path --------------------------------
+# --- the phase schedule on the organizer write path -------------------------
 
 
 @pytest.mark.django_db
-def test_create_ticket_type_accepts_an_early_bird(ticketing_service, event, owner):
+def test_create_ticket_type_accepts_a_phase_schedule(ticketing_service, event, owner):
     ends_at = timezone.now() + timedelta(days=7)
 
     tt = ticketing_service.create_ticket_type(
@@ -123,64 +124,156 @@ def test_create_ticket_type_accepts_an_early_bird(ticketing_service, event, owne
         name="Gold",
         price_minor=50_000,
         quantity=50,
-        early_bird_price_minor=30_000,
-        early_bird_ends_at=ends_at,
-        early_bird_quantity=10,
+        phases=[
+            {"name": "Early bird", "price_minor": 30_000, "ends_at": ends_at, "quantity": 10},
+            {"name": "Phase 2", "price_minor": 40_000, "quantity": 25},
+        ],
     )
 
-    assert tt.early_bird_price_minor == 30_000
-    assert tt.early_bird_quantity == 10
-    assert tt.early_bird_state().effective_price_minor == 30_000
+    phases = tt.pricing_phases()
+    assert [(p.name, p.price_minor, p.position) for p in phases] == [
+        ("Early bird", 30_000, 0),
+        ("Phase 2", 40_000, 1),
+    ]
+    assert phases[0].ends_at == ends_at
+    assert phases[0].quantity == 10
 
 
 @pytest.mark.django_db
-def test_create_ticket_type_rejects_an_early_bird_above_the_price(ticketing_service, event, owner):
-    """An "early bird" dearer than the face price would silently overcharge."""
-    with pytest.raises(EarlyBirdPriceAbovePriceError):
+def test_create_ticket_type_rejects_a_phase_above_the_face_price(ticketing_service, event, owner):
+    """A "phase" dearer than the face price would silently overcharge."""
+    with pytest.raises(PhasePriceAbovePriceError):
         ticketing_service.create_ticket_type(
             event_id=event.id,
             actor_id=owner.id,
             name="Gold",
             price_minor=50_000,
             quantity=50,
-            early_bird_price_minor=60_000,
+            phases=[{"name": "Early bird", "price_minor": 60_000, "quantity": 5}],
         )
 
 
 @pytest.mark.django_db
-def test_update_ticket_type_sets_and_clears_an_early_bird(
-    ticketing_service, make_ticket_type, owner
-):
-    tt = make_ticket_type(price_minor=50_000)
-
-    with_discount = ticketing_service.update_ticket_type(
-        ticket_type_id=tt.id,
-        actor_id=owner.id,
-        expected_version=1,
-        changes={"early_bird_price_minor": 30_000, "early_bird_quantity": 5},
-    )
-    assert with_discount.early_bird_state().is_active is True
-
-    cleared = ticketing_service.update_ticket_type(
-        ticket_type_id=tt.id,
-        actor_id=owner.id,
-        expected_version=2,
-        changes={"early_bird_price_minor": None},
-    )
-    assert cleared.early_bird_state().is_active is False
-    assert cleared.early_bird_state().effective_price_minor == 50_000
+def test_create_ticket_type_rejects_decreasing_phase_prices(ticketing_service, event, owner):
+    """Early is cheapest: a later cheaper phase would make the straddle rule
+    bill a straddling order MORE than the phase it fell out of promised."""
+    with pytest.raises(InvalidPhaseScheduleError):
+        ticketing_service.create_ticket_type(
+            event_id=event.id,
+            actor_id=owner.id,
+            name="Gold",
+            price_minor=50_000,
+            quantity=50,
+            phases=[
+                {"name": "Early bird", "price_minor": 40_000, "quantity": 5},
+                {"name": "Phase 2", "price_minor": 30_000, "quantity": 10},
+            ],
+        )
 
 
 @pytest.mark.django_db
-def test_update_ticket_type_rejects_cutting_the_price_below_the_early_bird(
+def test_create_ticket_type_rejects_a_phase_with_no_bound(ticketing_service, event, owner):
+    """A phase with no deadline and no threshold never ends — everything
+    scheduled after it would be unreachable decoration."""
+    with pytest.raises(InvalidPhaseScheduleError):
+        ticketing_service.create_ticket_type(
+            event_id=event.id,
+            actor_id=owner.id,
+            name="Gold",
+            price_minor=50_000,
+            quantity=50,
+            phases=[{"name": "Forever bird", "price_minor": 30_000}],
+        )
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_rejects_a_blank_phase_name(ticketing_service, event, owner):
+    with pytest.raises(InvalidPhaseScheduleError):
+        ticketing_service.create_ticket_type(
+            event_id=event.id,
+            actor_id=owner.id,
+            name="Gold",
+            price_minor=50_000,
+            quantity=50,
+            phases=[{"name": "   ", "price_minor": 30_000, "quantity": 5}],
+        )
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_rejects_more_than_five_phases(ticketing_service, event, owner):
+    with pytest.raises(InvalidPhaseScheduleError):
+        ticketing_service.create_ticket_type(
+            event_id=event.id,
+            actor_id=owner.id,
+            name="Gold",
+            price_minor=50_000,
+            quantity=50,
+            phases=[
+                {"name": f"Phase {i}", "price_minor": 10_000 + i, "quantity": i + 1}
+                for i in range(6)
+            ],
+        )
+
+
+@pytest.mark.django_db
+def test_update_ticket_type_sets_and_clears_a_schedule(ticketing_service, make_ticket_type, owner):
+    tt = make_ticket_type(price_minor=50_000)
+
+    with_phases = ticketing_service.update_ticket_type(
+        ticket_type_id=tt.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"phases": [{"name": "Early bird", "price_minor": 30_000, "quantity": 5}]},
+    )
+    assert [p.name for p in with_phases.pricing_phases()] == ["Early bird"]
+
+    # An empty list CLEARS the schedule (absence means "not in this PATCH").
+    cleared = ticketing_service.update_ticket_type(
+        ticket_type_id=tt.id, actor_id=owner.id, expected_version=2, changes={"phases": []}
+    )
+    assert cleared.pricing_phases() == []
+
+
+@pytest.mark.django_db
+def test_update_ticket_type_replaces_the_schedule_wholesale(
+    ticketing_service, make_ticket_type, owner
+):
+    tt = make_ticket_type(
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 5}],
+    )
+
+    updated = ticketing_service.update_ticket_type(
+        ticket_type_id=tt.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={
+            "phases": [
+                {"name": "Launch", "price_minor": 25_000, "quantity": 3},
+                {"name": "Phase 2", "price_minor": 40_000, "quantity": 10},
+            ]
+        },
+    )
+
+    assert [(p.name, p.position) for p in updated.pricing_phases()] == [
+        ("Launch", 0),
+        ("Phase 2", 1),
+    ]
+
+
+@pytest.mark.django_db
+def test_update_ticket_type_rejects_cutting_the_price_below_a_phase(
     ticketing_service, make_ticket_type, owner
 ):
     """The rule is checked against the MERGED row: this PATCH carries only the
-    face price, and lowering it under the stored early-bird price is the same
-    error as raising the early-bird price above it."""
-    tt = make_ticket_type(price_minor=50_000, early_bird_price_minor=30_000)
+    face price, and lowering it under a stored phase's price is the same
+    error as submitting a phase priced above it."""
+    tt = make_ticket_type(
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 5}],
+    )
 
-    with pytest.raises(EarlyBirdPriceAbovePriceError):
+    with pytest.raises(PhasePriceAbovePriceError):
         ticketing_service.update_ticket_type(
             ticket_type_id=tt.id,
             actor_id=owner.id,
@@ -190,15 +283,19 @@ def test_update_ticket_type_rejects_cutting_the_price_below_the_early_bird(
 
 
 @pytest.mark.django_db
-def test_reserve_returns_the_price_it_decided(ticketing_service, make_ticket_type):
-    tt = make_ticket_type(quantity=10, price_minor=50_000, early_bird_price_minor=30_000)
+def test_reserve_returns_the_price_and_phase_it_decided(ticketing_service, make_ticket_type):
+    tt = make_ticket_type(
+        quantity=10,
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 8}],
+    )
 
     outcome = ticketing_service.reserve(ticket_type_id=tt.id, quantity=2)
 
-    # This is the number booking records on the order — not the tier's face
+    # These are what booking records on the order — not the tier's face
     # price, which nothing serialised.
     assert outcome.unit_price_minor == 30_000
-    assert outcome.early_bird_applied is True
+    assert outcome.phase_name == "Early bird"
 
 
 # --- reservation primitives via the service --------------------------------

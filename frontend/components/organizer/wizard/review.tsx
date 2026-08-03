@@ -6,14 +6,17 @@ import { AlertTriangle, ChevronRight, Check, Rocket } from 'lucide-react';
 import { formatMoney } from '@/lib/discovery/format';
 import { describePublishFailure } from '@/lib/organizer/publish-error';
 import {
+  UNSAVED_DRAFT_BLOCKER,
   priceSummary,
   publishBlockers,
   type Draft,
   type Issue,
   type StepId,
 } from '@/lib/organizer/wizard/model';
+import type { SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
+import { missingForSave } from './details-step';
 
 /**
  * Review and publish.
@@ -46,6 +49,9 @@ export function ReviewStep({
   publishError,
   organizationName,
   organizations,
+  saveState,
+  saveError,
+  onSaveNow,
 }: {
   draft: Draft;
   issues: Issue[];
@@ -61,6 +67,13 @@ export function ReviewStep({
    *  check. Without it this screen can turn every row green and still be
    *  refused. */
   organizations?: readonly { id: string; name: string; verified_level: string }[];
+  /** The save engine's live state and message — what the toolbar badge shows,
+   *  repeated here so the unsaved blocker carries its CAUSE. */
+  saveState: SaveState;
+  saveError: string | null;
+  /** Flushes the autosave immediately — the way out of "unsaved" that does not
+   *  require going back and making an edit. */
+  onSaveNow: () => void;
 }) {
   const blockers = publishBlockers(draft, organizations);
   const publishFailure = publishError ? describePublishFailure(publishError) : null;
@@ -68,6 +81,30 @@ export function ReviewStep({
   const verified = !organization || organization.verified_level === 'verified';
   const summary = priceSummary(draft.tiers);
   const ready = blockers.length === 0 && issues.length === 0;
+
+  /**
+   * WHY the draft has not saved. The blocker above states the fact; this is
+   * the cause, and it used to exist only as a truncated toolbar caption this
+   * screen never repeated — so "has not been saved yet" was a dead end:
+   * Submit disabled BY the blocker, and nothing anywhere saying what to fix.
+   * Ordered by usefulness: the server's actual refusal, then offline, then
+   * the field `canCreate` is waiting on.
+   */
+  const missing = missingForSave(draft);
+  const creatable = missing.length === 0;
+  const saveCause = draft.eventId
+    ? null
+    : saveState === 'error'
+      ? (saveError ?? 'The last save failed.')
+      : saveState === 'offline'
+        ? (saveError ?? 'You are offline — the draft saves itself when the connection returns.')
+        : !creatable
+          ? `Still needed before it can save: ${missing
+              .map((item) => item.charAt(0).toLowerCase() + item.slice(1))
+              .join(', ')}.`
+          : saveState === 'saving'
+            ? 'Saving now…'
+            : null;
 
   /**
    * Two lists, not one.
@@ -228,6 +265,26 @@ export function ReviewStep({
               className="rounded-xl border border-warning/40 bg-warning-subtle px-card py-2 text-body-sm text-warning-subtle-foreground"
             >
               {blocker}
+              {/* The unsaved blocker never renders alone when the cause is
+                  known — the fact without the cause is the catch-22 this
+                  screen used to be. `Save now` appears once the draft is
+                  actually creatable, because a button that would early-return
+                  on `canCreate` is a lie with a label. */}
+              {blocker === UNSAVED_DRAFT_BLOCKER && (saveCause || creatable) ? (
+                <div className="mt-1.5 flex flex-wrap items-center gap-stack">
+                  {saveCause ? <p className="min-w-0 flex-1 text-caption">{saveCause}</p> : null}
+                  {creatable ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={onSaveNow}
+                      loading={saveState === 'saving'}
+                    >
+                      Save now
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>

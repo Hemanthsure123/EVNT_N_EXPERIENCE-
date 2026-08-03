@@ -76,6 +76,8 @@ import {
  */
 
 const AUTOSAVE_DELAY_MS = 1200;
+/** Backoff before the ONE automatic retry of a network-ish save failure. */
+const SAVE_RETRY_DELAY_MS = 4000;
 const HISTORY_LIMIT = 50;
 
 export type SaveState = 'local' | 'dirty' | 'saving' | 'saved' | 'offline' | 'error';
@@ -110,6 +112,16 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
   const saving = React.useRef(false);
   const pending = React.useRef(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * One armed retry for a network-ish failure — a single shot with backoff,
+   * never a loop. The offline/online listeners own a real outage; this covers
+   * the blip where `fetch` failed while `navigator.onLine` still said true,
+   * which otherwise left the draft stranded until the next keystroke. Re-armed
+   * by a save actually succeeding, so repeated failures cost one retry, not a
+   * hammering interval.
+   */
+  const retryTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryUsed = React.useRef(false);
   const latest = React.useRef(draft);
   latest.current = draft;
 
@@ -160,6 +172,14 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
     setState(restored.eventId ? 'saved' : 'local');
     setHydrated(true);
     discardLegacyDraft();
+    // A restored draft can be complete but never created: every required field
+    // present, `eventId` still null, because the tab closed inside the
+    // autosave delay or every earlier flush failed. Nothing else would ever
+    // save it — edits schedule a flush, but re-opening and pressing Submit is
+    // not an edit, and Submit itself is disabled BY the unsaved blocker. So
+    // the save the draft was owed is scheduled here.
+    if (!restored.eventId && canCreate(restored)) schedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, storageKey, organizationIds]);
 
   React.useEffect(() => {
@@ -383,13 +403,23 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
 
       setSavedAt(Date.now());
       setState(pending.current ? 'dirty' : 'saved');
+      retryUsed.current = false;
     } catch (thrown) {
+      // An ApiError is the server ANSWERING and refusing — retrying the same
+      // request would get the same refusal, so it is shown and left alone.
+      // Anything else is the request not arriving, which is worth one retry.
+      const networkish = !(thrown instanceof ApiError);
       setError(
         thrown instanceof ApiError
           ? thrown.message
           : 'Could not reach the server. Your changes are safe on this device.',
       );
-      setState(thrown instanceof ApiError ? 'error' : 'offline');
+      setState(networkish ? 'offline' : 'error');
+      if (networkish && !retryUsed.current) {
+        retryUsed.current = true;
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => void flush(), SAVE_RETRY_DELAY_MS);
+      }
     } finally {
       saving.current = false;
       if (pending.current) {
@@ -444,6 +474,7 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
   React.useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current);
+      if (retryTimer.current) clearTimeout(retryTimer.current);
     },
     [],
   );

@@ -12,7 +12,15 @@ import {
 } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { FaqBuilder } from './faq-builder';
-import { NeedsSavedDraft, NotStored, Section, StepHeader, TextArea, TextField } from './fields';
+import {
+  NeedsSavedDraft,
+  NotStored,
+  Section,
+  StepHeader,
+  TextArea,
+  TextField,
+  type DraftSave,
+} from './fields';
 
 /**
  * Duration, language, age policy, access notes and FAQs.
@@ -38,6 +46,8 @@ type Props = {
   draft: Draft;
   update: (patch: Partial<Draft>) => void;
   issues: Issue[];
+  /** The save engine's health, for the FAQ panel's honest closing line. */
+  save?: DraftSave;
 };
 
 const errorFor = (issues: Issue[], field: string) =>
@@ -56,7 +66,7 @@ const AGE_PRESETS = ['All ages', 'Under 18s with an adult', '16+', '18+', '21+']
 
 const LANGUAGE_PRESETS = ['English', 'Hindi', 'Hindi, English', 'Marathi', 'Tamil', 'Telugu'];
 
-export function DetailsStep({ draft, update, issues }: Props) {
+export function DetailsStep({ draft, update, issues, save }: Props) {
   const minutes = Number(draft.durationMinutes);
   const readable =
     Number.isInteger(minutes) && minutes > 0 && minutes <= DURATION_MAX_MINUTES
@@ -166,6 +176,7 @@ export function DetailsStep({ draft, update, issues }: Props) {
             title="FAQs unlock once the draft is saved"
             what="They are stored against the event, so it has to exist first. Fill in the fields below and the draft saves itself."
             missing={missingForSave(draft)}
+            save={save}
           />
         )}
       </Section>
@@ -228,6 +239,11 @@ function formatMinutes(minutes: number): string {
 /** Exactly the fields `POST /events` needs — the same list `canCreate` checks. */
 export function missingForSave(draft: Draft): string[] {
   const missing: string[] = [];
+  // First, matching `canCreate`. This list used to omit it, so on an account
+  // with several organisations it could read "nothing missing" while every
+  // flush early-returned on exactly this — the panel promising a save the
+  // engine had already refused.
+  if (!draft.organizationId) missing.push('Which organisation is running it');
   if (!draft.title.trim()) missing.push('A title');
   if (!draft.venue.trim()) missing.push('A venue');
   if (!draft.city.trim()) missing.push('A city');

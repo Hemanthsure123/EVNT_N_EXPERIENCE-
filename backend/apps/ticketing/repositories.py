@@ -1,7 +1,9 @@
-"""ORM access for ticket types — the only place tier queries live.
+"""ORM access for ticket types and their sale phases — the only place tier
+queries live.
 
-The reservation path (`lock_for_update` + `save_counts`) is deliberately the
-leanest possible: lock one row, read the counters, write them back. Nothing
+The reservation path (`lock_for_update` + `phases_for_pricing` +
+`save_counts`) is deliberately the leanest possible: lock one row, read its
+schedule with one indexed child SELECT, write the counters back. Nothing
 else runs while the lock is held (see CLAUDE.md's reservation contract).
 """
 
@@ -14,13 +16,14 @@ from django.utils import timezone
 
 from core.base_repository import BaseRepository
 
-from .models import TicketType
+from .models import SalePhase, TicketType
+from .pricing import Phase
 
 # Columns the locked reservation path needs — nothing heavy, so the critical
-# section stays tiny. The price columns are here because the PRICE decision is
-# made under the same lock as the availability decision (see strategies.py): if
-# they were deferred, pricing would either re-query outside the lock or trigger
-# a second fetch on the same row — both defeat the point of holding it.
+# section stays tiny. `price_minor` is here because the PRICE decision is made
+# under the same lock as the availability decision (see strategies.py): if it
+# were deferred, pricing would trigger a second fetch on the same row, which
+# defeats the point of holding it.
 _LOCK_FIELDS = (
     "id",
     "event_id",
@@ -31,10 +34,10 @@ _LOCK_FIELDS = (
     "sale_end",
     "max_per_order",
     "price_minor",
-    "early_bird_price_minor",
-    "early_bird_ends_at",
-    "early_bird_quantity",
 )
+
+# Columns the pricing rule needs from a phase row — the locked read stays lean.
+_PHASE_FIELDS = ("id", "ticket_type_id", "name", "price_minor", "ends_at", "quantity", "position")
 
 
 class TicketTypeRepository(BaseRepository[TicketType]):
@@ -55,6 +58,23 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             .first()
         )
 
+    def phases_for_pricing(self, ticket_type_id: uuid.UUID | str) -> list[Phase]:
+        """The tier's schedule, ascending position, as the pure rule's input.
+
+        This is the ONE extra statement the locked reserve section allows: a
+        single child SELECT backed by the `sale_phase_position_uniq` index
+        (ticket_type, position), which also hands back the rows already in
+        schedule order. Phase writes happen in the same transaction as the
+        tier's version-bump UPDATE (see services.py), so a read made while
+        holding the tier's row lock can never see a half-replaced schedule.
+        """
+        return [
+            row.as_phase()
+            for row in SalePhase.objects.filter(ticket_type__pk=ticket_type_id)
+            .only(*_PHASE_FIELDS)
+            .order_by("position")
+        ]
+
     def save_counts(self, ticket_type: TicketType) -> None:
         """Persist only the reservation counters (the CHECK constraint backstops
         the invariant on write). Targeted update keeps the write minimal and
@@ -64,23 +84,33 @@ class TicketTypeRepository(BaseRepository[TicketType]):
     # --- reads -------------------------------------------------------------
 
     def list_for_event(self, event_id: uuid.UUID | str) -> QuerySet[TicketType]:
-        """All of an event's live tiers, cheapest first. One query, no joins —
-        tiers don't traverse an FK for their display payload."""
+        """All of an event's live tiers, cheapest first, with their phase
+        schedules attached. Two queries total however many tiers there are —
+        the tier list plus ONE prefetch for every schedule — never a phases
+        query per tier."""
         return (
             self.get_queryset()
             .filter(event_id=event_id, deleted_at__isnull=True)
+            .prefetch_related("phases")
             .order_by("price_minor", "created_at")
         )
 
     def get_active_by_id(self, ticket_type_id: uuid.UUID | str) -> TicketType | None:
-        return self.get_queryset().filter(pk=ticket_type_id, deleted_at__isnull=True).first()
+        return (
+            self.get_queryset()
+            .filter(pk=ticket_type_id, deleted_at__isnull=True)
+            .prefetch_related("phases")
+            .first()
+        )
 
     def get_with_event_owner(self, ticket_type_id: uuid.UUID | str) -> TicketType | None:
-        """Load a tier plus its event's organization owner id in one query, for
-        the ownership check on organizer edits."""
+        """Load a tier plus its event's organization owner id in one joined
+        query (plus the phases prefetch), for the ownership check and the
+        merged price-vs-schedule validation on organizer edits."""
         return (
             self.get_queryset()
             .select_related("event__organization")
+            .prefetch_related("phases")
             .filter(pk=ticket_type_id, deleted_at__isnull=True)
             .first()
         )
@@ -102,7 +132,9 @@ class TicketTypeRepository(BaseRepository[TicketType]):
 
     def aggregate_event_availability(self, event_id: uuid.UUID | str) -> dict:
         """The event's denormalized ticketing fields, recomputed from the
-        authoritative tier rows: cheapest active price + total remaining."""
+        authoritative tier rows: cheapest active FACE price + total remaining.
+        Phases deliberately don't feed this — a "from ₹X" that lapses with a
+        phase deadline would go stale on every event card at once."""
         agg = (
             self.get_queryset()
             .filter(event_id=event_id, deleted_at__isnull=True)
@@ -128,9 +160,6 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         sale_start=None,
         sale_end=None,
         max_per_order: int = 10,
-        early_bird_price_minor: int | None = None,
-        early_bird_ends_at=None,
-        early_bird_quantity: int | None = None,
     ) -> TicketType:
         return TicketType.objects.create(
             event_id=event_id,
@@ -140,19 +169,38 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             sale_start=sale_start,
             sale_end=sale_end,
             max_per_order=max_per_order,
-            early_bird_price_minor=early_bird_price_minor,
-            early_bird_ends_at=early_bird_ends_at,
-            early_bird_quantity=early_bird_quantity,
+        )
+
+    def set_phases(self, *, ticket_type_id: uuid.UUID | str, phases: list[dict]) -> None:
+        """Replace the tier's schedule wholesale — delete + recreate (max 5
+        rows, so no diffing is worth its complexity). Array order IS position.
+        MUST run in the same transaction as the tier's version-bump UPDATE
+        (the caller's UnitOfWork) so a schedule edit serialises with in-flight
+        reserves and a locked reader never sees it half-applied."""
+        SalePhase.objects.filter(ticket_type__pk=ticket_type_id).delete()
+        SalePhase.objects.bulk_create(
+            [
+                SalePhase(
+                    ticket_type_id=ticket_type_id,
+                    name=phase["name"],
+                    price_minor=phase["price_minor"],
+                    ends_at=phase.get("ends_at"),
+                    quantity=phase.get("quantity"),
+                    position=position,
+                )
+                for position, phase in enumerate(phases)
+            ]
         )
 
     def update_if_version_matches(
         self, *, ticket_type_id: uuid.UUID | str, expected_version: int, changes: dict
     ) -> bool:
         """Optimistic-locked organizer edit (name/price/quantity/sale window/
-        max_per_order/early bird). Race-free conditional UPDATE; a mismatch means
-        another editor got there first. The no_oversell CHECK still backstops a
-        quantity reduction that races a reserve, and the early-bird CHECK backstops
-        a face-price cut that races an early-bird price edit."""
+        max_per_order). Race-free conditional UPDATE; a mismatch means another
+        editor got there first. The no_oversell CHECK still backstops a
+        quantity reduction that races a reserve. A phases-only edit passes
+        empty `changes` — the version bump alone is what serialises the
+        schedule replacement with in-flight reserves."""
         updated = (
             self.get_queryset()
             .filter(pk=ticket_type_id, version=expected_version, deleted_at__isnull=True)

@@ -94,7 +94,9 @@ def authed_client(api_client, owner) -> APIClient:
 @pytest.fixture
 def make_ticket_type(event):
     """Create a tier directly, with optional pre-set sold/reserved counters
-    (set via a raw update so the CHECK constraint still guards them)."""
+    (set via a raw update so the CHECK constraint still guards them) and an
+    optional phase schedule — each phase a dict of name/price_minor/ends_at/
+    quantity, array order becoming position (as the write API does it)."""
 
     def _make(
         *,
@@ -106,12 +108,11 @@ def make_ticket_type(event):
         sale_start=None,
         sale_end=None,
         max_per_order: int = 10,
-        early_bird_price_minor: int | None = None,
-        early_bird_ends_at=None,
-        early_bird_quantity: int | None = None,
+        phases: list[dict] | None = None,
         ev: Event | None = None,
     ) -> TicketType:
-        tt = TicketTypeRepository().create(
+        repo = TicketTypeRepository()
+        tt = repo.create(
             event_id=(ev or event).id,
             name=name,
             price_minor=price_minor,
@@ -119,10 +120,9 @@ def make_ticket_type(event):
             sale_start=sale_start,
             sale_end=sale_end,
             max_per_order=max_per_order,
-            early_bird_price_minor=early_bird_price_minor,
-            early_bird_ends_at=early_bird_ends_at,
-            early_bird_quantity=early_bird_quantity,
         )
+        if phases:
+            repo.set_phases(ticket_type_id=tt.id, phases=phases)
         if sold or reserved:
             TicketType.objects.filter(pk=tt.id).update(sold=sold, reserved=reserved)
             tt.refresh_from_db()

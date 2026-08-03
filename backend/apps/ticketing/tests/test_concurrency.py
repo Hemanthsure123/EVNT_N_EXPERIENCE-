@@ -98,8 +98,7 @@ def test_exactly_the_allocated_number_of_early_bird_seats_are_discounted(
     tt = make_ticket_type(
         quantity=100,
         price_minor=50_000,
-        early_bird_price_minor=30_000,
-        early_bird_quantity=k,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": k}],
         max_per_order=5,
     )
 
@@ -126,8 +125,7 @@ def test_multi_unit_orders_never_exceed_the_early_bird_allocation(
     tt = make_ticket_type(
         quantity=100,
         price_minor=50_000,
-        early_bird_price_minor=30_000,
-        early_bird_quantity=k,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": k}],
         max_per_order=5,
     )
 
@@ -153,7 +151,9 @@ def test_the_last_early_bird_seat_and_the_last_ticket_are_decided_together(
     total and 2 of them discounted. Exactly 3 succeed, of which exactly 2 pay
     the early-bird price."""
     tt = make_ticket_type(
-        quantity=3, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=2
+        quantity=3,
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 2}],
     )
 
     def buy(_i: int) -> int | None:
@@ -218,14 +218,36 @@ def test_check_constraint_is_the_db_backstop_against_oversell(make_ticket_type):
         TicketType.objects.filter(pk=tt.id).update(reserved=F("reserved") + 5)  # 8+5 > 10
 
 
-@pytest.mark.django_db
-def test_check_constraint_is_the_db_backstop_against_an_overpriced_early_bird(make_ticket_type):
-    """The same defense in depth for the price: an "early bird" above the face
-    price would silently overcharge, so the database refuses it even when the
-    write bypasses the service and its serializer."""
-    from django.db import IntegrityError, transaction
+@pytest.mark.django_db(transaction=True)
+def test_an_overpriced_phase_can_never_be_the_price_a_buyer_is_charged(
+    ticketing_service, make_ticket_type
+):
+    """WHY THIS IS NOT A CHECK CONSTRAINT ANY MORE.
 
-    tt = make_ticket_type(price_minor=50_000, early_bird_price_minor=30_000)
+    The single early-bird price used to be a column ON the tier, so
+    `early_bird_price_minor <= price_minor` was a same-row CHECK and the
+    database itself refused an overpriced discount. A named schedule lives in
+    a CHILD table, and Postgres cannot express a CHECK across two tables — so
+    that particular backstop is genuinely gone, not merely relocated. The
+    service is now the only writer that validates it (see the rejection tests
+    in test_services.py).
 
-    with pytest.raises(IntegrityError), transaction.atomic():
-        TicketType.objects.filter(pk=tt.id).update(early_bird_price_minor=60_000)
+    What survives at the money path — and what this test pins — is the
+    property that actually protects a buyer: the CHARGED price is decided from
+    the locked row's own face price, so even a schedule forced past the
+    service by a raw write can only ever make a buyer pay LESS, never more.
+    A phase above face price is ignored rather than billed.
+    """
+    from apps.ticketing.models import SalePhase
+
+    tt = make_ticket_type(
+        quantity=10,
+        price_minor=50_000,
+        phases=[{"name": "Early bird", "price_minor": 30_000, "quantity": 5}],
+    )
+    # A raw write, bypassing the service and its validation entirely.
+    SalePhase.objects.filter(ticket_type_id=tt.id).update(price_minor=60_000)
+
+    charged = ticketing_service.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor
+
+    assert charged == 50_000, "an above-face phase must be ignored, never charged"

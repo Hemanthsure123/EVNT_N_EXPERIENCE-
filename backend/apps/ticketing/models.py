@@ -17,26 +17,24 @@ float. `version` is an optimistic-lock counter for ORGANIZER edits; the
 reservation counters are guarded by a pessimistic row lock instead (edits
 are rare, reserves are a stampede — different tools for different contention).
 
-The early-bird columns are the same idea applied to price: they are inputs to
-a decision made under that same row lock (see `pricing.py` and
-`strategies.py`), never read from a cache to bill anyone.
+`SalePhase` rows are the tier's named pricing schedule ("Early bird",
+"Phase 1", …). They are the same idea applied to price: inputs to a decision
+made under that same row lock (see `pricing.py` and `strategies.py`), never
+read from a cache to bill anyone.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from django.db import models
 from django.db.models import F, Q
-from django.utils import timezone
 
-from .pricing import EarlyBirdState, evaluate_early_bird
+from .pricing import Phase
 
-# Named so the service can tell the two CHECK violations apart when Postgres
-# rejects an organizer edit — they mean different things to the operator.
+# Named so the service can tell the CHECK violation apart when Postgres
+# rejects an organizer edit.
 NO_OVERSELL_CONSTRAINT = "ticket_type_no_oversell"
-EARLY_BIRD_PRICE_CONSTRAINT = "ticket_type_early_bird_not_above_price"
 
 
 class TicketType(models.Model):
@@ -51,13 +49,6 @@ class TicketType(models.Model):
     reserved = models.PositiveIntegerField(default=0)
     sale_start = models.DateTimeField(null=True, blank=True)
     sale_end = models.DateTimeField(null=True, blank=True)
-    # Early bird: an optional lower price, bounded by a deadline and/or a seat
-    # allocation. All three nullable — no early bird is the norm. A null
-    # `early_bird_quantity` means unlimited until the deadline; a null
-    # `early_bird_ends_at` means it runs until the allocation is gone.
-    early_bird_price_minor = models.PositiveIntegerField(null=True, blank=True)
-    early_bird_ends_at = models.DateTimeField(null=True, blank=True)
-    early_bird_quantity = models.PositiveIntegerField(null=True, blank=True)
     max_per_order = models.PositiveIntegerField(default=10)
     version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -76,15 +67,6 @@ class TicketType(models.Model):
                 & Q(reserved__gte=0)
                 & Q(quantity__gte=F("sold") + F("reserved")),
                 name=NO_OVERSELL_CONSTRAINT,
-            ),
-            # An "early bird" dearer than the face price is a data-entry error
-            # that would silently OVERCHARGE every buyer who hits it — the same
-            # class of bug as an oversell, so it gets the same treatment: a hard
-            # database backstop, not just a serializer check.
-            models.CheckConstraint(
-                check=Q(early_bird_price_minor__isnull=True)
-                | Q(early_bird_price_minor__lte=F("price_minor")),
-                name=EARLY_BIRD_PRICE_CONSTRAINT,
             ),
         ]
         indexes = [
@@ -106,21 +88,65 @@ class TicketType(models.Model):
     def available(self) -> int:
         return self.quantity - self.sold - self.reserved
 
-    def early_bird_state(self, now: datetime | None = None) -> EarlyBirdState:
-        """This row's pricing right now, via the pure rule in `pricing.py`.
-
-        Every column it reads is in the reservation path's `.only(...)` set,
-        so calling this on a locked row costs no extra query. Callers on the
-        write path MUST call it on a row they hold the lock for; callers on
-        the read path get a display value that may be a cache TTL stale, which
-        is the module's standing trade.
+    def pricing_phases(self) -> list[Phase]:
+        """This tier's schedule as the pure rule's input, ascending position
+        (SalePhase's Meta ordering). Reads `self.phases`, so it costs no query
+        when the phases were prefetched (the display read path) and ONE lazy
+        child query otherwise. The LOCKED reserve path never calls this — it
+        loads phases through `TicketTypeRepository.phases_for_pricing`, the
+        one extra statement its critical section allows (see strategies.py).
         """
-        return evaluate_early_bird(
+        return [p.as_phase() for p in self.phases.all()]
+
+
+class SalePhase(models.Model):
+    """One named step of a tier's pricing schedule.
+
+    `quantity` is a CUMULATIVE threshold against the tier's `sold + reserved`
+    — "this phase's price applies to the first k seats of the tier" — not a
+    per-phase allocation (see `pricing.Phase`). `position` is the schedule
+    order; array order on the write payload becomes position. Phases are
+    replaced wholesale on edit (max 5 rows) inside the same transaction as
+    the tier's version-bump UPDATE, so a schedule edit serialises with
+    in-flight reserves (see services.py).
+
+    CASCADE, not PROTECT: a phase means nothing without its tier, and unlike
+    a booking it is not a financial record anyone must keep — the price a
+    buyer was actually billed lives on the booking item.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket_type = models.ForeignKey(TicketType, on_delete=models.CASCADE, related_name="phases")
+    name = models.CharField(max_length=40)
+    price_minor = models.PositiveIntegerField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        db_table = "ticketing_sale_phase"
+        # Every read of a schedule wants it in schedule order; ordering here
+        # means the prefetched display read and the admin agree without each
+        # restating it.
+        ordering = ["position"]
+        constraints = [
+            # Two phases can't share a slot in the schedule. Its backing
+            # (ticket_type, position) index is ALSO the index the reserve-path
+            # read needs (WHERE ticket_type_id = … ORDER BY position), on top
+            # of the FK's own index.
+            models.UniqueConstraint(
+                fields=["ticket_type", "position"], name="sale_phase_position_uniq"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} (pos {self.position}, {self.ticket_type_id})"
+
+    def as_phase(self) -> Phase:
+        return Phase(
+            name=self.name,
             price_minor=self.price_minor,
-            early_bird_price_minor=self.early_bird_price_minor,
-            early_bird_ends_at=self.early_bird_ends_at,
-            early_bird_quantity=self.early_bird_quantity,
-            sold=self.sold,
-            reserved=self.reserved,
-            now=now or timezone.now(),
+            ends_at=self.ends_at,
+            quantity=self.quantity,
+            position=self.position,
         )

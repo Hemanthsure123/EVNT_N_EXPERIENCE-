@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SEO_TITLE_MAX,
+  UNSAVED_DRAFT_BLOCKER,
   canCreate,
   completion,
   draftStorageKey,
@@ -197,9 +198,18 @@ describe('draftStorageKey', () => {
 describe('publishBlockers', () => {
   it('mirrors the backend publish gate: needs a saved event and a tier', () => {
     expect(publishBlockers(draftWith())).toEqual([
-      'The draft has not been saved yet.',
+      UNSAVED_DRAFT_BLOCKER,
       'Add at least one ticket type.',
     ]);
+  });
+
+  it('exports the unsaved blocker by name, so Review can attach the CAUSE to it', () => {
+    // Review matches on this exact string to append the live save state (the
+    // actual error, the missing field, or offline) and a Save now button —
+    // renaming it here without Review noticing would quietly bring back the
+    // dead end where the fact rendered without its cause.
+    expect(publishBlockers(draftWith())).toContain(UNSAVED_DRAFT_BLOCKER);
+    expect(publishBlockers(draftWith({ eventId: 'evt-1' }))).not.toContain(UNSAVED_DRAFT_BLOCKER);
   });
 
   it('clears once the event and its tier exist on the server', () => {
@@ -281,9 +291,29 @@ describe('priceSummary', () => {
     ]);
     expect(summary.lowestMinor).toBe(49_900);
     expect(summary.highestMinor).toBe(99_900);
-    expect(summary.averageMinor).toBe(74_900);
+    // Quantity-weighted: (49_900×100 + 99_900×50) / 150, not the midpoint of
+    // the two tier labels.
+    expect(summary.averageMinor).toBe(Math.round((49_900 * 100 + 99_900 * 50) / 150));
     expect(summary.capacity).toBe(150);
     expect(summary.potentialMinor).toBe(49_900 * 100 + 99_900 * 50);
+  });
+
+  it('weights the average by quantity, so a rare expensive tier cannot dominate', () => {
+    // Ten gold at ₹999 over nine hundred and ninety basic at ₹99: the average
+    // TICKET costs ~₹108. The old unweighted mean said ₹549 — a number no
+    // attendee would ever pay.
+    const summary = priceSummary([
+      tierWith({ price: '999', quantity: '10' }),
+      tierWith({ price: '99', quantity: '990' }),
+    ]);
+    expect(summary.averageMinor).toBe(Math.round((99_900 * 10 + 9_900 * 990) / 1000));
+  });
+
+  it('reports a null average while no tier has a quantity', () => {
+    // 0/0 is not an average; the preview renders an em dash for null.
+    const summary = priceSummary([tierWith({ price: '499', quantity: '' })]);
+    expect(summary.averageMinor).toBeNull();
+    expect(summary.lowestMinor).toBe(49_900);
   });
 });
 

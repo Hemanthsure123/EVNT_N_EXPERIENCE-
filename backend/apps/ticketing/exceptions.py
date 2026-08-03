@@ -35,13 +35,23 @@ class StaleTicketTypeVersionError(ConflictError):
         super().__init__("This ticket type changed since you loaded it. Reload and try again.")
 
 
-class EarlyBirdPriceAbovePriceError(InvalidInputError):
-    """An early-bird price was set at or above the tier's normal price."""
+class PhasePriceAbovePriceError(InvalidInputError):
+    """A sale phase's price was set above the tier's face price."""
 
-    code = "early_bird_price_above_price"
+    code = "phase_price_above_price"
 
     def __init__(self) -> None:
-        super().__init__("The early-bird price can't be higher than the normal ticket price.")
+        super().__init__("A sale phase's price can't be higher than the normal ticket price.")
+
+
+class InvalidPhaseScheduleError(InvalidInputError):
+    """The submitted phase schedule breaks a structural rule (too many phases,
+    a blank name, decreasing prices, or a phase with no bound at all)."""
+
+    code = "invalid_phase_schedule"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 
 class QuantityBelowCommittedError(ConflictError):

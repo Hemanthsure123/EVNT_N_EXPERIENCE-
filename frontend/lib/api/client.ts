@@ -60,17 +60,33 @@ function buildInit(opts: RequestOptions): RequestInit {
 
 async function parse<T>(res: Response): Promise<T> {
   const text = await res.text();
-  const data = text ? (JSON.parse(text) as unknown) : null;
   if (!res.ok) {
-    const envelope = data as Partial<ApiErrorEnvelope> | null;
+    // Parse the error body DEFENSIVELY. A 502 from a proxy, a gateway timeout
+    // or a load-balancer error page is HTML, not the envelope — and parsing it
+    // before checking `res.ok` used to throw a SyntaxError, which callers
+    // could only read as "network down": the wrong diagnosis, with the wrong
+    // remedy attached. A non-JSON error body is still an HTTP answer, so it
+    // becomes a typed ApiError carrying the status.
+    let envelope: Partial<ApiErrorEnvelope> | null = null;
+    if (text) {
+      try {
+        envelope = JSON.parse(text) as Partial<ApiErrorEnvelope>;
+      } catch {
+        // Not the envelope, not even JSON. The generic error below stands.
+      }
+    }
     const err = envelope?.error;
     throw new ApiError(
       res.status,
       err?.code ?? 'http_error',
-      err?.message ?? res.statusText ?? 'Request failed',
+      err?.message ?? (res.statusText || `The server returned an error (${res.status}).`),
       err?.details ?? {},
     );
   }
+  // A non-JSON 2xx is a broken contract with the backend, not a user-facing
+  // condition — let JSON.parse's own exception propagate so it gets
+  // investigated rather than rendered as an error message.
+  const data = text ? (JSON.parse(text) as unknown) : null;
   return data as T;
 }
 
