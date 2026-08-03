@@ -1,0 +1,330 @@
+import AxeBuilder from '@axe-core/playwright';
+import { type Page, expect, test } from '@playwright/test';
+
+/**
+ * The booking funnel, end to end, against the fixture backend.
+ *
+ * The thread running through these: every number and every state comes from a
+ * real request. The booking really is created, inventory really is reserved,
+ * the hold timer is a real deadline, and nothing simulates a payment.
+ */
+
+const API = 'http://localhost:8000/api/v1';
+
+const seriousOrWorse = (v: { impact?: string | null }) =>
+  v.impact === 'critical' || v.impact === 'serious';
+
+/**
+ * Wait for the step's entrance transition to finish.
+ *
+ * The cards fade in from `opacity: 0`, and axe samples COMPUTED colour — so a
+ * run that lands mid-transition reads blended values and reports contrast
+ * failures against foregrounds that never exist at rest. This waits for every
+ * animated child of the step to reach full opacity, which is exact rather than
+ * a guessed sleep.
+ */
+async function settled(page: Page) {
+  await page.waitForFunction(() => {
+    const main = document.getElementById('funnel-main');
+    if (!main) return false;
+    // Only the ANIMATED wrappers: the step container and the cards inside it.
+    // Checking every descendant never settles — the design system has plenty of
+    // legitimately semi-transparent things (disabled tiers, muted icons).
+    const step = main.firstElementChild;
+    if (!step) return false;
+    const animated = [step, ...Array.from(step.children)];
+    return animated.every((node) => Number(getComputedStyle(node).opacity) === 1);
+  });
+}
+
+async function axeClean(page: Page, label: string) {
+  await settled(page);
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations.filter(seriousOrWorse), `${label} a11y violations`).toEqual([]);
+}
+
+/** An event with healthy stock, plus its tiers — straight from the fixture. */
+async function bookableEvent(page: Page) {
+  const events = await page.evaluate(async (api) => {
+    const response = await fetch(`${api}/events?page_size=40`);
+    return (await response.json()) as {
+      data: { id: string; tickets_available: number | null; from_price: number | null }[];
+    };
+  }, API);
+  const event =
+    events.data.find((entry) => (entry.tickets_available ?? 0) > 100 && entry.from_price) ??
+    events.data[0]!;
+  const tiers = await page.evaluate(
+    async ([api, id]) => {
+      const response = await fetch(`${api}/events/${id}/ticket-types`, { cache: 'no-store' });
+      return (await response.json()) as { data: { id: string; name: string; price: number }[] };
+    },
+    [API, event.id] as const,
+  );
+  return { eventId: event.id, tiers: tiers.data };
+}
+
+/** Register a fresh account and put its tokens where the app looks for them. */
+async function signedIn(page: Page) {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
+  const tokens = await page.evaluate(
+    async ([api, address]) => {
+      const response = await fetch(`${api}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: address, password: 'password123', full_name: 'E2E Tester' }),
+      });
+      return (await response.json()) as { tokens: { access: string; refresh: string } };
+    },
+    [API, email] as const,
+  );
+  await page.evaluate(
+    ([access, refresh]) => {
+      localStorage.setItem('ee-access', access);
+      localStorage.setItem('ee-refresh', refresh);
+    },
+    [tokens.tokens.access, tokens.tokens.refresh] as const,
+  );
+  return email;
+}
+
+test.describe('the booking funnel', () => {
+  test('carries the selection in the URL, and the summary follows it', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await page.goto(`/booking/${eventId}`);
+
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+    const summary = page.getByRole('complementary', { name: 'Order summary' });
+    await expect(summary).toContainText('No tickets chosen yet');
+
+    // Two presses inside one frame, deliberately. The rendered quantity trails
+    // the URL by a render, so a stepper that computed "displayed + 1" would
+    // write 1 twice and silently drop the second tap — on the money path.
+    const add = page.getByRole('button', { name: `Add one ${tiers[0]!.name} ticket` });
+    await add.dblclick();
+
+    // The URL is the state — shareable, and survives a reload.
+    await expect(page).toHaveURL(new RegExp(`tickets=${tiers[0]!.id}%3A2`));
+    await expect(summary).toContainText(`${tiers[0]!.name}`);
+    await expect(summary).toContainText('× 2');
+
+    await page.reload();
+    await expect(page.getByLabel(`${tiers[0]!.name} quantity`)).toHaveText('2');
+  });
+
+  test('shows the sign-in step to a visitor, and skips it entirely once signed in', async ({
+    page,
+  }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+
+    // Anonymous: four steps, and Continue lands on sign-in.
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    const stepper = page.getByRole('navigation', { name: 'Booking progress' });
+    await expect(stepper.getByRole('listitem')).toHaveCount(4);
+    await expect(stepper).toContainText('Sign in');
+
+    await page.getByRole('button', { name: 'Continue' }).first().click();
+    await expect(page).toHaveURL(/\/login/);
+    // The heading continues the purchase rather than starting something new —
+    // the standalone /sign-in page is the one that says "Welcome back".
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
+
+    // Signed in: three steps, no sign-in anywhere, and Continue goes to review.
+    await signedIn(page);
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await expect(stepper.getByRole('listitem')).toHaveCount(3);
+    await expect(stepper).not.toContainText('Sign in');
+  });
+
+  test('reserves real inventory at review, with a real hold deadline', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await signedIn(page);
+    // The LAST tier, exclusively. This assertion is an exact delta, and the
+    // fixture's inventory is shared across the whole file — any other test
+    // booking the same tier concurrently would make it fail for the wrong
+    // reason. Nothing else in here touches this one.
+    const tier = tiers[tiers.length - 1]!;
+
+    const before = await page.evaluate(
+      // `no-store`: this endpoint is cacheable for 5s, and a cached read here
+      // would report the pre-booking number and quietly pass the assertion.
+      async ([api, id]) => {
+        const response = await fetch(`${api}/events/${id}/ticket-types`, { cache: 'no-store' });
+        const body = (await response.json()) as { data: { id: string; available: number }[] };
+        return body.data;
+      },
+      [API, eventId] as const,
+    );
+
+    await page.goto(`/booking/${eventId}/review?tickets=${tier.id}:2`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
+
+    // The booking id lands in the URL, so a refresh here can't re-reserve.
+    await expect(page).toHaveURL(/booking=[0-9a-f-]{8}/);
+
+    // A real countdown, from the booking's own `hold_expires_at`.
+    await expect(page.getByText(/Tickets held for \d+:\d\d/)).toBeVisible();
+
+    // Inventory actually moved.
+    const after = await page.evaluate(
+      async ([api, id]) => {
+        const response = await fetch(`${api}/events/${id}/ticket-types`, { cache: 'no-store' });
+        const body = (await response.json()) as { data: { id: string; available: number }[] };
+        return body.data;
+      },
+      [API, eventId] as const,
+    );
+    const was = before.find((entry) => entry.id === tier.id)!.available;
+    const now = after.find((entry) => entry.id === tier.id)!.available;
+    expect(now).toBe(was - 2);
+  });
+
+  test('a reload at review does not reserve a second time', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await signedIn(page);
+
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[1]!.id}:1`);
+    await expect(page).toHaveURL(/booking=/);
+    const first = new URL(page.url()).searchParams.get('booking');
+
+    await page.reload();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
+    await expect(page).toHaveURL(/booking=/);
+
+    // The derived Idempotency-Key makes the retry return the SAME booking.
+    expect(new URL(page.url()).searchParams.get('booking')).toBe(first);
+  });
+
+  test('never simulates a payment when no provider key is configured', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await signedIn(page);
+
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
+    await page.getByRole('link', { name: /Proceed to payment/ }).click();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
+
+    const main = page.locator('#funnel-main');
+    const hasKey = (await main.getByRole('button', { name: /^Pay ₹/ }).count()) > 0;
+    if (hasKey) {
+      // With a key, the SDK must NOT have been fetched before the press.
+      const before = await page.evaluate(() => typeof window.Razorpay);
+      expect(before).toBe('undefined');
+    } else {
+      await expect(main).toContainText('Payment provider not configured');
+      // And nothing anywhere claims the payment happened.
+      await expect(main).not.toContainText(/payment (successful|complete)/i);
+      await expect(page.getByRole('heading', { name: /You're going/ })).toHaveCount(0);
+    }
+  });
+
+  test('shows no promo field and no invented taxes', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+
+    // No coupon endpoint exists, so no coupon input pretends one does.
+    await expect(page.getByPlaceholder(/promo|coupon/i)).toHaveCount(0);
+    await expect(page.getByText(/^Taxes/)).toHaveCount(0);
+  });
+
+  test('Google is offered for real, and phone says plainly when it is not connected', async ({
+    page,
+  }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+
+    await page.getByRole('button', { name: 'Continue' }).first().click();
+    await expect(page).toHaveURL(/\/login/);
+
+    // The control EXISTS — the funnel and /sign-in render the same panel.
+    // Never clicked: Google is real now, and a real click leaves the SPA.
+    await expect(page.getByRole('button', { name: /Continue with Google/i })).toHaveCount(1);
+    // Apple was removed outright — no backend, no planned one.
+    await expect(page.getByRole('button', { name: /Continue with Apple/i })).toHaveCount(0);
+
+    // Phone is the seam still stating the truth: the tab is real, the send
+    // fails loudly rather than pretending a code went out. A social button
+    // that silently does nothing, or appears to succeed, is the worst
+    // possible control to fake on a checkout.
+    const urlBefore = page.url();
+    await page.getByRole('tab', { name: 'Phone' }).click();
+    await page.getByLabel('Phone number').fill('+919876543210');
+    await page.getByRole('button', { name: 'Send code' }).click();
+    // Scoped to main — the header carries its own sr-only status region.
+    await expect(page.getByRole('main').getByRole('status')).toContainText(
+      /Phone sign-in isn't connected yet/i,
+    );
+    expect(page.url()).toBe(urlBefore);
+
+    // Email + password is the one method with a backend behind it, and it works.
+    await page.getByRole('tab', { name: 'Email' }).click();
+    await expect(page.getByLabel('Email')).toBeVisible();
+  });
+
+  test('the summary card is present and consistent on every step', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId, tiers } = await bookableEvent(page);
+    await signedIn(page);
+    const summary = page.getByRole('complementary', { name: 'Order summary' });
+
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await expect(summary).toBeVisible();
+    const total = (await summary.getByText(/^₹/).last().textContent())?.trim();
+
+    await page.getByRole('button', { name: 'Continue' }).first().click();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
+    await expect(summary).toBeVisible();
+    await expect(summary).toContainText(total!);
+
+    await page.getByRole('link', { name: /Proceed to payment/ }).click();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
+    await expect(summary).toBeVisible();
+    await expect(summary).toContainText(total!);
+  });
+
+  test.describe('accessibility', () => {
+    // Reduced motion as well as the explicit settle in `axeClean` — this is a
+    // configuration real users run, and it should be just as clean.
+    test.use({ reducedMotion: 'reduce' });
+
+    test('passes axe on every step', async ({ page }) => {
+      await page.goto('/events');
+      const { eventId, tiers } = await bookableEvent(page);
+
+      await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await axeClean(page, 'booking step 1');
+
+      await page.goto(`/booking/${eventId}/login?tickets=${tiers[0]!.id}:1`);
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await axeClean(page, 'booking step 2');
+
+      await signedIn(page);
+      await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
+      await axeClean(page, 'booking step 3');
+
+      await page.getByRole('link', { name: /Proceed to payment/ }).click();
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
+      await axeClean(page, 'booking step 4');
+    });
+  });
+
+  test('is reachable from the event page with the chosen tier', async ({ page }) => {
+    await page.goto('/events');
+    const { eventId } = await bookableEvent(page);
+    await page.goto(`/events/${eventId}`);
+
+    const book = page.getByRole('link', { name: 'Book tickets' });
+    if ((await book.count()) === 0) test.skip(true, 'this event is sold out');
+    await book.click();
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+\?tickets=/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+  });
+});

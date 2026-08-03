@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from config.di import build_checkin_service
+from core.throttling import CheckinThrottle
 
 from .schemas import AttendanceSerializer, VerifyRequestSerializer, VerifyResultSerializer
 
@@ -32,6 +33,10 @@ def _no_store(response: Response) -> Response:
 
 class CheckinVerifyView(APIView):
     permission_classes = [IsAuthenticated]
+    # High deliberately: a gate scans continuously during entry, and
+    # denying a real scan means a queue at a door. A fake scan is already
+    # harmless — the per-ticket row lock decides, not this.
+    throttle_classes = [CheckinThrottle]
 
     @extend_schema(
         request=VerifyRequestSerializer,

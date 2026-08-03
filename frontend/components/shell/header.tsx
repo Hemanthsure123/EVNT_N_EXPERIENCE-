@@ -2,27 +2,72 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Ticket } from 'lucide-react';
+import { BrandMark } from '@/components/shell/brand-mark';
+import { BRAND_NAME } from '@/lib/brand';
 import { cn } from '@/lib/utils/cn';
 import { Container } from './container';
-import { ThemeToggle } from './theme-toggle';
+import { RouteProgress, RouteTransitionProvider } from './route-transition';
 
 export interface HeaderProps {
-  /** Brand slot (defaults to a placeholder logo). */
+  /** Brand slot (defaults to the Curatix lockup, linked home). */
   logo?: React.ReactNode;
-  /** Primary nav slot (rendered inline on md+). */
+  /** Primary nav slot. Supply your own `<nav>` — see the note on the grid. */
   nav?: React.ReactNode;
-  /** Search slot (rendered centered on lg+). */
+  /** Search slot (rendered in the centre column on lg+). */
   search?: React.ReactNode;
-  /** Right-side actions slot (sign-in, "Start selling", etc.). */
+  /** Right-side actions slot, in visual order. */
   actions?: React.ReactNode;
   className?: string;
 }
 
 /**
- * Sticky app header that CONDENSES on scroll (shrinks height, adds a blurred
- * background + shadow) — §10.3. Composed from slots; the shell provides the
- * chrome, feature code fills the nav/search/actions later.
+ * Sticky app header that condenses on scroll (§10.3).
+ *
+ * ── THE GRID, AND THE BUG IT REPLACES ─────────────────────────────────────
+ *
+ * This was `grid-cols-[1fr_auto_1fr]` with `min-w-0` on both side columns, on
+ * the reasoning that equal side tracks centre the middle one on the container
+ * regardless of what the sides hold. That is true, and it is also how the
+ * header broke: the middle track was `auto`, sized by a 448px search field,
+ * while `min-w-0` let the side tracks shrink BELOW their content. There was no
+ * width at which the arithmetic failed loudly — the nav simply overflowed its
+ * own column and painted underneath the search field. At 1280 and 1440 "Hire a
+ * band" and "More" sat behind it; at 1024 "Hire a band" wrapped onto three
+ * lines and "More" was sliced in half. None of it moved
+ * `documentElement.scrollWidth`, so the overflow test passed the whole time.
+ *
+ * The columns are now `[auto minmax(0,1fr) auto]`: the sides are sized by their
+ * content and CANNOT shrink below it, and the search absorbs whatever is left.
+ * Overlap is no longer a state this layout can reach. The cost is that the
+ * search is centred in the space that remains rather than on the container —
+ * which is what Airbnb and Stripe both do, and is the correct trade: an
+ * optically centred field is worth less than a nav that is never destroyed by
+ * one.
+ *
+ * The other half of the fix lives on the items themselves (`shrink-0`,
+ * `whitespace-nowrap` — see `nav-rail.tsx`); a track that refuses to shrink is
+ * only half a defence if its contents happily wrap.
+ *
+ * ── EVERYTHING IN THE ROW HAS TO FIT AT EVERY WIDTH ───────────────────────
+ *
+ * Which is a budget, not a hope, and it is why the nav thins out by breakpoint
+ * rather than scrolling or wrapping. `site-header.tsx` owns those decisions and
+ * documents the width each one buys.
+ *
+ * ── THE BAR IS A SURFACE AT REST, AND GLASS ONCE IT FLOATS ────────────────
+ *
+ * It used to be `bg-background` with a TRANSPARENT bottom border, which worked
+ * only because the old canvas was a violet-tinted off-white and the hero behind
+ * it was dark. On a pure white page a borderless white band is not a bar at
+ * all — it is the top of the page — so at rest it is now `bg-surface` with a
+ * permanent `border-border` hairline. That hairline is the whole "there is
+ * chrome here" signal in the light theme, exactly as it is on a card.
+ *
+ * Once scrolled, content passes UNDERNEATH it, which is the one condition in
+ * this shell that earns a backdrop-filter: `.glass` plus a `shadow-md` that
+ * says the bar is above the page rather than part of it. Glass is sanctioned
+ * HERE and nowhere else in the shell — see the two rules on `.glass` in
+ * globals.css.
  */
 export function Header({ logo, nav, search, actions, className }: HeaderProps) {
   const [scrolled, setScrolled] = React.useState(false);
@@ -35,42 +80,56 @@ export function Header({ logo, nav, search, actions, className }: HeaderProps) {
   }, []);
 
   return (
-    <header
-      className={cn(
-        'sticky top-0 z-sticky border-b transition-all duration-base ease-out',
-        scrolled
-          ? 'border-border bg-background/80 shadow-sm backdrop-blur-md'
-          : 'border-transparent bg-background',
-        className,
-      )}
-    >
-      <Container
+    <RouteTransitionProvider>
+      <header
         className={cn(
-          'flex items-center gap-4 transition-all duration-base ease-out',
-          scrolled ? 'h-14' : 'h-16',
+          'sticky top-0 z-sticky border-b transition-[height,background-color,border-color,box-shadow] duration-base ease-out',
+          // Glass only once scrolled: at rest there is nothing behind the header
+          // to blur, so the filter would be pure cost. See the note on `.glass`.
+          scrolled ? 'glass shadow-md' : 'border-border bg-surface',
+          className,
         )}
       >
-        <div className="flex items-center gap-6">
-          {logo ?? (
-            <Link href="/" className="inline-flex items-center gap-2 font-display text-h4">
-              <Ticket className="size-6 text-primary" aria-hidden />
-              Eventful
-            </Link>
+        <Container
+          className={cn(
+            'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 transition-[height] duration-base ease-out sm:gap-4 lg:gap-block',
+            scrolled ? 'h-header' : 'h-header md:h-header-lg',
           )}
-          {nav ? <nav className="hidden items-center gap-1 md:flex">{nav}</nav> : null}
-        </div>
+        >
+          <div className="flex items-center gap-1 lg:gap-3">
+            {logo ?? (
+              <Link
+                href="/"
+                aria-label={`${BRAND_NAME} — home`}
+                className="group inline-flex shrink-0 items-center gap-2 rounded-full py-1 pr-2 font-display text-h4 tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                {/* `currentColor`, so the mark is the same ink as the wordmark
+                    beside it and flips with the theme — see brand-mark.tsx. */}
+                <BrandMark
+                  title=""
+                  className="size-7 transition-transform duration-base ease-spring group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                />
+                <span className="transition-opacity duration-fast ease-out group-hover:opacity-80">
+                  {BRAND_NAME}
+                  <span className="text-accent">.</span>
+                </span>
+              </Link>
+            )}
+            {nav}
+          </div>
 
-        {search ? (
-          <div className="hidden flex-1 justify-center px-4 lg:flex">{search}</div>
-        ) : (
-          <div className="flex-1" />
-        )}
+          {/* Always rendered, even when empty: it is the column that absorbs
+              the slack, so removing it would let the actions slide left into
+              the nav. */}
+          <div className="flex min-w-0 justify-center">
+            {search ? <div className="hidden w-full max-w-md lg:block">{search}</div> : null}
+          </div>
 
-        <div className="flex items-center gap-2">
-          {actions}
-          <ThemeToggle />
-        </div>
-      </Container>
-    </header>
+          <div className="flex shrink-0 items-center justify-end gap-0.5 sm:gap-1">{actions}</div>
+        </Container>
+
+        <RouteProgress />
+      </header>
+    </RouteTransitionProvider>
   );
 }

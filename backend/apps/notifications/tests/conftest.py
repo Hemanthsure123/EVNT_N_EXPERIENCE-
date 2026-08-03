@@ -11,7 +11,10 @@ from apps.booking.repositories import BookingRepository, TicketRepository
 from apps.booking.services import BookingService
 from apps.events.models import Event, EventStatus
 from apps.events.repositories import EventRepository
-from apps.notifications.repositories import NotificationLogRepository
+from apps.notifications.repositories import (
+    NotificationLogRepository,
+    PushSubscriptionRepository,
+)
 from apps.notifications.services import DISPATCH_TASK, NotificationService
 from apps.notifications.templates import TemplateService
 from apps.organizations.repositories import OrganizationRepository
@@ -21,7 +24,9 @@ from apps.ticketing.services import TicketingService
 from apps.ticketing.strategies import RowLockReservationStrategy
 from core.adapters.local.fake_payment import FakePaymentAdapter
 from core.adapters.local.locmem_cache import LocMemCacheAdapter
-from core.ports.email_port import EmailPort
+from core.adapters.webpush.adapter import DisabledPushAdapter
+from core.ports.email_port import EmailAttachment, EmailPort
+from core.ports.push_port import PushPort
 from core.ports.sms_port import SmsPort
 from core.ports.task_queue_port import TaskQueuePort
 
@@ -35,8 +40,24 @@ class RecordingEmail(EmailPort):
     def __init__(self) -> None:
         self.sent: list[dict] = []
 
-    def send(self, *, to: str, subject: str, body: str) -> str:
-        self.sent.append({"to": to, "subject": subject, "body": body})
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str = "",
+        attachments: tuple[EmailAttachment, ...] = (),
+    ) -> str:
+        self.sent.append(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "html": html,
+                "attachments": attachments,
+            }
+        )
         return f"email-ref-{len(self.sent)}"
 
 
@@ -55,7 +76,15 @@ class FailingEmail(EmailPort):
     def __init__(self) -> None:
         self.calls = 0
 
-    def send(self, *, to: str, subject: str, body: str) -> str:
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html: str = "",
+        attachments: tuple[EmailAttachment, ...] = (),
+    ) -> str:
         self.calls += 1
         raise RuntimeError("provider down")
 
@@ -92,6 +121,7 @@ def make_service(
     email: EmailPort | None = None,
     sms: SmsPort | None = None,
     queue: TaskQueuePort | None = None,
+    push: PushPort | None = None,
     max_attempts: int = 5,
     retry_backoff_seconds: int = 1,
 ) -> NotificationService:
@@ -100,6 +130,11 @@ def make_service(
         templates=TemplateService(),
         email=email or RecordingEmail(),
         sms=sms or RecordingSms(),
+        # The DISABLED adapter by default, not a recording one: these tests are
+        # about email and SMS, and a push double that silently "delivered"
+        # would let a routing mistake pass unnoticed. Push has its own file.
+        push=push or DisabledPushAdapter(),
+        push_subscriptions=PushSubscriptionRepository(),
         task_queue=queue or RecordingQueue(),
         max_attempts=max_attempts,
         retry_backoff_seconds=retry_backoff_seconds,

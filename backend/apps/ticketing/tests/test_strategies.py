@@ -81,6 +81,137 @@ def test_reserve_unknown_tier_raises_not_found(strategy):
         strategy.reserve(ticket_type_id="00000000-0000-0000-0000-000000000000", quantity=1)
 
 
+# --- the price half of the locked decision ---------------------------------
+
+
+@pytest.mark.django_db
+def test_reserve_reports_the_normal_price_when_there_is_no_early_bird(strategy, make_ticket_type):
+    tt = make_ticket_type(quantity=10, price_minor=50_000)
+
+    outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
+
+    assert outcome.unit_price_minor == 50_000
+    assert outcome.early_bird_applied is False
+
+
+@pytest.mark.django_db
+def test_reserve_charges_the_early_bird_price_while_it_is_live(strategy, make_ticket_type):
+    tt = make_ticket_type(
+        quantity=10,
+        price_minor=50_000,
+        early_bird_price_minor=30_000,
+        early_bird_ends_at=timezone.now() + timedelta(days=1),
+    )
+
+    outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
+
+    assert outcome.unit_price_minor == 30_000
+    assert outcome.early_bird_applied is True
+
+
+@pytest.mark.django_db
+def test_reserve_charges_the_normal_price_after_the_deadline(strategy, make_ticket_type):
+    tt = make_ticket_type(
+        quantity=10,
+        price_minor=50_000,
+        early_bird_price_minor=30_000,
+        early_bird_ends_at=timezone.now() - timedelta(minutes=1),
+    )
+
+    outcome = strategy.reserve(ticket_type_id=tt.id, quantity=1)
+
+    assert outcome.unit_price_minor == 50_000
+    assert outcome.early_bird_applied is False
+
+
+@pytest.mark.django_db
+def test_reserve_stops_discounting_once_the_allocation_is_taken(strategy, make_ticket_type):
+    # 3 discounted seats; 3 are already held, so this buyer is the fourth.
+    tt = make_ticket_type(
+        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=3
+    )
+
+    first = strategy.reserve(ticket_type_id=tt.id, quantity=3)
+    assert first.unit_price_minor == 30_000
+
+    second = strategy.reserve(ticket_type_id=tt.id, quantity=1)
+    assert second.unit_price_minor == 50_000
+    assert second.early_bird_applied is False
+
+
+@pytest.mark.django_db
+def test_reserve_prices_from_the_counters_as_they_stand_before_this_hold(
+    strategy, make_ticket_type
+):
+    """The order taking the LAST discounted seats still gets them — the
+    allocation counts seats already committed, not the ones being taken."""
+    tt = make_ticket_type(
+        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=2
+    )
+
+    outcome = strategy.reserve(ticket_type_id=tt.id, quantity=2)
+
+    assert outcome.unit_price_minor == 30_000
+
+
+@pytest.mark.django_db
+def test_release_and_confirm_report_no_price(strategy, make_ticket_type):
+    """They decide no price, so they state none — a number here would invite a
+    caller to bill from something nothing decided."""
+    tt = make_ticket_type(quantity=10, reserved=4, price_minor=50_000)
+
+    assert strategy.release(ticket_type_id=tt.id, quantity=1).unit_price_minor is None
+    assert strategy.confirm_sold(ticket_type_id=tt.id, quantity=1).unit_price_minor is None
+
+
+@pytest.mark.django_db
+def test_released_holds_return_their_seats_to_the_early_bird_allocation(strategy, make_ticket_type):
+    """The allocation is measured against `sold + reserved` as they stand, so
+    it needs no bookkeeping of its own: when holds lapse and `booking`'s
+    sweeper releases them, those seats are early-bird seats again. It also
+    means an UNDISCOUNTED hold occupies an allocation slot while it lives —
+    the allocation is "the first k seats of this tier", which is what
+    `sold + reserved < early_bird_quantity` says."""
+    tt = make_ticket_type(
+        quantity=10, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=1
+    )
+    assert strategy.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor == 30_000
+    assert strategy.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor == 50_000
+
+    strategy.release(ticket_type_id=tt.id, quantity=2)  # both holds lapse
+
+    assert strategy.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor == 30_000
+
+
+@pytest.mark.django_db
+def test_reserve_prices_the_locked_row_not_the_display_cache(strategy, make_ticket_type):
+    """The cached tier payload can be stale by its TTL; the charge can't. Warm
+    the display cache with the discount live, expire the discount underneath
+    it, and the next reserve must still bill the normal price."""
+    from apps.ticketing.models import TicketType
+    from apps.ticketing.selectors import get_event_tiers_payload
+
+    tt = make_ticket_type(
+        quantity=10,
+        price_minor=50_000,
+        early_bird_price_minor=30_000,
+        early_bird_ends_at=timezone.now() + timedelta(hours=1),
+    )
+    cached = get_event_tiers_payload(tt.event_id)
+    assert cached[0]["effective_price"] == 30_000
+
+    TicketType.objects.filter(pk=tt.id).update(
+        early_bird_ends_at=timezone.now() - timedelta(minutes=1)
+    )
+
+    outcome = strategy.reserve(ticket_type_id=tt.id, quantity=1)
+
+    assert outcome.unit_price_minor == 50_000
+    # The stale display is still there — that's the accepted trade, and it is
+    # the reason the charge is never read from it.
+    assert get_event_tiers_payload(tt.event_id)[0]["effective_price"] == 30_000
+
+
 @pytest.mark.django_db
 def test_release_is_clamped_and_safe_to_retry(strategy, make_ticket_type):
     tt = make_ticket_type(quantity=10, reserved=2)

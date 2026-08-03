@@ -19,8 +19,8 @@ from django.db.models import QuerySet
 
 from core.ports.cache_port import CachePort
 
-from .models import Organization
-from .repositories import OrganizationRepository
+from .models import Organization, OrganizationFollow
+from .repositories import OrganizationFollowRepository, OrganizationRepository
 
 ORG_DETAIL_TTL_SECONDS = 60
 ORG_LIST_TTL_SECONDS = 30
@@ -46,6 +46,18 @@ def list_my_organizations(
 ) -> QuerySet[Organization]:
     organizations = organizations or OrganizationRepository()
     return organizations.list_active_by_owner(owner_id)
+
+
+def list_followed_organizations(
+    user_id: uuid.UUID | str, *, follows: OrganizationFollowRepository | None = None
+) -> QuerySet[OrganizationFollow]:
+    """GET /me/following. Deliberately NOT cached: it is one person's
+    subscription list, so a shared cache entry could only ever be wrong for
+    everybody else, and it changes the instant they press Follow anywhere on
+    the site. The query is a single index scan — there is nothing here worth
+    the risk of caching."""
+    follows = follows or OrganizationFollowRepository()
+    return follows.list_following(user_id)
 
 
 def get_organization_detail_payload(

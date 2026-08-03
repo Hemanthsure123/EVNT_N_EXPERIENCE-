@@ -34,10 +34,44 @@ docker compose up -d
 ```
 
 This builds the backend image and starts Postgres, a PgBouncer in front of
-it (transaction-pooling mode, TLS required — a local stand-in for Neon's
-pooled connection), Redis with a TLS listener (a local stand-in for
+it (transaction-pooling mode, TLS required — a local stand-in for
+Supabase's Supavisor pooler), Redis with a TLS listener (a local stand-in for
 Upstash), waits for them to be healthy, runs migrations, and starts the
 dev server on `http://localhost:8000`.
+
+Development lives in `docker-compose.override.yml`, which Compose loads
+automatically — so the command above is development, and
+
+```bash
+docker compose -f docker-compose.yml up -d     # production: .env is authoritative
+```
+
+is production (gunicorn, plus the scheduler and outbox worker; no migrate on
+boot).
+
+Deployment is a **configuration exercise, not a development exercise** — the
+same image runs all three environments and only `.env` differs:
+
+| Document | Answers |
+| --- | --- |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | How do I deploy it, and how do I undo it? |
+| [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md) | Tickable sign-off sheet before go-live. |
+| [OPERATIONS.md](OPERATIONS.md) | It is deployed — how do I run it day to day? |
+| [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) | What is every variable, and who reads it? |
+| [REAL_INTEGRATIONS_AUDIT.md](REAL_INTEGRATIONS_AUDIT.md) | What is each credential and where do I get it? |
+
+Environment templates — copy the one for your target to `.env`, fill in every
+`<PLACEHOLDER>`, and change nothing else:
+
+| Template | For |
+| --- | --- |
+| `.env.example` | Local development, and the canonical reference for every variable. |
+| `.env.staging.example` | Staging. |
+| `.env.production.example` | Production. |
+| `frontend/.env.local.example` · `frontend/.env.production.example` | The frontend's seven public variables. |
+
+All four backend templates declare the identical variable set, enforced by
+`core/tests/test_env_templates.py` rather than by asking.
 
 - Health check: `GET /health/`
 - OpenAPI schema: `GET /api/schema/` — Swagger UI: `/api/docs/`
@@ -187,3 +221,5 @@ backend/
                      event (recompute under lock, retry + dead-letter)
 frontend/            placeholder, see frontend/README.md
 ```
+#   E V N T _ N _ E X P E R I E N C E -  
+ 

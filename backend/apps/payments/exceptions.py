@@ -58,3 +58,40 @@ class PaymentNotRefundableError(ConflictError):
 
     def __init__(self, status: str) -> None:
         super().__init__(f"A payment in '{status}' state can't be refunded.")
+
+
+class SimulatedPaymentUnavailableError(ConflictError):
+    """A simulated payment was requested while a REAL payment provider is
+    configured.
+
+    This is the refusal that keeps the demo path from ever being a way to get a
+    free ticket. It is decided by asking the configured port whether it is a
+    `SimulatedPaymentPort` — the real Razorpay adapter is not, so with
+    `PAYMENTS_BACKEND=razorpay` the answer is always no. (`core/preflight.py`
+    separately refuses to boot production on a fake backend at all, so in
+    production this endpoint can only ever refuse.)
+    """
+
+    code = "simulated_payment_unavailable"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A real payment provider is configured, so payments cannot be simulated. "
+            "Pay through the provider's checkout instead."
+        )
+
+
+class BookingNotPayableError(ConflictError):
+    """The booking can't take a payment: its hold has lapsed, it was cancelled,
+    or no payment order was ever created for it.
+
+    Deliberately a refusal rather than a simulated capture that then refunds
+    itself. Taking (fake) money for an expired hold only to hand it back is a
+    real production flow worth having — but reaching it on purpose from a demo
+    button is just a confusing way to fail.
+    """
+
+    code = "booking_not_payable"
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"A booking in '{status}' state can't take a payment.")

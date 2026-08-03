@@ -13,7 +13,12 @@ import logging
 
 import razorpay
 
-from core.ports.payment_port import OrderTransfer, PaymentPort, SplitTransferResult
+from core.ports.payment_port import (
+    OrderTransfer,
+    PaymentPort,
+    ProviderPayment,
+    SplitTransferResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,70 @@ class RazorpayPaymentAdapter(PaymentPort):
     def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
         expected = hmac.new(self._webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
+
+    def fetch_payment(self, *, payment_id: str) -> ProviderPayment | None:
+        """`GET /v1/payments/{id}` — authenticated with the same key pair that
+        created the order, so the answer is Razorpay's, not the caller's.
+
+        An unknown id raises `BadRequestError` from the SDK rather than
+        returning empty, and that is a normal outcome here (somebody pasted a
+        stale or invented id), so it maps to `None` rather than propagating.
+        Any other exception is a real fault and is left to the caller.
+        """
+        try:
+            payment = self._client.payment.fetch(payment_id)
+        except Exception as exc:  # noqa: BLE001 — narrowed below
+            # The SDK raises its own error classes; `BadRequestError` is
+            # "no such payment". Matching on the class NAME avoids importing
+            # razorpay.errors at module scope, which would break the lazy
+            # import that keeps this adapter out of non-razorpay deploys.
+            if type(exc).__name__ in {"BadRequestError", "ServerError"}:
+                logger.info("razorpay.payment_not_found", extra={"payment_id": payment_id})
+                return None
+            raise
+
+        if not payment:
+            return None
+        status = str(payment.get("status", ""))
+        return ProviderPayment(
+            payment_id=str(payment.get("id", payment_id)),
+            order_id=str(payment.get("order_id") or ""),
+            amount_minor=int(payment.get("amount") or 0),
+            status=status,
+            # `captured` is the only status where the money is actually ours.
+            # `authorized` means the bank has RESERVED it and it has not been
+            # taken — treating that as paid issues a ticket against money that
+            # may never arrive.
+            is_captured=status == "captured",
+        )
+
+    def captured_payment_for_order(self, *, order_id: str) -> ProviderPayment | None:
+        """`GET /v1/orders/{id}/payments` — every payment attempted against the
+        order, from which we take the captured one.
+
+        An order can carry several attempts (a failed card, then a successful
+        UPI). Only `captured` counts; `authorized` is money the bank has
+        reserved and not released, and `failed`/`created` are not money at all.
+        """
+        try:
+            result = self._client.order.payments(order_id)
+        except Exception as exc:  # noqa: BLE001 — narrowed below
+            if type(exc).__name__ in {"BadRequestError", "ServerError"}:
+                logger.info("razorpay.order_not_found", extra={"order_id": order_id})
+                return None
+            raise
+
+        for item in (result or {}).get("items", []) or []:
+            if str(item.get("status", "")) != "captured":
+                continue
+            return ProviderPayment(
+                payment_id=str(item.get("id", "")),
+                order_id=str(item.get("order_id") or order_id),
+                amount_minor=int(item.get("amount") or 0),
+                status="captured",
+                is_captured=True,
+            )
+        return None
 
     def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
         # Razorpay reverses any Route transfers when it refunds. The

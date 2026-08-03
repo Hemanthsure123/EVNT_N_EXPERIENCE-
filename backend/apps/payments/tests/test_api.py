@@ -103,6 +103,84 @@ def test_webhook_endpoint_needs_no_user_token(api_client, buyer, event, tier, to
     assert resp.status_code == 200  # not 401
 
 
+# --- POST /payments/simulate (demo deployments only) -----------------------
+#
+# The test settings run `PAYMENTS_BACKEND=fake`, so the DI-built service here
+# is holding the same simulated provider a demo laptop would be.
+
+
+@pytest.mark.django_db
+def test_simulate_endpoint_completes_the_money_path_end_to_end(
+    api_client, buyer, event, tier, token_for
+):
+    """The headline: from a reserved booking to an issued, scannable ticket
+    over HTTP, with no payment provider and no inbound webhook anywhere."""
+    from apps.booking.models import Booking
+    from apps.booking.qr import verify_ticket_token
+
+    booking = _create_booking(api_client, buyer, event, tier, token_for)
+
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(buyer)}")
+    resp = api_client.post(
+        "/api/v1/payments/simulate", {"booking_id": booking["id"]}, format="json"
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "confirmed"
+    assert resp.headers["Cache-Control"] == "private, no-store"
+
+    b = Booking.objects.get(pk=booking["id"])
+    assert b.status == BookingStatus.PAID
+    tickets = list(Ticket.objects.filter(booking_id=b.id))
+    assert len(tickets) == 2
+    for ticket in tickets:
+        assert verify_ticket_token(ticket.qr_token, secret=settings.TICKET_QR_SIGNING_KEY)
+
+
+@pytest.mark.django_db
+def test_simulate_endpoint_is_idempotent_over_http(api_client, buyer, event, tier, token_for):
+    from apps.booking.models import Booking
+
+    booking = _create_booking(api_client, buyer, event, tier, token_for)
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(buyer)}")
+
+    first = api_client.post("/api/v1/payments/simulate", {"booking_id": booking["id"]}, "json")
+    second = api_client.post("/api/v1/payments/simulate", {"booking_id": booking["id"]}, "json")
+
+    assert first.json()["status"] == "confirmed"
+    assert second.json()["status"] == "already_confirmed"
+    b = Booking.objects.get(pk=booking["id"])
+    assert Ticket.objects.filter(booking_id=b.id).count() == 2
+    assert Payment.objects.filter(booking_id=b.id).count() == 1
+
+
+@pytest.mark.django_db
+def test_simulate_endpoint_requires_authentication(api_client, buyer, event, tier, token_for):
+    booking = _create_booking(api_client, buyer, event, tier, token_for)
+    resp = api_client.post(
+        "/api/v1/payments/simulate", {"booking_id": booking["id"]}, format="json"
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.django_db
+def test_simulate_endpoint_refuses_a_booking_the_caller_does_not_own(
+    api_client, buyer, other_user, event, tier, token_for
+):
+    from apps.booking.models import Booking
+
+    booking = _create_booking(api_client, buyer, event, tier, token_for)
+
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(other_user)}")
+    resp = api_client.post(
+        "/api/v1/payments/simulate", {"booking_id": booking["id"]}, format="json"
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "not_booking_owner"
+    assert Booking.objects.get(pk=booking["id"]).status == BookingStatus.RESERVED
+
+
 # --- GET /payments/{id} ----------------------------------------------------
 
 

@@ -12,6 +12,7 @@ from apps.accounts.models import User
 from apps.accounts.repositories import UserRepository
 from apps.events.models import Event, EventStatus
 from apps.events.repositories import EventRepository
+from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
 
 
@@ -56,7 +57,24 @@ def other_user() -> User:
 
 @pytest.fixture
 def organization(owner):
-    return OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+    """An organization a platform operator has ALREADY verified.
+
+    Verified on purpose: publishing is gated on it (see
+    `EventService.publish_event`), and almost every test in this module is
+    about an established organizer rather than about the gate. The gate itself
+    is proved against `unverified_organization` below — the two fixtures exist
+    so that a test which publishes has to say which kind of organizer it is.
+    """
+    org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+    org.verified_level = VerifiedLevel.VERIFIED
+    org.save(update_fields=["verified_level"])
+    return org
+
+
+@pytest.fixture
+def unverified_organization(other_user):
+    """A brand-new organization: nobody has approved it yet."""
+    return OrganizationRepository().create(owner_id=other_user.id, name="Unapproved Co")
 
 
 @pytest.fixture

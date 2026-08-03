@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.events.models import Event, EventStatus
 
@@ -291,13 +292,50 @@ def test_publish_transitions_draft_to_live(authed_client, make_event, add_ticket
     resp = authed_client.post(f"/api/v1/events/{event.id}/publish", format="json")
 
     assert resp.status_code == 200
-    assert resp.json()["status"] == "live"
+    # Publishing now SUBMITS for review. Only an operator can make it live.
+    assert resp.json()["status"] == "pending_review"
 
 
 @pytest.mark.django_db
-def test_publishing_makes_the_event_publicly_visible(
-    authed_client, api_client, make_event, add_ticket_type, django_capture_on_commit_callbacks
+def test_publish_over_http_is_refused_for_an_unverified_organization(
+    api_client, token_for, make_event, add_ticket_type, unverified_organization, other_user
 ):
+    """The gate has to be here, not only in the dashboard.
+
+    `POST /events/{id}/publish` is `IsAuthenticated` — a signed-in organizer
+    whose organization nobody has approved can reach it with one curl, no
+    matter what the frontend chooses to render. The envelope carries the level
+    so the UI can say "waiting on us" rather than "go get verified".
+    """
+    event = make_event(status=EventStatus.DRAFT, org=unverified_organization)
+    add_ticket_type(event)  # every other gate satisfied
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(other_user)}")
+
+    resp = api_client.post(f"/api/v1/events/{event.id}/publish", format="json")
+
+    assert resp.status_code == 403
+    body = resp.json()["error"]
+    assert body["code"] == "organization_not_verified"
+    assert body["details"]["verified_level"] == "unverified"
+    event.refresh_from_db()
+    assert event.status == EventStatus.DRAFT
+
+
+@pytest.mark.django_db
+def test_publishing_does_not_make_the_event_public_until_an_operator_approves(
+    authed_client,
+    api_client,
+    make_event,
+    add_ticket_type,
+    django_capture_on_commit_callbacks,
+    django_user_model,
+):
+    """The moderation gate, end to end.
+
+    The single most important test of the governance change: an organizer
+    submitting an event must NOT put it in front of attendees. Only a platform
+    operator's approval does that.
+    """
     event = make_event(title="Soon Live", status=EventStatus.DRAFT)
     add_ticket_type(event)  # ticketing publish gate
     api_client.get("/api/v1/events")  # warm the (empty) public list cache
@@ -305,11 +343,26 @@ def test_publishing_makes_the_event_publicly_visible(
     with django_capture_on_commit_callbacks(execute=True):
         publish = authed_client.post(f"/api/v1/events/{event.id}/publish", format="json")
     assert publish.status_code == 200
+    assert publish.json()["status"] == "pending_review"
 
-    # generation bump invalidated the cached listing, so this reflects the publish
+    # Still invisible. The cache generation bumped, so this is a fresh read.
     listing = api_client.get("/api/v1/events")
-    titles = [e["title"] for e in listing.json()["data"]]
-    assert "Soon Live" in titles
+    assert "Soon Live" not in [e["title"] for e in listing.json()["data"]]
+
+    operator = django_user_model.objects.create_user(
+        email="ops-mod@example.com", password="opspass12345", is_staff=True
+    )
+    staff_client = APIClient()
+    staff_client.force_authenticate(user=operator)
+    with django_capture_on_commit_callbacks(execute=True):
+        decision = staff_client.post(
+            f"/api/v1/admin/events/{event.id}/moderate", {"approve": True}, format="json"
+        )
+    assert decision.status_code == 200
+    assert decision.json()["status"] == "live"
+
+    listing = api_client.get("/api/v1/events")
+    assert "Soon Live" in [e["title"] for e in listing.json()["data"]]
 
 
 @pytest.mark.django_db

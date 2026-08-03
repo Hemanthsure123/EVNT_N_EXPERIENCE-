@@ -4,10 +4,10 @@ import { expect, test } from '@playwright/test';
 const seriousOrWorse = (v: { impact?: string | null }) =>
   v.impact === 'critical' || v.impact === 'serious';
 
-test('home links through to the style guide', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('link', { name: /open the living style guide/i }).click();
-  await expect(page).toHaveURL(/style-guide/);
+// The style guide is an internal reference, not a link on the public landing
+// page — it's reached directly (and listed in the sitemap at low priority).
+test('the style guide is reachable directly', async ({ page }) => {
+  await page.goto('/style-guide');
   await expect(page.getByRole('heading', { name: 'Living style guide' })).toBeVisible();
 });
 

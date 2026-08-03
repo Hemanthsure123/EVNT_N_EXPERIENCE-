@@ -19,6 +19,21 @@ class CreateBookingRequestSerializer(serializers.Serializer):
     items = BookingItemRequestSerializer(many=True, allow_empty=False)
 
 
+class AttendeeAssignmentSerializer(serializers.Serializer):
+    """One ticket and the person it admits. Blank name + blank email clears the
+    assignment back to "the buyer is going" — the default, which stays valid
+    forever. The both-or-neither rule is enforced in the service, where it can
+    be stated once alongside the rest of the assignment rules."""
+
+    ticket_id = serializers.UUIDField()
+    name = serializers.CharField(max_length=120, allow_blank=True, default="")
+    email = serializers.EmailField(allow_blank=True, default="")
+
+
+class AssignAttendeesRequestSerializer(serializers.Serializer):
+    assignments = AttendeeAssignmentSerializer(many=True, allow_empty=False)
+
+
 class BookingItemSerializer(serializers.ModelSerializer):
     ticket_type_name = serializers.CharField(source="ticket_type.name", read_only=True)
     unit_price = serializers.IntegerField(source="unit_price_minor", read_only=True)
@@ -48,11 +63,35 @@ class BookingSummarySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class BookingTicketSerializer(serializers.ModelSerializer):
+    """A ticket as it appears inside its own booking: which tier, and who it
+    admits. No `qr_token` — the booking screen names attendees, and the codes
+    themselves are served by GET /me/tickets (and emailed), so repeating them
+    here would put a wallet's worth of live credentials in a response that
+    doesn't render them."""
+
+    ticket_type_name = serializers.CharField(source="ticket_type.name", read_only=True)
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "ticket_type_id",
+            "ticket_type_name",
+            "status",
+            "attendee_name",
+            "attendee_email",
+        ]
+        read_only_fields = fields
+
+
 class BookingDetailSerializer(serializers.ModelSerializer):
     event_title = serializers.CharField(source="event.title", read_only=True)
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
     items = BookingItemSerializer(many=True, read_only=True)
+    # Empty until the booking is paid — tickets don't exist before that.
+    tickets = BookingTicketSerializer(many=True, read_only=True)
 
     class Meta:
         model = Booking
@@ -66,6 +105,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "hold_expires_at",
             "payment_order_id",
             "items",
+            "tickets",
             "created_at",
         ]
         read_only_fields = fields
@@ -80,11 +120,21 @@ class TicketSerializer(serializers.ModelSerializer):
         model = Ticket
         fields = [
             "id",
+            # Which booking issued it. A LOCAL column on the ticket row, so it
+            # costs no extra query and no join — and it is what lets the
+            # confirmation screen show the tickets belonging to the booking that
+            # was just paid for, rather than the whole account's tickets. Without
+            # it the buyer's only route from "paid" to "here is your QR" is the
+            # email, which is the one artifact nobody can be sure arrived.
+            "booking_id",
             "event_id",
             "event_title",
             "ticket_type_id",
             "ticket_type_name",
             "status",
+            # Who this ticket admits, blank when that's the buyer themselves.
+            "attendee_name",
+            "attendee_email",
             "qr_token",
             "created_at",
         ]

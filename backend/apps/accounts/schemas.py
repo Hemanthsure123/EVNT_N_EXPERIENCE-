@@ -41,7 +41,29 @@ class TokenPairSerializer(serializers.Serializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "is_organizer", "date_joined"]
+        # `is_staff` is what gates the operator console. Without it the
+        # frontend cannot tell an admin from anyone else, and an admin UI
+        # that cannot check its own audience is not an admin UI. It is a
+        # role flag, not a secret — the API still enforces every check.
+        # `email_verified` is exposed for the same reason `is_staff` is: the
+        # frontend has to decide whether to show the verify screen, and it
+        # cannot do that from a flag it never receives.
+        # `avatar_url` rides on the profile rather than getting a read endpoint
+        # of its own: every screen that shows a picture already has the user
+        # from `/auth/me`, and a second round trip for one string would be a
+        # request per avatar. Empty string means "no picture" — the frontend
+        # falls back to initials rather than to a stock silhouette, which is
+        # the same refusal-to-invent rule the rest of the platform follows.
+        fields = [
+            "id",
+            "email",
+            "full_name",
+            "avatar_url",
+            "is_organizer",
+            "is_staff",
+            "email_verified",
+            "date_joined",
+        ]
         read_only_fields = fields
 
 
@@ -50,3 +72,40 @@ class AuthResponseSerializer(serializers.Serializer):
 
     user = UserSerializer()
     tokens = TokenPairSerializer()
+
+
+class VerifyEmailRequestSerializer(serializers.Serializer):
+    """Address plus the six digits from the email."""
+
+    email = serializers.EmailField()
+    # Exactly six digits, validated at the boundary so a malformed code never
+    # reaches the service and never costs the user one of their attempts.
+    code = serializers.RegexField(r"^\d{6}$", trim_whitespace=True)
+
+
+class ResendVerificationRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class RegistrationResponseSerializer(serializers.Serializer):
+    """Register's response: a profile, and NO tokens.
+
+    Registration deliberately does not sign anybody in. The account exists but
+    is unproven, so handing out a session here would make the verification
+    step optional in practice — anyone could simply keep the token and never
+    open the email.
+    """
+
+    user = UserSerializer()
+    verification_required = serializers.BooleanField()
+    message = serializers.CharField()
+
+
+class GoogleSignInConfigSerializer(serializers.Serializer):
+    """Whether the button should render at all."""
+
+    available = serializers.BooleanField()
+
+
+class GoogleSignInRedeemSerializer(serializers.Serializer):
+    handoff = serializers.CharField(max_length=128)

@@ -19,9 +19,15 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from config.di import build_payment_service
+from core.throttling import WebhookThrottle, WriteThrottle
 
 from .exceptions import NotAllowedToViewPaymentError, PaymentNotFoundError
-from .schemas import PaymentSerializer
+from .schemas import (
+    PaymentSerializer,
+    SimulatePaymentRequestSerializer,
+    VerifyPaymentRequestSerializer,
+    VerifyPaymentResponseSerializer,
+)
 from .selectors import get_payment_detail
 
 
@@ -35,6 +41,9 @@ class WebhookView(APIView):
     # the raw body is the only credential (verified in the service).
     permission_classes = [AllowAny]
     authentication_classes: list = []
+    # Set well ABOVE Razorpay's retry schedule: the signature is the real
+    # gate, and throttling a genuine retry delays a ticket already paid for.
+    throttle_classes = [WebhookThrottle]
 
     @extend_schema(request=None, responses={200: None})
     def post(self, request: Request) -> Response:
@@ -47,6 +56,88 @@ class WebhookView(APIView):
         outcome = service.handle_webhook(raw_body=raw_body, signature=signature)
         # Always 200 once safely recorded (verification failures raise -> 400).
         return Response({"status": outcome.status}, status=status.HTTP_200_OK)
+
+
+class VerifyPaymentView(APIView):
+    """`POST /payments/verify` — confirm a payment the provider was not able
+    to tell us about.
+
+    ── WHAT THIS IS NOT ──────────────────────────────────────────────────────
+
+    It is NOT the browser reporting a successful payment. The body carries a
+    single opaque id; the service throws it at the provider and uses only what
+    comes back. Somebody who posts an invented id gets `ignored`, and somebody
+    who posts a real id belonging to another customer's payment gets a payment
+    whose order resolves to that customer's booking — which is already paid,
+    so it dedupes and issues nothing. There is no id that makes this endpoint
+    grant a ticket that was not paid for.
+
+    ── WHY IT IS AUTHENTICATED ANYWAY ────────────────────────────────────────
+
+    Correctness does not need the session — the provider's answer is the gate.
+    But an unauthenticated endpoint that reaches a payment provider on demand
+    is a free oracle for probing which payment ids exist, so it takes a token
+    and a write throttle. Belt and braces, in that order.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
+
+    @extend_schema(
+        request=VerifyPaymentRequestSerializer,
+        responses={200: VerifyPaymentResponseSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        payload = VerifyPaymentRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_payment_service()
+        outcome = service.verify_and_confirm(
+            provider_payment_id=payload.validated_data["razorpay_payment_id"],
+        )
+        return _no_store(Response({"status": outcome.status}, status=status.HTTP_200_OK))
+
+
+class SimulatePaymentView(APIView):
+    """`POST /payments/simulate` — complete a payment on a deployment that has
+    no real payment provider configured.
+
+    ── IT IS NOT A BACK DOOR, AND IT IS NOT ALWAYS OPEN ──────────────────────
+
+    It refuses outright unless the CONFIGURED port is a `SimulatedPaymentPort`
+    — the real Razorpay adapter is not one, so with `PAYMENTS_BACKEND=razorpay`
+    every call is a `409 simulated_payment_unavailable`. `core/preflight.py`
+    already refuses to boot production on a fake backend, so in production this
+    view can only ever refuse. It is mounted unconditionally on purpose: a route
+    that vanishes based on a setting is a route nobody can test, and the honest
+    refusal is the more useful answer to a client than a 404.
+
+    ── WHAT THE CALLER GETS TO DECIDE ────────────────────────────────────────
+
+    Which of their OWN bookings to pay for. That is all. The amount comes off
+    the booking row, the payment id comes from the provider, and the confirm
+    runs the same `verify_and_confirm` a real Razorpay payment runs — including
+    the ledger dedupe and the amount check. The demo is a demo of the REAL
+    fulfilment path, which is the only kind worth having.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
+
+    @extend_schema(
+        request=SimulatePaymentRequestSerializer,
+        responses={200: VerifyPaymentResponseSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        payload = SimulatePaymentRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_payment_service()
+        outcome = service.simulate_capture(
+            booking_id=payload.validated_data["booking_id"],
+            actor_id=cast(User, request.user).id,
+        )
+        return _no_store(Response({"status": outcome.status}, status=status.HTTP_200_OK))
 
 
 class PaymentDetailView(APIView):
@@ -69,6 +160,7 @@ class PaymentDetailView(APIView):
 
 class PaymentRefundView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
 
     @extend_schema(request=None, responses={200: None})
     def post(self, request: Request, payment_id: str) -> Response:

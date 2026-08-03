@@ -21,6 +21,7 @@ from typing import cast
 
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -28,17 +29,31 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from config.di import build_event_service, cache_port
+from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
+from core.throttling import UploadThrottle
 
 from .exceptions import EventNotFoundError
+from .models import MediaKind
 from .pagination import EventCursorPagination, OrganizerEventCursorPagination
+from .repositories import SavedEventRepository
 from .schemas import (
     CreateEventRequestSerializer,
     EventCardSerializer,
+    EventContentSerializer,
     EventDetailSerializer,
+    EventFaqSerializer,
+    EventMediaSerializer,
     EventSearchQuerySerializer,
+    EventTimelineSerializer,
     OrganizerEventSummarySerializer,
+    SavedEventSerializer,
+    SavedIdsSerializer,
+    SaveEventsRequestSerializer,
     UpdateEventRequestSerializer,
+    WriteEventFaqSerializer,
+    WriteEventMediaSerializer,
+    WriteEventTimelineSerializer,
 )
 from .selectors import (
     EVENT_LIST_TTL_SECONDS,
@@ -199,6 +214,23 @@ class EventPublishView(APIView):
         return _no_store(Response(EventDetailSerializer(event).data))
 
 
+class EventArchiveView(APIView):
+    """Retire an event. Organizer-only, and the ONLY route to `archived`.
+
+    A POST rather than a PATCH on purpose: `status` is not in the update
+    serializer's editable set, because a lifecycle change has source-state
+    rules a blind field write would skip.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: EventDetailSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        service = build_event_service()
+        event = service.archive_event(event_id=event_id, actor_id=cast(User, request.user).id)
+        return _no_store(Response(EventDetailSerializer(event).data))
+
+
 class OrganizerEventListView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = OrganizerEventCursorPagination
@@ -212,3 +244,200 @@ class OrganizerEventListView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = cast(list, OrganizerEventSummarySerializer(page, many=True).data)
         return _no_store(paginator.get_paginated_response(data))
+
+
+class EventContentView(APIView):
+    """Read every content collection for one event in a single request.
+
+    PUBLIC on GET, because this is what the event page renders — and it is the
+    same for every visitor, so it carries the same edge-cache treatment as the
+    event detail itself. Writes are per-collection below and are owner-only.
+    """
+
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses={200: EventContentSerializer})
+    def get(self, request: Request, event_id: str) -> Response:
+        from .repositories import EventContentRepository
+
+        repository = EventContentRepository()
+        body = {
+            "media": EventMediaSerializer(repository.media_for(event_id), many=True).data,
+            "faqs": EventFaqSerializer(repository.faqs_for(event_id), many=True).data,
+            "timeline": EventTimelineSerializer(repository.timeline_for(event_id), many=True).data,
+        }
+        etag = make_etag(body)
+        if is_not_modified(request, etag):
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+        return with_cache_headers(
+            Response(body),
+            etag=etag,
+            max_age_seconds=_PUBLIC_DETAIL_MAX_AGE,
+            private=False,
+            s_maxage_seconds=_PUBLIC_DETAIL_S_MAXAGE,
+            stale_while_revalidate_seconds=_PUBLIC_SWR,
+        )
+
+
+class _OwnerWriteView(APIView):
+    """Shared base for the content writes.
+
+    Authenticated at the request layer; OWNERSHIP is proven inside
+    `EventContentService`, which already loads the row — an object-level DRF
+    permission would fetch the same row a second time per request. Same
+    reasoning as the rest of this module.
+    """
+
+    permission_classes: list = [IsAuthenticated]
+
+    @property
+    def _service(self):
+        from config.di import build_event_content_service
+
+        return build_event_content_service()
+
+    @property
+    def _actor(self):
+        return cast(User, self.request.user).id
+
+
+class EventMediaView(_OwnerWriteView):
+    @extend_schema(request=WriteEventMediaSerializer, responses={201: EventMediaSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = WriteEventMediaSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        media = self._service.add_media(
+            event_id=event_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(Response(EventMediaSerializer(media).data, status=status.HTTP_201_CREATED))
+
+
+class EventMediaUploadView(_OwnerWriteView):
+    """Upload a file and attach it, in one multipart request.
+
+    `MultiPartParser` only — this endpoint exists to receive a file, and
+    accepting JSON here would just produce a confusing 400 for anyone who
+    guessed wrong.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+    # Bytes in, content validation, storage cost — keyed on the uploader.
+    throttle_classes = [UploadThrottle]
+
+    @extend_schema(request=None, responses={201: EventMediaSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise InvalidInputError("No file was uploaded — send one as `file`.")
+
+        media = self._service.upload_media(
+            event_id=event_id,
+            actor_id=self._actor,
+            upload=upload,
+            kind=request.data.get("kind", MediaKind.GALLERY),
+            alt_text=str(request.data.get("alt_text", "")),
+            caption=str(request.data.get("caption", "")),
+            position=int(request.data.get("position") or 0),
+        )
+        return _no_store(Response(EventMediaSerializer(media).data, status=status.HTTP_201_CREATED))
+
+
+class EventMediaDetailView(_OwnerWriteView):
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str, media_id: str) -> Response:
+        self._service.remove_media(event_id=event_id, actor_id=self._actor, media_id=media_id)
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class EventFaqView(_OwnerWriteView):
+    @extend_schema(request=WriteEventFaqSerializer, responses={201: EventFaqSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = WriteEventFaqSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        faq = self._service.add_faq(
+            event_id=event_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(Response(EventFaqSerializer(faq).data, status=status.HTTP_201_CREATED))
+
+
+class EventFaqDetailView(_OwnerWriteView):
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str, faq_id: str) -> Response:
+        self._service.remove_faq(event_id=event_id, actor_id=self._actor, faq_id=faq_id)
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class EventTimelineView(_OwnerWriteView):
+    @extend_schema(request=WriteEventTimelineSerializer, responses={201: EventTimelineSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = WriteEventTimelineSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        entry = self._service.add_timeline_entry(
+            event_id=event_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(
+            Response(EventTimelineSerializer(entry).data, status=status.HTTP_201_CREATED)
+        )
+
+
+class EventTimelineDetailView(_OwnerWriteView):
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str, entry_id: str) -> Response:
+        self._service.remove_timeline_entry(
+            event_id=event_id, actor_id=self._actor, entry_id=entry_id
+        )
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class SavedEventsView(APIView):
+    """A signed-in user's saved events.
+
+    ── WHY SAVING IS NOT GATED BEHIND SIGN-IN ───────────────────────────
+
+    Browsing needs no account on this platform, and a heart that demands one
+    before it will fill removes the affordance for exactly the people still
+    deciding whether to make an account. So the FRONTEND keeps saving to
+    `localStorage` while anonymous and MERGES that set here on sign-in — see
+    the POST body's `event_ids`.
+
+    That merge is why this endpoint takes a list rather than a single id: it
+    has to be idempotent over a set somebody has been building for a week.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: SavedEventSerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        rows = SavedEventRepository().list_cards(user_id=cast(User, request.user).id)
+        # `private, no-store`: this is per-user data, and a shared cache must
+        # never hand one person's saved list to another.
+        return _no_store(Response({"data": SavedEventSerializer(rows, many=True).data}))
+
+    @extend_schema(request=SaveEventsRequestSerializer, responses={200: SavedIdsSerializer})
+    def post(self, request: Request) -> Response:
+        """Save one or many. Returns the full set of saved ids.
+
+        Returning the whole set rather than just what changed means the client
+        can replace its local state outright instead of reconciling — which is
+        what makes the anonymous-to-signed-in merge a single call.
+        """
+        payload = SaveEventsRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        repository = SavedEventRepository()
+        user_id = cast(User, request.user).id
+        for event_id in payload.validated_data["event_ids"]:
+            repository.save(user_id=user_id, event_id=event_id)
+
+        return _no_store(Response({"event_ids": repository.saved_ids(user_id=user_id)}))
+
+
+class SavedEventDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str) -> Response:
+        """Unsave. A 204 whether or not it was saved — the caller's intent is
+        "this should not be saved", and that is true either way."""
+        SavedEventRepository().unsave(user_id=cast(User, request.user).id, event_id=event_id)
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))

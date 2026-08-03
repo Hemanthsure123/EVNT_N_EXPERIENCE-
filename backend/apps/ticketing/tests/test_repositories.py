@@ -108,6 +108,23 @@ def test_update_if_version_matches_rejects_stale_version(repo, make_ticket_type)
 
 
 @pytest.mark.django_db
+def test_lock_for_update_loads_the_pricing_columns_in_the_same_query(
+    repo, make_ticket_type, django_assert_num_queries
+):
+    """The price decision happens inside the lock, so its inputs must come
+    back with the locked row. If they were dropped from `_LOCK_FIELDS` this
+    would be two queries — the second one outside the lock's read, which is
+    exactly the pre-lock read the module forbids."""
+    from django.db import transaction
+
+    tt = make_ticket_type(price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=5)
+
+    with transaction.atomic(), django_assert_num_queries(1):
+        locked = repo.lock_for_update(tt.id)
+        assert locked.early_bird_state().effective_price_minor == 30_000
+
+
+@pytest.mark.django_db
 def test_get_with_event_owner_loads_owner_in_one_query(
     repo, make_ticket_type, owner, django_assert_num_queries
 ):

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 
 from apps.events.exceptions import EventNotFoundError
 from apps.events.repositories import EventRepository
 from apps.ticketing.exceptions import (
+    EarlyBirdPriceAbovePriceError,
     InvalidReservationQuantityError,
     NotTicketTypeOwnerError,
     QuantityBelowCommittedError,
@@ -104,6 +108,97 @@ def test_update_ticket_type_cannot_drop_quantity_below_committed(
         ticketing_service.update_ticket_type(
             ticket_type_id=tt.id, actor_id=owner.id, expected_version=1, changes={"quantity": 25}
         )
+
+
+# --- early bird on the organizer write path --------------------------------
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_accepts_an_early_bird(ticketing_service, event, owner):
+    ends_at = timezone.now() + timedelta(days=7)
+
+    tt = ticketing_service.create_ticket_type(
+        event_id=event.id,
+        actor_id=owner.id,
+        name="Gold",
+        price_minor=50_000,
+        quantity=50,
+        early_bird_price_minor=30_000,
+        early_bird_ends_at=ends_at,
+        early_bird_quantity=10,
+    )
+
+    assert tt.early_bird_price_minor == 30_000
+    assert tt.early_bird_quantity == 10
+    assert tt.early_bird_state().effective_price_minor == 30_000
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_rejects_an_early_bird_above_the_price(ticketing_service, event, owner):
+    """An "early bird" dearer than the face price would silently overcharge."""
+    with pytest.raises(EarlyBirdPriceAbovePriceError):
+        ticketing_service.create_ticket_type(
+            event_id=event.id,
+            actor_id=owner.id,
+            name="Gold",
+            price_minor=50_000,
+            quantity=50,
+            early_bird_price_minor=60_000,
+        )
+
+
+@pytest.mark.django_db
+def test_update_ticket_type_sets_and_clears_an_early_bird(
+    ticketing_service, make_ticket_type, owner
+):
+    tt = make_ticket_type(price_minor=50_000)
+
+    with_discount = ticketing_service.update_ticket_type(
+        ticket_type_id=tt.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"early_bird_price_minor": 30_000, "early_bird_quantity": 5},
+    )
+    assert with_discount.early_bird_state().is_active is True
+
+    cleared = ticketing_service.update_ticket_type(
+        ticket_type_id=tt.id,
+        actor_id=owner.id,
+        expected_version=2,
+        changes={"early_bird_price_minor": None},
+    )
+    assert cleared.early_bird_state().is_active is False
+    assert cleared.early_bird_state().effective_price_minor == 50_000
+
+
+@pytest.mark.django_db
+def test_update_ticket_type_rejects_cutting_the_price_below_the_early_bird(
+    ticketing_service, make_ticket_type, owner
+):
+    """The rule is checked against the MERGED row: this PATCH carries only the
+    face price, and lowering it under the stored early-bird price is the same
+    error as raising the early-bird price above it."""
+    tt = make_ticket_type(price_minor=50_000, early_bird_price_minor=30_000)
+
+    with pytest.raises(EarlyBirdPriceAbovePriceError):
+        ticketing_service.update_ticket_type(
+            ticket_type_id=tt.id,
+            actor_id=owner.id,
+            expected_version=1,
+            changes={"price_minor": 20_000},
+        )
+
+
+@pytest.mark.django_db
+def test_reserve_returns_the_price_it_decided(ticketing_service, make_ticket_type):
+    tt = make_ticket_type(quantity=10, price_minor=50_000, early_bird_price_minor=30_000)
+
+    outcome = ticketing_service.reserve(ticket_type_id=tt.id, quantity=2)
+
+    # This is the number booking records on the order — not the tier's face
+    # price, which nothing serialised.
+    assert outcome.unit_price_minor == 30_000
+    assert outcome.early_bird_applied is True
 
 
 # --- reservation primitives via the service --------------------------------

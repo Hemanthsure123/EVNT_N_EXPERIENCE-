@@ -1,0 +1,523 @@
+'use client';
+
+import * as React from 'react';
+import { cn } from '@/lib/utils/cn';
+import { FIGURE, Figure } from './figure';
+
+/**
+ * SPOTS — small decorative vignettes for section headers and cards.
+ *
+ * ── THE THIRD SIZE, AND WHY THERE HAD TO BE ONE ──────────────────────────
+ *
+ * The illustration language had two rungs and a gap between them. `clay.tsx` is
+ * a single OBJECT on a tile at 36-48px, for a category medallion or a nav
+ * decoration. `scenes.tsx` is a SITUATION with a character in it at 160-320px,
+ * for an empty state or an error page. A section header wants neither: a clay
+ * tile is an icon and reads as a control, and a full scene with a person in it
+ * beside a heading is a picture of somebody having a problem next to something
+ * that is going fine.
+ *
+ * A spot is the rung between them — a small scene with no character narrative,
+ * at 96-160px. It decorates, it says what the section is about, and it stops.
+ *
+ * ── THESE CARRY THE CLAY VOLUME; THE SCENES DELIBERATELY DO NOT ──────────
+ *
+ * A spot is one object, so the full clay treatment (a diagonal gradient for
+ * volume, a specular highlight on the upper surface, a tight ambient-occlusion
+ * pool underneath) lands on the thing the eye is already looking at. Applying
+ * the same treatment inside a scene means five highlights in one picture and
+ * nowhere for the eye to rest, which is why `scenes.tsx` stays flat. Same four
+ * moves, applied at the scale each one works at — that is what keeps three
+ * rungs feeling like one system instead of three sets that happen to be violet.
+ *
+ * ── SQUARE, ALL OF THEM ──────────────────────────────────────────────────
+ *
+ * One 96x96 viewBox across the set, including the skyline, which would have
+ * been happier in a landscape box. Spots get laid out in a row of section
+ * headers or in a grid of cards, and a set with two aspect ratios in it means
+ * every consumer has to know which is which to keep a row aligned. The skyline
+ * pays for that with a slightly taller composition; nothing else notices.
+ *
+ * ── ONE SLOW MOVE, ON ONE ELEMENT, VIA CSS ───────────────────────────────
+ *
+ * `illo-float` / `illo-sway` / `illo-pulse` from styles/tokens.css: transform
+ * and opacity only, no JS loop, and gone under `prefers-reduced-motion`. An
+ * animated group carries NO `transform` attribute of its own — a CSS transform
+ * REPLACES the attribute rather than composing with it, so anything animated is
+ * drawn in absolute viewBox coordinates and any static positioning goes on an
+ * INNER group.
+ *
+ * ── NO KNOCKOUTS, EVER ───────────────────────────────────────────────────
+ *
+ * Nothing in this file paints a shape in the page's background colour to fake a
+ * hole. A spot has no idea what is behind it — a card, the sunken band, a
+ * tinted category panel, a poster — and a notch filled with `--surface` stops
+ * being a notch on the first surface that is not `--surface`. Ticket notches
+ * are cut into the PATH, the same call `sign-in-art.tsx` makes and for the same
+ * reason.
+ *
+ * ── DECORATIVE, ALWAYS ───────────────────────────────────────────────────
+ *
+ * `aria-hidden` on every one. A spot sits beside a heading that already says
+ * what the section is; announcing "illustration of a skyline" is a second,
+ * worse copy of that heading, read out first.
+ */
+
+type SpotIds = {
+  warm: string;
+  cool: string;
+  gloss: string;
+  ground: string;
+};
+
+function Spot({
+  className,
+  gradientId,
+  children,
+}: {
+  className?: string;
+  gradientId: string;
+  children: (ids: SpotIds) => React.ReactNode;
+}) {
+  // SVG <defs> ids are DOCUMENT-global. A row of four spots with hard-coded ids
+  // means three of them silently adopt the first one's gradient — the same trap
+  // clay.tsx, brand-mark.tsx and sign-in-art.tsx each document, and it only
+  // ever shows up once more than one of them is on screen.
+  const id = React.useId();
+  const ids: SpotIds = {
+    warm: `${id}-${gradientId}-warm`,
+    cool: `${id}-${gradientId}-cool`,
+    gloss: `${id}-${gradientId}-gloss`,
+    ground: `${id}-${gradientId}-ground`,
+  };
+
+  return (
+    <svg
+      viewBox="0 0 96 96"
+      className={cn('size-24 shrink-0', className)}
+      aria-hidden
+      role="presentation"
+    >
+      <defs>
+        {/* Volume: light at the top-left where the light is, saturated at the
+            bottom-right. The same two ramps as the scenes, so the sets match. */}
+        <linearGradient id={ids.warm} x1="0" y1="0" x2="0.85" y2="1">
+          <stop offset="0%" stopColor="rgb(var(--violet-400))" />
+          <stop offset="100%" stopColor="rgb(var(--pink-500))" />
+        </linearGradient>
+        <linearGradient id={ids.cool} x1="0" y1="0" x2="0.85" y2="1">
+          <stop offset="0%" stopColor="rgb(var(--violet-600))" />
+          <stop offset="100%" stopColor="rgb(var(--violet-800))" />
+        </linearGradient>
+        {/* The specular highlight: light at the top, gone by the middle. This
+            is the move that sells "matte solid" over "coloured shape". */}
+        <linearGradient id={ids.gloss} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgb(var(--on-gradient))" stopOpacity="0.38" />
+          <stop offset="55%" stopColor="rgb(var(--on-gradient))" stopOpacity="0" />
+        </linearGradient>
+        <radialGradient id={ids.ground}>
+          <stop offset="0%" stopColor="rgb(var(--overlay))" stopOpacity="0.2" />
+          <stop offset="100%" stopColor="rgb(var(--overlay))" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+
+      {/* Ambient occlusion — tight, low, and UNDER the form. Not a drop shadow
+          offset into the distance, which reads as a sticker rather than as an
+          object sitting on something. */}
+      <ellipse cx="48" cy="84" rx="32" ry="6" fill={`url(#${ids.ground})`} />
+
+      {children(ids)}
+    </svg>
+  );
+}
+
+/**
+ * The transform that stands the shared `Figure` on a given line, at a given
+ * scale, in a spot's coordinate system.
+ *
+ * It positions by the FEET rather than by the head, because in a spot the
+ * figure is always standing on something that is drawn — a stage, a floor — and
+ * the thing that must line up is the contact point. Positioning by the head
+ * means every change of scale silently lifts the character off its own stage by
+ * a couple of units, which is exactly the "floating figure" tell the ground
+ * pool exists to prevent.
+ *
+ * Computed from `FIGURE`'s published metrics rather than eyeballed: `Figure`
+ * draws at a fixed y inside the 160x120 scene box, so a hand-written translate
+ * is a number somebody tuned by eye once, and it silently stops being right the
+ * moment the character's proportions are touched again — which has already
+ * happened to this set once.
+ */
+function figureOn(x: number, groundY: number, scale: number) {
+  return `translate(${x} ${groundY - FIGURE.feet * scale}) scale(${scale})`;
+}
+
+/**
+ * HIRE A BAND — the marketplace's supply side, in one small picture.
+ *
+ * A stage with two performers on it, not an instrument. A guitar or a mic on
+ * its own is a picture of EQUIPMENT, and what is being hired here is people;
+ * the arch and the two figures say "a booked act" in a way a headstock does
+ * not. The figures are the SAME character as every scene, scaled — a second
+ * body language for the same product is exactly the drift `figure.tsx` exists
+ * to prevent.
+ */
+export function SpotHireABand({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="band">
+      {(ids) => (
+        <>
+          {/* The proscenium arch: the backdrop the act stands in front of. */}
+          <path d="M16 68 V40 a32 26 0 0 1 64 0 V68 Z" fill={`url(#${ids.cool})`} />
+          <path d="M16 68 V40 a32 26 0 0 1 64 0 V68 Z" fill={`url(#${ids.gloss})`} />
+
+          {/* The stage, drawn BEFORE the performers so they stand on it rather
+              than behind its front edge. `--muted` in both themes: one value
+              step off the canvas, which is what a floor should be in a picture
+              whose subject is the people standing on it. */}
+          <rect
+            x="10"
+            y="66"
+            width="76"
+            height="10"
+            rx="5"
+            fill="rgb(var(--muted))"
+            stroke="rgb(var(--border))"
+            strokeWidth="1.5"
+          />
+
+          {/* Two performers, feet on the stage line at y=66. Different scales on
+              purpose — two figures at one size read as a repeated stamp rather
+              than as two people.
+
+              LIT, not violet. The first version used the character's default
+              deep-violet body against this deep-violet arch and rendered as a
+              purple blob with two faces on it. The arch is built from PRIMITIVE
+              violet tokens, so it is the same deep colour in both themes, which
+              is exactly what makes a near-white figure the safe choice here:
+              one fill that reads on it in light AND dark, and it happens to be
+              what a performer under a stage light actually looks like. */}
+          <g transform={figureOn(36, 66, 0.4)}>
+            <Figure
+              cx={0}
+              cool={ids.cool}
+              body="rgb(var(--violet-100))"
+              head="rgb(var(--on-gradient))"
+            />
+          </g>
+          <g transform={figureOn(61, 66, 0.36)}>
+            <Figure
+              cx={0}
+              cool={ids.cool}
+              body="rgb(var(--violet-100))"
+              head="rgb(var(--on-gradient))"
+            />
+          </g>
+
+          {/* The one animated element: a note rising off the stage. Placed
+              CLEAR of the arch rather than over it — the warm ramp on top of
+              the cool one is two mid violets touching, which is legible on
+              paper and mud at 96px. Absolute coordinates, because a CSS
+              transform would replace an attribute one rather than compose. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <path
+              d="M84 26 V10 l9 -2.5 V23"
+              fill="none"
+              stroke={`url(#${ids.warm})`}
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx="81" cy="26" r="3.2" fill={`url(#${ids.warm})`} />
+            <circle cx="90" cy="23" r="3.2" fill={`url(#${ids.warm})`} />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A CITY — for the city landing pages and the city switcher's header.
+ *
+ * Rounded towers with lit windows, and NO landmark. A recognisable silhouette
+ * (a Gateway of India, a Charminar) would be a picture of ONE city used as the
+ * decoration for every city page on the platform, which is worse than generic:
+ * it is wrong on all but one of them.
+ *
+ * The windows are `--on-gradient` — white in BOTH themes, unlike every other
+ * ink token — because a lit window is lit regardless of which theme the page is
+ * in. A window that followed the foreground colour would go dark on the dark
+ * theme, which is a picture of an empty building.
+ *
+ * Window rows and columns are DATA rather than a fitting calculation: a
+ * 15-wide tower cannot hold two 4-wide windows with a gap between them, and the
+ * arithmetic that discovers that at render time is longer than writing down the
+ * four towers this drawing has.
+ */
+const CITY_TOWERS = [
+  { x: 12, y: 54, width: 15, height: 24, rx: 4, rows: 1, cols: [5.5] },
+  { x: 29, y: 40, width: 17, height: 38, rx: 5, rows: 2, cols: [3.5, 9.5] },
+  { x: 48, y: 28, width: 19, height: 50, rx: 6, rows: 3, cols: [3.5, 11.5] },
+  { x: 69, y: 48, width: 15, height: 30, rx: 4, rows: 2, cols: [5.5] },
+];
+
+export function SpotCity({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="city">
+      {(ids) => (
+        <>
+          {CITY_TOWERS.map((tower) => (
+            <React.Fragment key={tower.x}>
+              <rect
+                x={tower.x}
+                y={tower.y}
+                width={tower.width}
+                height={tower.height}
+                rx={tower.rx}
+                fill={`url(#${ids.cool})`}
+              />
+              <rect
+                x={tower.x}
+                y={tower.y}
+                width={tower.width}
+                height={tower.height}
+                rx={tower.rx}
+                fill={`url(#${ids.gloss})`}
+              />
+            </React.Fragment>
+          ))}
+
+          <g fill="rgb(var(--on-gradient))" opacity="0.55">
+            {CITY_TOWERS.map((tower) =>
+              Array.from({ length: tower.rows }, (_, row) =>
+                tower.cols.map((col) => (
+                  <rect
+                    key={`${tower.x}-${row}-${col}`}
+                    x={tower.x + col}
+                    y={tower.y + 8 + row * 10}
+                    width="4"
+                    height="5"
+                    rx="1.5"
+                  />
+                )),
+              ),
+            )}
+          </g>
+
+          {/* The beacon on the tallest tower — the one animated element. Opacity
+              only, so the halo cannot swim off the mast it belongs to. */}
+          <circle
+            className="illo-pulse motion-reduce:animate-none"
+            cx="57.5"
+            cy="22"
+            r="8"
+            fill={`url(#${ids.warm})`}
+            opacity="0.25"
+          />
+          <path
+            d="M57.5 25 V29"
+            stroke={`url(#${ids.warm})`}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <circle cx="57.5" cy="22" r="3.4" fill={`url(#${ids.warm})`} />
+
+          {/* The street the towers stand on. */}
+          <rect x="8" y="76" width="80" height="8" rx="4" fill="rgb(var(--muted))" />
+          <path
+            d="M20 80 H30 M40 80 H50 M60 80 H70"
+            stroke="rgb(var(--border-strong))"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * AN ENVELOPE — for the subscribe card and anything that collects an email.
+ *
+ * Drawn OPEN with the letter rising out of it, rather than closed. A sealed
+ * envelope is the picture of a message that has already been sent; what is
+ * being asked for on a subscribe card is permission to send one, and an open
+ * envelope with something coming out of it is the more inviting half of that.
+ *
+ * The letter is also why the drawing order is back / letter / front rather than
+ * one shape: the pocket has to be painted OVER the letter for it to look like
+ * it is coming out of the envelope rather than sitting on top of it.
+ */
+export function SpotSubscribe({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="subscribe">
+      {(ids) => (
+        <>
+          {/* Back of the envelope. */}
+          <rect x="16" y="38" width="64" height="36" rx="8" fill={`url(#${ids.cool})`} />
+
+          {/* The letter, floating out. Absolute coordinates on the animated
+              group — see the transform note at the top of this file. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <rect
+              x="28"
+              y="18"
+              width="40"
+              height="30"
+              rx="5"
+              fill="rgb(var(--surface))"
+              stroke="rgb(var(--border-strong))"
+              strokeWidth="2"
+            />
+            {/* Two bars of "a message" — the SAME ink at two opacities rather
+                than two greys, so they hold their relationship in both themes.
+                Never lorem text: at this size it would be grey smudges anyway. */}
+            <g fill="rgb(var(--foreground))">
+              <rect x="35" y="26" width="26" height="4" rx="2" opacity="0.3" />
+              <rect x="35" y="34" width="18" height="4" rx="2" opacity="0.16" />
+            </g>
+          </g>
+
+          {/* Front pocket, painted over the letter. The V is what reads as
+              "open" — a straight top edge is a closed envelope seen from the
+              back. */}
+          <path
+            d="M16 44 L48 66 L80 44 V66 a8 8 0 0 1 -8 8 H24 a8 8 0 0 1 -8 -8 Z"
+            fill={`url(#${ids.warm})`}
+          />
+          <path
+            d="M16 44 L48 66 L80 44 V66 a8 8 0 0 1 -8 8 H24 a8 8 0 0 1 -8 -8 Z"
+            fill={`url(#${ids.gloss})`}
+          />
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A TICKET STUB — for anything about the thing being bought.
+ *
+ * The notches are IN THE PATH, not painted over the top (see the no-knockouts
+ * note above). Both bites use `sweep-flag 0` so they curve INTO the ticket:
+ * travelling clockwise, the top edge runs left-to-right and the bottom edge
+ * right-to-left, so the same flag bulges down on one and up on the other.
+ *
+ * The perforation is dashed and the code is three bars, because the honest
+ * alternative — a real QR — needs a payload and there is nothing here to
+ * encode. Same call `sign-in-art.tsx` makes about its finder squares.
+ */
+const TICKET_STUB =
+  'M21 26 H50 A6 6 0 0 0 62 26 H75 A9 9 0 0 1 84 35 V61 A9 9 0 0 1 75 70 H62' +
+  'A6 6 0 0 0 50 70 H21 A9 9 0 0 1 12 61 V35 A9 9 0 0 1 21 26 Z';
+
+export function SpotTicket({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="ticket">
+      {(ids) => (
+        // The whole stub swings from its own centre, which is exactly what
+        // `illo-sway`'s `transform-box: fill-box` gives it. Nothing else in the
+        // set may use that class unless its pivot really is its own middle — a
+        // board bolted to a post would detach from the post on every cycle.
+        <g className="illo-sway motion-reduce:animate-none">
+          <path d={TICKET_STUB} fill={`url(#${ids.warm})`} />
+          <path d={TICKET_STUB} fill={`url(#${ids.gloss})`} />
+
+          {/* The perforation, stopping short of both notches. */}
+          <path
+            d="M56 36 V60"
+            stroke="rgb(var(--on-gradient))"
+            strokeWidth="2.5"
+            strokeDasharray="3 5"
+            strokeLinecap="round"
+            opacity="0.75"
+          />
+
+          {/* The stub's three bars, and the body's printed lines. */}
+          <g stroke="rgb(var(--on-gradient))" strokeLinecap="round">
+            <path d="M66 40 V56 M72 40 V56 M78 40 V56" strokeWidth="2.5" opacity="0.8" />
+            <path d="M22 42 H46 M22 50 H40 M22 58 H44" strokeWidth="3" opacity="0.7" />
+          </g>
+        </g>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A CLUSTER OF CATEGORY SHAPES — for "browse by mood" and category headers.
+ *
+ * Three clay tiles at slight angles rather than one, because the section it
+ * decorates is about CHOOSING between kinds of night out; a single tile is a
+ * picture of one category, which is the opposite of the point.
+ *
+ * The glyphs are lifted straight from `clay.tsx` — the quaver, the handheld
+ * mic, the tent with a doorway — at the same stroke weight relative to their
+ * tile. A fourth, differently-drawn music note somewhere in the product is how
+ * an icon set stops being a set.
+ *
+ * Drawing order is back-left, right, then the largest tile last and centre, so
+ * the stack reads as depth rather than as a row that happens to overlap.
+ */
+export function SpotMood({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="mood">
+      {(ids) => (
+        <>
+          {/* Back-left: concerts. */}
+          <g transform="translate(27 54) rotate(-11)">
+            <rect x="-15" y="-15" width="30" height="30" rx="10" fill={`url(#${ids.cool})`} />
+            <rect x="-15" y="-15" width="30" height="30" rx="10" fill={`url(#${ids.gloss})`} />
+            <path
+              d="M-3 6 V-6 l8 -2 V4"
+              fill="none"
+              stroke="rgb(var(--on-gradient))"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx="-5.5" cy="6" r="2.6" fill="rgb(var(--on-gradient))" />
+            <circle cx="2.5" cy="4" r="2.6" fill="rgb(var(--on-gradient))" />
+          </g>
+
+          {/* Right: festivals. Smallest and furthest round. */}
+          <g transform="translate(70 60) rotate(14)">
+            <rect x="-13" y="-13" width="26" height="26" rx="9" fill="rgb(var(--pink-600))" />
+            <rect x="-13" y="-13" width="26" height="26" rx="9" fill={`url(#${ids.gloss})`} />
+            <g
+              fill="none"
+              stroke="rgb(var(--on-gradient))"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M0 -6 -7 6 H7 Z" />
+              <path d="M-2.5 6 0 1 2.5 6" />
+            </g>
+          </g>
+
+          {/* Front and centre: comedy. Largest and the most upright, so the eye
+              lands here first. */}
+          <g transform="translate(49 48) rotate(5)">
+            <rect x="-17" y="-17" width="34" height="34" rx="11" fill={`url(#${ids.warm})`} />
+            <rect x="-17" y="-17" width="34" height="34" rx="11" fill={`url(#${ids.gloss})`} />
+            <rect x="-3.4" y="-9" width="6.8" height="11" rx="3.4" fill="rgb(var(--on-gradient))" />
+            <g fill="none" stroke="rgb(var(--on-gradient))" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M-7 0a7 7 0 0 0 14 0" />
+              <path d="M0 7v4" />
+            </g>
+          </g>
+
+          {/* The one animated element: a sparkle above the stack. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <path
+              d="M30 14 l2.4 6.2 6.2 2.4 -6.2 2.4 -2.4 6.2 -2.4 -6.2 -6.2 -2.4 6.2 -2.4 Z"
+              fill={`url(#${ids.warm})`}
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}

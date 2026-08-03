@@ -19,9 +19,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # Lint AND format. black was removed: it was the formatter CI checked while
+  # ruff format was the one already installed, and the two disagree on a few
+  # line breaks — so running the obvious `ruff format` broke the build.
   "ruff>=0.6,<0.7",
-  "black>=24.8,<25.0",
-  "mypy>=1.11,<2.0",
+  # Upper bound pinned to the django-stubs 5.0.x compatibility window, NOT
+  # left open at <2.0. django-stubs' plugin calls mypy's internal
+  # `TypedDictType(fields, required_keys=...)`, which gained a required
+  # `readonly_keys` argument in a later mypy — so any `.values("a", "b")`
+  # in a repository crashes the type checker with an INTERNAL ERROR that
+  # cannot be silenced with `# type: ignore`. The open range meant a fresh
+  # `pip install` picked up 1.20 and broke the gate on code nobody had
+  # touched. Raise this together with django-stubs, never on its own.
+  "mypy>=1.11,<1.12",
   "django-stubs>=5.0,<5.1",
   "djangorestframework-stubs>=3.15,<3.16",
   "pytest>=8.3,<9.0",
@@ -38,8 +48,49 @@ gcp = [
   "google-cloud-pubsub>=2.23,<3.0",
   "google-cloud-tasks>=2.16,<3.0",
 ]
+# Web Push. `cryptography` also backs `manage.py generate_vapid_keys`. There is
+# no vendor here — Web Push is a standard and the VAPID keys are self-generated
+# — so this is the one "real integration" extra that needs no account.
+push = [
+  "pywebpush>=2.0,<3.0",
+  "cryptography>=42.0",
+]
+# Error reporting. Optional because the app logs structured JSON regardless;
+# this only adds alerting on top. See core/observability.py.
+observability = [
+  "sentry-sdk>=2.13,<3.0",
+]
+# S3-compatible object storage: Supabase Storage, Cloudflare R2, AWS S3 or
+# MinIO. One adapter for all four because they speak the same protocol — the
+# only difference is an endpoint URL.
+s3 = [
+  "boto3>=1.34,<2.0",
+]
+# Ticket PDFs. reportlab ALONE covers both halves of this — the document and
+# the QR — via `reportlab.graphics.barcode.qr`, so there is no separate QR
+# encoder and no Pillow: the code is drawn as vector rectangles straight into
+# the PDF. That is smaller, sharper at any zoom, and one dependency instead of
+# three. Only needed where ticket emails are actually sent.
+tickets = [
+  "reportlab>=4.2,<5.0",
+]
 razorpay = [
   "razorpay>=1.4,<2.0",
+  # razorpay 1.4.2 does `import pkg_resources` at module scope. That module
+  # ships with SETUPTOOLS, which Python 3.12 images no longer install by
+  # default — so without this the package is present on disk, satisfies
+  # `importlib.find_spec`, and then raises ModuleNotFoundError the first time
+  # anything uses it. Which is somebody's first checkout.
+  #
+  # UPPER BOUND, and it is the point of this pin: setuptools 81 REMOVED
+  # pkg_resources. An unbounded `>=68` resolves to 83 and reintroduces exactly
+  # the failure it was added to fix — which is how this was first written, and
+  # why the bound is here rather than a bare minimum.
+  #
+  # The forward fix is razorpay 2.x, which drops pkg_resources. That is a MAJOR
+  # version bump on the payments SDK and belongs in its own change with its own
+  # test run, not as a side effect of a packaging fix.
+  "setuptools>=68,<81",
 ]
 
 [build-system]
@@ -70,11 +121,6 @@ known-first-party = ["config", "core", "apps"]
 "config/settings/prod.py" = ["F405"]
 "config/settings/test.py" = ["F405"]
 
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-extend-exclude = "migrations"
-
 [tool.mypy]
 python_version = "3.10"
 plugins = ["mypy_django_plugin.main"]
@@ -86,6 +132,16 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 check_untyped_defs = true
 exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+# The Cloud Tasks adapter imports `google.protobuf`, which ships no inline
+# types. A stub package exists, so mypy raises `import-untyped` rather than
+# `import-not-found`, and the global `ignore_missing_imports` above does not
+# cover that code. Pulling `types-protobuf` into every dev install to type one
+# lazily-imported vendor adapter is not worth it — this adapter is only
+# imported when `QUEUE_BACKEND=cloud_tasks`.
+module = ["google.*"]
+ignore_missing_imports = true
 
 [tool.django-stubs]
 django_settings_module = "config.settings.test"

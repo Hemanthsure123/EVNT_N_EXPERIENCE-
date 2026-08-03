@@ -85,7 +85,8 @@ export function Combobox({
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
           align="start"
-          sideOffset={4}
+          sideOffset={8}
+          collisionPadding={8}
           className="z-dropdown w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-lg border border-border bg-elevated text-foreground shadow-lg data-[state=open]:animate-scale-in"
         >
           <div className="flex items-center gap-2 border-b border-border px-3">

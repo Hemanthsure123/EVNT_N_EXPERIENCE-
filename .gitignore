@@ -6,16 +6,23 @@ __pycache__/
 .eggs/
 .venv/
 venv/
-env/
+/env/
 .env
+# Any other real env variant (.env.local, .env.production, ...) is a live
+# secret and must never be committable; the *.example templates are the one
+# committed exception.
+.env.*
+!.env*.example
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
-staticfiles/
-media/
+# Anchored to Django's actual STATIC_ROOT/MEDIA_ROOT — an unanchored
+# `media/` would silently drop any future source directory named media.
+backend/staticfiles/
+backend/media/
 *.sqlite3
 backend/**/migrations/**/*.pyc
 
@@ -24,19 +31,42 @@ secrets/*.json
 !secrets/.gitkeep
 *.pem
 *.key
-docker/dev-tls/certs/
+# certs*/ not certs/: a Windows path slip once created `certs;C/` beside it,
+# and a leaf certificate landing there must be just as unignorable.
+docker/dev-tls/certs*/
 
 # --- Node / Next.js (frontend, added later) ---
 node_modules/
-frontend/.next/
+# Unanchored on purpose: a tool invoked from the repo root writes its output
+# HERE, where frontend/.gitignore's anchored rules cannot reach it — that has
+# already happened once with test-results/.
+.next/
 frontend/out/
 frontend/.env.local
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+storybook-static/
+coverage/
+
+# --- Local scratch (tooling passes leave these at the root) ---
+/scratch_vars.json
 
 # --- Editors / OS ---
 .vscode/
 .idea/
+.claude/settings.local.json
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # --- Docker volumes / local data ---
 .docker-data/
+
+# Environment backups. `.env` itself is ignored above, but a copy made during
+# an upgrade is not covered by that pattern and WILL be picked up by
+# `git add .` — which is how a live Razorpay secret reaches a public remote.
+.env.backup*
+.env.*.bak
+*.env.backup

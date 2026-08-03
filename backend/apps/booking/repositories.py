@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from django.db.models import Prefetch, QuerySet
+from django.db.models import Prefetch, Q, QuerySet
 
 from core.base_repository import BaseRepository
 
@@ -71,12 +71,23 @@ class BookingRepository(BaseRepository[Booking]):
         return Booking.objects.filter(payment_order_id=rzp_order_id).first()
 
     def get_detail(self, booking_id: uuid.UUID | str) -> Booking | None:
-        """Booking + event + items(+tier) in a fixed number of queries, for
-        GET /bookings/{id}."""
+        """Booking + event + items(+tier) + issued tickets(+tier) in a fixed
+        number of queries, for GET /bookings/{id}.
+
+        The tickets are prefetched (one extra query, never one per ticket)
+        because the detail response carries who each ticket admits — the screen
+        that names attendees is the booking screen, and making it fetch the
+        tickets separately would be a second round trip for data this query is
+        already positioned to return. A booking that hasn't been paid yet has
+        no tickets, so the prefetch comes back empty rather than absent."""
         return (
             Booking.objects.select_related("event")
             .prefetch_related(
-                Prefetch("items", queryset=BookingItem.objects.select_related("ticket_type"))
+                Prefetch("items", queryset=BookingItem.objects.select_related("ticket_type")),
+                Prefetch(
+                    "tickets",
+                    queryset=Ticket.objects.select_related("ticket_type").order_by("created_at"),
+                ),
             )
             .filter(pk=booking_id)
             .first()
@@ -92,6 +103,49 @@ class BookingRepository(BaseRepository[Booking]):
             ).values_list("id", flat=True)[:limit]
         )
 
+    def list_awaiting_reconciliation(
+        self,
+        *,
+        created_before: datetime,
+        terminal_since: datetime,
+        limit: int = 100,
+    ) -> list[tuple[uuid.UUID, str]]:
+        """`(booking_id, payment_order_id)` for bookings that hold a payment
+        order the platform has not resolved — the reconciliation work list.
+
+        Two disjoint sets, and the reason for each:
+
+        - **Still `reserved`.** The customer is in, or has just left, checkout.
+          Reconciling here is the GOOD outcome: the payment is found while the
+          hold is still alive, so the ticket is issued rather than refunded.
+        - **`expired`/`cancelled` within the grace window.** The sweeper got
+          there first. The payment may still have been captured, and that money
+          must come back to the customer — but only for a bounded window, after
+          which the booking is settled and asking again would be a provider
+          call per abandoned checkout, forever.
+
+        `created_before` keeps a checkout that started seconds ago out of the
+        list: the browser's own verify call has not had a chance to run yet, and
+        racing it just spends a provider call to learn nothing.
+
+        Ids and order ids only — each booking is re-resolved through the normal
+        confirm path, which locks it, so nothing here is read-modify-write.
+        """
+        rows = (
+            Booking.objects.filter(created_at__lte=created_before)
+            .exclude(payment_order_id="")
+            .filter(
+                Q(status=BookingStatus.RESERVED)
+                | Q(
+                    status__in=(BookingStatus.EXPIRED, BookingStatus.CANCELLED),
+                    hold_expires_at__gte=terminal_since,
+                )
+            )
+            .order_by("created_at")
+            .values_list("id", "payment_order_id")[:limit]
+        )
+        return [(row[0], row[1]) for row in rows]
+
 
 class TicketRepository(BaseRepository[Ticket]):
     model = Ticket
@@ -105,6 +159,28 @@ class TicketRepository(BaseRepository[Ticket]):
             .filter(booking_id=booking_id)
             .order_by("created_at")
         )
+
+    def list_for_attendee_assignment(self, booking_id: uuid.UUID | str) -> list[Ticket]:
+        """The booking's tickets with exactly what naming an attendee needs:
+        the CURRENT attendee (so a re-submitted form can be told apart from a
+        real change), the status (a voided ticket must not be mailed to
+        anybody), and the tier name (which goes into the domain event). Read
+        under the caller's booking-row lock, so the ticket rows need no lock of
+        their own — nothing else writes these two columns."""
+        return list(
+            Ticket.objects.select_related("ticket_type")
+            .only("id", "status", "attendee_name", "attendee_email", "ticket_type__name")
+            .filter(booking_id=booking_id)
+            .order_by("created_at")
+        )
+
+    def set_attendees(self, tickets: list[Ticket]) -> int:
+        """Persist the attendee columns for a batch of tickets in ONE statement
+        — an assignment covers a whole booking, so a save() per ticket would be
+        ten round trips inside the booking lock for a ten-seat order."""
+        if not tickets:
+            return 0
+        return Ticket.objects.bulk_update(tickets, ["attendee_name", "attendee_email"])
 
     def list_active_for_user(self, user_id: uuid.UUID | str) -> QuerySet[Ticket]:
         """A user's active tickets, newest first — one query with the tier and

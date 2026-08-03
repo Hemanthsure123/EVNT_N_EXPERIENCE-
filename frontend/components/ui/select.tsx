@@ -36,16 +36,27 @@ export const SelectTrigger = React.forwardRef<
 export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(function SelectContent({ className, children, position = 'popper', ...props }, ref) {
+>(function SelectContent(
+  { className, children, position = 'popper', sideOffset = 8, ...props },
+  ref,
+) {
   return (
+    // Portalled to the body, so no ancestor's `overflow: hidden` can clip it
+    // and no ancestor's stacking context can trap it below a sticky bar.
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         ref={ref}
         position={position}
+        // A real offset, not a `translate-y`: Radix measures `sideOffset` when
+        // it decides whether the menu fits below the trigger or has to flip
+        // above it. A transform is applied after that decision, so it silently
+        // pushes the last option off-screen near the viewport edge.
+        sideOffset={sideOffset}
+        collisionPadding={8}
         className={cn(
           'relative z-dropdown max-h-72 min-w-[8rem] overflow-hidden rounded-lg border border-border bg-elevated text-foreground shadow-lg',
           'data-[state=open]:animate-scale-in',
-          position === 'popper' && 'w-[var(--radix-select-trigger-width)] translate-y-1',
+          position === 'popper' && 'w-[var(--radix-select-trigger-width)]',
           className,
         )}
         {...props}

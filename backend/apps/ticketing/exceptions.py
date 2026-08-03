@@ -35,6 +35,15 @@ class StaleTicketTypeVersionError(ConflictError):
         super().__init__("This ticket type changed since you loaded it. Reload and try again.")
 
 
+class EarlyBirdPriceAbovePriceError(InvalidInputError):
+    """An early-bird price was set at or above the tier's normal price."""
+
+    code = "early_bird_price_above_price"
+
+    def __init__(self) -> None:
+        super().__init__("The early-bird price can't be higher than the normal ticket price.")
+
+
 class QuantityBelowCommittedError(ConflictError):
     """A requested quantity reduction would drop below tickets already sold/held."""
 

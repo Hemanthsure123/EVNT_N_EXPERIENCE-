@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from core.errors import ConflictError, InvalidInputError, NotFoundError, PermissionDeniedError
+from core.errors import (
+    ConflictError,
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 
 
 class BookingNotFoundError(NotFoundError):
@@ -47,3 +53,30 @@ class BookingNotCancellableError(ConflictError):
 
     def __init__(self, status: str) -> None:
         super().__init__(f"A booking in '{status}' state can't be cancelled.")
+
+
+class BookingNotAssignableError(ConflictError):
+    """Attendees were named on a booking that isn't paid.
+
+    The tickets don't exist until the booking is paid, so there is nothing to
+    address and nothing to send — a reserved hold could still expire, and an
+    email promising a ticket that was never issued is worse than no email.
+    """
+
+    code = "booking_not_assignable"
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"Attendees can only be named on a paid booking, not a '{status}' one.")
+
+
+class InvalidAttendeeAssignmentsError(DomainError):
+    """The attendee list is malformed, over-long, or names a ticket that isn't
+    part of this booking. 400 rather than 422: this is a bad request shape, and
+    every one of these is a client bug rather than a rejected-but-well-formed
+    intent."""
+
+    code = "invalid_attendee_assignments"
+    status_code = 400
+
+    def __init__(self, message: str = "Invalid attendee assignments.") -> None:
+        super().__init__(message)

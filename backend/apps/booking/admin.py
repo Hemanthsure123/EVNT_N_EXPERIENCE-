@@ -31,9 +31,20 @@ class BookingAdmin(admin.ModelAdmin):
 
 @admin.register(Ticket)
 class TicketAdmin(admin.ModelAdmin):
-    list_display = ["id", "booking", "ticket_type", "status", "used_at", "created_at"]
+    list_display = [
+        "id",
+        "booking",
+        "ticket_type",
+        "status",
+        "attendee_name",
+        "used_at",
+        "created_at",
+    ]
     list_filter = ["status"]
-    search_fields = ["id", "qr_token"]
+    # attendee_email is searchable because support's question is "who did we
+    # send this ticket to", and the buyer's address won't answer it for a
+    # ticket that was assigned to somebody else.
+    search_fields = ["id", "qr_token", "attendee_email"]
     readonly_fields = [f.name for f in Ticket._meta.fields]
     list_select_related = ["booking", "ticket_type"]
     ordering = ["-created_at"]

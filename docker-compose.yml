@@ -1,99 +1,112 @@
+# =============================================================================
+# Eventful — PRODUCTION topology
+# =============================================================================
+# This file describes what runs in production. It reads `.env` VERBATIM and
+# overrides nothing, because the previous version did the opposite: it set
+# `DATABASE_URL` and `REDIS_URL` in an `environment:` block, which takes
+# precedence over `env_file:` — so a carefully configured Supabase and Upstash
+# were silently ignored and every write went to a local Postgres.
+#
+# Local development now lives in `docker-compose.override.yml`, which Compose
+# loads automatically. That file brings up Postgres/PgBouncer/Redis and points
+# the app at them. The override is therefore explicit and named, rather than
+# hidden inside the production file.
+#
+#   development  docker compose up -d
+#                  (docker-compose.yml + docker-compose.override.yml)
+#
+#   production   docker compose -f docker-compose.yml up -d
+#                  (this file only — .env is authoritative)
+#
+# Migrations are NOT run on boot. See the `migrate` profile below.
+# =============================================================================
+
+x-backend: &backend
+  build:
+    context: ./backend
+  image: eventful-backend:latest
+  restart: unless-stopped
+  env_file:
+    - .env
+  # Deliberately NO `environment:` block. Anything here would silently outrank
+  # .env, which is the bug this file exists to remove.
+  stop_grace_period: 40s
+
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: eventsdb
+  # ── Web ─────────────────────────────────────────────────────────────────
+  # Gunicorn, not `runserver`. Config in backend/docker/gunicorn.conf.py.
+  # `stop_grace_period` (40s) exceeds gunicorn's `graceful_timeout` (30s) so a
+  # deploy always lets an in-flight checkout finish rather than killing it
+  # between recording a payment and issuing the ticket.
+  web:
+    <<: *backend
+    command: ["gunicorn", "config.wsgi:application", "-c", "/app/docker/gunicorn.conf.py"]
     ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+      - "${WEB_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d eventsdb"]
-      interval: 5s
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
+      interval: 30s
       timeout: 5s
-      retries: 10
+      start_period: 20s
+      retries: 3
 
-  # Local stand-in for Neon's pooled connection: a real PgBouncer in
-  # transaction-pooling mode with TLS required, so app<->pooler config
-  # (DISABLE_SERVER_SIDE_CURSORS, CONN_MAX_AGE=0, sslmode=require) is
-  # exercised for real. Swapping to Neon in staging/prod is a DATABASE_URL
-  # change only — no code changes.
-  pgbouncer:
-    image: edoburu/pgbouncer:latest
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
-      POOL_MODE: transaction
-      AUTH_TYPE: plain
-      LISTEN_ADDR: 0.0.0.0
-      LISTEN_PORT: 6432
-      MAX_CLIENT_CONN: 100
-      DEFAULT_POOL_SIZE: 20
-      ADMIN_USERS: app
-      CLIENT_TLS_SSLMODE: require
-      CLIENT_TLS_KEY_FILE: /tls/pgbouncer.key
-      CLIENT_TLS_CERT_FILE: /tls/pgbouncer.crt
-      CLIENT_TLS_CA_FILE: /tls/ca.crt
-    volumes:
-      - ./docker/dev-tls/certs:/tls:ro
-    ports:
-      - "6432:6432"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # Local stand-in for Upstash: stock Redis with its built-in TLS listener
-  # enabled on a second port, so REDIS_URL=rediss://... is exercised for
-  # real. Plain port stays open for the healthcheck only.
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: >
-      redis-server
-      --port 6379
-      --tls-port 6380
-      --tls-cert-file /tls/redis.crt
-      --tls-key-file /tls/redis.key
-      --tls-ca-cert-file /tls/ca.crt
-      --tls-auth-clients no
-    volumes:
-      - ./docker/dev-tls/certs:/tls:ro
-    ports:
-      - "6379:6379"
-      - "6380:6380"
+  # ── Scheduler ───────────────────────────────────────────────────────────
+  # WITHOUT THIS PROCESS, held ticket inventory is never released and
+  # ORGANIZERS ARE NEVER PAID. `core/scheduling.py` owns the intervals; this
+  # only supplies the clock. Runs the supervised loop rather than `--once`
+  # because Compose has no cron; on a platform that does (Cloud Scheduler, a
+  # Kubernetes CronJob), prefer `run_scheduled_jobs --once` on a tick and drop
+  # this service.
+  #
+  # Exactly ONE replica. Two schedulers would double-fire every job; the tasks
+  # are idempotent so it would be survivable, not correct.
+  scheduler:
+    <<: *backend
+    command: ["python", "manage.py", "run_scheduled_jobs"]
+    deploy:
+      replicas: 1
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      # No HTTP surface, so liveness is "the process is still there". A
+      # crashed loop exits, `restart: unless-stopped` brings it back, and this
+      # catches the wedged-but-alive case for an operator reading `ps`.
+      test: ["CMD-SHELL", "pgrep -f run_scheduled_jobs > /dev/null || exit 1"]
+      interval: 60s
       timeout: 5s
-      retries: 10
+      start_period: 15s
+      retries: 3
 
-  backend:
-    build:
-      context: ./backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgres://app:app@pgbouncer:6432/eventsdb?sslmode=require
-      REDIS_URL: rediss://redis:6380/0?ssl_cert_reqs=none
-      DISABLE_SERVER_SIDE_CURSORS: "true"
-      CONN_MAX_AGE: "0"
-      CACHE_BACKEND: redis
-    ports:
-      - "8000:8000"
-    depends_on:
-      pgbouncer:
-        condition: service_started
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py runserver 0.0.0.0:8000"
+  # ── Outbox worker ───────────────────────────────────────────────────────
+  # The durable half of the outbox. `UnitOfWork` drains synchronously on
+  # commit, which is enough in dev; this process exists because a crash
+  # between COMMIT and that on-commit hook would otherwise strand the event
+  # forever — and those events are what send tickets, refunds and reminders.
+  #
+  # It is also what executes background tasks while `QUEUE_BACKEND=local`,
+  # since that adapter runs a task inline in whichever process enqueued it.
+  worker:
+    <<: *backend
+    command: ["python", "-m", "config.worker"]
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f config.worker > /dev/null || exit 1"]
+      interval: 60s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
-volumes:
-  pgdata:
+  # ── Migrations ──────────────────────────────────────────────────────────
+  # A PROFILE, so it never runs automatically. Auto-migrating on container
+  # start was doing two dangerous things: applying unreviewed schema changes
+  # to production on every deploy, and racing itself across replicas.
+  #
+  #   docker compose -f docker-compose.yml --profile migrate run --rm migrate
+  #
+  # Uses DIRECT_DATABASE_URL (Supavisor SESSION mode, port 5432) because DDL
+  # through a transaction pooler is unreliable — see manage.py migrate_safe,
+  # which enforces that and refuses to apply a migration nobody has reviewed.
+  migrate:
+    <<: *backend
+    profiles: ["migrate"]
+    restart: "no"
+    command: ["python", "manage.py", "migrate_safe"]

@@ -113,6 +113,146 @@ def test_public_tier_list_query_budget_cold_then_warm(
         assert api_client.get(url).status_code == 200
 
 
+# --- early bird on the wire ------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_accepts_early_bird_fields(authed_client, event):
+    ends_at = (timezone.now() + timedelta(days=3)).isoformat()
+
+    resp = authed_client.post(
+        f"/api/v1/events/{event.id}/ticket-types",
+        {
+            "name": "Gold",
+            "price": 50000,
+            "quantity": 50,
+            "early_bird_price": 30000,
+            "early_bird_ends_at": ends_at,
+            "early_bird_quantity": 10,
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["price"] == 50000  # the normal price is still reported
+    assert body["effective_price"] == 30000
+    assert body["early_bird_active"] is True
+    assert body["early_bird_remaining"] == 10
+    assert body["early_bird_ends_at"] is not None
+
+
+@pytest.mark.django_db
+def test_create_ticket_type_rejects_early_bird_above_price(authed_client, event):
+    resp = authed_client.post(
+        f"/api/v1/events/{event.id}/ticket-types",
+        {"name": "Gold", "price": 50000, "quantity": 50, "early_bird_price": 60000},
+        format="json",
+    )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+def test_tier_list_reports_the_effective_price_and_remaining_seats(
+    api_client, event, make_ticket_type
+):
+    make_ticket_type(
+        name="Gold",
+        price_minor=50000,
+        quantity=50,
+        sold=3,
+        early_bird_price_minor=30000,
+        early_bird_quantity=10,
+    )
+
+    tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
+
+    assert tier["price"] == 50000
+    assert tier["early_bird_price"] == 30000
+    assert tier["effective_price"] == 30000
+    assert tier["early_bird_active"] is True
+    assert tier["early_bird_remaining"] == 7  # 10 allocated, 3 already sold
+
+
+@pytest.mark.django_db
+def test_tier_list_reports_no_remaining_count_for_an_uncapped_early_bird(
+    api_client, event, make_ticket_type
+):
+    """An uncapped early bird has no seat count to report, and the platform
+    does not invent one — the deadline is what bounds it."""
+    make_ticket_type(
+        price_minor=50000,
+        early_bird_price_minor=30000,
+        early_bird_ends_at=timezone.now() + timedelta(days=1),
+    )
+
+    tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
+
+    assert tier["early_bird_active"] is True
+    assert tier["early_bird_remaining"] is None
+
+
+@pytest.mark.django_db
+def test_tier_list_reports_a_lapsed_early_bird_as_the_normal_price(
+    api_client, event, make_ticket_type
+):
+    make_ticket_type(
+        price_minor=50000,
+        early_bird_price_minor=30000,
+        early_bird_ends_at=timezone.now() - timedelta(minutes=1),
+        early_bird_quantity=10,
+    )
+
+    tier = api_client.get(f"/api/v1/events/{event.id}/ticket-types").json()["data"][0]
+
+    assert tier["early_bird_active"] is False
+    assert tier["effective_price"] == 50000
+    assert tier["early_bird_remaining"] == 0  # none will be sold at that price
+
+
+@pytest.mark.django_db
+def test_tier_list_query_budget_is_unchanged_by_early_bird(
+    api_client, event, make_ticket_type, django_assert_num_queries
+):
+    """The rule reads only columns already on the row, so pricing costs no
+    extra query cold and none warm."""
+    make_ticket_type(price_minor=50000, early_bird_price_minor=30000, early_bird_quantity=5)
+    url = f"/api/v1/events/{event.id}/ticket-types"
+
+    with django_assert_num_queries(1):
+        assert api_client.get(url).status_code == 200
+    with django_assert_num_queries(0):
+        assert api_client.get(url).status_code == 200
+
+
+@pytest.mark.django_db
+def test_patch_can_clear_an_early_bird(authed_client, make_ticket_type):
+    tt = make_ticket_type(price_minor=50000, early_bird_price_minor=30000)
+
+    resp = authed_client.patch(
+        f"/api/v1/ticket-types/{tt.id}",
+        {"version": 1, "early_bird_price": None},
+        format="json",
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["early_bird_active"] is False
+    assert resp.json()["effective_price"] == 50000
+
+
+@pytest.mark.django_db
+def test_patch_rejects_dropping_the_price_below_a_live_early_bird(authed_client, make_ticket_type):
+    tt = make_ticket_type(price_minor=50000, early_bird_price_minor=30000)
+
+    resp = authed_client.patch(
+        f"/api/v1/ticket-types/{tt.id}", {"version": 1, "price": 20000}, format="json"
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "early_bird_price_above_price"
+
+
 # --- patch tier ------------------------------------------------------------
 
 
@@ -179,7 +319,7 @@ def test_event_cannot_be_published_without_a_ticket_type(authed_client, organiza
 
 
 @pytest.mark.django_db
-def test_event_can_be_published_once_it_has_a_ticket_type(
+def test_event_can_be_submitted_once_it_has_a_ticket_type(
     authed_client, organization, make_ticket_type
 ):
     draft = _draft_event(organization)
@@ -188,7 +328,9 @@ def test_event_can_be_published_once_it_has_a_ticket_type(
     resp = authed_client.post(f"/api/v1/events/{draft.id}/publish", format="json")
 
     assert resp.status_code == 200
-    assert resp.json()["status"] == "live"
+    # The ticketing gate is satisfied, so the submission is accepted. Going
+    # LIVE now needs an operator's approval — see the events moderation tests.
+    assert resp.json()["status"] == "pending_review"
 
 
 @pytest.mark.django_db

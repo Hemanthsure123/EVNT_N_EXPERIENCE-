@@ -1,9 +1,9 @@
 /*
- * DESIGN TOKENS — the SINGLE SOURCE OF TRUTH.
+ * DESIGN TOKENS -- the SINGLE SOURCE OF TRUTH.
  *
  * This is the ONLY file in the codebase that contains raw colour/size values.
  * Everything downstream (Tailwind theme, components) references these tokens by
- * name, never a raw hex or px — enforced by the no-raw-values lint rules. Swap a
+ * name, never a raw hex or px -- enforced by the no-raw-values lint rules. Swap a
  * value here and the whole app reskins, in any environment.
  *
  * Colours are stored as SPACE-SEPARATED RGB CHANNELS (not hex) so Tailwind can
@@ -11,17 +11,129 @@
  * `bg-primary/10`. (There is deliberately zero hex anywhere in the repo.)
  *
  * Two layers:
- *   1. PRIMITIVES  — the raw brand ramp (violet/pink/slate/...), theme-independent.
- *   2. SEMANTIC    — role tokens (background, foreground, primary, border, ...),
+ *   1. PRIMITIVES  -- raw ramps (ink/butter/violet/pink/slate/...), theme-independent.
+ *   2. SEMANTIC    -- role tokens (background, foreground, cta, border, ...),
  *                    remapped per theme. Components use ONLY these.
+ *
+ * ============================================================================
+ * THE LIGHT-FIRST SHIFT -- read this before changing anything below
+ * ============================================================================
+ *
+ * The product used to be dark-first: a violet-tinted off-white canvas, violet
+ * and pink gradients on every call to action, and a coloured glow standing in
+ * for elevation. It is now LIGHT-FIRST and image-forward: the page is white,
+ * event PHOTOGRAPHY carries the colour, and the UI is quiet around it.
+ *
+ * Four decisions drive every value in this file:
+ *
+ * 1. THE PRIMARY ACTION IS NOT `--primary`.
+ *    A near-black pill is the single most recognisable trait of the target
+ *    language, and the obvious move -- repointing `--primary` at ink -- is wrong
+ *    here. `--primary` is referenced 180+ times across files this one does not
+ *    own, and only about half of those are actions: the rest are `text-primary`
+ *    icons, `border-primary/40` hover hairlines, a `stroke-primary` chart line,
+ *    `::selection`, and the BrandMark's gradient. Repointing it would turn the
+ *    search icon, every selected-state hairline and the brand mark BLACK in one
+ *    commit, and there would be no token left to express "brand accent".
+ *
+ *    So the two roles are now two tokens:
+ *      --cta*      the PRIMARY ACTION.  Near-black pill in light, near-white
+ *                  pill in dark. Point Button's `primary` variant here.
+ *      --primary*  the BRAND / WAYFINDING accent. Still violet, unchanged
+ *                  values, changed job: the search icon, the date on an event
+ *                  page, a selected hairline, the focus ring's source colour.
+ *                  Used sparingly -- never again as a full-width CTA fill.
+ *
+ *    `--ring` deliberately does NOT follow `--cta`. A black focus ring around a
+ *    black pill on a white page is invisible; the ring stays violet, which is
+ *    5.70:1 against white and 6.82:1 against the dark canvas.
+ *
+ * 2. ELEVATION USES A DIFFERENT MECHANISM IN EACH THEME, ON PURPOSE.
+ *    In LIGHT the canvas is pure white, so there is nowhere lighter to go: a
+ *    card cannot separate by VALUE. It separates by a HAIRLINE plus a very soft
+ *    SHADOW -- `bg-surface` + `border-border` + `shadow-sm/md` is the recipe, and
+ *    `bg-surface` alone is invisible. The one value step in light runs
+ *    DOWNWARD: `--sunken`, a very light warm grey for large section bands and
+ *    recessed wells.
+ *    In DARK a shadow is invisible, so elevation is carried entirely by VALUE:
+ *      sunken(11 11 10) < background(20 19 18) < surface(30 29 27)
+ *      < muted(46 44 41) < elevated(42 40 38) < secondary(56 53 49)
+ *    Using the same mechanism in both themes is exactly why the light theme
+ *    previously read as flat while dark looked designed.
+ *
+ * 3. THE NEUTRALS ROTATED FROM VIOLET TO WARM.
+ *    The old `--canvas-*` ramp carried a few points of violet so a white card
+ *    would separate from a tinted page. With a white page that job is gone, and
+ *    a violet hairline on white reads as faintly purple. The new `--ink-*` ramp
+ *    is warm-neutral (a red/yellow bias of a few points), which is what makes a
+ *    white UI feel like paper rather than like a screenshot. `--canvas-*` names
+ *    survive as aliases so nothing that referenced them breaks.
+ *
+ * 4. PINK IS RETIRED FROM THE SEMANTIC LAYER.
+ *    The `--pink-*` PRIMITIVES stay (the clay illustrations, the empty-state
+ *    scenes and `lib/discovery/categories.ts` tone strings all read them), but
+ *    no role token resolves to pink any more. `--accent` now points at the
+ *    deeper step of the wayfinding violet -- see its note below.
+ *
+ * Every foreground/background pair defined here has a computed WCAG ratio in
+ * the CONTRAST LEDGER at the bottom of this file. Nothing below 4.5:1 for body
+ * text or 3:1 for large text / UI boundaries ships.
  */
 
 :root {
   /* ---------------------------------------------------------------------- */
-  /* 1. PRIMITIVES — from the Design System doc (§4). Theme-independent.     */
+  /* 1. PRIMITIVES -- theme-independent raw ramps.                           */
   /* ---------------------------------------------------------------------- */
 
-  /* Brand — Violet (600 = primary) */
+  /* -- INK -- the warm-neutral ramp the light-first product is built on ----
+     Every stop here has exactly one job, which is why the steps are uneven:
+     they were chosen to LAND on a contrast requirement, not to sit on a
+     mathematical curve. A ramp tuned for looks needs a second pass for
+     accessibility; this one was tuned for accessibility and then checked for
+     looks.
+
+       25   the near-white CTA pill in dark
+       50   page-section band (`--sunken` light) / body ink in dark
+       100  muted fills, skeletons (light) / secondary button ink in dark
+       200  hairline borders (light) / pressed CTA in dark
+       300  emphasis dividers (light) / secondary body ink in dark
+       400  tertiary ink in dark
+       500  CONTROL BOUNDARIES in both themes -- the one stop that clears the
+            3:1 non-text requirement (WCAG 1.4.11) against BOTH a white and a
+            dark surface, so `--input` can be a single value in both themes
+       600  tertiary ink in light
+       700  secondary body ink in light
+       800  secondary-button ink (light) / hover step of the CTA
+       900  headings and body ink in light -- near-black, deliberately not 0 0 0
+       950  THE CTA FILL in light, and the colour every shadow is tinted with */
+  --ink-25: 252 251 249;
+  --ink-50: 249 247 244;
+  --ink-100: 243 241 237;
+  --ink-200: 231 228 222;
+  --ink-300: 205 201 193;
+  --ink-400: 168 163 154;
+  --ink-500: 145 140 131;
+  --ink-600: 112 107 100;
+  --ink-700: 87 83 77;
+  --ink-800: 55 52 48;
+  --ink-900: 28 27 25;
+  --ink-950: 18 17 16;
+
+  /* -- BUTTER -- the warm cream of the active navigation pill --------------
+     The target's active nav item is a butter/cream fill with dark text:
+     quiet, unsaturated, and NOT the brand violet, so "where I am" never reads
+     as "press me". It is a whole ramp rather than one value because dark
+     theme needs the same idea inverted (a deep warm brown carrying cream
+     text), and because a hover step for the pill has to come from somewhere. */
+  --butter-50: 255 251 240;
+  --butter-100: 253 240 205;
+  --butter-200: 248 227 170;
+  --butter-300: 238 206 124;
+  --butter-800: 92 66 12;
+  --butter-900: 72 53 16;
+  --butter-950: 56 42 14;
+
+  /* Brand -- Violet. Now the WAYFINDING accent, not the primary action. */
   --violet-50: 245 243 255;
   --violet-100: 237 233 254;
   --violet-200: 221 214 254;
@@ -33,16 +145,21 @@
   --violet-800: 91 33 182;
   --violet-900: 76 29 149;
 
-  /* Accent — Magenta / Pink (500 = accent) */
+  /* Magenta / Pink -- RETIRED from the semantic layer, kept as a primitive.
+     `components/illustrations/*.tsx` and the category `tone` gradients in
+     lib/discovery read these directly; deleting the names breaks files this
+     one does not own. */
   --pink-50: 253 242 248;
   --pink-300: 249 168 212;
   --pink-500: 236 72 153;
   --pink-600: 219 39 119;
 
-  /* Indigo — used only as the Royal gradient stop */
+  /* Indigo -- the Royal gradient's second stop. */
   --indigo-600: 79 70 229;
 
-  /* Neutrals — Slate */
+  /* Slate -- kept because the primitive ramp is projected into Tailwind and
+     `from-slate-900` appears in the category tone strings. No role token
+     resolves to slate any more: the neutrals are warm now (see decision 3). */
   --slate-50: 248 250 252;
   --slate-100: 241 245 249;
   --slate-200: 226 232 240;
@@ -55,69 +172,196 @@
   --slate-900: 15 23 42;
   --white: 255 255 255;
 
-  /* Semantic base hues (§4.5) */
+  /* DEPRECATED ALIASES -- the old violet-tinted canvas ramp. Kept alive so any
+     file still naming them keeps compiling; they now resolve to the warm ink
+     ramp. Do not reach for these in new code. */
+  --canvas-50: var(--ink-50);
+  --canvas-100: var(--ink-100);
+  --canvas-200: var(--ink-200);
+  --canvas-300: var(--ink-500);
+  --canvas-900: var(--ink-900);
+
+  /* Semantic base hues.
+     `--success-600` was the light-theme fill and gave only 3.30:1 against
+     white text -- an AA failure that shipped. `--success-700` is the light
+     fill now (5.02:1) and 600 is kept because the name is referenced. */
+  --success-500: 34 197 94;
   --success-600: 22 163 74;
+  --success-700: 21 128 61;
+  --warning-400: 251 191 36;
   --warning-500: 245 158 11;
+  /* 400, not 500, is the dark-theme step for red and blue. Both 500s fail
+     4.5:1 as TEXT on the ELEVATED rung (error-500 -> 3.90:1, info-500 ->
+     3.99:1), which is precisely where an inline error message in a modal or a
+     popover lands. Amber and green are luminous enough that their 500/400
+     already clear it. */
+  --error-400: 248 113 113;
+  --error-500: 239 68 68;
   --error-600: 220 38 38;
+  --info-400: 96 165 250;
+  --info-500: 59 130 246;
   --info-600: 37 99 235;
 
-  /* Accessible tint pairs (extend §4.5 so text-on-tint always meets AA) */
-  --success-tint: 220 252 231; /* success 100 */
-  --success-strong: 22 101 52; /* green 800 */
-  --warning-tint: 254 243 199; /* warning 100 */
-  --warning-strong: 146 64 14; /* amber 800 */
-  --error-tint: 254 226 226; /* error 100 */
-  --error-strong: 185 28 28; /* red 700 */
-  --info-tint: 219 234 254; /* blue 100 */
-  --info-strong: 29 78 216; /* blue 700 */
+  /* Accessible tint pairs -- text-on-tint always clears AA. Retuned a few
+     points warmer so they sit on a warm-neutral canvas without looking like
+     they came from a different system. */
+  --success-tint: 223 250 231;
+  --success-strong: 20 92 48;
+  --warning-tint: 254 243 205;
+  --warning-strong: 126 56 12;
+  --error-tint: 254 228 226;
+  --error-strong: 166 26 26;
+  --info-tint: 222 234 254;
+  --info-strong: 28 72 200;
 
-  /* Dark surfaces (§4.7) — referenced by the .dark semantic layer below */
-  --dark-bg: 11 16 32;
-  --dark-surface: 17 24 39;
-  --dark-elevated: 30 41 59;
-  --dark-border: 51 65 85;
+  /* Dark-theme tint pairs, pulled out of `.dark` into named primitives so the
+     dark palette is as inspectable as the light one. */
+  --success-tint-dark: 8 46 24;
+  --success-strong-dark: 134 239 172;
+  --warning-tint-dark: 56 34 6;
+  --warning-strong-dark: 253 216 122;
+  --error-tint-dark: 64 18 18;
+  --error-strong-dark: 252 165 165;
+  --info-tint-dark: 22 38 82;
+  --info-strong-dark: 151 190 253;
+
+  /* Dark surfaces -- the elevation LADDER (see decision 2). Retuned from the
+     old cool blue-black (11 16 32) to a warm near-neutral, so dark is the same
+     product as light rather than a different one, and given real, measurable
+     steps between rungs instead of two rungs and a gap. */
+  --dark-sunken: 11 11 10;
+  --dark-bg: 20 19 18;
+  --dark-surface: 30 29 27;
+  --dark-elevated: 42 40 38;
+  --dark-muted: 46 44 41;
+  --dark-secondary: 56 53 49;
+  --dark-border: 61 58 54;
+  --dark-border-strong: 84 80 74;
+
+  /* -- CATEGORY TINTS -----------------------------------------------------
+     The target's category tile is a white card with the label at the top and a
+     large 3D clay icon below it, sitting on "a soft pastel tint matching that
+     category's hue".
+
+     These are a PARALLEL set to the saturated `tone` gradients in
+     lib/discovery/categories.ts, not a replacement -- the tone strings are still
+     what a poster-less event card falls back to, and both need to keep working.
+     Each pastel ships with an `-ink` partner: the deep version of the same hue,
+     verified against BOTH its own tint and white, so a label can sit on the
+     tint or beside it and stay legible either way.
+
+     Keyed by the CategorySlug they belong to, so a lookup is `--tint-${slug}`
+     and adding a category is adding a pair here. */
+  --tint-concerts: 238 233 255;
+  --tint-concerts-ink: 91 33 182;
+  --tint-comedy: 255 236 244;
+  --tint-comedy-ink: 157 23 77;
+  --tint-workshops: 227 240 255;
+  --tint-workshops-ink: 29 78 216;
+  --tint-sports: 223 246 231;
+  --tint-sports-ink: 21 110 53;
+  --tint-festivals: 255 238 224;
+  --tint-festivals-ink: 154 52 18;
+  --tint-nightlife: 231 232 253;
+  --tint-nightlife-ink: 67 56 202;
+  --tint-food-drink: 255 241 219;
+  --tint-food-drink-ink: 133 77 14;
+  --tint-tech: 228 238 242;
+  --tint-tech-ink: 15 94 116;
 
   /* ---------------------------------------------------------------------- */
-  /* 2. SEMANTIC — LIGHT theme (default). Components reference ONLY these.   */
+  /* 2. SEMANTIC -- LIGHT theme (the primary experience).                    */
   /* ---------------------------------------------------------------------- */
 
-  --background: var(--slate-50);
-  --foreground: var(--slate-900);
+  /* The canvas is PURE WHITE. `--surface` matches it and separates with a
+     hairline + shadow; `--sunken` is the one step down, for large section
+     bands and for wells recessed inside a card. See decision 2.
+
+     Note for implementers: `bg-background` is no longer a recess. Anything
+     that used it to inset a control inside a `bg-surface` card (a quantity
+     stepper, a code field) must move to `bg-sunken`. */
+  --background: var(--white);
+  --foreground: var(--ink-900);
+  --foreground-subtle: var(--ink-600);
 
   --surface: var(--white);
-  --surface-foreground: var(--slate-900);
+  --surface-foreground: var(--ink-900);
   --elevated: var(--white);
+  --sunken: var(--ink-50);
 
-  --muted: var(--slate-100);
-  /* slate-600 (not 500) so secondary text clears AA 4.5:1 even on the muted
-     tint (e.g. inactive tab labels on bg-muted). */
-  --muted-foreground: var(--slate-600);
+  --muted: var(--ink-100);
+  /* ink-700, not ink-500: secondary text has to clear 4.5:1 on the muted tint
+     and on the sunken band as well as on white -- 6.77:1 at its worst. */
+  --muted-foreground: var(--ink-700);
 
-  --border: var(--slate-200);
-  --input: var(--slate-300);
+  --border: var(--ink-200);
+  /* A divider that has to actually separate two things, rather than whisper. */
+  --border-strong: var(--ink-300);
+  /* An input's border is its ONLY affordance, so it clears the 3:1 non-text
+     requirement (WCAG 1.4.11) rather than the 1.27:1 a hairline gets away
+     with. Same value in both themes -- ink-500 is the single stop that clears
+     3:1 against a white surface AND against the dark ladder. */
+  --input: var(--ink-500);
+  /* Violet, NOT ink -- see decision 1. */
   --ring: var(--violet-600);
 
+  /* -- THE PRIMARY ACTION -------------------------------------------------
+     Near-black fill, white label, fully rounded, generous horizontal padding.
+     Hover LIGHTENS (ink-800) rather than darkening, because ink-950 is already
+     within 18 of black and a darker hover would be invisible. */
+  --cta: var(--ink-950);
+  --cta-foreground: var(--white);
+  --cta-hover: var(--ink-800);
+  --cta-active: var(--ink-700);
+
+  /* -- THE BRAND / WAYFINDING ACCENT --------------------------------------
+     Values unchanged from the old palette; the ROLE changed. Hover and active
+     now both move AWAY from the canvas (600 -> 700 -> 800) instead of the old
+     600 -> 500 -> 700 zig-zag, so a press always reads as deeper. */
   --primary: var(--violet-600);
   --primary-foreground: var(--white);
-  --primary-hover: var(--violet-500);
-  --primary-active: var(--violet-700);
+  --primary-hover: var(--violet-700);
+  --primary-active: var(--violet-800);
 
-  --secondary: var(--violet-100);
-  --secondary-foreground: var(--violet-700);
+  /* Quiet neutral tint: secondary buttons, informational pills, unselected
+     chips. MEANING CHANGED -- this was violet-100/violet-700. A lilac pill on
+     every "info" status across 59 files is exactly the kind of decoration the
+     target removes; the tint stays, the hue goes. Deeper than `--muted` so a
+     secondary button still outranks a ghost button's hover fill. */
+  --secondary: var(--ink-200);
+  --secondary-foreground: var(--ink-800);
 
-  --accent: var(--pink-500);
-  /* dark text on the vibrant pink accent clears AA for small text (white on
-     pink-500 is only 3.52:1). */
-  --accent-foreground: var(--slate-900);
-  --accent-hover: var(--pink-600);
+  /* The active navigation pill. Its own token rather than a re-tint of
+     `--secondary`, which 82 call sites use for something else entirely. */
+  --nav-active: var(--butter-100);
+  --nav-active-foreground: var(--ink-900);
+  --nav-active-hover: var(--butter-200);
 
-  --success: var(--success-600);
+  /* MEANING CHANGED -- was pink-500 with dark text. Pink has no role in the
+     target palette, and white-on-pink-500 was only 3.52:1, which is why its
+     foreground had to be dark in the first place. It is now the DEEPER step of
+     the wayfinding violet: distinct enough from `--primary` that the BrandMark
+     gradient (which runs primary -> accent) is still a gradient, dark enough
+     that `text-accent` clears AA on white at 7.10:1, and no longer a second
+     brand hue competing with the photography.
+     "Selling fast" and other scarcity cues should move to `--warning-subtle`;
+     urgency is semantic, not decorative. */
+  --accent: var(--violet-700);
+  --accent-foreground: var(--white);
+  --accent-hover: var(--violet-800);
+
+  /* success-700, not 600: white on success-600 is 3.30:1 and `text-success` on
+     white was 3.90:1 -- both AA failures that were live. */
+  --success: var(--success-700);
   --success-foreground: var(--white);
   --success-subtle: var(--success-tint);
   --success-subtle-foreground: var(--success-strong);
 
+  /* `--warning` is a FILL ONLY. Amber cannot carry small text on white
+     (2.15:1); anything that needs warning-coloured TEXT uses
+     `--warning-subtle-foreground`, which is 7.70:1 on its tint. */
   --warning: var(--warning-500);
-  --warning-foreground: var(--slate-900);
+  --warning-foreground: var(--ink-950);
   --warning-subtle: var(--warning-tint);
   --warning-subtle-foreground: var(--warning-strong);
 
@@ -131,107 +375,565 @@
   --info-subtle: var(--info-tint);
   --info-subtle-foreground: var(--info-strong);
 
-  --overlay: var(--slate-900);
+  /* Scrims over PHOTOGRAPHY. Warm near-black in both themes: what sits under
+     it is an arbitrary image, not the page, so it does not follow the theme. */
+  --overlay: 14 13 12;
 
-  /* Gradients (§4.6) — brand moments only; overlay before body text. */
-  --gradient-brand: linear-gradient(135deg, rgb(var(--violet-600)), rgb(var(--pink-500)));
+  /* Foreground for content sitting ON a photo overlay or a brand gradient.
+     Stays light in BOTH themes -- unlike `--cta-foreground` and
+     `--primary-foreground`, which flip -- because the thing underneath it does
+     not change with the theme.
+     If you are using this on a FILLED BUTTON rather than over an image, you
+     want `--cta-foreground`: on dark theme the pill is near-white and white
+     text on it is invisible. */
+  --on-gradient: var(--white);
+
+  /* Gradients -- brand moments only (avatars, the brand mark), never a CTA.
+     `--gradient-brand` was violet-600 -> pink-500. It is now a quiet violet
+     deepening: the ~25 surviving `bg-gradient-brand` call sites keep working
+     and stop shouting, and white text clears AA on the LIGHTEST stop of every
+     one of these (5.70:1 on violet-600, 4.61:1 on pink-600), which the old
+     sunset gradient did not (2.15:1 on amber). Identical in both themes --
+     what makes them readable is the stop, not the canvas behind them. */
+  --gradient-brand: linear-gradient(135deg, rgb(var(--violet-600)), rgb(var(--violet-800)));
   --gradient-royal: linear-gradient(135deg, rgb(var(--violet-700)), rgb(var(--indigo-600)));
-  --gradient-sunset: linear-gradient(135deg, rgb(var(--pink-500)), rgb(var(--warning-500)));
+  --gradient-sunset: linear-gradient(135deg, rgb(var(--pink-600)), rgb(var(--error-600)));
 
   /* --------------------------------------------------------------------- */
-  /* 3. NON-COLOUR TOKENS — theme-independent (shadows deepen in dark).     */
+  /* 3. NON-COLOUR TOKENS -- theme-independent (shadows/glass change below). */
   /* --------------------------------------------------------------------- */
 
-  /* Radius (§7) — canonical card radius is xl / 20px */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
+  /*
+   * SPACING -- an 8pt grid. Every gap, pad and section rhythm is a multiple of
+   * 8px (Tailwind steps 2/4/6/8/10/12/16/20/24), with 4px (step 1 / 1.5) as the
+   * ONLY sanctioned half-step, reserved for icon-scale gaps where 8px is
+   * visibly too loose. Tailwind's default scale is 4px-based, so the discipline
+   * is in which steps get used -- see the spacing note in frontend/README.md.
+   *
+   *
+   * A RHYTHM, not a single gap. Four rungs, each with a job, so a component
+   * never has to invent a number:
+   *
+   *   section  between major page sections      the page's breathing
+   *   block    between components in a section  groups related things
+   *   stack    a heading and the content it     binds a label to its object
+   *            introduces                       (Gestalt: proximity)
+   *   card     padding inside a surface         keeps content off the edge
+   *
+   * Why the section rung grew: at 24/32px the visible gap between two blocks
+   * was 48/64px, which reads as compressed at desktop widths -- sections ran
+   * into each other and the page felt like a list rather than a sequence of
+   * ideas. 40/48px gives 80/96px visible, which is the range Airbnb and Stripe
+   * sit in. It is deliberately NOT larger: past ~120px a section stops feeling
+   * adjacent to the next and the page reads as disconnected screens.
+   */
+  --space-section: 2.5rem; /* 40px -- mobile  -> 80px visible between sections */
+  --space-section-lg: 3rem; /* 48px -- lg up   -> 96px visible */
+  /* NB: adjacent sections each contribute the token, so the gap a reader sees
+     between two blocks is DOUBLE it. */
+
+  --space-block: 1.5rem; /* 24px -- component -> component inside a section */
+  --space-block-lg: 2rem; /* 32px -- lg and up */
+
+  /* Small on purpose. A heading must sit CLOSER to its content than the
+     content sits to the next block, or proximity groups it with the wrong
+     thing -- the single most common spacing error in a long page. */
+  --space-stack: 0.75rem; /* 12px */
+  --space-stack-lg: 1rem; /* 16px */
+
+  --space-card: 1.25rem; /* 20px -- internal padding of a card/panel */
+  --space-card-lg: 1.5rem; /* 24px -- lg and up */
+
+  /* PILL PADDING. A fully-rounded button needs more horizontal room than a
+     rectangular one for the same optical breathing space: the corners eat the
+     ends of the label. These are the only new spacing rungs the light-first
+     language needed, and they exist so "generous horizontal padding" is a
+     token every CTA shares rather than a number each one picks. */
+  --space-pill: 1.25rem; /* 20px -- sm/md pills */
+  --space-pill-lg: 1.75rem; /* 28px -- lg pills, the hero CTA */
+
+  /* CONTROL HEIGHTS. Named because 44px is the touch-target floor and must not
+     drift, and because a pill's height and its radius have to be retunable
+     together. */
+  --control-height-sm: 2.25rem; /* 36px */
+  --control-height: 2.75rem; /* 44px -- the touch-target floor */
+  --control-height-lg: 3rem; /* 48px */
+
+  /* Header heights. Two values because the bar CONDENSES on scroll -- the
+     taller resting height gives the brand and search room to breathe at the
+     top of a page, the shorter one gives the content back its vertical space
+     once the reader has committed to scrolling. Named rather than inline so
+     `scroll-margin-top` on anchor targets can reference the same number and
+     an in-page link never lands under the bar. */
+  --header-height: 4rem; /* 64px -- mobile, and condensed everywhere */
+  --header-height-lg: 4.5rem; /* 72px -- md and up, at rest */
+
+  /* Chrome offsets, derived rather than retyped. A sticky summary rail hard-
+     coded `lg:top-20` (80px) against a 72px header, and a booking bar hard-
+     coded `bottom-16` against a bottom nav with no height token at all -- so
+     any change to the chrome silently desynchronised them. These are that
+     arithmetic, expressed once. */
+  --bottom-nav-height: 4rem; /* 64px -- matches BottomNav's h-16 */
+  --sticky-top: calc(var(--header-height) + 1rem);
+  --sticky-top-lg: calc(var(--header-height-lg) + 1rem);
+
+  /* Radius -- one ladder, applied by ROLE, never ad hoc:
+       sm  controls inside controls   md  small inputs/chips
+       lg  thumbnails/medallions      xl  CARDS
+       2xl panels, modals, sheets     full BUTTONS, inputs, search, pills
+
+     Retuned down one rung across the board. The target's card range is 12-16px
+     and its modal range is 16-20px, against a ladder whose card rung was 20px
+     and whose modal rung was 24px -- every existing `rounded-xl` card and
+     `rounded-2xl` panel now lands inside the target range WITHOUT touching a
+     single call site, which is the cheapest possible way to move a radius
+     language across 700+ usages.
+
+     The ladder compresses at the top (lg 14 -> xl 16 is only 2px) because those
+     two target ranges overlap. That is honest: the distinct rungs live at the
+     bottom, where a 4px difference in radius is actually perceptible. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* Elevation (§8) — soft, cool-tinted (slate 900), never harsh black */
-  --shadow-sm: 0 1px 2px rgb(var(--slate-900) / 0.06);
-  --shadow-md: 0 4px 12px rgb(var(--slate-900) / 0.08);
-  --shadow-lg: 0 12px 32px rgb(var(--slate-900) / 0.1);
-  --shadow-xl: 0 24px 64px rgb(var(--slate-900) / 0.14);
-  --shadow-glow: 0 8px 24px rgb(var(--violet-600) / 0.28);
+  /* Horizontal card rails scroll; the platform's default scrollbar for that is
+     a full-height bar with stepper arrows, which reads as a browser control
+     dropped into the page. This is the slim replacement. */
+  --scrollbar-thickness: 6px;
 
-  /* Motion (§10) */
+  /* Glass -- used ONLY on thin, small surfaces (the header strip, floating
+     controls, chips over a poster). Never full-viewport: a backdrop-filter
+     covering the whole page is a measurable paint cost on low-end devices.
+
+     Retuned for light-first. At 0.85 alpha over a white page the frost was
+     indistinguishable from the page, so the sticky header simply vanished the
+     moment it left the hero. 0.78 lets enough of the scrolling content through
+     for the blur to be visible as an effect, and the hairline moved from 0.08
+     to 0.12 because on white the EDGE is what tells you the bar is there. Even
+     over a dark photograph the frost composites to a light surface, so the
+     header's near-black label still clears AA (10.71:1). */
+  --blur-glass: 16px;
+  --glass-surface: 0.78; /* alpha of --surface under the blur */
+  --glass-hairline: 0.12; /* alpha of --foreground for the 1px edge */
+
+  /* Elevation. Two layers each -- a tight contact shadow plus a wide ambient
+     one -- because a single blur at low alpha reads as a smudge, while the pair
+     reads as an object above a surface. Tinted with `--ink-950` (warm) rather
+     than slate (cool), so a lifted card does not cast a blue shadow on a warm
+     white page.
+
+     Alphas are LOW on purpose: the target's shadows are "very subtle" and the
+     hairline is doing half the work. They are still slightly heavier than the
+     old values, because on a pure white canvas the shadow is now the ONLY
+     thing separating a card from the page. */
+  --shadow-sm: 0 1px 1px rgb(var(--ink-950) / 0.04), 0 1px 3px rgb(var(--ink-950) / 0.06);
+  --shadow-md: 0 1px 2px rgb(var(--ink-950) / 0.04), 0 6px 16px rgb(var(--ink-950) / 0.08);
+  --shadow-lg: 0 2px 4px rgb(var(--ink-950) / 0.05), 0 16px 40px rgb(var(--ink-950) / 0.1);
+  --shadow-xl: 0 4px 8px rgb(var(--ink-950) / 0.06), 0 32px 72px rgb(var(--ink-950) / 0.14);
+  /* MEANING CHANGED -- this was a violet halo (`violet-600 / 0.28`) used as the
+     hover language on cards and as Button's `emphasis` variant. A coloured
+     glow is off-language in a quiet, image-forward product, and the halo tinted
+     the white page around every hovered card. It is now the NEUTRAL LIFT: the
+     same shape as `--shadow-lg`, one step deeper. The name survives because 19
+     call sites reference it. */
+  --shadow-glow: 0 2px 6px rgb(var(--ink-950) / 0.07), 0 12px 28px rgb(var(--ink-950) / 0.16);
+
+  /* Rendering hints -- placeholder sizes for `content-visibility: auto`, so an
+     off-screen section still reserves the right space (no CLS) while the
+     browser skips its layout/paint work entirely. Raised from 22rem because
+     the event card is PORTRAIT now (3:4 image plus the text block below it,
+     which no longer sits on the image). */
+  --intrinsic-card: 28rem;
+
+  /* Motion */
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --duration-slow: 320ms;
   --duration-page: 400ms;
+  /* Carousel + section reveals: long enough to read as deliberate, short
+     enough that nobody waits on it. */
+  --duration-reveal: 500ms;
+  --duration-carousel: 600ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Spring-ish: decelerates hard at the end WITHOUT overshooting. A true
+     bouncing spring draws attention to the animation instead of the content. */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 
   color-scheme: light;
 }
 
-/* ------------------------------------------------------------------------ */
-/* SEMANTIC — DARK theme. Only role tokens change; primitives stay constant. */
-/* ------------------------------------------------------------------------ */
+/* ------------------------------------------------------------------------
+   SEMANTIC -- DARK theme.
+
+   Not an inversion and not an afterthought. Dark gets its elevation from
+   VALUE (a shadow is invisible on a dark canvas), so the ladder here is real
+   and every rung is measurably apart; light gets its elevation from shadow
+   and hairline. Same product, two mechanisms, each chosen because it is the
+   one that works in that theme.
+   ------------------------------------------------------------------------ */
 .dark {
   --background: var(--dark-bg);
-  --foreground: var(--slate-50);
+  --foreground: var(--ink-50);
+  --foreground-subtle: var(--ink-400);
 
   --surface: var(--dark-surface);
-  --surface-foreground: var(--slate-50);
+  --surface-foreground: var(--ink-50);
   --elevated: var(--dark-elevated);
+  --sunken: var(--dark-sunken);
 
-  --muted: var(--slate-800);
-  --muted-foreground: var(--slate-400);
+  --muted: var(--dark-muted);
+  /* ink-300, not ink-400: secondary text has to clear 4.5:1 on the ELEVATED
+     rung too (a popover, a modal), which is the brightest surface it can land
+     on -- 8.90:1 there, 11.24:1 on the canvas. */
+  --muted-foreground: var(--ink-300);
 
   --border: var(--dark-border);
-  --input: var(--slate-700);
+  --border-strong: var(--dark-border-strong);
+  /* Same value as light, and it is not laziness: ink-500 is the one stop that
+     clears 3:1 against a white surface AND against every rung of this ladder,
+     so a form field's boundary is equally findable in both themes. */
+  --input: var(--ink-500);
   --ring: var(--violet-400);
 
-  /* Primary lifts to Violet 400 for contrast on dark (§4.7) */
+  /* The primary action INVERTS: a near-white pill with near-black text.
+     Press moves AWAY from the canvas here too -- but on a dark canvas "away"
+     means brighter, so hover goes to pure white and active to ink-200. */
+  --cta: var(--ink-25);
+  --cta-foreground: var(--ink-950);
+  --cta-hover: var(--white);
+  --cta-active: var(--ink-200);
+
+  /* Violet lifts to 400 for contrast on dark; press brightens, mirroring the
+     light theme's "press deepens". */
   --primary: var(--violet-400);
-  --primary-foreground: var(--slate-900);
+  --primary-foreground: var(--ink-950);
   --primary-hover: var(--violet-300);
-  --primary-active: var(--violet-500);
+  --primary-active: var(--violet-200);
 
-  --secondary: var(--violet-900);
-  --secondary-foreground: var(--violet-200);
+  --secondary: var(--dark-secondary);
+  --secondary-foreground: var(--ink-100);
 
-  --accent: var(--pink-500);
-  /* dark text on the vibrant pink accent clears AA for small text (white on
-     pink-500 is only 3.52:1). */
-  --accent-foreground: var(--slate-900);
-  --accent-hover: var(--pink-600);
+  /* A deep warm brown carrying cream text -- the same "quiet, warm, not the
+     brand hue" idea as the light pill, inverted rather than re-hued. */
+  --nav-active: var(--butter-950);
+  --nav-active-foreground: var(--butter-100);
+  --nav-active-hover: var(--butter-900);
 
-  --success: var(--success-600);
-  --success-foreground: var(--white);
-  --success-subtle: 5 46 22;
-  --success-subtle-foreground: 134 239 172;
+  --accent: var(--violet-300);
+  --accent-foreground: var(--ink-950);
+  --accent-hover: var(--violet-200);
 
-  --warning: var(--warning-500);
-  --warning-foreground: var(--slate-900);
-  --warning-subtle: 69 26 3;
-  --warning-subtle-foreground: 252 211 77;
+  /* The solid semantic fills all lift one stop in dark. success-600 on a dark
+     canvas is only 3.4:1 as text, which is why `text-success` was unreadable
+     in dark and had to be avoided; success-500 is 8.14:1. */
+  --success: var(--success-500);
+  --success-foreground: var(--ink-950);
+  --success-subtle: var(--success-tint-dark);
+  --success-subtle-foreground: var(--success-strong-dark);
 
-  --destructive: var(--error-600);
-  --destructive-foreground: var(--white);
-  --destructive-subtle: 69 10 10;
-  --destructive-subtle-foreground: 252 165 165;
+  --warning: var(--warning-400);
+  --warning-foreground: var(--ink-950);
+  --warning-subtle: var(--warning-tint-dark);
+  --warning-subtle-foreground: var(--warning-strong-dark);
 
-  --info: var(--info-600);
-  --info-foreground: var(--white);
-  --info-subtle: 23 37 84;
-  --info-subtle-foreground: 147 197 253;
+  --destructive: var(--error-400);
+  --destructive-foreground: var(--ink-950);
+  --destructive-subtle: var(--error-tint-dark);
+  --destructive-subtle-foreground: var(--error-strong-dark);
 
-  --overlay: 2 4 12;
+  --info: var(--info-400);
+  --info-foreground: var(--ink-950);
+  --info-subtle: var(--info-tint-dark);
+  --info-subtle-foreground: var(--info-strong-dark);
 
-  /* Gradients mute slightly in dark; shadows deepen + pair with a border. */
-  --gradient-brand: linear-gradient(135deg, rgb(var(--violet-700)), rgb(var(--pink-600)));
-  --gradient-royal: linear-gradient(135deg, rgb(var(--violet-800)), rgb(var(--indigo-600)));
+  /* Deeper than light's, because a scrim on a dark page has to separate the
+     text from the photo AND from a dark canvas behind it. */
+  --overlay: 8 8 7;
 
+  /* Unchanged in dark on purpose -- see the light-theme note. */
+  --on-gradient: var(--white);
+
+  /* Category pastels invert to deep, desaturated versions of the same hue,
+     each paired with a light ink from the same family. Every pair was checked
+     against its own tint AND against the dark canvas. */
+  --tint-concerts: 42 34 66;
+  --tint-concerts-ink: 196 181 253;
+  --tint-comedy: 63 30 46;
+  --tint-comedy-ink: 249 168 212;
+  --tint-workshops: 26 42 66;
+  --tint-workshops-ink: 147 197 253;
+  --tint-sports: 24 52 38;
+  --tint-sports-ink: 134 239 172;
+  --tint-festivals: 63 40 22;
+  --tint-festivals-ink: 253 186 116;
+  --tint-nightlife: 34 36 68;
+  --tint-nightlife-ink: 165 180 252;
+  --tint-food-drink: 62 45 20;
+  --tint-food-drink-ink: 252 211 77;
+  --tint-tech: 26 44 52;
+  --tint-tech-ink: 125 211 252;
+
+  /* Shadows are near-invisible on a dark canvas -- the ladder above is what
+     carries elevation here. These stay so a floating surface still gets an
+     edge of separation from whatever it covers, and `shadow-glow` remains the
+     neutral hover lift rather than reverting to a coloured halo. */
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45);
   --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
   --shadow-xl: 0 24px 64px rgb(0 0 0 / 0.6);
-  --shadow-glow: 0 8px 24px rgb(var(--violet-500) / 0.35);
+  --shadow-glow: 0 8px 28px rgb(0 0 0 / 0.55);
+
+  /* Dark needs a brighter hairline to read at all, and a denser frost: the
+     content passing under a glass bar is lighter than the bar itself. */
+  --glass-hairline: 0.14;
+  --glass-surface: 0.86;
 
   color-scheme: dark;
 }
+
+/* ==========================================================================
+ * ILLUSTRATION MOTION -- the only animation the drawn scenes ever get.
+ *
+ * WHY THESE LIVE HERE AND NOT IN A COMPONENT
+ * `sign-in-art.tsx` puts its keyframes in a scoped <style> because exactly one
+ * component uses them; the house rule it writes down is that SHARED effects
+ * (`.skeleton`, `.glass`) belong in a stylesheet. These are shared by eight
+ * illustrations across two files, and React 18 does not hoist or dedupe a
+ * <style> tag -- eight copies of the same sheet would be in the DOM of the
+ * homepage. They sit beside the `--duration-*` / `--ease-*` tokens because
+ * that is where this file already keeps motion, and the `illo-` prefix keeps
+ * the global keyframe namespace honest about who owns them.
+ *
+ * WHY SO LITTLE, AND WHY ONLY ONE ELEMENT PER SCENE
+ * An empty state and an error page are read by somebody who is already mildly
+ * stuck. Motion there is a signal that the page is alive, not entertainment --
+ * one slow, small, looping move on ONE element reads as breathing; three read
+ * as a cartoon and stop the eye from reaching the sentence that matters.
+ *
+ * WHY THESE THREE PROPERTIES AND NO OTHERS
+ * `transform` and `opacity` only. Anything else (width, top, filter) is a
+ * layout or paint invalidation on every frame of a loop that never ends, on
+ * pages a person may leave open. There is deliberately no JS driving any of
+ * this: a requestAnimationFrame loop for a 6-second drift is main-thread work
+ * charged against INP for the entire life of the page.
+ *
+ * REDUCED MOTION IS HANDLED TWICE, ON PURPOSE
+ * globals.css already collapses every animation to 0.001ms under
+ * `prefers-reduced-motion`, and each of these is also given
+ * `motion-reduce:animate-none` at its call site. The rule below is the third
+ * and is not redundant: the global rule leaves the animation RUNNING at a
+ * degenerate duration, which lands each of these on its final keyframe rather
+ * than its resting state -- a pulse frozen at 20% opacity looks like a
+ * rendering bug. `animation: none` returns the element to its authored
+ * attributes.
+ * ========================================================================== */
+
+/* A slow vertical bob. Deliberately in px rather than a percentage: a
+   percentage translate on an SVG child resolves against its own bounding box,
+   so the same rule would move a 6px shard further than a 60px envelope. A
+   fixed 3px is the same gentle amount at every size the scenes ship at. */
+@keyframes illo-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* A hinge, for objects whose own centre IS the pivot -- a hanging ticket, a
+   sign board. `transform-box: fill-box` is what makes `50% 50%` mean the
+   element's own middle instead of the SVG viewport's origin. Anything whose
+   pivot is somewhere else (a board bolted to a post) must not use this. */
+@keyframes illo-sway {
+  0%,
+  100% {
+    transform: rotate(-2.5deg);
+  }
+
+  50% {
+    transform: rotate(2.5deg);
+  }
+}
+
+/* Opacity ONLY -- no scale. A scale would need a transform-origin, and the
+   things this is used on (a signal arc, a beacon halo) have bounding boxes
+   whose centre is not the centre they radiate from. */
+@keyframes illo-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.illo-float {
+  animation: illo-float 6s var(--ease-in-out) infinite;
+}
+
+.illo-sway {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: illo-sway 7s var(--ease-in-out) infinite;
+}
+
+.illo-pulse {
+  animation: illo-pulse 3.2s var(--ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .illo-float,
+  .illo-sway,
+  .illo-pulse {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+ * CONTRAST LEDGER -- every pair this file defines, computed, not estimated.
+ *
+ * WCAG 2.1 relative-luminance contrast. Thresholds: 4.5:1 for body text, 3:1
+ * for large/bold text and for non-text UI boundaries (SC 1.4.11). A pair below
+ * its threshold is a bug in this file, not a note for later. Four were below it
+ * before this pass and all four were fixed by MOVING THE TOKEN, not by writing
+ * the failure down: `--success` as a fill (3.30:1) and as text (3.90:1), white
+ * on the old pink `--accent` (3.52:1 -- which is why its foreground had to be
+ * dark), and dark-theme `--destructive` / `--info` as text on the elevated
+ * rung (3.90:1 / 3.99:1), which is exactly where an inline error message in a
+ * modal lands.
+ *
+ * Every number below was produced by resolving this file's own var() chains,
+ * so it describes what actually ships rather than what was intended.
+ *
+ * -- LIGHT --------------------------------------------- ratio -- needs --
+ *  foreground             on background / surface ......... 17.21     4.5
+ *  foreground             on sunken ....................... 16.09     4.5
+ *  foreground             on muted ........................ 15.26     4.5
+ *  muted-foreground       on background / surface .......... 7.64     4.5
+ *  muted-foreground       on sunken ........................ 7.14     4.5
+ *  muted-foreground       on muted ......................... 6.77     4.5
+ *  foreground-subtle      on background / surface .......... 5.28     4.5
+ *  foreground-subtle      on sunken ........................ 4.94     4.5
+ *  foreground-subtle      on muted ......................... 4.68     4.5
+ *  cta-foreground         on cta .......................... 18.86     4.5
+ *  cta-foreground         on cta-hover .................... 12.38     4.5
+ *  cta-foreground         on cta-active .................... 7.64     4.5
+ *  cta (fill)             on background / surface ......... 18.86     3.0
+ *  primary   as text      on background / surface .......... 5.70     4.5
+ *  primary   as text      on muted ......................... 5.05     4.5
+ *  primary-foreground     on primary ....................... 5.70     4.5
+ *  primary-foreground     on primary-hover ................. 7.10     4.5
+ *  primary-foreground     on primary-active ................ 8.98     4.5
+ *  accent    as text      on background .................... 7.10     4.5
+ *  accent-foreground      on accent ........................ 7.10     4.5
+ *  accent-foreground      on accent-hover .................. 8.98     4.5
+ *  secondary-foreground   on secondary ..................... 9.76     4.5
+ *  nav-active-foreground  on nav-active ................... 15.18     4.5
+ *  nav-active-foreground  on nav-active-hover ............. 13.57     4.5
+ *  ring (focus indicator) on background / surface .......... 5.70     3.0
+ *  input (control edge)   on background / surface .......... 3.34     3.0
+ *  success-foreground     on success ....................... 5.02     4.5
+ *  success   as text      on background / surface .......... 5.02     4.5
+ *  success-subtle-fg      on success-subtle ................ 7.29     4.5
+ *  warning-foreground     on warning ....................... 8.78     4.5
+ *  warning-subtle-fg      on warning-subtle ................ 7.70     4.5
+ *  destructive-foreground on destructive ................... 4.83     4.5
+ *  destructive as text    on background / surface .......... 4.83     4.5
+ *  destructive-subtle-fg  on destructive-subtle ............ 6.25     4.5
+ *  info-foreground        on info .......................... 5.17     4.5
+ *  info      as text      on background / surface .......... 5.17     4.5
+ *  info-subtle-fg         on info-subtle ................... 6.16     4.5
+ *  on-gradient  on gradient-brand's lightest stop .......... 5.70     4.5
+ *  on-gradient  on gradient-royal's lightest stop .......... 6.29     4.5
+ *  on-gradient  on gradient-sunset's lightest stop ......... 4.60     4.5
+ *  foreground   on .glass (0.78 frost over a dark photo) .. 10.71     4.5
+ *  on-gradient  on .glass-media (0.66 scrim over white) .... 6.36     4.5
+ *  tint-*-ink   on its own tint ................... 5.58 - 7.59       4.5
+ *  tint-*-ink   on background ..................... 6.34 - 8.98       4.5
+ *  foreground   on any tint ..................... 14.23 - 15.45       4.5
+ *  muted-foreground on any tint ................... 6.31 - 6.86       4.5
+ *
+ *  `--warning` is the ONE fill with no text pairing against the canvas: amber
+ *  on white is 2.15:1 and always will be. It is a FILL. Warning-coloured TEXT
+ *  uses `--warning-subtle-foreground` (7.70:1 on its tint).
+ *
+ *  Non-text separations. Not AA requirements, but they are what makes the
+ *  light theme read as layered now that no card separates by value:
+ *    background -> sunken 1.069 | -> muted 1.128 | -> nav-active 1.134
+ *    background -> border 1.269 (hairline) | -> border-strong 1.651 (divider)
+ *
+ * -- DARK ---------------------------------------------- ratio -- needs --
+ *  foreground             on background ................... 17.35     4.5
+ *  foreground             on surface ...................... 15.75     4.5
+ *  foreground             on elevated ..................... 13.73     4.5
+ *  foreground             on sunken ....................... 18.41     4.5
+ *  foreground             on muted ....................... 13.02      4.5
+ *  muted-foreground       on background .................. 11.24      4.5
+ *  muted-foreground       on surface ...................... 10.20     4.5
+ *  muted-foreground       on elevated ...................... 8.90     4.5
+ *  muted-foreground       on muted ......................... 8.43     4.5
+ *  foreground-subtle      on background .................... 7.40     4.5
+ *  foreground-subtle      on surface ....................... 6.71     4.5
+ *  foreground-subtle      on elevated ...................... 5.85     4.5
+ *  foreground-subtle      on muted ......................... 5.55     4.5
+ *  cta-foreground         on cta .......................... 18.24     4.5
+ *  cta-foreground         on cta-hover .................... 18.86     4.5
+ *  cta-foreground         on cta-active ................... 14.86     4.5
+ *  cta (fill)             on background ................... 17.94     3.0
+ *  cta (fill)             on surface ...................... 16.29     3.0
+ *  primary   as text      on background .................... 6.82     4.5
+ *  primary   as text      on surface ....................... 6.19     4.5
+ *  primary   as text      on elevated ...................... 5.40     4.5
+ *  primary   as text      on muted ......................... 5.12     4.5
+ *  primary-foreground     on primary ....................... 6.93     4.5
+ *  primary-foreground     on primary-hover ................ 10.22     4.5
+ *  primary-foreground     on primary-active ............... 13.58     4.5
+ *  accent    as text      on background ................... 10.05     4.5
+ *  accent-foreground      on accent ....................... 10.22     4.5
+ *  accent-foreground      on accent-hover ................. 13.58     4.5
+ *  secondary-foreground   on secondary .................... 10.81     4.5
+ *  nav-active-foreground  on nav-active ................... 12.30     4.5
+ *  nav-active-foreground  on nav-active-hover ............. 10.33     4.5
+ *  ring (focus indicator) on background .................... 6.82     3.0
+ *  ring (focus indicator) on surface ....................... 6.19     3.0
+ *  input (control edge)   on background .................... 5.55     3.0
+ *  input (control edge)   on surface ....................... 5.04     3.0
+ *  input (control edge)   on elevated ...................... 4.39     3.0
+ *  success-foreground     on success ....................... 8.28     4.5
+ *  success   as text      on background .................... 8.14     4.5
+ *  success   as text      on surface ....................... 7.39     4.5
+ *  success-subtle-fg      on success-subtle ............... 10.57     4.5
+ *  warning-foreground     on warning ...................... 11.30     4.5
+ *  warning   as text      on background ................... 11.12     4.5
+ *  warning-subtle-fg      on warning-subtle ............... 10.92     4.5
+ *  destructive-foreground on destructive ................... 6.82     4.5
+ *  destructive as text    on background .................... 6.71     4.5
+ *  destructive as text    on surface ....................... 6.09     4.5
+ *  destructive-subtle-fg  on destructive-subtle ............ 8.43     4.5
+ *  info-foreground        on info .......................... 7.42     4.5
+ *  info      as text      on background .................... 7.30     4.5
+ *  info      as text      on surface ....................... 6.62     4.5
+ *  info-subtle-fg         on info-subtle ................... 7.74     4.5
+ *  on-gradient  on gradient-brand's lightest stop .......... 5.70     4.5
+ *  foreground   on .glass (0.86 frost over white content) . 10.15     4.5
+ *  tint-*-ink   on its own tint ................... 7.50 - 9.60       4.5
+ *  tint-*-ink   on background .................... 9.31 - 13.22       4.5
+ *  foreground   on any tint ..................... 12.35 - 13.99       4.5
+ *  muted-foreground on any tint ................... 8.00 - 9.06       4.5
+ *
+ *  Elevation-ladder separation. Not a text requirement, but it is the ONLY
+ *  thing carrying hierarchy in dark, so it is measured rather than eyeballed:
+ *    sunken -> background 1.061 | background -> surface 1.102
+ *    surface -> elevated 1.147  | elevated -> secondary 1.204
+ *    surface -> muted 1.210     | surface -> border 1.489 (hairline)
+ *    surface -> border-strong 2.104 (divider)
+ * ========================================================================== */

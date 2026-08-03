@@ -11,5 +11,10 @@ urlpatterns = [
         api.BookingCancelView.as_view(),
         name="booking-cancel",
     ),
+    path(
+        "bookings/<uuid:booking_id>/attendees",
+        api.BookingAttendeesView.as_view(),
+        name="booking-attendees",
+    ),
     path("me/tickets", api.MyTicketsView.as_view(), name="my-tickets"),
 ]

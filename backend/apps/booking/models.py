@@ -78,6 +78,18 @@ class Booking(models.Model):
                 name="booking_expiry_sweep_idx",
                 condition=models.Q(status="reserved"),
             ),
+            # The reconciliation job's exact query: bookings the sweeper has
+            # already given up on, but only for the short grace window in which
+            # a payment may still turn out to have been captured. Partial on
+            # both the terminal statuses AND "has an order id", because a
+            # booking that never reached the payment step has nothing to
+            # reconcile — that pair is most of the table and none of the work.
+            models.Index(
+                fields=["hold_expires_at"],
+                name="booking_reconcile_idx",
+                condition=models.Q(status__in=("expired", "cancelled"))
+                & ~models.Q(payment_order_id=""),
+            ),
         ]
 
     def __str__(self) -> str:
@@ -117,6 +129,20 @@ class Ticket(models.Model):
     )
     used_at = models.DateTimeField(null=True, blank=True)
     gate = models.CharField(max_length=100, blank=True, default="")
+    # WHO THIS TICKET ADMITS, when it isn't the buyer. Someone booking ten seats
+    # names the other nine people so each gets their own copy of their own
+    # ticket, instead of the buyer forwarding one email with ten QR codes.
+    #
+    # These are columns ON the ticket, not an assignment table, because one
+    # ticket admits exactly one person: a separate table would permit two rows
+    # for one seat, and "which of these two is the real holder" is precisely the
+    # question that must never be askable. Blank is the default and stays
+    # permanently valid — it means the buyer is going.
+    #
+    # No index: nothing queries by attendee. Every read of these reaches them
+    # through the booking, which `ticket_booking_created_idx` already covers.
+    attendee_name = models.CharField(max_length=120, blank=True, default="")
+    attendee_email = models.EmailField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

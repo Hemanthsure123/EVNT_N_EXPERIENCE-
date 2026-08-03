@@ -139,14 +139,56 @@ def test_update_of_source_column_refreshes_the_search_vector(repo, make_event):
 
 
 @pytest.mark.django_db
-def test_publish_if_draft_transitions_only_from_draft(repo, make_event):
+def test_submit_for_review_transitions_only_from_draft_or_rejected(repo, make_event):
     draft = make_event(status=EventStatus.DRAFT)
     live = make_event(status=EventStatus.LIVE)
+    rejected = make_event(status=EventStatus.REJECTED)
 
-    assert repo.publish_if_draft(event_id=draft.id, expected_version=1) is True
-    assert repo.get_active_by_id(draft.id).status == EventStatus.LIVE
-    # Already live → not a draft → no-op.
-    assert repo.publish_if_draft(event_id=live.id, expected_version=1) is False
+    assert repo.submit_for_review_if_draft(event_id=draft.id, expected_version=1) is True
+    assert repo.get_active_by_id(draft.id).status == EventStatus.PENDING_REVIEW
+
+    # A rejection is recoverable: editing and resubmitting is the whole point
+    # of recording a reason rather than deleting the event.
+    assert repo.submit_for_review_if_draft(event_id=rejected.id, expected_version=1) is True
+
+    # Already live -> nothing to submit.
+    assert repo.submit_for_review_if_draft(event_id=live.id, expected_version=1) is False
+
+
+@pytest.mark.django_db
+def test_moderating_the_same_event_twice_only_lands_once(repo, make_event, owner):
+    """Two operators clicking Approve on one queue entry. The conditional
+    UPDATE is the guard — the second matches zero rows."""
+    event = make_event(status=EventStatus.DRAFT)
+    repo.submit_for_review_if_draft(event_id=event.id, expected_version=1)
+
+    assert (
+        repo.moderate_if_pending(event_id=event.id, approve=True, actor_id=owner.id, note="")
+        is True
+    )
+    assert (
+        repo.moderate_if_pending(event_id=event.id, approve=False, actor_id=owner.id, note="no")
+        is False
+    )
+    assert repo.get_active_by_id(event.id).status == EventStatus.LIVE
+
+
+@pytest.mark.django_db
+def test_rejection_records_the_reason_and_resubmission_clears_it(repo, make_event, owner):
+    event = make_event(status=EventStatus.DRAFT)
+    repo.submit_for_review_if_draft(event_id=event.id, expected_version=1)
+    repo.moderate_if_pending(
+        event_id=event.id, approve=False, actor_id=owner.id, note="Poster is unreadable."
+    )
+
+    rejected = repo.get_active_by_id(event.id)
+    assert rejected.status == EventStatus.REJECTED
+    assert rejected.moderation_note == "Poster is unreadable."
+
+    # Resubmitting clears the note: a stale reason on an event now awaiting a
+    # fresh review is how it gets rejected twice for a problem already fixed.
+    repo.submit_for_review_if_draft(event_id=event.id, expected_version=rejected.version)
+    assert repo.get_active_by_id(event.id).moderation_note == ""
 
 
 @pytest.mark.django_db

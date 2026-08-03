@@ -12,6 +12,7 @@ from apps.accounts.models import User
 from apps.accounts.repositories import UserRepository
 from apps.events.models import Event, EventStatus
 from apps.events.repositories import EventRepository
+from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
 from apps.ticketing.models import TicketType
 from apps.ticketing.repositories import TicketTypeRepository
@@ -56,7 +57,18 @@ def other_user() -> User:
 
 @pytest.fixture
 def organization(owner):
-    return OrganizationRepository().create(owner_id=owner.id, name="Groove Collective")
+    """An organization a platform operator has already verified.
+
+    Verified explicitly because `EventService.publish_event` now refuses an
+    unverified organization (the approval gate lives in the service, not in
+    the frontend). Two tests in this module submit an event for review to
+    prove the ticket-type publish gate; they are about ticketing, not about
+    verification, so the organizer here is an established one.
+    """
+    org = OrganizationRepository().create(owner_id=owner.id, name="Groove Collective")
+    org.verified_level = VerifiedLevel.VERIFIED
+    org.save(update_fields=["verified_level"])
+    return org
 
 
 @pytest.fixture
@@ -94,6 +106,9 @@ def make_ticket_type(event):
         sale_start=None,
         sale_end=None,
         max_per_order: int = 10,
+        early_bird_price_minor: int | None = None,
+        early_bird_ends_at=None,
+        early_bird_quantity: int | None = None,
         ev: Event | None = None,
     ) -> TicketType:
         tt = TicketTypeRepository().create(
@@ -104,6 +119,9 @@ def make_ticket_type(event):
             sale_start=sale_start,
             sale_end=sale_end,
             max_per_order=max_per_order,
+            early_bird_price_minor=early_bird_price_minor,
+            early_bird_ends_at=early_bird_ends_at,
+            early_bird_quantity=early_bird_quantity,
         )
         if sold or reserved:
             TicketType.objects.filter(pk=tt.id).update(sold=sold, reserved=reserved)

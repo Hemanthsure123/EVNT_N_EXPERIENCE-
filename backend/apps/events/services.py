@@ -23,20 +23,34 @@ from django.db import transaction
 
 from apps.accounts.repositories import UserRepository
 from apps.organizations.exceptions import OrganizationNotFoundError
+from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
 from core.audit import record_audit
-from core.events import EVENT_CREATED, EVENT_PUBLISHED, EVENT_UPDATED
+from core.errors import InvalidInputError
+from core.events import (
+    EVENT_APPROVED,
+    EVENT_ARCHIVED,
+    EVENT_CREATED,
+    EVENT_PUBLISHED,
+    EVENT_REJECTED,
+    EVENT_SUBMITTED_FOR_REVIEW,
+    EVENT_UPDATED,
+)
 from core.ports.storage_port import StoragePort
 from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
     EventNotFoundError,
+    EventNotLiveError,
+    EventNotUnderReviewError,
     InvalidEventStateError,
     NotEventOwnerError,
+    NotPlatformOperatorError,
+    OrganizationNotVerifiedError,
     StaleEventVersionError,
 )
-from .models import Event, EventStatus
+from .models import Event, EventStatus, MediaKind
 from .publish_checks import run_publish_checks
 from .repositories import EventRepository
 from .selectors import invalidate_event_caches
@@ -47,7 +61,32 @@ _POSTER_PROCESS_TASK = "events.process_poster"
 # Fields a client may edit, mapped straight onto the model. Status is not
 # here on purpose — lifecycle transitions go through publish()/(future)
 # pause()/finish(), never a blind PATCH.
-_EDITABLE_FIELDS = ("title", "description", "venue", "city", "starts_at", "ends_at")
+_EDITABLE_FIELDS = (
+    "title",
+    "description",
+    "venue",
+    "city",
+    # Where the venue resolves to. Editable for the same reason the content
+    # fields are: a column the event page renders must be reachable by a
+    # PATCH, or the map is decoration nobody can ever populate. Written by
+    # the organizer's venue picker when they choose a Places suggestion.
+    "place_id",
+    "latitude",
+    "longitude",
+    "starts_at",
+    "ends_at",
+    # Content fields — same PATCH, same optimistic lock, same cache
+    # invalidation. They are editable rather than read-only because the
+    # alternative is a column the event page renders that nobody can ever
+    # fill in.
+    "short_description",
+    "duration_minutes",
+    "language",
+    "age_restriction",
+    "accessibility_notes",
+    "seo_title",
+    "seo_description",
+)
 
 
 class EventService:
@@ -105,6 +144,9 @@ class EventService:
         description: str = "",
         ends_at: datetime | None = None,
         poster: UploadedFile | None = None,
+        place_id: str = "",
+        latitude=None,
+        longitude=None,
     ) -> Event:
         org = self._organizations.get_active_by_id(organization_id)
         if org is None:
@@ -125,6 +167,9 @@ class EventService:
                 description=description,
                 ends_at=ends_at,
                 poster_url=poster_url,
+                place_id=place_id,
+                latitude=latitude,
+                longitude=longitude,
             )
             # We already hold the loaded org — attach it so serializing the
             # response doesn't lazy-load organization.name (an N+1).
@@ -203,11 +248,39 @@ class EventService:
         return refreshed
 
     def publish_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
+        """Submit a draft for platform review.
+
+        **This no longer makes an event public.** An organizer publishes; a
+        platform operator approves; only then is it `live`. That is the whole
+        point of the moderation gate — a marketplace where anyone can put
+        anything in front of buyers is one bad listing away from a refund
+        wave, and the check cannot live on the organizer's side of the fence.
+        The method keeps its name because `POST /events/{id}/publish` is what
+        an organizer is doing; what CHANGED is the state it lands in.
+
+        A rejected event may be resubmitted here — the readiness checks and
+        the ownership check run again, so an organizer cannot fix a rejection
+        by deleting a ticket type.
+
+        **The organization must be VERIFIED.** This is the second half of the
+        approval story and it lives HERE, in the service, because the frontend
+        already renders an "awaiting approval" shell and a gate that only
+        renders is not a gate — `POST /events/{id}/publish` is
+        `IsAuthenticated`, so a direct API call would otherwise walk straight
+        past it. It gates SUBMISSION and not create/edit on purpose: an
+        organizer waiting on verification can build their event, they just
+        cannot join the queue that ends in a public listing.
+        """
         event = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
 
-        if event.status != EventStatus.DRAFT:
+        # Read off the already-joined organization row — `_WRITE_LOAD_FIELDS`
+        # includes `organization__verified_level` so this costs no query.
+        if event.organization.verified_level != VerifiedLevel.VERIFIED:
+            raise OrganizationNotVerifiedError(event.organization.verified_level)
+
+        if event.status not in (EventStatus.DRAFT, EventStatus.REJECTED):
             raise InvalidEventStateError(
-                f"Only draft events can be published (this one is '{event.status}')."
+                f"Only draft or rejected events can be submitted (this one is '{event.status}')."
             )
 
         # Extensible readiness gate — core checks now, ticketing's "has a
@@ -217,15 +290,16 @@ class EventService:
         owner = self._users.get_by_id(event.organization.owner_id)
 
         with UnitOfWork() as uow:
-            published = self._events.publish_if_draft(
+            submitted = self._events.submit_for_review_if_draft(
                 event_id=event.id, expected_version=event.version
             )
-            if not published:
-                # Version moved or it's no longer a draft — a concurrent change.
+            if not submitted:
+                # Version moved, or it is no longer draft/rejected — a
+                # concurrent change.
                 raise StaleEventVersionError()
 
             uow.publish(
-                EVENT_PUBLISHED,
+                EVENT_SUBMITTED_FOR_REVIEW,
                 {
                     "event_id": str(event.id),
                     "organization_id": str(event.organization_id),
@@ -236,14 +310,446 @@ class EventService:
             )
             record_audit(
                 actor_id=str(actor_id),
-                action="event.published",
+                action="event.submitted_for_review",
+                target_type="event",
+                target_id=str(event.id),
+            )
+            # Still invalidated: an event moving OUT of live (a resubmitted
+            # rejection) has to leave the public caches immediately.
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        logger.info("event_submitted_for_review", extra={"event_id": str(event.id)})
+        refreshed = self._events.get_active_by_id(event.id)
+        if refreshed is None:  # pragma: no cover — just deleted mid-request
+            raise EventNotFoundError(str(event_id))
+        return refreshed
+
+    def archive_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
+        """Retire an event the organizer is finished with.
+
+        A LIFECYCLE TRANSITION, not a `status` field a PATCH may set — the same
+        reason `publish` is its own endpoint. `status` is deliberately absent
+        from `UpdateEventRequestSerializer`, so this is the only way an event
+        reaches `archived`, and the source-state rule lives in exactly one
+        place (the repository's conditional UPDATE).
+
+        There is NO delete counterpart, and there should not be: an event is
+        referenced by bookings, tickets and a settlement, all `PROTECT`ed, so
+        deleting one would either fail or orphan real money. Archive is the
+        honest operation.
+        """
+        event = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
+
+        if event.status not in (EventStatus.DRAFT, EventStatus.REJECTED, EventStatus.FINISHED):
+            raise InvalidEventStateError(
+                f"A '{event.status}' event cannot be archived. "
+                "Take it off sale first, or wait for it to finish."
+            )
+
+        was_visible = event.status == EventStatus.LIVE
+
+        with UnitOfWork() as uow:
+            archived = self._events.archive_if_archivable(
+                event_id=event.id, expected_version=event.version
+            )
+            if not archived:
+                raise StaleEventVersionError()
+
+            uow.publish(
+                EVENT_ARCHIVED,
+                {"event_id": str(event.id), "organization_id": str(event.organization_id)},
+                aggregate_id=str(event.id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.archived",
+                target_type="event",
+                target_id=str(event.id),
+            )
+            if was_visible:  # pragma: no cover — guarded above, kept for safety
+                transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        logger.info("event_archived", extra={"event_id": str(event.id)})
+        refreshed = self._events.get_active_by_id(event.id)
+        if refreshed is None:  # pragma: no cover — just deleted mid-request
+            raise EventNotFoundError(str(event_id))
+        return refreshed
+
+
+class EventModerationService:
+    """A platform operator's decisions on submitted events.
+
+    Deliberately a SEPARATE service from `EventService`, for the same reason
+    `organizations.decide_verification` is separate from `submit_verification`:
+    every method on `EventService` begins by proving the caller owns the row,
+    and every method here begins by proving they do not have to. Mixing the two
+    in one class is how an ownership check eventually gets skipped on a write
+    that needed it.
+
+    The caller must be staff, and this service proves it for ITSELF rather
+    than trusting the view. There is no row-level ownership question to ask —
+    the question is only "is this a platform operator" — but approval is the
+    ONLY path an event has to `live`, and a rule enforced solely by one
+    permission class is one new caller (a management command, a task, a second
+    view) away from being skipped. One extra lookup on an admin-volume
+    endpoint is a cheap price for the transition that makes something public.
+    """
+
+    def __init__(self, *, events: EventRepository, users) -> None:
+        self._events = events
+        self._users = users
+
+    def _require_operator(self, actor_id: uuid.UUID | str):
+        actor = self._users.get_by_id(actor_id)
+        if actor is None or not actor.is_staff or not actor.is_active:
+            raise NotPlatformOperatorError()
+        return actor
+
+    def moderate(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        approve: bool,
+        note: str = "",
+    ) -> Event:
+        """Approve or reject an event awaiting review.
+
+        Approval is the ONLY path to `live`. The decision is a conditional
+        `UPDATE ... WHERE status = 'pending_review'`, so two operators clicking
+        Approve on the same queue entry cannot both succeed — the second is
+        told the decision was already made rather than silently re-approving.
+        """
+        self._require_operator(actor_id)
+
+        event = self._events.get_active_by_id(event_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+        if event.status != EventStatus.PENDING_REVIEW:
+            raise EventNotUnderReviewError()
+        if not approve and not note.strip():
+            # A rejection an organizer cannot act on is a support ticket.
+            raise InvalidInputError("A rejection needs a reason the organizer can act on.")
+
+        owner = self._users.get_by_id(event.organization.owner_id)
+
+        with UnitOfWork() as uow:
+            decided = self._events.moderate_if_pending(
+                event_id=event.id, approve=approve, actor_id=actor_id, note=note
+            )
+            if not decided:
+                raise EventNotUnderReviewError()
+
+            payload = {
+                "event_id": str(event.id),
+                "organization_id": str(event.organization_id),
+                "owner_email": owner.email if owner else "",
+                "title": event.title,
+                "note": note,
+            }
+            uow.publish(
+                EVENT_APPROVED if approve else EVENT_REJECTED, payload, aggregate_id=str(event.id)
+            )
+            if approve:
+                # The event is public from this moment, so the event the rest
+                # of the platform already listens for is emitted HERE, not at
+                # submission. `notifications` schedules its reminder off this,
+                # and scheduling a reminder for an event that was then
+                # rejected would be a message to ticket holders who do not
+                # exist.
+                uow.publish(EVENT_PUBLISHED, payload, aggregate_id=str(event.id))
+
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.approved" if approve else "event.rejected",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"note": note},
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        logger.info(
+            "event_moderated",
+            extra={"event_id": str(event.id), "approved": approve},
+        )
+        refreshed = self._events.get_active_by_id(event.id)
+        if refreshed is None:  # pragma: no cover — deleted mid-request
+            raise EventNotFoundError(str(event_id))
+        return refreshed
+
+    def unpublish(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, note: str
+    ) -> Event:
+        """Take a live event back off sale, with a reason.
+
+        The tickets already sold are untouched — this hides the listing, it
+        does not cancel anybody's booking. Refunding is `payments`' job and is
+        a separate, deliberate decision.
+        """
+        self._require_operator(actor_id)
+
+        if not note.strip():
+            raise InvalidInputError("Taking an event down needs a reason.")
+
+        event = self._events.get_active_by_id(event_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+        if event.status != EventStatus.LIVE:
+            raise EventNotLiveError()
+
+        with UnitOfWork() as uow:
+            if not self._events.unpublish(event_id=event.id, actor_id=actor_id, note=note):
+                raise EventNotLiveError()
+            uow.publish(
+                EVENT_REJECTED,
+                {
+                    "event_id": str(event.id),
+                    "organization_id": str(event.organization_id),
+                    "title": event.title,
+                    "note": note,
+                },
+                aggregate_id=str(event.id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.unpublished",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"note": note},
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        refreshed = self._events.get_active_by_id(event.id)
+        if refreshed is None:  # pragma: no cover
+            raise EventNotFoundError(str(event_id))
+        return refreshed
+
+
+class EventContentService:
+    """Media, FAQs and running order for an event.
+
+    OWNERSHIP IS CHECKED HERE, not in a DRF permission — the same reasoning the
+    rest of this service uses: `_load_owned_for_write` already fetches the row,
+    and an object-level permission would fetch it a second time per request.
+
+    THE MEDIA CAPS LIVE HERE and nowhere else. One hero, ten gallery, one
+    video. A partial unique index could enforce the singletons but not the
+    count, and a rule split across two layers is a rule that drifts.
+    """
+
+    def __init__(self, *, events: EventRepository, content, storage: StoragePort) -> None:
+        self._events = events
+        self._content = content
+        self._storage = storage
+
+    def _owned(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
+        event = self._events.get_active_by_id(event_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+        if event.organization.owner_id != actor_id:
+            # NotFound, not PermissionDenied — a 403 confirms the event exists
+            # to anyone guessing ids.
+            raise EventNotFoundError(str(event_id))
+        return event
+
+    # -------------------------------------------------------------- media
+
+    def add_media(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        kind: str,
+        url: str,
+        alt_text: str,
+        caption: str = "",
+        position: int = 0,
+    ):
+        from .repositories import MEDIA_LIMITS
+
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+
+        # `kind` arrives as a validated plain string from the serializer;
+        # MEDIA_LIMITS is keyed by the enum, whose members ARE strings.
+        limit = MEDIA_LIMITS.get(MediaKind(kind))
+        if limit is not None and self._content.count_media(event.id, kind) >= limit:
+            raise InvalidInputError(
+                f"This event already has the maximum of {limit} "
+                f"{'item' if limit == 1 else 'items'} for {kind}."
+            )
+        if not alt_text.strip():
+            # The most-viewed image on the platform must not be invisible to a
+            # screen reader. The column allows blank so historical rows survive;
+            # this path does not.
+            raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
+
+        with UnitOfWork():
+            media = self._content.add_media(
+                event_id=event.id,
+                kind=kind,
+                url=url,
+                alt_text=alt_text.strip(),
+                caption=caption.strip(),
+                position=position,
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.media_added",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"kind": kind},
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return media
+
+    def upload_media(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        upload,
+        kind: str,
+        alt_text: str,
+        caption: str = "",
+        position: int = 0,
+    ):
+        """Validate, store, and attach — one call.
+
+        Deliberately ONE request rather than upload-then-attach. A two-step
+        flow leaks orphaned objects every time a browser is closed between the
+        steps, and it makes the client responsible for a URL it has no reason
+        to hold. Ownership and the media caps are proven BEFORE anything is
+        written to storage, so a refused upload leaves nothing behind.
+        """
+        from core.uploads import storage_path, validate_image
+
+        from .repositories import MEDIA_LIMITS
+
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+
+        # Cheap checks first, in this order on purpose: ownership, then the
+        # cap, then the file. Reading and storing bytes for an upload we were
+        # always going to reject is wasted work and wasted storage.
+        limit = MEDIA_LIMITS.get(MediaKind(kind))
+        if limit is not None and self._content.count_media(event.id, kind) >= limit:
+            raise InvalidInputError(
+                f"This event already has the maximum of {limit} "
+                f"{'item' if limit == 1 else 'items'} for {kind}."
+            )
+        if not alt_text.strip():
+            raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
+
+        content_type = validate_image(upload)
+        path = storage_path(prefix="event-media", owner_id=str(event.id), filename=upload.name)
+
+        # OUTSIDE the transaction: storage is slow external I/O, and CLAUDE.md's
+        # performance rule is that it never happens while a DB transaction holds
+        # connections. If the write below fails, the orphaned object is
+        # harmless — far better than a row pointing at nothing.
+        url = self._storage.upload(path=path, content=upload.read(), content_type=content_type)
+
+        with UnitOfWork():
+            media = self._content.add_media(
+                event_id=event.id,
+                kind=kind,
+                url=url,
+                alt_text=alt_text.strip(),
+                caption=caption.strip(),
+                position=position,
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.media_uploaded",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"kind": kind, "content_type": content_type},
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return media
+
+    def remove_media(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, media_id: uuid.UUID | str
+    ) -> None:
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        with UnitOfWork():
+            if not self._content.soft_delete_media(media_id):
+                raise EventNotFoundError(str(media_id))
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.media_removed",
                 target_type="event",
                 target_id=str(event.id),
             )
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
 
-        logger.info("event_published", extra={"event_id": str(event.id)})
-        refreshed = self._events.get_active_by_id(event.id)
-        if refreshed is None:  # pragma: no cover — just deleted mid-request
-            raise EventNotFoundError(str(event_id))
-        return refreshed
+    # ---------------------------------------------------------------- faq
+
+    def add_faq(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        question: str,
+        answer: str,
+        position: int = 0,
+    ):
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        if not question.strip() or not answer.strip():
+            raise InvalidInputError("An FAQ needs both a question and an answer.")
+
+        with UnitOfWork():
+            faq = self._content.add_faq(
+                event_id=event.id,
+                question=question.strip(),
+                answer=answer.strip(),
+                position=position,
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return faq
+
+    def remove_faq(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, faq_id: uuid.UUID | str
+    ) -> None:
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        with UnitOfWork():
+            if not self._content.soft_delete_faq(faq_id):
+                raise EventNotFoundError(str(faq_id))
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+    # ----------------------------------------------------------- timeline
+
+    def add_timeline_entry(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        kind: str,
+        label: str,
+        description: str = "",
+        starts_at=None,
+        position: int = 0,
+    ):
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        if not label.strip():
+            raise InvalidInputError("A timeline entry needs a label.")
+
+        with UnitOfWork():
+            entry = self._content.add_timeline_entry(
+                event_id=event.id,
+                kind=kind,
+                label=label.strip(),
+                description=description.strip(),
+                starts_at=starts_at,
+                position=position,
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return entry
+
+    def remove_timeline_entry(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, entry_id: uuid.UUID | str
+    ) -> None:
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        with UnitOfWork():
+            if not self._content.soft_delete_timeline_entry(entry_id):
+                raise EventNotFoundError(str(entry_id))
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))

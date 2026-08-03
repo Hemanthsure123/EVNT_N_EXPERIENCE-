@@ -37,6 +37,32 @@ def test_create_booking_returns_201_with_payment_info(authed_client, event, make
 
 
 @pytest.mark.django_db
+def test_create_booking_names_the_provider_and_withholds_a_mismatched_key(
+    authed_client, event, make_tier, settings
+):
+    """The response has to say which provider actually created the order.
+
+    A leftover `RAZORPAY_KEY_ID` alongside `PAYMENTS_BACKEND=fake` used to be
+    handed to the frontend anyway, whose only signal for "can a real checkout
+    happen" was whether that string was empty — so the funnel opened Razorpay
+    Checkout with a `fake_order_…` id, which Razorpay rejects. The key belongs
+    to the provider or it is not sent.
+    """
+    settings.RAZORPAY_KEY_ID = "rzp_test_leftover_from_another_deploy"
+    tier = make_tier(price_minor=50000, quantity=100)
+
+    resp = authed_client.post(
+        "/api/v1/bookings",
+        {"event_id": str(event.id), "items": [{"ticket_type_id": str(tier.id), "quantity": 1}]},
+        format="json",
+    )
+
+    body = resp.json()
+    assert body["payment"]["provider"] == "fake"
+    assert body["payment"]["key_id"] == ""
+
+
+@pytest.mark.django_db
 def test_create_booking_requires_authentication(api_client, event, make_tier):
     tier = make_tier()
     resp = api_client.post(
@@ -130,9 +156,148 @@ def test_get_booking_detail_query_budget(
     result = _create_via_service(booking_service, buyer, event, tier)
     url = f"/api/v1/bookings/{result.booking.id}"
 
-    # auth lookup + (booking+event) + (items+tier prefetch). No N+1 on items.
-    with django_assert_num_queries(3):
+    # auth lookup + (booking+event) + (items+tier prefetch) + (tickets+tier
+    # prefetch). No N+1 on either collection.
+    with django_assert_num_queries(4):
         assert authed_client.get(url).status_code == 200
+
+
+@pytest.mark.django_db
+def test_get_booking_detail_shows_who_each_ticket_is_for(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    tier = make_tier(name="Gold", quantity=100)
+    result = _create_via_service(booking_service, buyer, event, tier, quantity=2)
+    tickets = booking_service.confirm_booking(
+        booking_id=result.booking.id, payment_ref="pay_1"
+    ).tickets
+    booking_service.assign_attendees(
+        booking_id=result.booking.id,
+        actor_id=buyer.id,
+        assignments=[{"ticket_id": tickets[0].id, "name": "Asha Rao", "email": "asha@example.com"}],
+    )
+
+    body = authed_client.get(f"/api/v1/bookings/{result.booking.id}").json()
+
+    rows = {row["id"]: row for row in body["tickets"]}
+    assert rows[str(tickets[0].id)]["attendee_name"] == "Asha Rao"
+    assert rows[str(tickets[0].id)]["attendee_email"] == "asha@example.com"
+    # Blank on the buyer's own ticket — the default, and it stays valid.
+    assert rows[str(tickets[1].id)]["attendee_name"] == ""
+
+
+# --- POST /bookings/{id}/attendees -----------------------------------------
+
+
+def _paid_tickets(booking_service, buyer, event, make_tier, quantity=3):
+    tier = make_tier(name="Gold", quantity=100)
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": quantity}],
+    )
+    outcome = booking_service.confirm_booking(booking_id=result.booking.id, payment_ref="pay_1")
+    return result.booking, outcome.tickets
+
+
+@pytest.mark.django_db
+def test_assign_attendees_returns_the_updated_ticket_list(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    booking, tickets = _paid_tickets(booking_service, buyer, event, make_tier, quantity=2)
+
+    resp = authed_client.post(
+        f"/api/v1/bookings/{booking.id}/attendees",
+        {
+            "assignments": [
+                {"ticket_id": str(tickets[0].id), "name": "Asha Rao", "email": "asha@example.com"}
+            ]
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 200
+    rows = {row["id"]: row for row in resp.json()["tickets"]}
+    assert len(rows) == 2
+    assert rows[str(tickets[0].id)]["attendee_email"] == "asha@example.com"
+    assert resp.headers["Cache-Control"] == "private, no-store"
+
+
+@pytest.mark.django_db
+def test_assign_attendees_by_non_owner_is_403(
+    api_client, booking_service, buyer, other_user, event, make_tier, token_for
+):
+    booking, tickets = _paid_tickets(booking_service, buyer, event, make_tier, quantity=1)
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(other_user)}")
+
+    resp = api_client.post(
+        f"/api/v1/bookings/{booking.id}/attendees",
+        {
+            "assignments": [
+                {"ticket_id": str(tickets[0].id), "name": "Thief", "email": "t@example.com"}
+            ]
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "not_booking_owner"
+
+
+@pytest.mark.django_db
+def test_assign_attendees_with_a_foreign_ticket_is_400(
+    authed_client, booking_service, buyer, other_user, event, make_tier
+):
+    booking, _mine = _paid_tickets(booking_service, buyer, event, make_tier, quantity=1)
+    tier = make_tier(name="Silver", quantity=100)
+    theirs = booking_service.create_booking(
+        user_id=other_user.id, event_id=event.id, items=[{"ticket_type_id": tier.id, "quantity": 1}]
+    )
+    stolen = booking_service.confirm_booking(
+        booking_id=theirs.booking.id, payment_ref="pay_theirs"
+    ).tickets[0]
+
+    resp = authed_client.post(
+        f"/api/v1/bookings/{booking.id}/attendees",
+        {
+            "assignments": [
+                {"ticket_id": str(stolen.id), "name": "Thief", "email": "thief@example.com"}
+            ]
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "invalid_attendee_assignments"
+
+
+@pytest.mark.django_db
+def test_assign_attendees_on_an_unpaid_booking_is_409(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    tier = make_tier(quantity=100)
+    result = _create_via_service(booking_service, buyer, event, tier, quantity=1)
+
+    resp = authed_client.post(
+        f"/api/v1/bookings/{result.booking.id}/attendees",
+        {
+            "assignments": [
+                {"ticket_id": str(result.booking.id), "name": "Asha", "email": "a@example.com"}
+            ]
+        },
+        format="json",
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "booking_not_assignable"
+
+
+@pytest.mark.django_db
+def test_assign_attendees_requires_authentication(api_client, event):
+    resp = api_client.post(
+        f"/api/v1/bookings/{event.id}/attendees", {"assignments": []}, format="json"
+    )
+    assert resp.status_code == 401
 
 
 # --- POST /bookings/{id}/cancel --------------------------------------------
@@ -169,6 +334,9 @@ def test_my_tickets_lists_issued_tickets(authed_client, booking_service, buyer, 
     assert len(data) == 2
     assert data[0]["event_title"] == "Headline Show"
     assert data[0]["qr_token"]
+    # Which booking issued it — how the confirmation screen shows the buyer the
+    # tickets they just paid for rather than their whole account's.
+    assert data[0]["booking_id"] == str(result.booking.id)
     assert resp.headers["Cache-Control"] == "private, no-store"
 
 

@@ -20,21 +20,26 @@ delay (prompt) but still through this same async path.
 
 from __future__ import annotations
 
+import base64
 import logging
 import uuid
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.accounts.repositories import UserRepository
 from apps.booking.repositories import TicketRepository
 from apps.events.repositories import EventRepository
-from core.ports.email_port import EmailPort
+from core.ports.email_port import EmailAttachment, EmailPort
+from core.ports.push_port import PushPort
+from core.ports.push_port import PushSubscription as PushSubscriptionData
 from core.ports.sms_port import SmsPort
 from core.ports.task_queue_port import TaskQueuePort
 
 from .models import NotificationChannel, NotificationLog, NotificationStatus, NotificationType
-from .repositories import NotificationLogRepository
+from .repositories import NotificationLogRepository, PushSubscriptionRepository
 from .templates import (
     TemplateService,
     channel_for_type,
@@ -44,8 +49,33 @@ from .templates import (
 
 logger = logging.getLogger(__name__)
 
+
+def _decode_attachments(stored: list | None) -> tuple[EmailAttachment, ...]:
+    """Rebuild attachments from the claimed row.
+
+    A malformed or truncated entry is DROPPED, not raised on. The email is
+    complete without its attachment — the QR tokens are in the body and the
+    wallet link is in the HTML — so a corrupt blob costs a convenience, while
+    raising here would dead-letter a ticket somebody has already paid for.
+    """
+    attachments: list[EmailAttachment] = []
+    for entry in stored or []:
+        try:
+            attachments.append(
+                EmailAttachment(
+                    filename=str(entry["filename"]),
+                    content=base64.b64decode(entry["b64"]),
+                    content_type=str(entry.get("content_type") or "application/octet-stream"),
+                )
+            )
+        except Exception:  # noqa: BLE001 — see the note above
+            logger.exception("notifications.attachment.undecodable")
+    return tuple(attachments)
+
+
 DISPATCH_TASK = "notifications.dispatch"
 EVENT_REMINDER_TASK = "notifications.event_reminder"
+SWEEP_STUCK_TASK = "notifications.sweep_stuck"
 
 
 class NotificationService:
@@ -59,11 +89,15 @@ class NotificationService:
         task_queue: TaskQueuePort,
         max_attempts: int,
         retry_backoff_seconds: int,
+        push: PushPort,
+        push_subscriptions: PushSubscriptionRepository,
     ) -> None:
         self._logs = logs
         self._templates = templates
         self._email = email
         self._sms = sms
+        self._push = push
+        self._push_subscriptions = push_subscriptions
         self._task_queue = task_queue
         self._max_attempts = max_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
@@ -112,6 +146,16 @@ class NotificationService:
                     recipient=recipient,
                     subject=rendered.subject,
                     body=rendered.body,
+                    html_body=rendered.html,
+                    context_url=rendered.url,
+                    attachments_json=[
+                        {
+                            "filename": a.filename,
+                            "content_type": a.content_type,
+                            "b64": base64.b64encode(a.content).decode("ascii"),
+                        }
+                        for a in rendered.attachments
+                    ],
                 )
         except IntegrityError:
             # A concurrent notify() claimed it first — return the winner, and
@@ -191,14 +235,139 @@ class NotificationService:
                 DISPATCH_TASK, {"notification_id": str(notification_id)}, delay_seconds=retry_delay
             )
 
+    # --- sweep: the backstop for claims that were never dispatched ---------
+
+    def sweep_stuck(self, *, older_than_seconds: int = 300, limit: int = 200) -> int:
+        """Re-enqueue dispatch for claims left `pending`. Returns the count.
+
+        `notify` claims the row and THEN enqueues — two steps, so there is a
+        window. A process killed inside it, or a queue that rejects the
+        enqueue, leaves a `pending` row that nothing will ever look at again:
+        the dedupe key exists, so a later `notify` returns it rather than
+        re-enqueueing, and `dispatch` is only ever called from the task that
+        was never created. The message is a ticket email that silently never
+        arrives, which the customer discovers at the gate.
+
+        This is the module's third reliability layer, and it is the same shape
+        as booking's expired-hold sweeper: periodic, idempotent, and correct
+        even when every best-effort signal was missed.
+
+        Safe to run as often as you like. It only re-enqueues — `dispatch`
+        re-checks `status == pending` under the row lock, so a sweep racing a
+        dispatcher that is already sending does nothing at all.
+
+        `older_than_seconds` must comfortably exceed a normal enqueue-to-send
+        gap, or the sweeper starts racing healthy dispatches and doing wasted
+        work. Five minutes is far longer than any real dispatch takes and far
+        shorter than a person's patience for a ticket.
+        """
+        cutoff = timezone.now() - timedelta(seconds=older_than_seconds)
+        stuck = self._logs.list_stuck_pending(older_than=cutoff, limit=limit)
+        if not stuck:
+            return 0
+
+        requeued = 0
+        for log in stuck:
+            try:
+                self._task_queue.enqueue(DISPATCH_TASK, {"notification_id": str(log.id)})
+            except Exception:
+                # One bad enqueue must not abandon the rest of the backlog.
+                logger.exception(
+                    "notifications.sweep.enqueue_failed", extra={"notification_id": str(log.id)}
+                )
+                continue
+            requeued += 1
+
+        # Warning, not info: a non-zero result means something dropped a send
+        # earlier. The messages are rescued, and somebody should still know.
+        logger.warning("notifications.sweep.requeued", extra={"count": requeued})
+        return requeued
+
     def _send(self, log: NotificationLog) -> str:
         if log.channel == NotificationChannel.EMAIL:
-            return self._email.send(to=log.recipient, subject=log.subject, body=log.body)
+            return self._email.send(
+                to=log.recipient,
+                subject=log.subject,
+                body=log.body,
+                html=log.html_body,
+                attachments=_decode_attachments(log.attachments_json),
+            )
+        if log.channel == NotificationChannel.PUSH:
+            return self._send_push(log)
         return self._sms.send(
             to=log.recipient,
             message=log.body,
             dlt_template_id=dlt_template_id_for_type(log.type),
         )
+
+    def _send_push(self, log: NotificationLog) -> str:
+        """Fan one logical notification out to every device a user subscribed.
+
+        `recipient` is a USER ID here, not an address — one person with a
+        laptop and a phone should get one reminder on each, not two
+        notifications each. So the log row stays one row, and the fan-out
+        happens at send time.
+
+        ── WHAT COUNTS AS SUCCESS ───────────────────────────────────────────
+
+        One device reaching the person is the message being delivered. Raising
+        because their old laptop's subscription expired would dead-letter a
+        notification their phone already showed. So:
+
+        - at least one delivered  -> success, with a per-device summary stored
+          as the provider ref;
+        - every device reported GONE -> also success, and every row deleted.
+          There is nobody to reach and no retry that could change that; the
+          honest record is "delivered to zero live devices", not a failure
+          that burns five attempts and dead-letters;
+        - a real transport error with nothing delivered -> raise, so the
+          existing retry/dead-letter machinery handles it exactly as it does
+          for a refused SMTP connection.
+
+        Expired subscriptions are deleted here rather than swept later: this
+        is the moment we learn, and the row can never work again.
+        """
+        subscriptions = self._push_subscriptions.list_for_user(log.recipient)
+        if not subscriptions:
+            # Not an error. Somebody unsubscribed between the claim and the
+            # send, which is ordinary. Recorded as sent-to-nothing rather than
+            # retried five times against a user who has no devices.
+            return "push:no-subscriptions"
+
+        delivered: list = []
+        expired: list = []
+        last_error = ""
+        for subscription in subscriptions:
+            result = self._push.send(
+                subscription=PushSubscriptionData(
+                    endpoint=subscription.endpoint,
+                    p256dh=subscription.p256dh,
+                    auth=subscription.auth,
+                ),
+                title=log.subject or "Update",
+                body=log.body,
+                url=log.context_url,
+                # One tag per logical notification, so a second delivery
+                # REPLACES the first in the tray instead of stacking. Two
+                # identical reminders is how people turn notifications off.
+                tag=log.dedupe_key,
+            )
+            if result.delivered:
+                delivered.append(subscription.id)
+            elif result.gone:
+                expired.append(subscription.id)
+            else:
+                last_error = result.error
+
+        if expired:
+            self._push_subscriptions.delete_ids(expired)
+        if delivered:
+            self._push_subscriptions.mark_used(delivered, when=timezone.now())
+            return f"push:{len(delivered)}/{len(subscriptions)}"
+        if expired and not last_error:
+            return "push:all-expired"
+
+        raise RuntimeError(last_error or "push delivery failed")
 
 
 class ReminderService:
@@ -235,18 +404,37 @@ class ReminderService:
 
         when = format_when(event.starts_at)
         where = f"{event.venue}, {event.city}"
+        # Blank rather than a guess when PUBLIC_SITE_URL is unset: a push whose
+        # tap target is the wrong host is worse than one with no link.
+        site = settings.PUBLIC_SITE_URL
+        context = {
+            "event_title": event.title,
+            "event_when": when,
+            "event_where": where,
+            "url": f"{site}/events/{event.id}" if site else "",
+        }
         count = 0
         for user in self._users.list_by_ids(holder_ids):
             self._notifications.notify(
                 notification_type=NotificationType.EVENT_REMINDER,
                 recipient=user.email,
-                context={
-                    "name": user.full_name,
-                    "event_title": event.title,
-                    "event_when": when,
-                    "event_where": where,
-                },
+                context={"name": user.full_name, **context},
                 dedupe_key=f"event_reminder:{event_id}:email:{user.email}",
+            )
+            # A SECOND logical notification, not a second copy of the first.
+            # Its own type, channel, template and dedupe key, so the email
+            # arriving has no bearing on whether the push does — and somebody
+            # with no subscribed device simply gets the email, which is what
+            # already happened before push existed.
+            #
+            # Keyed on the USER rather than a device: two devices should show
+            # one reminder each, not two logical messages. `_send_push` fans
+            # out; this stays one row.
+            self._notifications.notify(
+                notification_type=NotificationType.EVENT_REMINDER_PUSH,
+                recipient=str(user.id),
+                context=context,
+                dedupe_key=f"event_reminder:{event_id}:push:{user.id}",
             )
             count += 1
         logger.info(

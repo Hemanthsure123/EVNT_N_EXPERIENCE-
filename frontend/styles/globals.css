@@ -8,6 +8,35 @@
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
+    /* The page scrollbar is the ONE scrollbar left in the product — every
+       in-page rail and list is sized or paged so it never needs one. This makes
+       the survivor look designed instead of like platform chrome.
+
+       It tracks `--input`, not `--border`. On the old tinted canvas a hairline
+       was visible as a thumb; against a pure white page it is not, and a
+       scrollbar you cannot find is worse than a default one. `--input` is the
+       token that clears 3:1 in both themes precisely because it is used for
+       things you have to be able to grab. */
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--input)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-thickness);
+    height: var(--scrollbar-thickness);
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--input));
+    border-radius: var(--radius-full);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--muted-foreground));
   }
 
   body {
@@ -26,12 +55,18 @@
     text-wrap: balance;
   }
 
-  /* Prices, references, OTP, tables read with aligned tabular figures (§5.1). */
+  /* Prices, references, OTP, tables read with aligned tabular figures. */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Visible focus ring on keyboard navigation (§11). */
+  /* Visible focus ring on keyboard navigation.
+
+     The ring is VIOLET (`--ring`), and deliberately does not follow the
+     near-black primary action: a black ring around a black pill on a white
+     page is invisible, which is the single easiest way to make a keyboard
+     user's position on the page unfindable. 5.70:1 against white, 6.82:1
+     against the dark canvas. */
   :focus-visible {
     outline: 2px solid rgb(var(--ring));
     outline-offset: 2px;
@@ -56,7 +91,7 @@
 }
 
 @layer components {
-  /* Skeleton shimmer — a soft gradient sweep while content loads (§10.3). */
+  /* Skeleton shimmer — a soft gradient sweep while content loads. */
   .skeleton {
     position: relative;
     overflow: hidden;
@@ -83,7 +118,225 @@
     }
   }
 
-  /* Brand gradient text for hero/marketing headings (§4.6). */
+  /*
+   * Skip rendering work for grid rows scrolled far out of view.
+   * `contain-intrinsic-size: auto <size>` keeps the space reserved (and
+   * remembers the real size after first render), so nothing shifts.
+   *
+   * Scoped deliberately to deep GRID rows and nothing else. Applying it to
+   * whole page sections also worked, but it takes those subtrees out of the
+   * render tree far enough that axe can no longer resolve their colours and
+   * reports false contrast failures — an accessibility gate you can't trust is
+   * worth more than the remaining milliseconds, especially now that the
+   * expensive full-page invalidation it was compensating for is gone (see the
+   * `modal={false}` note in components/search/search-overlay.tsx).
+   */
+  .cv-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto var(--intrinsic-card);
+  }
+
+  /*
+   * Glass — a translucent surface with a blurred backdrop and a hairline edge.
+   * Deliberately a component class, not a utility soup, so every glass surface
+   * in the app is literally the same recipe.
+   *
+   * TWO rules, and the second is new with the light-first language:
+   *
+   * 1. THIN surfaces only (the sticky header, a floating control, a chip over a
+   *    poster). A backdrop-filter is a per-frame paint over whatever it covers;
+   *    at full-viewport size that is one of the most expensive things a page
+   *    can do on a low-end device.
+   *
+   * 2. GENUINELY FLOATING chrome only — a bar that content scrolls underneath.
+   *    Never a flat card. On a white canvas a frosted card is just a card with
+   *    a paint cost, and the effect stops meaning "this is above the page" the
+   *    moment things that are not above the page use it.
+   *
+   * The HAIRLINE is what makes it legible in light theme, not the fill: a
+   * white-ish frost on a white page has no edge of its own, so `--glass-hairline`
+   * carries the whole "there is a bar here" signal (see tokens.css).
+   */
+  .glass {
+    background-color: rgb(var(--surface) / var(--glass-surface));
+    backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+    border-color: rgb(var(--foreground) / var(--glass-hairline));
+  }
+
+  /*
+   * Chrome that sits ON MEDIA (a chip or a save button over a poster).
+   *
+   * Two deliberate differences from `.glass`:
+   * 1. NOT theme-adaptive. What's behind it is an arbitrary photograph, not the
+   *    page, so it stays dark in both themes and pairs with `--on-gradient`
+   *    text. Using `.glass` here makes the label invisible in light mode —
+   *    white text on a white frost.
+   * 2. NO backdrop-filter. This appears on every card in a grid, and a blur is
+   *    a per-frame paint of everything under it; twenty of them measurably hurt
+   *    INP. Over a photo a solid scrim looks the same and costs nothing. Real
+   *    blur stays on the single header bar, where "thin surface" still holds.
+   *
+   * The image-forward language moves most CHROME off the poster (text sits
+   * BELOW the image now), so what should still be wearing this is the small set
+   * of controls that genuinely have to live on the photograph: favourite,
+   * share, carousel navigation. A date medallion or a category chip belongs in
+   * the text block underneath, where it needs no scrim at all.
+   */
+  .glass-media {
+    background-color: rgb(var(--overlay) / 0.66);
+    border-color: rgb(var(--on-gradient) / 0.18);
+  }
+
+  /* No backdrop-filter support (or forced-colors): fall back to an opaque
+     surface rather than an unreadable translucent one. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass {
+      background-color: rgb(var(--surface));
+    }
+  }
+
+  /*
+   * HERO ATMOSPHERE — built from tokens, not from an image.
+   *
+   * Three soft radial pools, a vignette that darkens the edges, and a fine
+   * noise grain that kills the banding large gradients get on 8-bit displays.
+   * All of it is CSS, so it costs no bytes, no request, and no layout.
+   *
+   * REWRITTEN FOR LIGHT-FIRST. These were violet-and-pink pools tuned for a
+   * dark canvas; at the opacities the hero applies them, on white, they read as
+   * a bruise rather than as atmosphere. The light recipe is a warm wash — a
+   * trace of the wayfinding violet, a butter pool, and a neutral settle at the
+   * base — because in an image-forward product the background's job is to get
+   * out of the photography's way, not to compete with it.
+   *
+   * The dark recipe keeps real colour (there is nothing else carrying the page
+   * there) but drops pink, which no longer exists in the palette.
+   */
+  .hero-atmosphere {
+    background-image: radial-gradient(
+        58% 55% at 12% 18%,
+        rgb(var(--violet-600) / 0.1),
+        transparent 62%
+      ),
+      radial-gradient(48% 48% at 88% 8%, rgb(var(--butter-300) / 0.22), transparent 62%),
+      radial-gradient(70% 60% at 62% 105%, rgb(var(--ink-200) / 0.55), transparent 66%);
+  }
+
+  .dark .hero-atmosphere {
+    background-image: radial-gradient(
+        58% 55% at 12% 18%,
+        rgb(var(--violet-600) / 0.3),
+        transparent 62%
+      ),
+      radial-gradient(48% 48% at 88% 8%, rgb(var(--violet-500) / 0.16), transparent 62%),
+      radial-gradient(70% 60% at 62% 105%, rgb(var(--violet-800) / 0.28), transparent 66%);
+  }
+
+  /* Gentler in light: this sits over photography, and a heavy vignette on a
+     bright page reads as a dirty lens rather than as focus. */
+  .hero-vignette {
+    background-image: radial-gradient(
+      130% 105% at 50% -10%,
+      transparent 42%,
+      rgb(var(--overlay) / 0.3) 100%
+    );
+  }
+
+  .dark .hero-vignette {
+    background-image: radial-gradient(
+      130% 105% at 50% -10%,
+      transparent 42%,
+      rgb(var(--overlay) / 0.45) 100%
+    );
+  }
+
+  /*
+   * A crowd silhouette along the hero's base — overlapping dark ellipses, the
+   * same shape language as the generated stage photography, so the banner and
+   * the page behind it read as one scene rather than a card on a background.
+   * Unchanged: it is drawn on top of media, where a dark silhouette is correct
+   * in either theme.
+   */
+  .hero-crowd {
+    background-image: radial-gradient(
+        20% 46% at 6% 100%,
+        rgb(var(--overlay) / 0.9),
+        transparent 72%
+      ),
+      radial-gradient(15% 38% at 19% 100%, rgb(var(--overlay) / 0.85), transparent 72%),
+      radial-gradient(22% 52% at 33% 100%, rgb(var(--overlay) / 0.9), transparent 72%),
+      radial-gradient(17% 40% at 48% 100%, rgb(var(--overlay) / 0.85), transparent 72%),
+      radial-gradient(21% 48% at 63% 100%, rgb(var(--overlay) / 0.9), transparent 72%),
+      radial-gradient(16% 36% at 77% 100%, rgb(var(--overlay) / 0.85), transparent 72%),
+      radial-gradient(23% 50% at 92% 100%, rgb(var(--overlay) / 0.9), transparent 72%);
+  }
+
+  /*
+   * Ambient particles. A single tiled dot pattern drifting very slowly — the
+   * animation is transform-only, so it runs on the compositor and never touches
+   * the main thread (this page's INP budget is already tight). It stops
+   * entirely under reduced motion, where it becomes a static texture.
+   *
+   * The dot is `--foreground`, not `--on-gradient`. `--on-gradient` is white in
+   * both themes, which was right when the hero was always dark; on a light hero
+   * white dots on a white wash are simply not there. `--foreground` flips with
+   * the theme, so the texture exists in both.
+   */
+  .hero-particles {
+    background-image: radial-gradient(circle, rgb(var(--foreground) / 0.55) 1px, transparent 1.5px);
+    background-size: 130px 130px;
+    opacity: 0.05;
+    animation: drift 120s linear infinite;
+    will-change: transform;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-particles {
+      animation: none;
+    }
+  }
+
+  .hero-noise {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.045;
+  }
+
+  /*
+   * SCROLL REVEAL — opacity + a 20px rise, driven by a `data-revealed`
+   * attribute an IntersectionObserver flips.
+   *
+   * Never applied above the fold: an element that starts at opacity 0 cannot be
+   * the Largest Contentful Paint, so revealing the hero would trade a real
+   * metric for a flourish. Under `prefers-reduced-motion` the content is simply
+   * visible from the start — the observer never needs to run.
+   */
+  .reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition:
+      opacity var(--duration-reveal) var(--ease-spring),
+      transform var(--duration-reveal) var(--ease-spring);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+
+  .reveal[data-revealed='true'] {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* Brand gradient text. `--gradient-brand` is a quiet violet deepening now
+     rather than violet→pink, so this clears AA at its lightest stop (5.70:1 on
+     white) instead of relying on the reader not caring. Reserve it for a brand
+     moment; a page whose headings are all gradient has no brand moment. */
   .text-gradient-brand {
     background-image: var(--gradient-brand);
     background-clip: text;

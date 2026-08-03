@@ -1,0 +1,192 @@
+# =============================================================================
+# Eventful — LOCAL DEVELOPMENT
+# =============================================================================
+# Compose loads this automatically on top of docker-compose.yml, so
+# `docker compose up -d` is development and
+# `docker compose -f docker-compose.yml up -d` is production.
+#
+# ── WHY THIS FILE EXISTS ────────────────────────────────────────────────────
+#
+# The database and Redis overrides below used to live in the production
+# compose file, where `environment:` silently outranks `env_file:`. The result
+# was that a correctly configured Supabase and Upstash in `.env` were ignored
+# and every write went to a local Postgres — with nothing anywhere saying so.
+#
+# The overrides are unchanged in substance and entirely intentional; what
+# changed is that they are now in a file called "override", loaded only in
+# development. `.env` is authoritative in production.
+#
+# ── WHAT THIS DELIBERATELY POINTS AWAY FROM ─────────────────────────────────
+#
+# `.env` holds LIVE Supabase, Upstash and Razorpay credentials. Local
+# development must not write to them, so the three lines below redirect the
+# database and cache to containers. Payments are redirected too — see
+# PAYMENTS_BACKEND.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: eventsdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d eventsdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Local stand-in for Supabase's Supavisor pooler: a real PgBouncer in
+  # transaction-pooling mode with TLS required, so the app<->pooler config
+  # (DISABLE_SERVER_SIDE_CURSORS, CONN_MAX_AGE=0, sslmode=require) is
+  # exercised for real rather than only in production.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
+      POOL_MODE: transaction
+      AUTH_TYPE: plain
+      LISTEN_ADDR: 0.0.0.0
+      LISTEN_PORT: 6432
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 20
+      ADMIN_USERS: app
+      CLIENT_TLS_SSLMODE: require
+      CLIENT_TLS_KEY_FILE: /tls/pgbouncer.key
+      CLIENT_TLS_CERT_FILE: /tls/pgbouncer.crt
+      CLIENT_TLS_CA_FILE: /tls/ca.crt
+    volumes:
+      - ./docker/dev-tls/certs:/tls:ro
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Local stand-in for Upstash: stock Redis with its TLS listener on a second
+  # port, so `REDIS_URL=rediss://...` is exercised for real. The plain port
+  # stays open for the healthcheck only.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --port 6379
+      --tls-port 6380
+      --tls-cert-file /tls/redis.crt
+      --tls-key-file /tls/redis.key
+      --tls-ca-cert-file /tls/ca.crt
+      --tls-auth-clients no
+    volumes:
+      - ./docker/dev-tls/certs:/tls:ro
+    ports:
+      - "6379:6379"
+      - "6380:6380"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Development web process ─────────────────────────────────────────────
+  # `runserver` is correct HERE and only here: autoreload is the point of a
+  # dev loop, and this file is never used in production.
+  web:
+    build:
+      context: ./backend
+      args:
+        # The `dev` extra (pytest, ruff, mypy, silk) on top of the production
+        # set. Deliberately NOT in the production image: a test runner and a
+        # profiler are attack surface and image weight that production has no
+        # use for.
+        INSTALL_EXTRAS: "razorpay,push,observability,s3,tickets,dev"
+    environment: &dev-env
+      # THE OVERRIDES. Explicit, named, and development-only.
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://app:app@pgbouncer:6432/eventsdb?sslmode=require
+      # Session-mode equivalent for migrations and pytest. Without this,
+      # DIRECT_DATABASE_URL falls through to .env — which is production
+      # Supabase — and `pytest` would create and drop a database THERE.
+      # `config/settings/test.py` now also refuses a non-local host, so this
+      # is defence in depth rather than the only guard.
+      DIRECT_DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
+      REDIS_URL: rediss://redis:6380/0?ssl_cert_reqs=none
+      DISABLE_SERVER_SIDE_CURSORS: "true"
+      CONN_MAX_AGE: "0"
+      CACHE_BACKEND: redis
+      # A switch, defaulting to the fake adapter — the same shape as
+      # DEV_EMAIL_PROVIDER below, and for the same reason.
+      #
+      # This was hard-coded `fake`, on the stated grounds that "`.env` carries
+      # LIVE Razorpay keys". It does not: the key there is `rzp_test_…`, which
+      # is Razorpay's sandbox, moves no real money, and is the credential you
+      # are SUPPOSED to develop against. So the hard-code was protecting
+      # against something that was not true, at the cost of never exercising
+      # the real gateway before production did.
+      #
+      # The live-key danger is real, and it is still guarded — but by the
+      # thing that can actually check it: `core.preflight.
+      # check_development_settings` REFUSES to boot dev with an `rzp_live_`
+      # key, whatever this is set to. A conditional guard beats a blanket one,
+      # because a blanket one gets switched off by whoever needs it off.
+      PAYMENTS_BACKEND: ${DEV_PAYMENTS_BACKEND:-fake}
+      # Likewise: no real email out of a development container BY DEFAULT.
+      #
+      # But "the code never arrives" is indistinguishable from a broken
+      # pipeline when the only place it appears is a container log, so this
+      # is a switch rather than a hard-coded value. Set DEV_EMAIL_PROVIDER=smtp
+      # in `.env` and recreate the web/worker services to send for real
+      # through the SMTP_* credentials already there.
+      #
+      # The DEFAULT is still console: a development container that mails
+      # real people the moment somebody runs a seed script is how a test
+      # fixture ends up in a customer's inbox.
+      EMAIL_PROVIDER: ${DEV_EMAIL_PROVIDER:-console}
+      STORAGE_BACKEND: local
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      # Bind mount for hot reload. Development only — the production file has
+      # no volumes, so the image is immutable there.
+      - ./backend:/app
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    environment: *dev-env
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  worker:
+    environment: *dev-env
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  migrate:
+    environment: *dev-env
+    volumes:
+      - ./backend:/app
+
+volumes:
+  pgdata:

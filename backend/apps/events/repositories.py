@@ -15,12 +15,20 @@ from __future__ import annotations
 import uuid
 
 from django.contrib.postgres.search import SearchQuery
-from django.db.models import QuerySet
+from django.db.models import F, QuerySet
 from django.utils import timezone
 
 from core.base_repository import BaseRepository
 
-from .models import Event, EventStatus
+from .models import (
+    Event,
+    EventFaq,
+    EventMedia,
+    EventStatus,
+    EventTimelineEntry,
+    MediaKind,
+    SavedEvent,
+)
 
 # Columns a public event *card* (list item) needs — plus the org name via the
 # select_related join. Deliberately tiny: this is the highest-volume payload.
@@ -46,6 +54,14 @@ _DETAIL_FIELDS = (
     "description",
     "venue",
     "city",
+    # The venue's resolved location. Same rule as the content fields below:
+    # `EventDetailSerializer` returns them, so omitting them here is a
+    # deferred load per field — which is exactly how adding these three
+    # columns turned a 1-query detail read into a 4-query one, caught by the
+    # budget test rather than in production.
+    "place_id",
+    "latitude",
+    "longitude",
     "starts_at",
     "ends_at",
     "status",
@@ -54,6 +70,18 @@ _DETAIL_FIELDS = (
     "tickets_available",
     "version",
     "created_at",
+    # Content fields MUST be listed here. `EventDetailSerializer` returns
+    # them, and a field the serializer touches but `.only()` omits is a
+    # DEFERRED LOAD — one extra query per field, per row, silently. That is
+    # exactly the N+1 the lean field sets exist to prevent, and it is why the
+    # detail query budget is asserted in a test.
+    "short_description",
+    "duration_minutes",
+    "language",
+    "age_restriction",
+    "accessibility_notes",
+    "seo_title",
+    "seo_description",
 )
 
 # Columns the organizer dashboard list needs (includes status, since drafts
@@ -70,12 +98,18 @@ _ORGANIZER_CARD_FIELDS = (
     "organization__name",
 )
 
-# Columns the publish/edit path loads: enough to run the publish checks and
-# the ownership check, without the fat text/tsvector columns.
+# Columns the publish/edit path loads: enough to run the publish checks, the
+# ownership check and the organization-verified gate, without the fat
+# text/tsvector columns.
 _WRITE_LOAD_FIELDS = (
     "id",
     "organization_id",
     "organization__owner_id",
+    # The approval gate reads this on every publish (see
+    # EventService.publish_event). Omitting it would make the check a DEFERRED
+    # LOAD — one extra query per publish — which is exactly the trap the
+    # detail field set's comment above describes.
+    "organization__verified_level",
     "title",
     "venue",
     "starts_at",
@@ -185,6 +219,9 @@ class EventRepository(BaseRepository[Event]):
         description: str = "",
         ends_at=None,
         poster_url: str = "",
+        place_id: str = "",
+        latitude=None,
+        longitude=None,
     ) -> Event:
         return Event.objects.create(
             organization_id=organization_id,
@@ -195,6 +232,10 @@ class EventRepository(BaseRepository[Event]):
             description=description,
             ends_at=ends_at,
             poster_url=poster_url,
+            # Null unless the organizer picked a real Places suggestion.
+            place_id=place_id,
+            latitude=latitude,
+            longitude=longitude,
         )
 
     def update_if_version_matches(
@@ -304,20 +345,336 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
-    def publish_if_draft(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
-        """Transition draft -> live under the same optimistic-lock guard."""
+    def submit_for_review_if_draft(
+        self, *, event_id: uuid.UUID | str, expected_version: int
+    ) -> bool:
+        """draft | rejected -> pending_review, under the optimistic-lock guard.
+
+        A REJECTED event may be resubmitted — that is the whole point of
+        recording a reason rather than deleting the event. Both source states
+        are in one conditional `UPDATE`, so a concurrent edit or a double
+        submit still moves the row exactly once.
+
+        `moderation_note` is cleared on resubmission: the note describes the
+        LAST decision, and leaving a stale rejection reason attached to an
+        event now awaiting a fresh review is how an operator rejects it twice
+        for a problem that was already fixed.
+        """
         updated = (
             self.get_queryset()
             .filter(
                 pk=event_id,
                 version=expected_version,
-                status=EventStatus.DRAFT,
+                status__in=(EventStatus.DRAFT, EventStatus.REJECTED),
                 deleted_at__isnull=True,
             )
             .update(
-                status=EventStatus.LIVE,
+                status=EventStatus.PENDING_REVIEW,
+                submitted_at=timezone.now(),
+                moderation_note="",
                 version=expected_version + 1,
                 updated_at=timezone.now(),
             )
         )
         return updated == 1
+
+    def archive_if_archivable(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
+        """draft | rejected | finished -> archived, under the optimistic lock.
+
+        The source states are the ones an organizer can safely retire, and the
+        omissions are the point:
+
+        - **`live` is not here.** Archiving an event that is on sale would hide
+          it from buyers while tickets already issued for it stay valid. Take
+          it off sale first (an operator's unpublish), then archive.
+        - **`pending_review` is not here.** An event in an operator's queue is
+          not the organizer's to withdraw silently — the operator would decide
+          on a row that had vanished.
+
+        Archiving is reversible in principle (the row is untouched apart from
+        `status`), which is exactly why this is archive and NOT delete: an
+        event is referenced by bookings, tickets and a settlement, so deleting
+        one would orphan real money.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(
+                pk=event_id,
+                version=expected_version,
+                status__in=(EventStatus.DRAFT, EventStatus.REJECTED, EventStatus.FINISHED),
+                deleted_at__isnull=True,
+            )
+            .update(
+                status=EventStatus.ARCHIVED,
+                version=expected_version + 1,
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
+
+    def moderate_if_pending(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        approve: bool,
+        actor_id: uuid.UUID | str,
+        note: str,
+    ) -> bool:
+        """pending_review -> live | rejected. The operator's decision.
+
+        Conditional on the CURRENT status rather than on a version, and that
+        difference is deliberate: an operator is not editing content they read
+        a moment ago, they are answering a question about a queue entry. What
+        must not happen is two operators deciding the same event — and the
+        `status=PENDING_REVIEW` predicate is exactly that guard. The second
+        UPDATE matches zero rows and the caller is told the decision was
+        already made.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(pk=event_id, status=EventStatus.PENDING_REVIEW, deleted_at__isnull=True)
+            .update(
+                status=EventStatus.LIVE if approve else EventStatus.REJECTED,
+                moderation_note=note,
+                moderated_at=timezone.now(),
+                moderated_by_id=actor_id,
+                version=F("version") + 1,
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
+
+    def unpublish(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, note: str) -> bool:
+        """live -> rejected. Taking a published event back off sale.
+
+        Reuses `rejected` rather than inventing a `hidden` state: from the
+        organizer's side the situation is identical — it is not public, there
+        is a reason attached, and fixing it means editing and resubmitting.
+        A parallel state would double every queue and filter for no new
+        meaning.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(pk=event_id, status=EventStatus.LIVE, deleted_at__isnull=True)
+            .update(
+                status=EventStatus.REJECTED,
+                moderation_note=note,
+                moderated_at=timezone.now(),
+                moderated_by_id=actor_id,
+                version=F("version") + 1,
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
+
+    #: Statuses the moderation console may ask for. Deliberately NOT every
+    #: `EventStatus`: `draft` is an organizer's private workspace and no
+    #: operator has business browsing it, and `paused`/`finished` are lifecycle
+    #: facts rather than moderation outcomes. An unknown value falls back to
+    #: the pending queue rather than widening to everything.
+    MODERATABLE_STATUSES = (
+        EventStatus.PENDING_REVIEW,
+        EventStatus.LIVE,
+        EventStatus.REJECTED,
+        EventStatus.ARCHIVED,
+    )
+
+    def list_for_moderation(self, *, status: str | None = None):
+        """The moderation queue, or the record of past decisions.
+
+        Ordering differs by what is being asked, and that is the point:
+
+        - **Pending** is a QUEUE, so it is oldest-submission-first (FIFO). An
+          operator working top-down should be clearing the longest wait, not
+          the newest arrival.
+        - **Everything else** is a RECORD, so it is newest-first — "what did
+          we just do" is the question being asked of it.
+        """
+        chosen = status if status in set(self.MODERATABLE_STATUSES) else None
+        queryset = (
+            self.get_queryset()
+            .filter(status=chosen or EventStatus.PENDING_REVIEW, deleted_at__isnull=True)
+            .select_related("organization")
+            .only(
+                "id",
+                "title",
+                "description",
+                "venue",
+                "city",
+                "starts_at",
+                "ends_at",
+                "poster_url",
+                "status",
+                "submitted_at",
+                "moderated_at",
+                "moderation_note",
+                "version",
+                "created_at",
+                "organization__id",
+                "organization__name",
+                "organization__verified_level",
+                "organization__owner_id",
+            )
+        )
+        if chosen is None or chosen == EventStatus.PENDING_REVIEW:
+            return queryset.order_by("submitted_at")
+        # `-created_at` and NOT `-moderated_at`: the console cursor-paginates
+        # this, and a cursor needs a non-null monotonic column. An event can
+        # reach `archived` without ever being moderated, so ordering on
+        # `moderated_at` would put nulls in the middle of the keyset and make
+        # paging skip rows. The decision time is still on every row for
+        # display.
+        return queryset.order_by("-created_at")
+
+    def list_pending_review(self):
+        """The pending queue. Kept as its own name because three call sites
+        mean exactly this and reading `list_for_moderation()` at them would be
+        less clear, not more."""
+        return self.list_for_moderation(status=EventStatus.PENDING_REVIEW)
+
+
+class EventContentRepository:
+    """Media, FAQs and timeline for one event.
+
+    Separate from `EventRepository` because these are child collections with
+    their own lifecycle, and folding them in would give the events repository
+    three more reasons to change.
+    """
+
+    # -------------------------------------------------------------- media
+
+    def media_for(self, event_id: uuid.UUID | str) -> list[EventMedia]:
+        """Visible media, ordered. One query, no N+1 from the caller."""
+        return list(
+            EventMedia.objects.filter(event_id=event_id, deleted_at__isnull=True, is_visible=True)
+            .only("id", "kind", "url", "alt_text", "caption", "position", "event_id")
+            .order_by("kind", "position", "created_at")
+        )
+
+    def count_media(self, event_id: uuid.UUID | str, kind: str) -> int:
+        """Live rows of one kind — the number the caps are checked against."""
+        return EventMedia.objects.filter(
+            event_id=event_id, kind=kind, deleted_at__isnull=True
+        ).count()
+
+    def add_media(self, **fields) -> EventMedia:
+        return EventMedia.objects.create(**fields)
+
+    def soft_delete_media(self, media_id: uuid.UUID | str) -> bool:
+        """Soft: an organizer pulling an image mid-sale should not lose the
+        asset, and a hard delete would orphan the stored object."""
+        return (
+            EventMedia.objects.filter(pk=media_id, deleted_at__isnull=True).update(
+                deleted_at=timezone.now()
+            )
+            == 1
+        )
+
+    def reorder_media(self, positions: dict[uuid.UUID | str, int]) -> None:
+        for media_id, position in positions.items():
+            EventMedia.objects.filter(pk=media_id).update(position=position)
+
+    # ---------------------------------------------------------------- faq
+
+    def faqs_for(self, event_id: uuid.UUID | str) -> list[EventFaq]:
+        return list(
+            EventFaq.objects.filter(event_id=event_id, deleted_at__isnull=True, is_published=True)
+            .only("id", "question", "answer", "position", "event_id")
+            .order_by("position", "created_at")
+        )
+
+    def add_faq(self, **fields) -> EventFaq:
+        return EventFaq.objects.create(**fields)
+
+    def soft_delete_faq(self, faq_id: uuid.UUID | str) -> bool:
+        return (
+            EventFaq.objects.filter(pk=faq_id, deleted_at__isnull=True).update(
+                deleted_at=timezone.now()
+            )
+            == 1
+        )
+
+    # ----------------------------------------------------------- timeline
+
+    def timeline_for(self, event_id: uuid.UUID | str) -> list[EventTimelineEntry]:
+        """Ordered by explicit position, then by time.
+
+        Entries without a time sort LAST within their position — an organizer
+        may know the running order before the clock times, and a null should
+        not float to the top of the list.
+        """
+        return list(
+            EventTimelineEntry.objects.filter(event_id=event_id, deleted_at__isnull=True)
+            .only("id", "kind", "label", "description", "starts_at", "position", "event_id")
+            .order_by("position", F("starts_at").asc(nulls_last=True), "created_at")
+        )
+
+    def add_timeline_entry(self, **fields) -> EventTimelineEntry:
+        return EventTimelineEntry.objects.create(**fields)
+
+    def soft_delete_timeline_entry(self, entry_id: uuid.UUID | str) -> bool:
+        return (
+            EventTimelineEntry.objects.filter(pk=entry_id, deleted_at__isnull=True).update(
+                deleted_at=timezone.now()
+            )
+            == 1
+        )
+
+
+#: The caps, declared once. `EventContentService` is the only enforcer — see
+#: the note on `EventMedia` for why this is not a database constraint.
+MEDIA_LIMITS = {
+    MediaKind.HERO: 1,
+    MediaKind.GALLERY: 10,
+    MediaKind.VIDEO: 1,
+    MediaKind.THUMBNAIL: 1,
+    MediaKind.MOBILE: 1,
+}
+
+
+class SavedEventRepository:
+    """A user's saved events."""
+
+    def save(self, *, user_id: uuid.UUID | str, event_id: uuid.UUID | str) -> bool:
+        """Idempotent. Returns True when a row was created, False when it was
+        already saved — so a double-tap on a slow connection is a no-op rather
+        than an error the UI has to explain."""
+        _, created = SavedEvent.objects.get_or_create(user_id=user_id, event_id=event_id)
+        return created
+
+    def unsave(self, *, user_id: uuid.UUID | str, event_id: uuid.UUID | str) -> bool:
+        deleted, _ = SavedEvent.objects.filter(user_id=user_id, event_id=event_id).delete()
+        return bool(deleted)
+
+    def saved_ids(self, *, user_id: uuid.UUID | str) -> list[str]:
+        """Just the ids — what the discovery cards need to draw a filled heart
+        without loading an event the page already has."""
+        return [
+            str(row)
+            for row in SavedEvent.objects.filter(user_id=user_id).values_list("event_id", flat=True)
+        ]
+
+    def list_cards(self, *, user_id: uuid.UUID | str) -> QuerySet[SavedEvent]:
+        """The saved-events page: the same lean card fields the browse grid
+        uses, joined in ONE query so a list of twenty is not twenty-one."""
+        return (
+            SavedEvent.objects.filter(user_id=user_id)
+            .select_related("event", "event__organization")
+            .only(
+                "id",
+                "created_at",
+                "event__id",
+                "event__title",
+                "event__venue",
+                "event__city",
+                "event__starts_at",
+                "event__poster_url",
+                "event__status",
+                "event__deleted_at",
+                "event__from_price_minor",
+                "event__tickets_available",
+                "event__organization__id",
+                "event__organization__name",
+            )
+            .order_by("-created_at")
+        )

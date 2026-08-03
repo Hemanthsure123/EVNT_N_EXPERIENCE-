@@ -1,9 +1,13 @@
+import { API_BASE_URL } from './config';
 import { ApiError, type ApiErrorEnvelope } from './errors';
 import { tokenStore } from './token-store';
 import type { TokenPair } from './types';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
-const API_ROOT = `${BASE_URL}/api/v1`;
+const API_ROOT = `${API_BASE_URL}/api/v1`;
+
+/** Next.js' fetch extensions (ISR). Typed here rather than relying on the
+ * ambient augmentation so this file compiles the same in tests. */
+type NextFetchOptions = { revalidate?: number | false; tags?: string[] };
 
 export type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -12,11 +16,27 @@ export type RequestOptions = {
   /** Attach the access token. Default true; pass false for public reads. */
   auth?: boolean;
   signal?: AbortSignal;
+  /** Fetch cache mode. Defaults to `no-store` — the only safe default when a
+   * response may be per-user. Public reads opt in explicitly (see `next`). */
+  cache?: RequestCache;
+  /**
+   * Next's ISR controls, for PUBLIC reads rendered on the server. Passing this
+   * drops the `no-store` default so the route can actually be revalidated on a
+   * timer — keep the interval aligned with the backend's own `s-maxage` for
+   * that endpoint (see lib/api/events.ts).
+   */
+  next?: NextFetchOptions;
 };
 
 function buildInit(opts: RequestOptions): RequestInit {
   const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers };
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  // FormData passes straight through. Setting `Content-Type` ourselves would be
+  // actively harmful here: multipart needs a `boundary=` parameter that only
+  // the browser can generate, and naming the type without it makes the server
+  // fail to find any parts at all. The upload endpoints (`poster` on
+  // create/update event) are the only callers that need this.
+  const multipart = typeof FormData !== 'undefined' && opts.body instanceof FormData;
+  if (opts.body !== undefined && !multipart) headers['Content-Type'] = 'application/json';
   if (opts.auth !== false) {
     const token = tokenStore.getAccess();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -24,10 +44,18 @@ function buildInit(opts: RequestOptions): RequestInit {
   return {
     method: opts.method ?? 'GET',
     headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body:
+      opts.body === undefined
+        ? undefined
+        : multipart
+          ? (opts.body as FormData)
+          : JSON.stringify(opts.body),
     signal: opts.signal,
-    cache: 'no-store',
-  };
+    // `no-store` unless the caller explicitly opted into an ISR-cached read;
+    // setting both `cache` and `next.revalidate` is a Next-level conflict.
+    cache: opts.cache ?? (opts.next ? undefined : 'no-store'),
+    ...(opts.next ? { next: opts.next } : {}),
+  } as RequestInit;
 }
 
 async function parse<T>(res: Response): Promise<T> {
@@ -104,11 +132,13 @@ export const api = {
 /** Liveness ping to the backend's /health/ (outside /api/v1). */
 export async function ping(): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE_URL}/health/`, { cache: 'no-store' });
+    const res = await fetch(`${API_BASE_URL}/health/`, { cache: 'no-store' });
     return res.ok;
   } catch {
     return false;
   }
 }
 
-export { API_ROOT, BASE_URL };
+// `BASE_URL` is re-exported under its original name so existing importers keep
+// working; `lib/api/config` is where it is actually resolved now.
+export { API_ROOT, API_BASE_URL as BASE_URL };

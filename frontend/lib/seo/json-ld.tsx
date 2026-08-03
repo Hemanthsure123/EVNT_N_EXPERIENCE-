@@ -56,6 +56,47 @@ export function eventJsonLd(input: EventJsonLdInput): Record<string, unknown> {
   };
 }
 
+/**
+ * schema.org/ItemList of Events — what a discovery listing (home, city page,
+ * category page) should expose, rather than N loose Event blobs. Each entry
+ * carries the full nested Event so a rich result can render without a crawl of
+ * every detail page.
+ */
+export function eventItemListJsonLd(
+  name: string,
+  events: EventJsonLdInput[],
+): Record<string, unknown> {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name,
+    numberOfItems: events.length,
+    itemListElement: events.map((event, i) => {
+      const { '@context': _context, ...eventNode } = eventJsonLd(event);
+      return { '@type': 'ListItem', position: i + 1, item: eventNode };
+    }),
+  };
+}
+
+/** schema.org/WebSite + SearchAction — the sitelinks search box. */
+export function webSiteJsonLd(input: {
+  name: string;
+  url: string;
+  searchUrlTemplate: string;
+}): Record<string, unknown> {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: input.name,
+    url: input.url,
+    potentialAction: {
+      '@type': 'SearchAction',
+      target: { '@type': 'EntryPoint', urlTemplate: input.searchUrlTemplate },
+      'query-input': 'required name=search_term_string',
+    },
+  };
+}
+
 /** schema.org/BreadcrumbList structured data. */
 export function breadcrumbJsonLd(items: { name: string; url: string }[]): Record<string, unknown> {
   return {

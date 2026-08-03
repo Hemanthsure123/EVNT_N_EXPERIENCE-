@@ -2,9 +2,11 @@ import pytest
 
 from apps.accounts.exceptions import (
     EmailAlreadyRegisteredError,
+    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidTokenError,
 )
+from apps.accounts.models import User
 from apps.accounts.repositories import UserRepository
 from apps.accounts.services import AuthService
 from core.adapters.local.console_email import ConsoleEmailAdapter
@@ -51,10 +53,24 @@ def test_register_rejects_a_duplicate_email_case_insensitively(auth_service):
 @pytest.mark.django_db
 def test_authenticate_returns_the_user_on_correct_credentials(auth_service):
     auth_service.register(email="user@example.com", password="correct-pass")
+    # Registration no longer grants access on its own — the address has to be
+    # proven first. `test_authenticate_refuses_an_unverified_account` below
+    # covers the other side of that.
+    User.objects.filter(email="user@example.com").update(email_verified=True)
 
     user = auth_service.authenticate(email="user@example.com", password="correct-pass")
 
     assert user.email == "user@example.com"
+
+
+@pytest.mark.django_db
+def test_authenticate_refuses_an_unverified_account(auth_service):
+    """Correct password, unproven address — a DISTINCT error so the frontend
+    can offer to resend the code instead of claiming the password is wrong."""
+    auth_service.register(email="unproven@example.com", password="correct-pass")
+
+    with pytest.raises(EmailNotVerifiedError):
+        auth_service.authenticate(email="unproven@example.com", password="correct-pass")
 
 
 @pytest.mark.django_db

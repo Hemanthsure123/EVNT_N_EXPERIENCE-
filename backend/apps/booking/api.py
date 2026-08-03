@@ -21,6 +21,7 @@ from config.di import build_booking_service
 from .exceptions import BookingNotFoundError, NotBookingOwnerError
 from .pagination import MyTicketsCursorPagination
 from .schemas import (
+    AssignAttendeesRequestSerializer,
     BookingDetailSerializer,
     BookingSummarySerializer,
     CreateBookingRequestSerializer,
@@ -57,14 +58,31 @@ class BookingCreateView(APIView):
             idempotency_key=idempotency_key,
         )
 
+        # WHICH PROVIDER, STATED PLAINLY.
+        #
+        # This used to return `RAZORPAY_KEY_ID` unconditionally, and the
+        # frontend's only signal for "can a real checkout happen" was whether
+        # that string was empty. Those are different questions, and a leftover
+        # key in `.env` alongside `PAYMENTS_BACKEND=fake` made them disagree:
+        # the funnel rendered a live "Pay ₹X" button that opened Razorpay
+        # Checkout with a `fake_order_…` id, which Razorpay rejects outright.
+        # A checkout that looks real and cannot work is worse than one that
+        # says what it is, so the backend now names the provider it is actually
+        # configured with and only sends the key when that provider is the one
+        # the key belongs to.
+        is_razorpay = settings.PAYMENTS_BACKEND == "razorpay"
         body = {
             "booking": BookingSummarySerializer(result.booking).data,
             "payment": {
                 "order_id": result.payment_order_id,
                 "amount_minor": result.amount_minor,
                 "currency": result.currency,
-                # Public checkout key for the frontend (safe to expose).
-                "key_id": settings.RAZORPAY_KEY_ID,
+                # "razorpay" | "fake" — what actually created the order above.
+                "provider": settings.PAYMENTS_BACKEND,
+                # Public checkout key for the frontend (safe to expose — it is
+                # the public half; the secret signs webhooks and never leaves
+                # the backend). Empty unless Razorpay is the live provider.
+                "key_id": settings.RAZORPAY_KEY_ID if is_razorpay else "",
             },
         }
         return _no_store(Response(body, status=status.HTTP_201_CREATED))
@@ -93,6 +111,32 @@ class BookingCancelView(APIView):
             booking_id=booking_id, actor_id=cast(User, request.user).id
         )
         return _no_store(Response(BookingSummarySerializer(booking).data))
+
+
+class BookingAttendeesView(APIView):
+    """Name the people a booking's tickets are for, so each gets their own copy.
+
+    Ownership, the paid-booking rule and the "every ticket must belong to this
+    booking" check are all enforced in the service against the locked row —
+    the view only parses.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=AssignAttendeesRequestSerializer, responses={200: TicketSerializer(many=True)}
+    )
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = AssignAttendeesRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_booking_service()
+        tickets = service.assign_attendees(
+            booking_id=booking_id,
+            actor_id=cast(User, request.user).id,
+            assignments=list(payload.validated_data["assignments"]),
+        )
+        return _no_store(Response({"tickets": TicketSerializer(tickets, many=True).data}))
 
 
 class MyTicketsView(APIView):

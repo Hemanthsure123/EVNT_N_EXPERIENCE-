@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from core.tasks import register_task
 
-from .services import DISPATCH_TASK, EVENT_REMINDER_TASK
+from .services import DISPATCH_TASK, EVENT_REMINDER_TASK, SWEEP_STUCK_TASK
 
 
 @register_task(DISPATCH_TASK)
@@ -24,3 +24,15 @@ def send_event_reminder(payload: dict) -> None:
     from config.di import build_reminder_service
 
     build_reminder_service().send_event_reminders(payload["event_id"])
+
+
+@register_task(SWEEP_STUCK_TASK)
+def sweep_stuck(payload: dict) -> None:
+    """Re-enqueue sends claimed but never dispatched. Scheduler-fired; see
+    core/scheduling.py. Idempotent — dispatch re-checks under the row lock."""
+    from config.di import build_notification_service
+
+    build_notification_service().sweep_stuck(
+        older_than_seconds=int(payload.get("older_than_seconds", 300)),
+        limit=int(payload.get("limit", 200)),
+    )

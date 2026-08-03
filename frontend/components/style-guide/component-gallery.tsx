@@ -268,7 +268,7 @@ export function ComponentGallery() {
                   <AvatarFallback>EE</AvatarFallback>
                 </Avatar>
                 <div>
-                  <p className="text-body-sm font-medium">Eventful Collective</p>
+                  <p className="text-body-sm font-medium">Curatix Collective</p>
                   <p className="text-caption text-muted-foreground">Verified organizer</p>
                 </div>
               </div>

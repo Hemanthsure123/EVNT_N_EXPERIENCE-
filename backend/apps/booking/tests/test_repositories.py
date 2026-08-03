@@ -6,7 +6,7 @@ import pytest
 from django.utils import timezone
 
 from apps.booking.models import Booking, BookingStatus
-from apps.booking.repositories import BookingRepository
+from apps.booking.repositories import BookingRepository, TicketRepository
 
 
 @pytest.fixture
@@ -67,3 +67,24 @@ def test_get_detail_loads_event_and_items(repo, booking_service, buyer, event, m
     items = list(detail.items.all())
     assert len(items) == 1
     assert items[0].ticket_type.name == "Gold"
+    # A reserved booking has no tickets yet — prefetched empty, never absent.
+    assert list(detail.tickets.all()) == []
+
+
+@pytest.mark.django_db
+def test_list_for_attendee_assignment_is_one_query_with_the_tier_name(
+    booking_service, buyer, event, make_tier, django_assert_num_queries
+):
+    """The tier name goes into the TICKET_ASSIGNED payload, so it must come
+    back joined — otherwise a ten-seat booking is ten extra queries inside the
+    booking lock."""
+    tier = make_tier(name="Gold", quantity=100)
+    result = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=[{"ticket_type_id": tier.id, "quantity": 3}]
+    )
+    booking_service.confirm_booking(booking_id=result.booking.id, payment_ref="pay_1")
+
+    with django_assert_num_queries(1):
+        tickets = TicketRepository().list_for_attendee_assignment(result.booking.id)
+        assert [t.ticket_type.name for t in tickets] == ["Gold", "Gold", "Gold"]
+        assert all(t.attendee_email == "" for t in tickets)

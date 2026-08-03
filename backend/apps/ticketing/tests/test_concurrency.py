@@ -79,6 +79,99 @@ def test_concurrent_multi_quantity_reserves_never_oversell(ticketing_service, ma
     assert tt.sold + tt.reserved <= tt.quantity  # never exceeds
 
 
+# --- the price decision under contention -----------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_exactly_the_allocated_number_of_early_bird_seats_are_discounted(
+    ticketing_service, make_ticket_type
+):
+    """THE test for this slice: 30 buyers race for 5 early-bird seats.
+
+    Exactly 5 units are billed at the early-bird price and the other 25 at the
+    normal price — no more, no fewer, with zero oversell. If the price were
+    read from the display cache or from a pre-lock read of the tier, several
+    of these threads would all see "sold + reserved = 4" and every one of them
+    would take the discount.
+    """
+    k = 5
+    tt = make_ticket_type(
+        quantity=100,
+        price_minor=50_000,
+        early_bird_price_minor=30_000,
+        early_bird_quantity=k,
+        max_per_order=5,
+    )
+
+    def buy(_i: int) -> int:
+        return ticketing_service.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor
+
+    prices = _run_concurrently(buy, 30)
+
+    assert prices.count(30_000) == k
+    assert prices.count(50_000) == 30 - k
+    tt.refresh_from_db()
+    assert tt.reserved == 30  # every buyer got a seat; only the price differed
+    assert tt.sold + tt.reserved <= tt.quantity
+
+
+@pytest.mark.django_db(transaction=True)
+def test_multi_unit_orders_never_exceed_the_early_bird_allocation(
+    ticketing_service, make_ticket_type
+):
+    """Same race with 2-unit orders against 6 discounted seats: at most 3
+    orders can fit, and no combination of winners can bill more than 6 units
+    at the early-bird price."""
+    k = 6
+    tt = make_ticket_type(
+        quantity=100,
+        price_minor=50_000,
+        early_bird_price_minor=30_000,
+        early_bird_quantity=k,
+        max_per_order=5,
+    )
+
+    def buy(_i: int) -> tuple[int, int]:
+        outcome = ticketing_service.reserve(ticket_type_id=tt.id, quantity=2)
+        return outcome.unit_price_minor, outcome.quantity
+
+    results = _run_concurrently(buy, 20)
+
+    discounted_units = sum(q for price, q in results if price == 30_000)
+    assert discounted_units == k  # 3 orders x 2 units, exactly the allocation
+    assert all(price in (30_000, 50_000) for price, _ in results)
+    tt.refresh_from_db()
+    assert tt.reserved == 40
+    assert tt.sold + tt.reserved <= tt.quantity
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_last_early_bird_seat_and_the_last_ticket_are_decided_together(
+    ticketing_service, make_ticket_type
+):
+    """Both decisions come from the same locked row: 8 buyers, 3 tickets in
+    total and 2 of them discounted. Exactly 3 succeed, of which exactly 2 pay
+    the early-bird price."""
+    tt = make_ticket_type(
+        quantity=3, price_minor=50_000, early_bird_price_minor=30_000, early_bird_quantity=2
+    )
+
+    def buy(_i: int) -> int | None:
+        try:
+            return ticketing_service.reserve(ticket_type_id=tt.id, quantity=1).unit_price_minor
+        except SoldOutError:
+            return None
+
+    prices = _run_concurrently(buy, 8)
+
+    assert prices.count(30_000) == 2
+    assert prices.count(50_000) == 1
+    assert prices.count(None) == 5
+    tt.refresh_from_db()
+    assert tt.reserved == 3
+    assert tt.available == 0
+
+
 @pytest.mark.django_db(transaction=True)
 def test_release_then_reserve_restores_availability(ticketing_service, make_ticket_type):
     tt = make_ticket_type(quantity=1)
@@ -123,3 +216,16 @@ def test_check_constraint_is_the_db_backstop_against_oversell(make_ticket_type):
 
     with pytest.raises(IntegrityError), transaction.atomic():
         TicketType.objects.filter(pk=tt.id).update(reserved=F("reserved") + 5)  # 8+5 > 10
+
+
+@pytest.mark.django_db
+def test_check_constraint_is_the_db_backstop_against_an_overpriced_early_bird(make_ticket_type):
+    """The same defense in depth for the price: an "early bird" above the face
+    price would silently overcharge, so the database refuses it even when the
+    write bypasses the service and its serializer."""
+    from django.db import IntegrityError, transaction
+
+    tt = make_ticket_type(price_minor=50_000, early_bird_price_minor=30_000)
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        TicketType.objects.filter(pk=tt.id).update(early_bird_price_minor=60_000)

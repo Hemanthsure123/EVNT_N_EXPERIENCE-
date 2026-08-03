@@ -1,19 +1,17 @@
 repos:
+  # One tool for both lint and format. black used to do the formatting here
+  # and in CI, while ruff format was already installed as part of the linter —
+  # and the two disagree on a handful of line breaks, so running the obvious
+  # `ruff format` broke CI. They are compatible by design, so consolidating
+  # reformatted five files and changed no behaviour.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
     hooks:
       - id: ruff
         args: [--fix]
         files: ^backend/
-
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
-    hooks:
-      - id: black
+      - id: ruff-format
         files: ^backend/
-        # black ignores its own [tool.black] extend-exclude when files are
-        # passed explicitly (which pre-commit always does) — exclude here too.
-        exclude: ^backend/.*/migrations/
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

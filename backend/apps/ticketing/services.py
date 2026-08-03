@@ -14,6 +14,9 @@ THE RESERVATION CONTRACT (see CLAUDE.md for the canonical version):
   short (no payment call while the lock is held).
 - `release`/`confirm_sold` clamp to the currently-reserved amount, so a
   retry is a safe no-op; exactly-once accounting is the caller's job.
+- `reserve` also decides the PRICE under that same lock (early bird or
+  normal) and returns it as `ReservationOutcome.unit_price_minor`. That is
+  the number to bill — see `pricing.py`.
 
 Availability display (cache + the event's denormalized from_price/
 tickets_available) is refreshed AFTER commit, outside the lock — display is
@@ -35,13 +38,14 @@ from core.events import TICKET_TYPE_ADDED, TICKET_TYPE_SOLD_OUT, TICKET_TYPE_UPD
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    EarlyBirdPriceAbovePriceError,
     InvalidReservationQuantityError,
     NotTicketTypeOwnerError,
     QuantityBelowCommittedError,
     StaleTicketTypeVersionError,
     TicketTypeNotFoundError,
 )
-from .models import TicketType
+from .models import EARLY_BIRD_PRICE_CONSTRAINT, TicketType
 from .repositories import TicketTypeRepository
 from .strategies import ReservationOutcome, ReservationStrategy
 
@@ -54,6 +58,9 @@ _EDITABLE_TIER_FIELDS = (
     "sale_start",
     "sale_end",
     "max_per_order",
+    "early_bird_price_minor",
+    "early_bird_ends_at",
+    "early_bird_quantity",
 )
 
 
@@ -107,12 +114,20 @@ class TicketingService:
         sale_start: datetime | None = None,
         sale_end: datetime | None = None,
         max_per_order: int = 10,
+        early_bird_price_minor: int | None = None,
+        early_bird_ends_at: datetime | None = None,
+        early_bird_quantity: int | None = None,
     ) -> TicketType:
         event = self._events.get_active_for_write(event_id)
         if event is None:
             raise EventNotFoundError(str(event_id))
         if str(event.organization.owner_id) != str(actor_id):
             raise NotTicketTypeOwnerError()
+        # The rule lives here, not only in the serializer: the DB CHECK is the
+        # backstop, but a service caller deserves the domain error, not an
+        # IntegrityError.
+        if early_bird_price_minor is not None and early_bird_price_minor > price_minor:
+            raise EarlyBirdPriceAbovePriceError()
 
         with UnitOfWork() as uow:
             tt = self._ticket_types.create(
@@ -123,6 +138,9 @@ class TicketingService:
                 sale_start=sale_start,
                 sale_end=sale_end,
                 max_per_order=max_per_order,
+                early_bird_price_minor=early_bird_price_minor,
+                early_bird_ends_at=early_bird_ends_at,
+                early_bird_quantity=early_bird_quantity,
             )
             uow.publish(
                 TICKET_TYPE_ADDED,
@@ -160,6 +178,14 @@ class TicketingService:
         # between this read and the update below.
         if "quantity" in applied and applied["quantity"] < (tt.sold + tt.reserved):
             raise QuantityBelowCommittedError()
+        # Both prices are editable and either may be absent from this PATCH, so
+        # the rule is checked against the MERGED row — cutting the face price
+        # below an existing early-bird price is the same error as raising the
+        # early-bird price above it.
+        merged_price = applied.get("price_minor", tt.price_minor)
+        merged_early_bird = applied.get("early_bird_price_minor", tt.early_bird_price_minor)
+        if merged_early_bird is not None and merged_early_bird > merged_price:
+            raise EarlyBirdPriceAbovePriceError()
 
         with UnitOfWork() as uow:
             try:
@@ -169,6 +195,13 @@ class TicketingService:
                     changes=applied,
                 )
             except IntegrityError as exc:
+                # A CHECK fired between the pre-checks above and this UPDATE.
+                # Which one matters: they tell the organizer to do different
+                # things, so the constraint name (the only thing that
+                # distinguishes them at this point) picks the message.
+                if EARLY_BIRD_PRICE_CONSTRAINT in str(exc):
+                    # A concurrent edit moved the other price under us.
+                    raise EarlyBirdPriceAbovePriceError() from exc
                 # no_oversell CHECK fired: a concurrent reserve pushed committed
                 # tickets above the new quantity between the pre-check and here.
                 raise QuantityBelowCommittedError() from exc
@@ -198,7 +231,14 @@ class TicketingService:
     def reserve(self, *, ticket_type_id: uuid.UUID | str, quantity: int) -> ReservationOutcome:
         """Hold `quantity` tickets: quantity moves into `reserved`. Raises
         SaleNotStarted/SaleClosed/ExceedsMaxPerOrder/SoldOut/TicketTypeNotFound.
-        Atomic; decided under the tier's row lock."""
+        Atomic; decided under the tier's row lock.
+
+        The outcome carries `unit_price_minor` — the price this locked decision
+        actually settled on, early bird or normal. Callers that bill for the
+        hold MUST use it rather than a price they read off the tier separately:
+        that read wasn't serialised with anyone else's, so under contention it
+        can quote a discount this reserve did not get.
+        """
         if quantity < 1:
             raise InvalidReservationQuantityError()
 

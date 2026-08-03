@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
+from django.contrib.auth.models import BaseUserManager
 from django.db import IntegrityError
 from django.utils import timezone
 
@@ -39,6 +40,7 @@ from core.events import (
     BOOKING_CANCELLED,
     BOOKING_CONFIRMED,
     BOOKING_CREATED,
+    TICKET_ASSIGNED,
     TICKET_ISSUED,
 )
 from core.ports.cache_port import CachePort
@@ -46,9 +48,11 @@ from core.ports.payment_port import OrderTransfer, PaymentPort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    BookingNotAssignableError,
     BookingNotCancellableError,
     BookingNotFoundError,
     EventNotBookableError,
+    InvalidAttendeeAssignmentsError,
     InvalidBookingItemsError,
     NotBookingOwnerError,
 )
@@ -174,7 +178,6 @@ class BookingService:
         booking_id = uuid.uuid4()
         hold_expires_at = timezone.now() + timedelta(minutes=self._hold_minutes)
         total_quantity = sum(q for _, q, _ in requested)
-        total_amount = sum(q * price for _, q, price in requested)
         platform_fee = self._platform_fee_per_ticket * total_quantity
 
         try:
@@ -182,8 +185,27 @@ class BookingService:
                 # Reserve every item under its per-tier lock. All-or-nothing: any
                 # failure (SoldOut / SaleClosed / ExceedsMaxPerOrder / …) rolls the
                 # whole transaction back, releasing everything reserved so far.
+                #
+                # ── BILL THE PRICE THE LOCK DECIDED, NOT THE ONE WE READ ─────
+                #
+                # `reserve` returns `unit_price_minor` — the price that locked
+                # decision actually settled on, early bird or normal. The price
+                # in `requested` came off an UNLOCKED read a moment earlier, and
+                # under contention those two disagree in both directions: the
+                # last early-bird seat can be taken between the read and the
+                # lock (so we would bill a discount this hold did not get), and
+                # an early-bird tier that was full on read can free up (so we
+                # would overcharge for a seat that qualified).
+                #
+                # This is the same rule the tier counters follow — display is
+                # cached and fast, the DECISION is made under the row lock and
+                # nowhere else — applied to the money rather than to the count.
+                priced: list[tuple] = []
                 for tier_id, quantity, _ in requested:
-                    self._ticketing.reserve(ticket_type_id=tier_id, quantity=quantity)
+                    outcome = self._ticketing.reserve(ticket_type_id=tier_id, quantity=quantity)
+                    priced.append((tier_id, quantity, outcome.unit_price_minor))
+
+                total_amount = sum(q * price for _, q, price in priced)
 
                 booking = self._bookings.create(
                     id=booking_id,
@@ -448,6 +470,153 @@ class BookingService:
                 "booking.tickets_voided", extra={"booking_id": str(booking_id), "count": voided}
             )
         return voided
+
+    # --- AssignAttendees (who each ticket is for) --------------------------
+
+    def assign_attendees(
+        self,
+        *,
+        booking_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        assignments: list[dict],
+    ) -> list[Ticket]:
+        """Name the person each ticket admits, so they get their own copy.
+
+        Somebody who books ten seats is buying for nine other people. Naming
+        them here is what lets `notifications` email each one their own ticket
+        instead of the buyer forwarding a single email with ten QR codes in it.
+
+        The rules, in the order they're checked:
+
+        - Only the buyer may address their own booking's tickets.
+        - The booking must be `paid` — an unpaid hold has no tickets to send.
+        - **Every ticket id must belong to THIS booking.** The ticket ids are
+          the only thing the caller supplies, and without this check a caller
+          could re-address somebody else's ticket to themselves, which is a
+          ticket theft with a form field. This is the important one.
+        - Re-assigning overwrites (people mistype addresses) and clearing is
+          allowed (blank name + blank email = the buyer is going).
+
+        Runs under the BOOKING row lock (the module's lock ordering: booking
+        first, always), which is what makes the "same address doesn't re-send"
+        decision below safe against two forms submitted at once. The lock is
+        uncontended and the section holds no I/O — just one batched UPDATE.
+
+        The buyer's own delivery is untouched: they still receive every ticket
+        for the booking, exactly as before.
+        """
+        with UnitOfWork() as uow:
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None:
+                raise BookingNotFoundError(str(booking_id))
+            if str(booking.user_id) != str(actor_id):
+                raise NotBookingOwnerError()
+            if booking.status != BookingStatus.PAID:
+                raise BookingNotAssignableError(booking.status)
+
+            tickets = {str(t.id): t for t in self._tickets.list_for_attendee_assignment(booking_id)}
+            requested = self._validate_assignments(assignments, tickets)
+
+            changed: list[Ticket] = []
+            newly_addressed: list[Ticket] = []
+            for ticket_id, name, email in requested:
+                ticket = tickets[ticket_id]
+                if ticket.attendee_name == name and ticket.attendee_email == email:
+                    continue  # nothing to write, nothing to send
+                # THE EMAIL is what decides whether a copy needs sending. A
+                # corrected spelling of the same person's name updates the row
+                # and publishes nothing — that address already has this ticket,
+                # and re-sending it every time the buyer touches the form is
+                # how one order becomes a mailbox full of duplicates. Compared
+                # case-insensitively because "Alice@x.com" and "alice@x.com"
+                # are the same human, while the address we STORE keeps the
+                # local part's case, which is not ours to fold away.
+                resend = bool(email) and email.casefold() != ticket.attendee_email.casefold()
+                ticket.attendee_name = name
+                ticket.attendee_email = email
+                changed.append(ticket)
+                if resend:
+                    newly_addressed.append(ticket)
+
+            self._tickets.set_attendees(changed)
+
+            for ticket in newly_addressed:
+                # In the same transaction as the write, so a ticket can never be
+                # addressed to somebody the outbox has no record of telling.
+                uow.publish(
+                    TICKET_ASSIGNED,
+                    {
+                        "ticket_id": str(ticket.id),
+                        "booking_id": str(booking.id),
+                        "event_id": str(booking.event_id),
+                        "attendee_name": ticket.attendee_name,
+                        "attendee_email": ticket.attendee_email,
+                        "ticket_type_name": ticket.ticket_type.name,
+                    },
+                    aggregate_id=str(ticket.id),
+                )
+
+            if changed:
+                record_audit(
+                    actor_id=str(actor_id),
+                    action="booking.attendees_assigned",
+                    target_type="booking",
+                    target_id=str(booking.id),
+                )
+
+        if newly_addressed:
+            logger.info(
+                "booking.attendees_assigned",
+                extra={"booking_id": str(booking.id), "sent_to": len(newly_addressed)},
+            )
+        # The full list, joined for the response DTO — the caller's screen shows
+        # every ticket, not just the ones that moved.
+        return self._tickets.list_for_booking(booking_id)
+
+    def _validate_assignments(
+        self, assignments: list[dict], tickets: dict[str, Ticket]
+    ) -> list[tuple[str, str, str]]:
+        if len(assignments) > len(tickets):
+            # Bounded by the thing itself: you cannot name more attendees than
+            # there are seats, and an unbounded list is an unbounded write.
+            raise InvalidAttendeeAssignmentsError(
+                "More attendees were named than this booking has tickets."
+            )
+
+        seen: set[str] = set()
+        requested: list[tuple[str, str, str]] = []
+        for assignment in assignments:
+            ticket_id = str(assignment["ticket_id"])
+            if ticket_id in seen:
+                # Two entries for one ticket means the client is confused about
+                # who is going; silently letting the last one win would send a
+                # ticket to one of two people with no way to tell which.
+                raise InvalidAttendeeAssignmentsError("Each ticket may appear only once.")
+            seen.add(ticket_id)
+
+            ticket = tickets.get(ticket_id)
+            if ticket is None:
+                raise InvalidAttendeeAssignmentsError(
+                    "A ticket in this request doesn't belong to this booking."
+                )
+
+            name = str(assignment.get("name") or "").strip()
+            email = BaseUserManager.normalize_email(str(assignment.get("email") or "").strip())
+            if bool(name) != bool(email):
+                # Both or neither. A name with no address looks assigned on the
+                # screen and delivers nothing, which is indistinguishable from a
+                # lost email; an address with no name doesn't say who is being
+                # admitted. Neither of the two is a state worth storing.
+                raise InvalidAttendeeAssignmentsError("An attendee needs both a name and an email.")
+            if email and ticket.status != TicketStatus.ACTIVE:
+                # Same rule as "the booking must be paid", one level down: a
+                # used or refunded ticket admits nobody, so mailing it to
+                # somebody is a promise the gate will refuse.
+                raise InvalidAttendeeAssignmentsError(
+                    "A ticket that is no longer active can't be assigned to anyone."
+                )
+            requested.append((ticket_id, name, email))
+        return requested
 
     def _issue_tickets(self, booking: Booking, items: list[BookingItem]) -> list[Ticket]:
         tickets: list[Ticket] = []

@@ -31,6 +31,7 @@ export {
   ModalTrigger,
 } from './modal';
 export { Pagination, type PaginationProps } from './pagination';
+export { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './popover';
 export { RadioGroup, RadioGroupItem } from './radio';
 export {
   Select,

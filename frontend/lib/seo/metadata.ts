@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
-export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+export { SITE_URL } from '@/lib/api/config';
+import { SITE_URL } from '@/lib/api/config';
 export const SITE_NAME = 'Event & Experience Platform';
 const SITE_DESCRIPTION =
   'Discover events and experiences, book tickets in seconds, and get in with a single scan.';

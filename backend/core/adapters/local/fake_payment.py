@@ -8,6 +8,13 @@ HMAC-SHA256 with the configured webhook secret. That keeps the
 security-critical verification path honest under PAYMENTS_BACKEND=fake, so
 tests exercise the real verifier (a correctly-signed webhook passes, a
 mis-signed one is rejected) without any Razorpay credentials.
+
+It also implements `SimulatedPaymentPort.capture`, which is what makes a demo
+payment completable: it models money arriving at the provider, and nothing
+more. It does not confirm bookings or issue tickets — the caller still has to
+go and ASK this adapter (`fetch_payment`) and run the same confirm path a real
+Razorpay payment runs. The real adapter does not implement that interface, so
+no code path can tell Razorpay a payment happened.
 """
 
 from __future__ import annotations
@@ -18,12 +25,18 @@ import itertools
 import logging
 import uuid
 
-from core.ports.payment_port import OrderTransfer, PaymentPort, SplitTransferResult
+from core.ports.payment_port import (
+    OrderTransfer,
+    PaymentPort,
+    ProviderPayment,
+    SimulatedPaymentPort,
+    SplitTransferResult,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class FakePaymentAdapter(PaymentPort):
+class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
     def __init__(self, *, webhook_secret: str = "") -> None:
         self._transfer_ids = itertools.count(1)
         self._linked_account_ids = itertools.count(1)
@@ -31,6 +44,10 @@ class FakePaymentAdapter(PaymentPort):
         self._payout_ids = itertools.count(1)
         self._webhook_secret = webhook_secret
         self.orders: dict[str, dict] = {}
+        # Payments this adapter has been told were completed, keyed by the
+        # id it issued. `fetch_payment` reads this the way the real adapter
+        # reads Razorpay.
+        self.payments: dict[str, dict] = {}
         self.linked_accounts: dict[str, dict] = {}
         # Idempotency ledgers: one id per key, so a repeat call with the same
         # key returns the same id (mirrors Razorpay's idempotency).
@@ -74,6 +91,92 @@ class FakePaymentAdapter(PaymentPort):
     def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
         expected = hmac.new(self._webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
+
+    def capture(self, *, order_id: str, amount_minor: int | None = None) -> str:
+        """Simulate the customer completing payment for an order.
+
+        `SimulatedPaymentPort`, NOT `PaymentPort` — a real provider is told this
+        by the customer's bank, never by us, and `RazorpayPaymentAdapter` has no
+        such method at all. It exists so the fake adapter can model the one
+        thing a fake otherwise cannot: money arriving. `fetch_payment` then
+        reports it exactly as Razorpay would, so every layer above this runs the
+        same code against a fake provider as against a real one.
+
+        ── THE ID IS DERIVED FROM THE ORDER, NOT RANDOM ──────────────────────
+
+        A provider issues ONE payment per successfully captured order. A random
+        id per call would mean a double-tapped demo button produced two distinct
+        payment ids, two `payment.captured:{id}` ledger rows and two `Payment`
+        records for one booking — the second harmless to the customer (the
+        confirm is idempotent, so no second ticket) but corrupting the gross
+        figure `settlements` recomputes from payment records. Deriving the id
+        makes a repeat capture resolve to the SAME id, which the existing ledger
+        then dedupes with no new code.
+
+        It is an HMAC rather than a hash so the id cannot be produced by
+        anything that does not hold the server secret, matching the one thing
+        this fake already does for real (webhook signature verification).
+
+        ── AMOUNT ────────────────────────────────────────────────────────────
+
+        `amount_minor` is passed by the caller because `self.orders` is
+        process-local: the order may well have been created by a different
+        gunicorn worker, or before the last autoreload. Falling back to the
+        stored order keeps the in-process/test path working unchanged.
+        """
+        payment_id = self._payment_id_for(order_id)
+        order = self.orders.get(order_id, {})
+        amount = amount_minor if amount_minor is not None else order.get("amount_minor")
+        self.payments[payment_id] = {
+            "order_id": order_id,
+            "amount_minor": int(amount or 0),
+            "status": "captured",
+        }
+        logger.info("fake_payment.captured", extra={"order_id": order_id, "payment_id": payment_id})
+        return payment_id
+
+    def _payment_id_for(self, order_id: str) -> str:
+        digest = hmac.new(
+            self._webhook_secret.encode(), f"capture:{order_id}".encode(), hashlib.sha256
+        ).hexdigest()
+        return f"fake_pay_{digest[:20]}"
+
+    def fetch_payment(self, *, payment_id: str) -> ProviderPayment | None:
+        record = self.payments.get(payment_id)
+        if record is None:
+            # An id this adapter never issued. Same answer Razorpay gives for
+            # one it never issued, which is what keeps the caller's "unknown
+            # payment" branch exercised in tests.
+            return None
+        status = str(record["status"])
+        return ProviderPayment(
+            payment_id=payment_id,
+            order_id=str(record["order_id"]),
+            amount_minor=int(record["amount_minor"]),
+            status=status,
+            is_captured=status == "captured",
+        )
+
+    def captured_payment_for_order(self, *, order_id: str) -> ProviderPayment | None:
+        """Same question the real adapter answers, against this adapter's own
+        ledger. Note the in-memory caveat: `self.payments` is process-local, so
+        a reconciliation running in the WORKER process cannot see a capture
+        recorded in the WEB process. That is a property of a fake provider, not
+        of the reconciliation — against Razorpay the lookup is a real API call
+        and is process-independent."""
+        for payment_id, record in self.payments.items():
+            if str(record.get("order_id")) != order_id:
+                continue
+            if str(record.get("status")) != "captured":
+                continue
+            return ProviderPayment(
+                payment_id=payment_id,
+                order_id=order_id,
+                amount_minor=int(record.get("amount_minor") or 0),
+                status="captured",
+                is_captured=True,
+            )
+        return None
 
     def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
         # Idempotent: the same key always maps to the same refund id, so a

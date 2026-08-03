@@ -17,7 +17,10 @@ from core.base_repository import BaseRepository
 from .models import TicketType
 
 # Columns the locked reservation path needs — nothing heavy, so the critical
-# section stays tiny.
+# section stays tiny. The price columns are here because the PRICE decision is
+# made under the same lock as the availability decision (see strategies.py): if
+# they were deferred, pricing would either re-query outside the lock or trigger
+# a second fetch on the same row — both defeat the point of holding it.
 _LOCK_FIELDS = (
     "id",
     "event_id",
@@ -27,6 +30,10 @@ _LOCK_FIELDS = (
     "sale_start",
     "sale_end",
     "max_per_order",
+    "price_minor",
+    "early_bird_price_minor",
+    "early_bird_ends_at",
+    "early_bird_quantity",
 )
 
 
@@ -121,6 +128,9 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         sale_start=None,
         sale_end=None,
         max_per_order: int = 10,
+        early_bird_price_minor: int | None = None,
+        early_bird_ends_at=None,
+        early_bird_quantity: int | None = None,
     ) -> TicketType:
         return TicketType.objects.create(
             event_id=event_id,
@@ -130,15 +140,19 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             sale_start=sale_start,
             sale_end=sale_end,
             max_per_order=max_per_order,
+            early_bird_price_minor=early_bird_price_minor,
+            early_bird_ends_at=early_bird_ends_at,
+            early_bird_quantity=early_bird_quantity,
         )
 
     def update_if_version_matches(
         self, *, ticket_type_id: uuid.UUID | str, expected_version: int, changes: dict
     ) -> bool:
         """Optimistic-locked organizer edit (name/price/quantity/sale window/
-        max_per_order). Race-free conditional UPDATE; a mismatch means another
-        editor got there first. The no_oversell CHECK still backstops a quantity
-        reduction that races a reserve."""
+        max_per_order/early bird). Race-free conditional UPDATE; a mismatch means
+        another editor got there first. The no_oversell CHECK still backstops a
+        quantity reduction that races a reserve, and the early-bird CHECK backstops
+        a face-price cut that races an early-bird price edit."""
         updated = (
             self.get_queryset()
             .filter(pk=ticket_type_id, version=expected_version, deleted_at__isnull=True)

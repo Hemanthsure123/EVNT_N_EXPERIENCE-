@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timezone as dt_timezone
+
 import pytest
 
 from apps.notifications.exceptions import TemplateMissingError, UnknownNotificationTypeError
@@ -10,6 +13,7 @@ from apps.notifications.templates import (
     TemplateService,
     channel_for_type,
     dlt_template_id_for_type,
+    format_when,
 )
 
 
@@ -56,6 +60,35 @@ def test_otp_template_has_no_subject_and_carries_the_code():
 def test_missing_template_raises():
     with pytest.raises(TemplateMissingError):
         TemplateService().render(notification_type="does_not_exist", channel="email", context={})
+
+
+def test_event_times_are_rendered_in_local_time_like_the_site(settings):
+    """The email and the ticket PDF must say the same time as the event page
+    the ticket was bought from.
+
+    frontend/lib/discovery/format.ts renders Asia/Kolkata. This used to render
+    UTC, which put the two artifacts nobody can cross-check — the ticket email
+    and the PDF taken to the gate — five and a half hours apart from the page.
+    """
+    settings.NOTIFICATION_DISPLAY_TIMEZONE = "Asia/Kolkata"
+    # The instant the event page renders as "Sun 19 Jul 2026, 23:29".
+    instant = datetime(2026, 7, 19, 17, 59, 21, tzinfo=dt_timezone.utc)
+
+    assert format_when(instant) == "Sun 19 Jul 2026, 23:29 IST"
+
+
+def test_a_naive_datetime_is_read_as_utc_not_as_local(settings):
+    """Guessing local for a naive value would silently shift a correct time."""
+    settings.NOTIFICATION_DISPLAY_TIMEZONE = "Asia/Kolkata"
+
+    assert format_when(datetime(2026, 7, 19, 17, 59, 21)) == "Sun 19 Jul 2026, 23:29 IST"
+
+
+def test_an_unknown_timezone_degrades_the_label_rather_than_the_ticket(settings):
+    """A typo in an env var must not dead-letter a ticket somebody paid for."""
+    settings.NOTIFICATION_DISPLAY_TIMEZONE = "Mars/Olympus_Mons"
+
+    assert format_when(datetime(2026, 7, 19, 17, 59, 21, tzinfo=dt_timezone.utc)).endswith("UTC")
 
 
 def test_dlt_mapping_falls_back_then_honours_overrides(settings):

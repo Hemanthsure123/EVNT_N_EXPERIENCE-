@@ -7,6 +7,7 @@ import { TokensShowcase } from '@/components/style-guide/tokens-showcase';
 import { Container } from '@/components/shell/container';
 import { Footer } from '@/components/shell/footer';
 import { Header } from '@/components/shell/header';
+import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 
 export const metadata: Metadata = pageMetadata(
@@ -26,15 +27,23 @@ export default function StyleGuidePage() {
   return (
     <>
       <Header
-        nav={NAV.map((item) => (
-          <a
-            key={item.href}
-            href={item.href}
-            className="rounded-md px-3 py-2 text-label text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {item.label}
-          </a>
-        ))}
+        // In-page anchors, not routes — so this is a plain `<nav>` rather than
+        // the site header's `NavRail`, whose sliding pill tracks a pathname
+        // that never changes here.
+        nav={
+          <nav aria-label="Style guide sections" className="hidden items-center gap-1 md:flex">
+            {NAV.map((item) => (
+              <a
+                key={item.href}
+                href={item.href}
+                className="rounded-full px-3 py-2 text-body-sm font-medium text-muted-foreground transition-colors duration-fast ease-out hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+        }
+        actions={<ThemeToggle />}
       />
       <main>
         <Container className="flex flex-col gap-16 py-12">

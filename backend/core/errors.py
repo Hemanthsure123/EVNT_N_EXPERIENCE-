@@ -9,6 +9,7 @@ response — the exception handler is the only place that knows about HTTP.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 
 from rest_framework import exceptions as drf_exceptions
@@ -54,11 +55,19 @@ class AuthenticationError(DomainError):
 
 
 def _error_response(
-    *, code: str, message: str, status_code: int, details: dict | None = None
+    *,
+    code: str,
+    message: str,
+    status_code: int,
+    details: dict | None = None,
+    headers: dict | None = None,
 ) -> Response:
-    return Response(
+    response = Response(
         {"error": {"code": code, "message": message, "details": details or {}}}, status=status_code
     )
+    for name, value in (headers or {}).items():
+        response[name] = value
+    return response
 
 
 def exception_handler(exc: Exception, context: dict) -> Response | None:
@@ -71,8 +80,34 @@ def exception_handler(exc: Exception, context: dict) -> Response | None:
     if response is not None:
         code = getattr(exc, "default_code", exc.__class__.__name__.lower())
         message = str(exc) if not isinstance(exc, drf_exceptions.APIException) else str(exc.detail)
+        # DRF attaches protocol headers to some exceptions, and rebuilding the
+        # body used to drop them. Two matter and both are part of the response's
+        # MEANING, not decoration:
+        #
+        # - `Retry-After` on a 429. Without it a throttled client is told "too
+        #   many requests" and given no way to know when to come back, so it
+        #   either gives up or retries immediately and stays throttled. Losing
+        #   it turns a rate limit into an outage for well-behaved clients.
+        # - `WWW-Authenticate` on a 401, which is what tells a client WHICH
+        #   scheme to authenticate with.
+        headers: dict[str, str] = {}
+        wait = getattr(exc, "wait", None)
+        if wait is not None:
+            # Ceil, not floor: DRF's `wait` is fractional, and rounding down
+            # tells a client to retry a moment before the window opens — which
+            # produces a second 429 and, for a client that trusts the header,
+            # a retry loop.
+            headers["Retry-After"] = str(math.ceil(wait))
+        auth_header = getattr(exc, "auth_header", None)
+        if auth_header:
+            headers["WWW-Authenticate"] = auth_header
+
         return _error_response(
-            code=code, message=message, status_code=response.status_code, details={}
+            code=code,
+            message=message,
+            status_code=response.status_code,
+            details={},
+            headers=headers,
         )
 
     error_id = str(uuid.uuid4())

@@ -6,13 +6,16 @@ import pytest
 from django.utils import timezone
 
 from apps.booking.exceptions import (
+    BookingNotAssignableError,
     BookingNotCancellableError,
     EventNotBookableError,
+    InvalidAttendeeAssignmentsError,
     InvalidBookingItemsError,
     NotBookingOwnerError,
 )
 from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
 from apps.booking.qr import verify_ticket_token
+from apps.booking.services import TICKET_ASSIGNED
 from apps.booking.tests.conftest import QR_SECRET
 from apps.ticketing.exceptions import SoldOutError
 from apps.ticketing.repositories import TicketTypeRepository
@@ -296,6 +299,272 @@ def test_confirm_a_cancelled_booking_issues_nothing(booking_service, event, buye
     assert outcome.issued is False
     assert outcome.reason == "hold_expired"
     assert Ticket.objects.filter(booking_id=result.booking.id).count() == 0
+
+
+# --- AssignAttendees (who each ticket is for) ------------------------------
+
+
+def _paid_booking(booking_service, event, buyer, make_tier, quantity=3):
+    """A paid booking with `quantity` issued tickets — the only state in which
+    attendees can be named."""
+    tier = make_tier(name="Gold", quantity=100)
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": quantity}],
+    )
+    outcome = booking_service.confirm_booking(booking_id=result.booking.id, payment_ref="pay_1")
+    return result.booking, outcome.tickets
+
+
+def _assigned_events() -> list[dict]:
+    return list(
+        OutboxEvent.objects.filter(event_type=TICKET_ASSIGNED)
+        .order_by("created_at")
+        .values_list("payload", flat=True)
+    )
+
+
+@pytest.mark.django_db
+def test_assign_attendees_names_tickets_and_publishes_one_event_each(
+    booking_service, event, buyer, make_tier
+):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=3)
+
+    updated = booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[
+            {"ticket_id": tickets[0].id, "name": "Asha Rao", "email": "asha@example.com"},
+            {"ticket_id": tickets[1].id, "name": "Dev Patel", "email": "dev@example.com"},
+        ],
+    )
+
+    by_id = {str(t.id): t for t in updated}
+    assert by_id[str(tickets[0].id)].attendee_name == "Asha Rao"
+    assert by_id[str(tickets[0].id)].attendee_email == "asha@example.com"
+    # The third ticket is untouched: blank means the buyer is going.
+    assert by_id[str(tickets[2].id)].attendee_email == ""
+
+    payloads = _assigned_events()
+    assert len(payloads) == 2
+    first = payloads[0]
+    assert first["ticket_id"] == str(tickets[0].id)
+    assert first["booking_id"] == str(booking.id)
+    assert first["event_id"] == str(event.id)
+    assert first["attendee_name"] == "Asha Rao"
+    assert first["attendee_email"] == "asha@example.com"
+    assert first["ticket_type_name"] == "Gold"
+
+
+@pytest.mark.django_db
+def test_assign_attendees_by_non_owner_is_rejected(
+    booking_service, event, buyer, other_user, make_tier
+):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=1)
+
+    with pytest.raises(NotBookingOwnerError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=other_user.id,
+            assignments=[{"ticket_id": tickets[0].id, "name": "Thief", "email": "t@example.com"}],
+        )
+
+    tickets[0].refresh_from_db()
+    assert tickets[0].attendee_email == ""
+    assert _assigned_events() == []
+
+
+@pytest.mark.django_db
+def test_assign_attendees_rejects_a_ticket_from_another_booking(
+    booking_service, event, buyer, other_user, make_tier
+):
+    """The check that matters: the ticket ids are the only thing the caller
+    supplies, so without this somebody could re-address another person's ticket
+    to their own inbox."""
+    booking, _mine = _paid_booking(booking_service, event, buyer, make_tier, quantity=1)
+    tier = make_tier(name="Silver", quantity=100)
+    theirs = booking_service.create_booking(
+        user_id=other_user.id, event_id=event.id, items=[{"ticket_type_id": tier.id, "quantity": 1}]
+    )
+    stolen = booking_service.confirm_booking(
+        booking_id=theirs.booking.id, payment_ref="pay_theirs"
+    ).tickets[0]
+
+    with pytest.raises(InvalidAttendeeAssignmentsError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=buyer.id,
+            assignments=[{"ticket_id": stolen.id, "name": "Thief", "email": "thief@example.com"}],
+        )
+
+    stolen.refresh_from_db()
+    assert stolen.attendee_email == ""
+    assert _assigned_events() == []
+
+
+@pytest.mark.django_db
+def test_assign_attendees_on_an_unpaid_booking_is_rejected(
+    booking_service, event, buyer, make_tier
+):
+    tier = make_tier(quantity=100)
+    result = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=[{"ticket_type_id": tier.id, "quantity": 2}]
+    )
+
+    with pytest.raises(BookingNotAssignableError):
+        booking_service.assign_attendees(
+            booking_id=result.booking.id,
+            actor_id=buyer.id,
+            assignments=[
+                # A reserved booking has no tickets at all, so any id is wrong —
+                # the booking's own state is what refuses first.
+                {"ticket_id": result.booking.id, "name": "Asha", "email": "asha@example.com"}
+            ],
+        )
+
+    assert _assigned_events() == []
+
+
+@pytest.mark.django_db
+def test_reassigning_the_same_address_publishes_nothing(booking_service, event, buyer, make_tier):
+    """Re-submitting the form must not email the same person the same ticket
+    again — the address is what decides, and it hasn't changed."""
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=2)
+    assignment = [{"ticket_id": tickets[0].id, "name": "Asha Rao", "email": "asha@example.com"}]
+
+    booking_service.assign_attendees(
+        booking_id=booking.id, actor_id=buyer.id, assignments=assignment
+    )
+    booking_service.assign_attendees(
+        booking_id=booking.id, actor_id=buyer.id, assignments=assignment
+    )
+    # Same person, differently cased address and a corrected name: still the
+    # same mailbox, so still no second copy.
+    booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[
+            {"ticket_id": tickets[0].id, "name": "Asha Rao-Iyer", "email": "Asha@Example.com"}
+        ],
+    )
+
+    assert len(_assigned_events()) == 1
+    tickets[0].refresh_from_db()
+    assert tickets[0].attendee_name == "Asha Rao-Iyer"  # the correction landed
+
+
+@pytest.mark.django_db
+def test_reassigning_to_a_new_address_publishes_once(booking_service, event, buyer, make_tier):
+    """People mistype addresses. The corrected one gets its own copy, and
+    exactly one."""
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=2)
+
+    booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[{"ticket_id": tickets[0].id, "name": "Asha", "email": "asha@exmaple.com"}],
+    )
+    booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[{"ticket_id": tickets[0].id, "name": "Asha", "email": "asha@example.com"}],
+    )
+
+    payloads = _assigned_events()
+    assert len(payloads) == 2
+    assert [p["attendee_email"] for p in payloads] == ["asha@exmaple.com", "asha@example.com"]
+
+
+@pytest.mark.django_db
+def test_clearing_an_assignment_is_allowed_and_publishes_nothing(
+    booking_service, event, buyer, make_tier
+):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=1)
+    booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[{"ticket_id": tickets[0].id, "name": "Asha", "email": "asha@example.com"}],
+    )
+
+    booking_service.assign_attendees(
+        booking_id=booking.id,
+        actor_id=buyer.id,
+        assignments=[{"ticket_id": tickets[0].id, "name": "", "email": ""}],
+    )
+
+    tickets[0].refresh_from_db()
+    assert tickets[0].attendee_name == ""
+    assert tickets[0].attendee_email == ""
+    assert len(_assigned_events()) == 1  # the clear sends nobody anything
+
+
+@pytest.mark.django_db
+def test_assign_attendees_rejects_more_attendees_than_tickets(
+    booking_service, event, buyer, make_tier
+):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=2)
+
+    with pytest.raises(InvalidAttendeeAssignmentsError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=buyer.id,
+            assignments=[
+                {"ticket_id": tickets[0].id, "name": "A", "email": "a@example.com"},
+                {"ticket_id": tickets[1].id, "name": "B", "email": "b@example.com"},
+                {"ticket_id": tickets[0].id, "name": "C", "email": "c@example.com"},
+            ],
+        )
+
+    assert _assigned_events() == []
+
+
+@pytest.mark.django_db
+def test_assign_attendees_rejects_the_same_ticket_twice(booking_service, event, buyer, make_tier):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=2)
+
+    with pytest.raises(InvalidAttendeeAssignmentsError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=buyer.id,
+            assignments=[
+                {"ticket_id": tickets[0].id, "name": "A", "email": "a@example.com"},
+                {"ticket_id": tickets[0].id, "name": "B", "email": "b@example.com"},
+            ],
+        )
+
+    assert _assigned_events() == []
+
+
+@pytest.mark.django_db
+def test_assign_attendees_requires_both_a_name_and_an_email(
+    booking_service, event, buyer, make_tier
+):
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=1)
+
+    with pytest.raises(InvalidAttendeeAssignmentsError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=buyer.id,
+            assignments=[{"ticket_id": tickets[0].id, "name": "Asha", "email": ""}],
+        )
+
+
+@pytest.mark.django_db
+def test_assign_attendees_refuses_a_voided_ticket(booking_service, event, buyer, make_tier):
+    """A refunded ticket admits nobody; mailing it to somebody is a promise the
+    gate will refuse."""
+    booking, tickets = _paid_booking(booking_service, event, buyer, make_tier, quantity=1)
+    booking_service.void_tickets_for_booking(booking_id=booking.id)
+
+    with pytest.raises(InvalidAttendeeAssignmentsError):
+        booking_service.assign_attendees(
+            booking_id=booking.id,
+            actor_id=buyer.id,
+            assignments=[{"ticket_id": tickets[0].id, "name": "Asha", "email": "asha@example.com"}],
+        )
+
+    assert _assigned_events() == []
 
 
 @pytest.mark.django_db

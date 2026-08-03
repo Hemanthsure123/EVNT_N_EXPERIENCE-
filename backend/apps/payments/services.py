@@ -14,10 +14,23 @@ deliveries (Razorpay retries), AND booking's `confirm_booking` is itself
 idempotent — so a ticket is never double-issued and a refund never
 double-runs. External calls (refunds) happen OUTSIDE any DB transaction/lock
 and are offloaded to the task queue so the webhook returns fast.
+
+There are three ways a payment reaches fulfilment, and ALL THREE converge on
+`_process_captured` — the same ledger key, the same amount check, the same
+confirm. That convergence is the point: no entry point gets to be the lenient
+one, and adding one cannot issue a second ticket for a payment another already
+fulfilled.
+
+1. `handle_webhook`   — the provider PUSHES a signed fact. The primary path.
+2. `verify_and_confirm` — the server PULLS the same fact. For deployments with
+   no public HTTPS endpoint, where a push can never arrive.
+3. `simulate_capture` — a FAKE provider is told money arrived, then (2) runs.
+   Refused outright whenever a real provider is configured.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import uuid
@@ -25,20 +38,24 @@ from dataclasses import dataclass
 
 from django.db import IntegrityError, transaction
 
+from apps.booking.exceptions import BookingNotFoundError, NotBookingOwnerError
+from apps.booking.models import BookingStatus
 from apps.booking.repositories import BookingRepository
 from apps.booking.services import BookingService
 from core.audit import record_audit
 from core.events import PAYMENT_CONFIRMED, PAYMENT_FAILED, PAYMENT_REFUNDED
-from core.ports.payment_port import PaymentPort
+from core.ports.payment_port import PaymentPort, SimulatedPaymentPort
 from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    BookingNotPayableError,
     InvalidWebhookSignatureError,
     MalformedWebhookError,
     NotAllowedToRefundError,
     PaymentNotFoundError,
     PaymentNotRefundableError,
+    SimulatedPaymentUnavailableError,
 )
 from .models import Payment, PaymentStatus
 from .repositories import PaymentRepository, ProcessedWebhookRepository, RefundRepository
@@ -115,6 +132,254 @@ class PaymentService:
             return WebhookOutcome("duplicate")
 
         return outcome
+
+    # --- STAGE 1b: verify-on-demand, for deployments with no public URL ----
+
+    def verify_and_confirm(self, *, provider_payment_id: str) -> WebhookOutcome:
+        """Ask the provider about a payment and, if it is captured, confirm it.
+
+        ── THIS IS THE SAME TRUST MODEL, NOT A WEAKER ONE ────────────────────
+
+        The rule this module is built on is "never trust the browser", not
+        "only trust a webhook". A webhook is the provider PUSHING a signed
+        fact; this is the server PULLING the same fact over an authenticated
+        outbound call. In both cases the statement "this payment was captured,
+        for this order, for this amount" comes from the provider. What the
+        browser supplies here is one opaque id — a lookup key, never a claim.
+        Every figure used below comes back from `fetch_payment`, and NOTHING
+        the caller sent is trusted beyond that id.
+
+        ── WHY IT HAS TO EXIST ───────────────────────────────────────────────
+
+        A webhook needs a publicly reachable HTTPS endpoint. A laptop, a CI
+        run and a not-yet-DNS'd deployment do not have one, and on those the
+        callback can never arrive — while the customer's money has still left
+        their account. "We cannot receive callbacks yet" is an infrastructure
+        gap; "a customer paid and got nothing" is a money-path failure. Those
+        must not be the same bug, so the fulfilment path does not depend on
+        inbound connectivity.
+
+        ── IT CANNOT DOUBLE-ISSUE WITH THE WEBHOOK ───────────────────────────
+
+        It writes the SAME `payment.captured:{id}` ledger row and runs the
+        SAME `_process_captured` as the webhook. Whichever arrives first does
+        the work; the other is a `duplicate`. So turning the webhook on later
+        needs no change here and cannot issue a second ticket for a payment
+        this already fulfilled — which is exactly what the ledger is for.
+        """
+        if not provider_payment_id:
+            return WebhookOutcome("ignored")
+
+        # The provider is asked BEFORE any DB work: if it does not know this
+        # id, or has not captured it, there is nothing to record.
+        payment = self._port.fetch_payment(payment_id=provider_payment_id)
+        if payment is None:
+            logger.info(
+                "payments.verify.unknown_payment", extra={"payment_id": provider_payment_id}
+            )
+            return WebhookOutcome("ignored")
+        if not payment.is_captured:
+            # `authorized` lands here: the bank has reserved the money and not
+            # yet handed it over. Issuing a ticket now is issuing one against
+            # money that may never arrive.
+            logger.info(
+                "payments.verify.not_captured",
+                extra={"payment_id": provider_payment_id, "status": payment.status},
+            )
+            return WebhookOutcome("not_captured")
+
+        dedupe_key = f"{_EVENT_CAPTURED}:{payment.payment_id}"
+        if self._webhooks.exists(dedupe_key):
+            return WebhookOutcome("duplicate")
+
+        # The entity shape `_process_captured` reads, rebuilt from what the
+        # PROVIDER returned — deliberately identical to the webhook's, so one
+        # code path serves both and neither can drift into being the lenient
+        # one.
+        entity = {
+            "id": payment.payment_id,
+            "order_id": payment.order_id,
+            "amount": payment.amount_minor,
+        }
+        try:
+            with UnitOfWork() as uow:
+                self._webhooks.create(dedupe_key=dedupe_key)
+                return self._process_captured(entity, uow)
+        except IntegrityError:
+            # A webhook (or a concurrent verify) won the unique key; our
+            # transaction rolled back and theirs did the work.
+            return WebhookOutcome("duplicate")
+
+    # --- STAGE 1c: the demo path, for a deployment with no real provider ---
+
+    def simulate_capture(
+        self, *, booking_id: uuid.UUID | str, actor_id: uuid.UUID | str
+    ) -> WebhookOutcome:
+        """Simulate the customer paying for their own booking at the FAKE
+        provider, then fulfil it through the ordinary path.
+
+        ── WHAT MAKES THIS SAFE ──────────────────────────────────────────────
+
+        The browser sends ONE field: which of its own bookings to pay for. It
+        does not send an amount, a status, or a payment id — every one of those
+        is decided server-side. The amount handed to the provider is read off
+        the booking row; the confirmation runs `verify_and_confirm`, which asks
+        the provider what it thinks and uses only the answer. So the browser is
+        no more the authority here than it is on the real path: it asks, the
+        provider states, the server decides.
+
+        ── WHY IT CAPTURES *AND* CONFIRMS IN ONE CALL ────────────────────────
+
+        A real provider does two things: it takes the money, and it tells us it
+        took the money. A fake provider cannot make an outbound call, so the
+        second half has to be driven from here — this stands in for the webhook
+        as well as for the customer. Splitting it into two browser round trips
+        would reintroduce exactly the failure this module exists to prevent: a
+        payment captured at the provider with nothing on our side ever
+        fulfilling it, because a tab closed in between.
+
+        ── AND WHY IT CANNOT DOUBLE-ISSUE ────────────────────────────────────
+
+        Three layers, none of them new: the booking must be `reserved` to be
+        captured at all; the fake provider's payment id is derived from the
+        order, so a repeat capture is the SAME id; and that id writes the SAME
+        `payment.captured:{id}` ledger row the webhook writes, so the second
+        attempt is a `duplicate` before it reaches `confirm_booking` — which is
+        itself idempotent.
+        """
+        port = self._port
+        if not isinstance(port, SimulatedPaymentPort):
+            # A real provider is configured. There is no "simulate" here, and
+            # there must not be: it would be a route to a ticket nobody paid for.
+            raise SimulatedPaymentUnavailableError()
+
+        booking = self._bookings.get_by_id(booking_id)
+        if booking is None:
+            raise BookingNotFoundError(str(booking_id))
+        if str(booking.user_id) != str(actor_id):
+            # Nobody gets to pay for — or fulfil — somebody else's booking.
+            raise NotBookingOwnerError()
+
+        if booking.status == BookingStatus.PAID:
+            # Already fulfilled. Say so rather than capturing a second time:
+            # the confirm would dedupe, but a second capture is a second
+            # payment record against one booking, and `settlements` recomputes
+            # gross from payment records.
+            return WebhookOutcome("already_confirmed")
+        if booking.status != BookingStatus.RESERVED or not booking.payment_order_id:
+            raise BookingNotPayableError(booking.status)
+
+        provider_payment_id = port.capture(
+            order_id=booking.payment_order_id,
+            # From the row, never from the request. This is the figure the
+            # provider will report back and `_process_captured` will check
+            # against the booking — so a tampered request cannot make them agree.
+            amount_minor=booking.total_amount_minor,
+        )
+        logger.info(
+            "payments.simulated_capture",
+            extra={"booking_id": str(booking.id), "payment_id": provider_payment_id},
+        )
+        return self.verify_and_confirm(provider_payment_id=provider_payment_id)
+
+    # --- STAGE 1d: reconciliation — the path that needs no browser at all ---
+
+    def reconcile_pending(self, *, limit: int = 100) -> dict:
+        """Ask the provider about every booking holding an unresolved order,
+        and fulfil (or refund) whatever it says was captured.
+
+        ── THE HOLE THIS CLOSES ──────────────────────────────────────────────
+
+        Stages 1 and 1b both need something to ARRIVE: a webhook needs a public
+        HTTPS endpoint, and `verify_and_confirm` needs the customer's browser
+        to make one more call after Razorpay hands control back. On a
+        deployment with no webhook URL, that browser call was the only path —
+        and it is `void verifyPayment(...).catch(() => {})` in a tab the
+        customer is free to close. A closed tab, a dead battery, a train
+        tunnel, and the money was captured at the provider while this system
+        knew nothing: NO TICKET AND NO REFUND, permanently, with no error
+        anywhere because nothing failed. Every other guard in this module
+        assumes something eventually tells it a payment happened.
+
+        This is the thing that tells it. It needs no inbound connectivity and
+        no browser — only the `payment_order_id` already on the booking row,
+        which is why `captured_payment_for_order` had to exist.
+
+        ── IT DECIDES NOTHING ITSELF ─────────────────────────────────────────
+
+        It finds candidates and asks. Everything after that is
+        `verify_and_confirm`: the same `payment.captured:{id}` ledger row, the
+        same amount check, the same `confirm_booking`. So it cannot issue a
+        ticket the webhook would not have issued, and cannot issue a second one
+        for a payment either of the other two paths already fulfilled.
+
+        ── A CAPTURED PAYMENT FOR A LAPSED HOLD IS A REFUND, NOT A TICKET ────
+
+        If the sweeper released the inventory first, `confirm_booking` returns
+        `hold_expired` and the existing branch schedules the auto-refund. That
+        is the correct outcome and it is the SECOND half of why this job
+        matters: without it, "customer paid, hold lapsed" is not just an
+        unissued ticket, it is money kept for nothing.
+
+        Runs outside any transaction: each candidate is an outbound provider
+        call, and `verify_and_confirm` opens its own short transaction.
+        """
+        from django.conf import settings
+        from django.utils import timezone
+
+        now = timezone.now()
+        candidates = self._bookings.list_awaiting_reconciliation(
+            created_before=now
+            - datetime.timedelta(seconds=settings.PAYMENT_RECONCILE_MIN_AGE_SECONDS),
+            terminal_since=now
+            - datetime.timedelta(minutes=settings.PAYMENT_RECONCILE_GRACE_MINUTES),
+            limit=limit,
+        )
+
+        stats = {"checked": len(candidates), "captured": 0, "confirmed": 0, "refunding": 0}
+
+        for booking_id, order_id in candidates:
+            try:
+                payment = self._port.captured_payment_for_order(order_id=order_id)
+            except Exception:
+                # One unreachable lookup must not stop the rest — the next tick
+                # retries it, and the candidate is still in the window.
+                logger.exception(
+                    "payments.reconcile.lookup_failed",
+                    extra={"booking_id": str(booking_id), "order_id": order_id},
+                )
+                continue
+
+            if payment is None:
+                continue  # nobody paid for this one. The ordinary case.
+
+            stats["captured"] += 1
+            # Deliberately re-fetches the payment by id inside. That is one
+            # extra provider call, paid only on the rare booking that WAS
+            # captured without being fulfilled — and it buys a single trust
+            # path rather than a second, subtly different one that takes a
+            # pre-fetched payment on faith.
+            outcome = self.verify_and_confirm(provider_payment_id=payment.payment_id)
+            if outcome.status in {"confirmed", "already_confirmed"}:
+                stats["confirmed"] += 1
+            elif outcome.status == "hold_expired_refunding":
+                stats["refunding"] += 1
+
+            logger.warning(
+                # WARNING, not INFO: reaching this line means a real payment was
+                # fulfilled by a backstop rather than by the path that should
+                # have caught it. It works, and it should be visible.
+                "payments.reconcile.recovered",
+                extra={
+                    "booking_id": str(booking_id),
+                    "payment_id": payment.payment_id,
+                    "outcome": outcome.status,
+                },
+            )
+
+        if stats["captured"]:
+            logger.warning("payments.reconcile.summary", extra=stats)
+        return stats
 
     def _process(self, event_type: str, entity: dict, uow: UnitOfWork) -> WebhookOutcome:
         if event_type == _EVENT_CAPTURED:

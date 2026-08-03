@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Generates a throwaway self-signed CA + leaf certs so the local Redis and
-# PgBouncer containers can simulate Upstash's TLS (rediss://) and Neon's
+# PgBouncer containers can simulate Upstash's TLS (rediss://) and Supabase's
 # SSL-required pooled Postgres endpoint. Certs are written to
 # docker/dev-tls/certs/, which is gitignored — regenerate any time by
 # deleting that directory and re-running this script. Never used against a
-# real service; production points REDIS_URL/DATABASE_URL at Upstash/Neon's
+# real service; production points REDIS_URL/DATABASE_URL at Upstash/Supabase's
 # own properly CA-signed certs, no code changes needed.
 set -euo pipefail
 

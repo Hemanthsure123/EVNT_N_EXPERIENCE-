@@ -1,0 +1,381 @@
+'use client';
+
+import * as React from 'react';
+import { ChevronRight } from 'lucide-react';
+import {
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
+} from '@/components/ui';
+import { cn } from '@/lib/utils/cn';
+
+/**
+ * The wizard's form primitives.
+ *
+ * Three things every field here does, which is why they are shared rather than
+ * inlined per step:
+ *
+ * 1. **The error is wired to the input, not just printed near it.** A message
+ *    in a `<p>` below an input is invisible to a screen reader unless
+ *    `aria-describedby` points at it and `aria-invalid` marks the field — so
+ *    both are always set here, and no step can forget.
+ * 2. **The counter reserves its line whether or not it is shown.** A counter
+ *    that appears at 80% of the limit pushes everything below it down by one
+ *    line mid-typing, which is a layout shift on a form people are looking at.
+ * 3. **The control itself is the shared `Input` / `Textarea` primitive**, not a
+ *    class string copied into this directory. That is what keeps a field in the
+ *    Studio the same height, radius, border token and focus ring as a field
+ *    anywhere else in the product — including `border-input`, which is the one
+ *    neutral stop that clears the 3:1 non-text requirement against BOTH a white
+ *    surface and the dark ladder. A form's border is its only affordance, and a
+ *    hairline is not enough of one.
+ *
+ * The invalid styling comes from the primitive's own `aria-[invalid=true]`
+ * selector, so setting the ARIA attribute and colouring the border are the same
+ * act and cannot drift apart.
+ */
+
+export function TextField({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  error,
+  max,
+  autoFocus,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+  max?: number;
+  autoFocus?: boolean;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} count={max ? { used: value.length, max } : undefined} />
+      <Input
+        id={id}
+        value={value}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        maxLength={max}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy || undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+export function TextArea({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  error,
+  softMax,
+  rows = 6,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+  /** Advisory, not enforced — the column is a TextField with no length cap. */
+  softMax?: number;
+  rows?: number;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label
+        htmlFor={id}
+        value={label}
+        count={softMax ? { used: value.length, max: softMax, soft: true } : undefined}
+      />
+      <Textarea
+        id={id}
+        rows={rows}
+        value={value}
+        placeholder={placeholder}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy || undefined}
+        onChange={(event) => onChange(event.target.value)}
+        className="resize-y"
+      />
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+export function DateField({
+  id,
+  label,
+  value,
+  onChange,
+  hint,
+  error,
+  min,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  error?: string;
+  min?: string;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} />
+      <Input
+        id={id}
+        type="datetime-local"
+        value={value}
+        min={min}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy || undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+/**
+ * A one-of-many field, wired the same way as the text ones.
+ *
+ * Radix's `Select` is not a native `<select>`, so `htmlFor` alone would not
+ * name it — the label is bound with `aria-labelledby` on the trigger instead,
+ * and clicking the label still focuses it because the trigger carries the id.
+ */
+export function SelectField({
+  id,
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+  hint,
+  error,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: readonly { value: string; label: string }[];
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+  disabled?: boolean;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} />
+      {/* Radix refuses `value=""` (an empty string is how it clears a
+          selection), so an unresolved choice is `undefined` — which is also
+          what makes the placeholder show. */}
+      <Select value={value || undefined} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger
+          id={id}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy || undefined}
+          className={cn(error && 'border-destructive')}
+        >
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+function Label({
+  htmlFor,
+  value,
+  count,
+}: {
+  htmlFor: string;
+  value: string;
+  count?: { used: number; max: number; soft?: boolean };
+}) {
+  const near = count ? count.used / count.max >= 0.8 : false;
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <label htmlFor={htmlFor} className="text-body-sm font-medium text-foreground">
+        {value}
+      </label>
+      {count ? (
+        <span
+          className={cn(
+            'shrink-0 text-caption tabular-nums',
+            // `warning-subtle-foreground`, never `text-warning`: the amber fill
+            // token is 2.15:1 as text on a white page, which is the counter
+            // becoming LESS readable exactly as it starts to matter.
+            near ? 'text-warning-subtle-foreground' : 'text-muted-foreground',
+          )}
+        >
+          {count.used}/{count.max}
+          {count.soft ? ' suggested' : ''}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function Messages({ id, hint, error }: { id: string; hint?: string; error?: string }) {
+  // One reserved line, so an error appearing does not shove the next field
+  // down the page while someone is reading it.
+  return (
+    <p
+      id={error ? `${id}-error` : `${id}-hint`}
+      role={error ? 'alert' : undefined}
+      className={cn('min-h-4 text-caption', error ? 'text-destructive' : 'text-muted-foreground')}
+    >
+      {error ?? hint ?? ''}
+    </p>
+  );
+}
+
+/** A step's heading block — one place, so every step has the same rhythm. */
+export function StepHeader({ title, blurb }: { title: string; blurb: string }) {
+  return (
+    <header className="flex flex-col gap-1.5">
+      <h1 className="text-h3">{title}</h1>
+      <p className="max-w-prose text-body-sm text-muted-foreground">{blurb}</p>
+    </header>
+  );
+}
+
+/**
+ * What a step deliberately does not collect, and why.
+ *
+ * Rendered as a quiet recessed note rather than as disabled inputs: a greyed-out
+ * "Category" field reads as "coming soon, keep checking", whereas a sentence
+ * naming the missing column reads as a decision somebody made. `bg-sunken` is
+ * the one value step DOWN from the canvas in light and the darkest rung in
+ * dark, so in both themes it reads as an aside rather than as content.
+ */
+export function NotStored({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-xl border border-dashed border-border bg-sunken p-card text-caption text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+/**
+ * The panel a server-backed step shows before the draft exists.
+ *
+ * Gallery images, FAQs and the running order all hang off an event id, and
+ * `POST /events` needs a title, venue, city and future start date before it
+ * will issue one. So these steps genuinely cannot work yet — and the honest
+ * response is a sentence saying which fields unlock them, not a disabled form
+ * that looks broken or an upload that 404s.
+ */
+export function NeedsSavedDraft({
+  title,
+  what,
+  missing,
+}: {
+  title: string;
+  what: string;
+  missing: string[];
+}) {
+  return (
+    <div className="flex flex-col gap-stack rounded-xl border border-dashed border-border bg-sunken p-card-lg">
+      <p className="text-body-sm font-medium">{title}</p>
+      <p className="max-w-prose text-body-sm text-muted-foreground">{what}</p>
+      {missing.length ? (
+        <ul className="flex flex-col gap-1">
+          {missing.map((item) => (
+            <li key={item} className="flex items-center gap-2 text-caption text-muted-foreground">
+              <span className="size-1.5 shrink-0 rounded-full bg-border-strong" aria-hidden />
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-caption text-muted-foreground">Saving now — this unlocks in a moment.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A collapsible group inside a step.
+ *
+ * Open by default and remembered per section: a collapsed-by-default form is
+ * how a field nobody expands stays permanently empty. The summary line carries
+ * the count so a collapsed section still says what is in it.
+ *
+ * The disclosure marker is a real icon rather than the `▸` character it used to
+ * be — a text glyph picks up whatever the platform's emoji/symbol font decides,
+ * which is why it rendered at a different size and baseline on every OS.
+ */
+export function Section({
+  title,
+  blurb,
+  count,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  blurb?: string;
+  count?: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details open={defaultOpen} className="group rounded-xl border border-border bg-surface shadow-sm">
+      <summary className="flex min-h-control cursor-pointer list-none items-center gap-3 rounded-xl px-card py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        <span className="min-w-0 flex-1">
+          <span className="block text-body-sm font-semibold">{title}</span>
+          {blurb ? <span className="block text-caption text-muted-foreground">{blurb}</span> : null}
+        </span>
+        {count ? (
+          <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{count}</span>
+        ) : null}
+        <ChevronRight
+          className="size-4 shrink-0 text-muted-foreground transition-transform duration-fast group-open:rotate-90 motion-reduce:transition-none"
+          aria-hidden
+        />
+      </summary>
+      <div className="flex flex-col gap-stack-lg border-t border-border p-card">{children}</div>
+    </details>
+  );
+}

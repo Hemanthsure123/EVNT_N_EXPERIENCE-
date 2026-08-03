@@ -205,6 +205,63 @@ def test_submit_verification_returns_201(authed_client, owner):
 
 
 @pytest.mark.django_db
+def test_reading_verification_before_submitting_is_a_404(authed_client, owner):
+    """A brand-new organization, not an error — it is what tells the UI to
+    offer the form rather than a status."""
+    org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+
+    resp = authed_client.get(f"/api/v1/organizations/{org.id}/verification")
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "verification_not_found"
+
+
+@pytest.mark.django_db
+def test_the_owner_can_read_a_rejection_and_its_reason(authed_client, owner):
+    """The whole point of the endpoint. A rejected organization has NO
+    pending record, so the operator-facing query cannot answer this — and a
+    rejection with no reason shown is one the organizer cannot act on."""
+    repo = OrganizationRepository()
+    org = repo.create(owner_id=owner.id, name="Acme Events")
+    record = repo.create_verification_record(organization_id=org.id)
+    record.status = "rejected"
+    record.notes = "Registration certificate was unreadable."
+    repo.save_verification_record(record)
+
+    body = authed_client.get(f"/api/v1/organizations/{org.id}/verification").json()
+
+    assert body["status"] == "rejected"
+    assert body["notes"] == "Registration certificate was unreadable."
+
+
+@pytest.mark.django_db
+def test_the_latest_submission_wins_over_an_older_one(authed_client, owner):
+    """Re-submitting after a rejection must show PENDING, not the rejection
+    it replaced — otherwise the organizer sees the old refusal forever."""
+    repo = OrganizationRepository()
+    org = repo.create(owner_id=owner.id, name="Acme Events")
+    first = repo.create_verification_record(organization_id=org.id)
+    first.status = "rejected"
+    repo.save_verification_record(first)
+    authed_client.post(f"/api/v1/organizations/{org.id}/verification", {}, format="json")
+
+    assert (
+        authed_client.get(f"/api/v1/organizations/{org.id}/verification").json()["status"]
+        == "pending"
+    )
+
+
+@pytest.mark.django_db
+def test_verification_status_is_never_shared_cached(authed_client, owner):
+    org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+    authed_client.post(f"/api/v1/organizations/{org.id}/verification", {}, format="json")
+
+    resp = authed_client.get(f"/api/v1/organizations/{org.id}/verification")
+
+    assert "no-store" in resp["Cache-Control"]
+
+
+@pytest.mark.django_db
 def test_link_payout_account_returns_200_with_a_linked_account_id(authed_client, owner):
     org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
 
