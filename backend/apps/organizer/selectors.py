@@ -304,6 +304,9 @@ def decorate_bookings(rows: list, *, repository: OrganizerRepository | None = No
             "total_amount_minor": row.total_amount_minor,
             "platform_fee_minor": row.platform_fee_minor,
             "payment_ref": row.payment_ref,
+            # Null unless there is a payment that could actually be refunded.
+            # The UI enables its action on THIS, never on `payment_ref`.
+            "payment_id": getattr(row, "captured_payment_id", None),
             "hold_expires_at": row.hold_expires_at,
             "created_at": row.created_at,
             "quantity": quantities.get(row.id, 0),

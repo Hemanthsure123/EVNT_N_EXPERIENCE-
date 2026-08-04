@@ -19,6 +19,7 @@ import { formatMoney } from '@/lib/discovery/format';
 import type { OrganizerBooking } from '@/lib/api/organizer';
 import { cn } from '@/lib/utils/cn';
 import { TOOLBAR_ICON } from './data-table';
+import { RefundAction } from './refund-action';
 import { BookingBadge } from './status-badge';
 
 /**
@@ -39,17 +40,18 @@ import { BookingBadge } from './status-badge';
  * `cancelled_at`. So those steps say what happened without inventing a
  * timestamp. BACKLOG "Booking state transition timestamps" covers the columns.
  *
- * ── WHY THERE IS NO REFUND BUTTON HERE ────────────────────────────────────
+ * ── THE ONE WRITE, AND WHY IT COULD NOT BE HERE BEFORE ────────────────────
  *
- * `POST /payments/{id}/refund` needs our `Payment.id`. This row carries
- * `payment_ref`, which is Razorpay's id — a different value. Refunding from
- * here would mean guessing, on the money path. The Refunds surface refunds
- * from the payment record, where the id is the right one.
+ * `POST /payments/{id}/refund` needs our `Payment.id`. This row used to carry
+ * only `payment_ref` — Razorpay's id, a DIFFERENT value — so a refund button
+ * here would have meant guessing a handle on the money path. The payload now
+ * carries `payment_id`, computed server-side as the payment that can actually
+ * be refunded, so `RefundAction` enables on a fact rather than an inference.
  *
- * That absence is also why nothing in this panel is a filled pill: every
- * control here navigates, and a near-black button on a support panel would
- * read as "do the thing" on a screen whose only job is to let somebody read a
- * number out loud correctly.
+ * It lives in its own file precisely because everything ELSE on this panel
+ * navigates or copies a reference. That is also why nothing else here is a
+ * filled pill: a near-black button on a support screen whose job is to let
+ * somebody read a number out loud correctly would read as "do the thing".
  */
 export function BookingInspector({
   booking,
@@ -172,6 +174,11 @@ export function BookingInspector({
                   View this customer
                 </Link>
               </Button>
+
+              {/* Renders nothing unless there is a payment that can actually
+                  be returned, so a hold or an already-refunded booking shows
+                  no dead control. */}
+              <RefundAction booking={shown} />
             </div>
           </>
         ) : null}
@@ -192,16 +199,21 @@ function Timeline({ booking }: { booking: OrganizerBooking }) {
   const expires = new Date(booking.hold_expires_at);
   const lapsed = expires.getTime() < Date.now();
 
-  const steps: { icon: LucideIcon; title: string; detail: string; at: Date | null; tone: string }[] =
-    [
-      {
-        icon: Clock,
-        title: 'Tickets held',
-        detail: `${booking.quantity} ticket${booking.quantity === 1 ? '' : 's'} reserved out of inventory`,
-        at: created,
-        tone: 'bg-muted text-muted-foreground',
-      },
-    ];
+  const steps: {
+    icon: LucideIcon;
+    title: string;
+    detail: string;
+    at: Date | null;
+    tone: string;
+  }[] = [
+    {
+      icon: Clock,
+      title: 'Tickets held',
+      detail: `${booking.quantity} ticket${booking.quantity === 1 ? '' : 's'} reserved out of inventory`,
+      at: created,
+      tone: 'bg-muted text-muted-foreground',
+    },
+  ];
 
   if (booking.status === 'paid') {
     steps.push({
@@ -366,7 +378,10 @@ function CopyableId({ label, value }: { label: string; value: string }) {
       className="group inline-flex max-w-full items-center gap-1 rounded-sm font-mono text-caption text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="truncate">{copied ? 'Copied' : value}</span>
-      <Copy className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+      <Copy
+        className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+        aria-hidden
+      />
     </button>
   );
 }

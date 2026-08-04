@@ -2,11 +2,22 @@
 
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ImagePlus, Loader2, Star, Trash2, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ImagePlus,
+  Loader2,
+  Star,
+  Trash2,
+  X,
+} from 'lucide-react';
 import {
   checkFile,
   fetchEventContent,
   removeMedia,
+  reorderMedia,
+  updateMedia,
   uploadMedia,
   type EventMedia,
   type MediaKind,
@@ -46,10 +57,18 @@ import { missingForSave } from './details-step';
  *
  * Cropping, rotation and client-side compression are absent: they are
  * non-destructive edits that need a rendition pipeline to be meaningful, and
- * the API stores exactly the bytes it is given. Reordering by drag is absent
- * because `position` has no PATCH endpoint yet — the up/down controls write
- * the field the API does accept, on create. Both are named at the foot of the
- * step rather than shipped as controls that quietly do nothing.
+ * the API stores exactly the bytes it is given. Video is excluded because the
+ * upload validator is image-only, so offering the kind would guarantee a 422.
+ * Both are named at the foot of the step rather than shipped as controls that
+ * quietly do nothing.
+ *
+ * REORDERING AND ALT-TEXT EDITING ARE REAL NOW. Both were previously absent
+ * for the same honest reason — there was no PATCH on a media row — and both
+ * have one: the whole order is written in a single transaction, so a failed
+ * move cannot leave the gallery half-sorted. Up/down rather than drag, because
+ * the grid is two or three columns at different widths (so "up" is not a fixed
+ * direction on screen) and a drag handle is unusable by keyboard without
+ * reimplementing the entire interaction.
  *
  * ── NOTHING HERE IS THE NEAR-BLACK PILL ───────────────────────────────────
  *
@@ -115,6 +134,35 @@ export function MediaStep({
     onSuccess: () => void client.invalidateQueries({ queryKey: ['event-content', eventId] }),
   });
 
+  const reorder = useMutation({
+    mutationFn: (items: { id: string; position: number }[]) =>
+      reorderMedia(eventId as string, items),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['event-content', eventId] }),
+  });
+
+  const editAlt = useMutation({
+    mutationFn: ({ id, altText }: { id: string; altText: string }) =>
+      updateMedia(eventId as string, id, { alt_text: altText }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['event-content', eventId] }),
+  });
+
+  /**
+   * Swap an image with its neighbour, and send the WHOLE order.
+   *
+   * Positions are only meaningful among siblings of the same kind, so the
+   * swap happens inside the filtered list and the request carries every row
+   * in it renumbered from zero. Sending just the two that moved would leave
+   * the rest of the list holding whatever positions history gave them, which
+   * is how an order drifts until two images claim the same slot.
+   */
+  const move = (list: EventMedia[], index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= list.length) return;
+    const next = [...list];
+    [next[index], next[target]] = [next[target] as EventMedia, next[index] as EventMedia];
+    reorder.mutate(next.map((item, position) => ({ id: item.id, position })));
+  };
+
   // Paste support: an organizer copying a poster from a design tool expects
   // ⌘V to work, and it is the fastest path there is.
   React.useEffect(() => {
@@ -153,13 +201,32 @@ export function MediaStep({
     if (accepted.length) setStaged((current) => [...current, ...accepted]);
   };
 
+  /**
+   * The next free slot for a kind, counting what is already staged.
+   *
+   * `claimed` is bumped per call rather than read back from the query,
+   * because a batch of five is queued in one tick and the cache has not been
+   * invalidated yet — reading it would hand all five the same number.
+   */
+  const claimed = React.useRef<Record<string, number>>({});
+  const nextPosition = (forKind: MediaKind) => {
+    const existing = (content.data?.media ?? []).filter((item) => item.kind === forKind).length;
+    const taken = claimed.current[forKind] ?? 0;
+    claimed.current[forKind] = taken + 1;
+    return existing + taken;
+  };
+
   const start = (file: File, altText: string) => {
     const key = `${file.name}-${Date.now()}-${Math.random()}`;
     const entry: Pending = { key, file, kind, altText, percent: 0, error: null, handle: null };
 
     const handle = uploadMedia(
       eventId as string,
-      { file, kind, altText, position: (content.data?.media.length ?? 0) + 1 },
+      // PER KIND, and incremented across the batch. It used to be
+      // `media.length + 1` for every file in a staged batch, counting media of
+      // ALL kinds — so five files at once all claimed the same position and
+      // only looked ordered because the server falls back to `created_at`.
+      { file, kind, altText, position: nextPosition(kind) },
       (percent) =>
         setPending((current) =>
           current.map((row) => (row.key === key ? { ...row, percent } : row)),
@@ -226,195 +293,203 @@ export function MediaStep({
         </Section>
       ) : (
         <>
-      <div className="flex flex-wrap items-center gap-stack">
-        <label className="text-caption font-medium text-muted-foreground" htmlFor="media-kind">
-          Uploading as
-        </label>
-        <select
-          id="media-kind"
-          value={kind}
-          onChange={(event) => setKind(event.target.value as MediaKind)}
-          className="h-control rounded-md border border-input bg-surface px-2.5 text-body text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-        >
-          {(Object.keys(KIND_LABEL) as MediaKind[])
-            .filter((value) => value !== 'video')
-            .map((value) => (
-              <option key={value} value={value}>
-                {KIND_LABEL[value]}
-              </option>
-            ))}
-        </select>
-        <p className="text-caption text-muted-foreground">
-          One hero, ten gallery images. The server enforces both.
-        </p>
-      </div>
+          <div className="flex flex-wrap items-center gap-stack">
+            <label className="text-caption font-medium text-muted-foreground" htmlFor="media-kind">
+              Uploading as
+            </label>
+            <select
+              id="media-kind"
+              value={kind}
+              onChange={(event) => setKind(event.target.value as MediaKind)}
+              className="h-control rounded-md border border-input bg-surface px-2.5 text-body text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {(Object.keys(KIND_LABEL) as MediaKind[])
+                .filter((value) => value !== 'video')
+                .map((value) => (
+                  <option key={value} value={value}>
+                    {KIND_LABEL[value]}
+                  </option>
+                ))}
+            </select>
+            <p className="text-caption text-muted-foreground">
+              One hero, ten gallery images. The server enforces both.
+            </p>
+          </div>
 
-      <div
-        onDragOver={(event) => {
-          event.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setOver(false);
-          stage(Array.from(event.dataTransfer.files));
-        }}
-        className={cn(
-          'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
-          'transition-colors duration-fast motion-reduce:transition-none',
-          // Armed: the accent edge plus the faintest wash of it. `bg-secondary`
-          // is a neutral grey now, which read as "disabled" rather than "let
-          // go here".
-          over ? 'border-primary bg-primary/5' : 'border-border bg-sunken',
-        )}
-      >
-        <span
-          className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
-          aria-hidden
-        >
-          <ImagePlus className="size-5 text-muted-foreground" />
-        </span>
-        <p className="text-body-sm font-medium">Drop images here, or paste with ⌘V</p>
-        <p className="max-w-sm text-caption text-muted-foreground">
-          JPEG, PNG, WebP, AVIF or GIF, up to 10 MB. Landscape at 1200×800 or larger works best —
-          cards crop to 3:2.
-        </p>
-        <Button variant="outline" onClick={() => inputRef.current?.click()}>
-          Choose files
-        </Button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="sr-only"
-          aria-label="Choose images to upload"
-          onChange={(event) => {
-            stage(Array.from(event.target.files ?? []));
-            event.target.value = '';
-          }}
-        />
-      </div>
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setOver(true);
+            }}
+            onDragLeave={() => setOver(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setOver(false);
+              stage(Array.from(event.dataTransfer.files));
+            }}
+            className={cn(
+              'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
+              'transition-colors duration-fast motion-reduce:transition-none',
+              // Armed: the accent edge plus the faintest wash of it. `bg-secondary`
+              // is a neutral grey now, which read as "disabled" rather than "let
+              // go here".
+              over ? 'border-primary bg-primary/5' : 'border-border bg-sunken',
+            )}
+          >
+            <span
+              className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
+              aria-hidden
+            >
+              <ImagePlus className="size-5 text-muted-foreground" />
+            </span>
+            <p className="text-body-sm font-medium">Drop images here, or paste with ⌘V</p>
+            <p className="max-w-sm text-caption text-muted-foreground">
+              JPEG, PNG, WebP, AVIF or GIF, up to 10 MB. Landscape at 1200×800 or larger works best
+              — cards crop to 3:2.
+            </p>
+            <Button variant="outline" onClick={() => inputRef.current?.click()}>
+              Choose files
+            </Button>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="sr-only"
+              aria-label="Choose images to upload"
+              onChange={(event) => {
+                stage(Array.from(event.target.files ?? []));
+                event.target.value = '';
+              }}
+            />
+          </div>
 
-      {/* Alt text is collected BEFORE the bytes go up — the server refuses a
+          {/* Alt text is collected BEFORE the bytes go up — the server refuses a
           file without it, and text written with the image in mind is real alt
           text rather than "image1". */}
-      {staged.length ? (
-        <section className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
-          <h3 className="text-body-sm font-semibold">
-            Describe {staged.length === 1 ? 'this image' : 'these images'} before uploading
-          </h3>
-          <ul className="flex flex-col gap-stack">
-            {staged.map((file, index) => {
-              const id = `${file.name}-${index}`;
-              return (
-                <li key={id} className="flex flex-col gap-1.5">
-                  <label htmlFor={`alt-${id}`} className="truncate text-caption font-medium">
-                    {file.name}
-                  </label>
-                  <Input
-                    id={`alt-${id}`}
-                    value={altDraft[id] ?? ''}
-                    onChange={(event) =>
-                      setAltDraft((current) => ({ ...current, [id]: event.target.value }))
-                    }
-                    placeholder="What is in the picture? e.g. The main stage at dusk, crowd in front"
+          {staged.length ? (
+            <section className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
+              <h3 className="text-body-sm font-semibold">
+                Describe {staged.length === 1 ? 'this image' : 'these images'} before uploading
+              </h3>
+              <ul className="flex flex-col gap-stack">
+                {staged.map((file, index) => {
+                  const id = `${file.name}-${index}`;
+                  return (
+                    <li key={id} className="flex flex-col gap-1.5">
+                      <label htmlFor={`alt-${id}`} className="truncate text-caption font-medium">
+                        {file.name}
+                      </label>
+                      <Input
+                        id={`alt-${id}`}
+                        value={altDraft[id] ?? ''}
+                        onChange={(event) =>
+                          setAltDraft((current) => ({ ...current, [id]: event.target.value }))
+                        }
+                        placeholder="What is in the picture? e.g. The main stage at dusk, crowd in front"
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="flex flex-wrap gap-stack">
+                <Button
+                  variant="outline"
+                  disabled={staged.some(
+                    (file, index) => !(altDraft[`${file.name}-${index}`] ?? '').trim(),
+                  )}
+                  onClick={() => {
+                    staged.forEach((file, index) =>
+                      start(file, (altDraft[`${file.name}-${index}`] ?? '').trim()),
+                    );
+                    setStaged([]);
+                    setAltDraft({});
+                  }}
+                >
+                  Upload {staged.length === 1 ? 'image' : `${staged.length} images`}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setStaged([]);
+                    setAltDraft({});
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </section>
+          ) : null}
+
+          {pending.length ? (
+            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+              {pending.map((row) => (
+                <li key={row.key}>
+                  <PendingTile
+                    row={row}
+                    onCancel={() => {
+                      row.handle?.cancel();
+                      setPending((current) => current.filter((item) => item.key !== row.key));
+                    }}
+                    onRetry={() => {
+                      setPending((current) => current.filter((item) => item.key !== row.key));
+                      if (!checkFile(row.file)) start(row.file, row.altText);
+                      else setStaged((current) => [...current, row.file]);
+                    }}
                   />
                 </li>
-              );
-            })}
-          </ul>
-          <div className="flex flex-wrap gap-stack">
-            <Button
-              variant="outline"
-              disabled={staged.some(
-                (file, index) => !(altDraft[`${file.name}-${index}`] ?? '').trim(),
-              )}
-              onClick={() => {
-                staged.forEach((file, index) =>
-                  start(file, (altDraft[`${file.name}-${index}`] ?? '').trim()),
-                );
-                setStaged([]);
-                setAltDraft({});
-              }}
-            >
-              Upload {staged.length === 1 ? 'image' : `${staged.length} images`}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setStaged([]);
-                setAltDraft({});
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </section>
-      ) : null}
+              ))}
+            </ul>
+          ) : null}
 
-      {pending.length ? (
-        <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-          {pending.map((row) => (
-            <li key={row.key}>
-              <PendingTile
-                row={row}
-                onCancel={() => {
-                  row.handle?.cancel();
-                  setPending((current) => current.filter((item) => item.key !== row.key));
-                }}
-                onRetry={() => {
-                  setPending((current) => current.filter((item) => item.key !== row.key));
-                  if (!checkFile(row.file)) start(row.file, row.altText);
-                  else setStaged((current) => [...current, row.file]);
-                }}
+          {content.isError ? (
+            <ErrorState
+              message="Could not load this event's media."
+              onRetry={() => void content.refetch()}
+              className="rounded-xl border border-border bg-surface shadow-sm"
+            />
+          ) : content.isPending ? (
+            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 3 }, (_, index) => (
+                <li key={index}>
+                  <Skeleton className="aspect-card w-full rounded-xl" />
+                </li>
+              ))}
+            </ul>
+          ) : media.length === 0 && pending.length === 0 && staged.length === 0 ? (
+            <div className="rounded-xl border border-border bg-surface shadow-sm">
+              <EmptyState
+                icon={ImagePlus}
+                title="No gallery images yet"
+                body="Four or five photographs of the last one sell an event better than any amount of description. A crowd shot works harder than an empty stage."
               />
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {content.isError ? (
-        <ErrorState
-          message="Could not load this event's media."
-          onRetry={() => void content.refetch()}
-          className="rounded-xl border border-border bg-surface shadow-sm"
-        />
-      ) : content.isPending ? (
-        <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }, (_, index) => (
-            <li key={index}>
-              <Skeleton className="aspect-card w-full rounded-xl" />
-            </li>
-          ))}
-        </ul>
-      ) : media.length === 0 && pending.length === 0 && staged.length === 0 ? (
-        <div className="rounded-xl border border-border bg-surface shadow-sm">
-          <EmptyState
-            icon={ImagePlus}
-            title="No gallery images yet"
-            body="Four or five photographs of the last one sell an event better than any amount of description. A crowd shot works harder than an empty stage."
-          />
-        </div>
-      ) : (
-        <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-          {media.map((item) => (
-            <li key={item.id}>
-              <MediaTile media={item} busy={drop.isPending} onRemove={() => drop.mutate(item.id)} />
-            </li>
-          ))}
-        </ul>
-      )}
+            </div>
+          ) : (
+            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+              {media.map((item, index) => (
+                <li key={item.id}>
+                  <MediaTile
+                    media={item}
+                    busy={drop.isPending || reorder.isPending}
+                    onRemove={() => drop.mutate(item.id)}
+                    onMove={(direction) => move(media, index, direction)}
+                    onEditAlt={(altText) => editAlt.mutate({ id: item.id, altText })}
+                    canMoveUp={index > 0}
+                    canMoveDown={index < media.length - 1}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
 
       <NotStored>
         Cropping, rotation and client-side compression are not offered: the API stores exactly the
-        bytes it is given, so a crop here would be destructive rather than a rendition. Drag-to-
-        reorder is absent for the same reason — <code>position</code> is set on upload and has no
-        update endpoint yet. Video is in the model but has no upload path (the validator is
-        image-only), so the kind is not offered. All three are backend dependencies, not omissions.
+        bytes it is given, so a crop here would be destructive rather than a rendition. Video is in
+        the model but has no upload path (the validator is image-only), so the kind is not offered.
+        Both are backend dependencies, not omissions. Reordering and alt-text edits now write
+        through <code>PATCH</code> on the media row.
       </NotStored>
     </div>
   );
@@ -623,18 +698,48 @@ function MediaTile({
   media,
   busy,
   onRemove,
+  onMove,
+  onEditAlt,
+  canMoveUp,
+  canMoveDown,
 }: {
   media: EventMedia;
   busy: boolean;
   onRemove: () => void;
+  /** Swaps this image with its neighbour in the same KIND. Sends the whole
+   *  order in one request, so a failure cannot leave it half-applied. */
+  onMove: (direction: -1 | 1) => void;
+  onEditAlt: (altText: string) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 }) {
   const [armed, setArmed] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [draftAlt, setDraftAlt] = React.useState(media.alt_text);
 
   React.useEffect(() => {
     if (!armed) return;
     const timer = window.setTimeout(() => setArmed(false), 4000);
     return () => window.clearTimeout(timer);
   }, [armed]);
+
+  // Follow the server's value when it changes underneath an idle tile, but
+  // never while somebody is typing into it.
+  React.useEffect(() => {
+    if (!editing) setDraftAlt(media.alt_text);
+  }, [media.alt_text, editing]);
+
+  const commitAlt = () => {
+    const next = draftAlt.trim();
+    setEditing(false);
+    // The server REFUSES a blank alt text, so an empty box is a no-op that
+    // restores what was there rather than a request that comes back 422.
+    if (!next || next === media.alt_text) {
+      setDraftAlt(media.alt_text);
+      return;
+    }
+    onEditAlt(next);
+  };
 
   return (
     <figure className="group flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
@@ -657,12 +762,69 @@ function MediaTile({
 
       <figcaption className="flex min-w-0 flex-1 flex-col gap-1.5 p-card">
         <p className="truncate text-caption text-muted-foreground">{KIND_LABEL[media.kind]}</p>
-        <p className="line-clamp-2 text-body-sm">{media.alt_text}</p>
+
+        {/* Alt text is edited IN PLACE. It used to be fixed at upload, so a
+            typo cost a delete and a re-upload of the same bytes — which is
+            also how alt text quietly becomes "image1": nobody re-uploads a
+            photo to fix a word. */}
+        {editing ? (
+          <Input
+            value={draftAlt}
+            autoFocus
+            onChange={(event) => setDraftAlt(event.target.value)}
+            onBlur={commitAlt}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitAlt();
+              if (event.key === 'Escape') {
+                setDraftAlt(media.alt_text);
+                setEditing(false);
+              }
+            }}
+            aria-label="Alt text"
+            className="h-8 text-body-sm"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="line-clamp-2 rounded-sm text-left text-body-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {media.alt_text}
+          </button>
+        )}
 
         {/* Armed, Keep comes FIRST. The safe way out is the one under the
             pointer that just pressed the trash icon; the irreversible one is
             the one you have to travel to. */}
-        <div className="mt-auto pt-stack">
+        <div className="mt-auto flex items-center gap-1 pt-stack">
+          {/* Up/down rather than drag: the grid is two or three columns at
+              different widths, so "up" is not a fixed direction on screen —
+              and a drag handle is unusable by keyboard without reimplementing
+              the whole interaction. These move within the KIND, because
+              position is only meaningful among siblings. */}
+          {!armed ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={busy || !canMoveUp}
+                onClick={() => onMove(-1)}
+                aria-label={`Move ${media.alt_text || 'this image'} earlier`}
+              >
+                <ArrowUp className="size-4" aria-hidden />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={busy || !canMoveDown}
+                onClick={() => onMove(1)}
+                aria-label={`Move ${media.alt_text || 'this image'} later`}
+              >
+                <ArrowDown className="size-4" aria-hidden />
+              </Button>
+              <span className="flex-1" />
+            </>
+          ) : null}
           {armed ? (
             <span className="flex flex-wrap gap-1.5">
               <Button variant="outline" size="sm" onClick={() => setArmed(false)}>

@@ -111,6 +111,11 @@ export type OrganizerBooking = {
   total_amount_minor: number;
   platform_fee_minor: number;
   payment_ref: string;
+  /** The refundable payment's own id, or null when there is nothing to refund
+   *  (never captured, or already refunded). The refund action enables on THIS,
+   *  never on `payment_ref` — that is the vendor's string and not what
+   *  `POST /payments/{id}/refund` accepts. */
+  payment_id: string | null;
   hold_expires_at: string;
   created_at: string;
   quantity: number;

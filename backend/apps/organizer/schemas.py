@@ -97,6 +97,10 @@ class OrganizerBookingSerializer(serializers.Serializer):
     total_amount_minor = serializers.IntegerField()
     platform_fee_minor = serializers.IntegerField()
     payment_ref = serializers.CharField(allow_blank=True)
+    # The refundable payment's own id, or null. `payment_ref` is the VENDOR's
+    # string and is not what the refund endpoint takes — a UI that guessed one
+    # from the other would be refunding by a handle the API never promised.
+    payment_id = serializers.UUIDField(allow_null=True)
     hold_expires_at = serializers.DateTimeField()
     created_at = serializers.DateTimeField()
     quantity = serializers.IntegerField()

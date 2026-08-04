@@ -170,3 +170,45 @@ export function checkFile(file: File): string | null {
   }
   return null;
 }
+
+/**
+ * Edit a media row after upload — alt text, caption, kind or position.
+ *
+ * `url` is deliberately not editable: the bytes were validated on the way in
+ * (size, declared type, then the leading bytes against that type), and letting
+ * a PATCH swap the address afterwards would walk straight past all three.
+ * Replacing a picture means uploading a new one.
+ */
+export const updateMedia = (
+  eventId: string,
+  mediaId: string,
+  changes: Partial<Pick<EventMedia, 'alt_text' | 'caption' | 'kind' | 'position'>>,
+) => api.patch<EventMedia>(`${base(eventId)}/media/${encodeURIComponent(mediaId)}`, changes);
+
+/**
+ * Reorder a whole collection in ONE request.
+ *
+ * A per-row PATCH per move would leave the order half-applied if any single
+ * call failed — the server writes every position inside one transaction, so
+ * the gallery either reorders or does not.
+ */
+export const reorderMedia = (eventId: string, items: { id: string; position: number }[]) =>
+  api.patch<{ data: EventMedia[] }>(`${base(eventId)}/media`, { items });
+
+/** Fix a typo in a question or answer without deleting and re-adding it,
+ *  which is what the studio had to offer before this existed. */
+export const updateFaq = (
+  eventId: string,
+  faqId: string,
+  changes: Partial<Pick<EventFaq, 'question' | 'answer' | 'position'>>,
+) => api.patch<EventFaq>(`${base(eventId)}/faqs/${encodeURIComponent(faqId)}`, changes);
+
+export const updateTimelineEntry = (
+  eventId: string,
+  entryId: string,
+  changes: Partial<Pick<EventTimelineEntry, 'label' | 'description' | 'starts_at' | 'position'>>,
+) =>
+  api.patch<EventTimelineEntry>(
+    `${base(eventId)}/timeline/${encodeURIComponent(entryId)}`,
+    changes,
+  );

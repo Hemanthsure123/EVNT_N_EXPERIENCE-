@@ -31,7 +31,7 @@ import datetime as dt
 from collections.abc import Iterable, Sequence
 from uuid import UUID
 
-from django.db.models import Count, F, Max, Q, QuerySet, Sum
+from django.db.models import Count, F, Max, OuterRef, Q, QuerySet, Subquery, Sum
 from django.db.models.functions import TruncDate
 
 from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
@@ -345,6 +345,23 @@ class OrganizerRepository:
                 "event__id",
                 "event__title",
                 "event__starts_at",
+            )
+            # The PAYABLE payment's id, so the bookings table can offer a
+            # refund. A SUBQUERY and not a second grouped read: this page's
+            # query budget is enforced at two, and `payment_ref` (the vendor's
+            # string) is not something `POST /payments/{id}/refund` accepts —
+            # refunding by a guessed handle is the mistake this annotation
+            # exists to make impossible.
+            #
+            # `paid` only. A `refunded` payment has nothing left to return and
+            # a `created` one was never captured; offering the action for
+            # either would put a button on a row it cannot act on.
+            .annotate(
+                captured_payment_id=Subquery(
+                    Payment.objects.filter(booking_id=OuterRef("pk"), status=PaymentStatus.PAID)
+                    .order_by("-created_at")
+                    .values("id")[:1]
+                )
             )
             .order_by("-created_at")
         )
