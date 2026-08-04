@@ -28,6 +28,10 @@ _LIST_FIELDS = (
     "net",
     "status",
     "payout_at",
+    # In the lean set because the serializer exposes it. A field the serializer
+    # reads but `.only()` omits is fetched again PER ROW — the same deferred
+    # re-fetch `provider_ref` above is here to avoid.
+    "releasable_at",
     "provider_ref",
     "created_at",
     "event_id",

@@ -23,6 +23,11 @@ class SettlementSerializer(serializers.ModelSerializer):
             "net",
             "status",
             "payout_at",
+            # WHEN it becomes releasable, not just the rule. The payouts screen
+            # was stating the policy ("after the event and the refund window")
+            # because it had no date to show; an organizer asking "when am I
+            # paid" wants the date the scheduler will actually act on.
+            "releasable_at",
             "provider_ref",
             "created_at",
         ]

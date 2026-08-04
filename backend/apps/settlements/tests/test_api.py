@@ -128,3 +128,29 @@ def test_list_query_budget_is_tiny(
     with django_assert_num_queries(2):
         resp = api_client.get(LIST_URL)
     assert resp.status_code == 200
+    # Every serialized field must be in the repository's lean `.only()` set.
+    # `releasable_at` is the one most recently added, and a field the
+    # serializer reads but `.only()` omits is re-fetched PER ROW — which the
+    # budget above would catch only once there were two rows to re-fetch.
+    assert resp.data["data"][0]["releasable_at"] is not None
+
+
+@pytest.mark.django_db
+def test_pending_settlement_reports_when_it_releases(
+    api_client, token_for, organizer, upcoming_event
+):
+    """The organizer's own question is "when am I paid".
+
+    The payouts screen could previously only restate the rule, because the
+    payload carried no date. This is the same instant `release_due_payouts`
+    acts on, so the screen cannot promise a different day from the scheduler.
+    """
+    settlement = _make_settlement(upcoming_event, releasable=False)
+    _auth(api_client, token_for, organizer)
+
+    resp = api_client.get(LIST_URL)
+
+    assert resp.status_code == 200
+    row = next(r for r in resp.data["data"] if r["id"] == str(settlement.id))
+    assert row["status"] == "pending"
+    assert row["releasable_at"] is not None

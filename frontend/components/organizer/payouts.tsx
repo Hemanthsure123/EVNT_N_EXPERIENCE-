@@ -218,6 +218,22 @@ export function Payouts() {
                       <StatusPill tone={TONES[row.status] ?? 'neutral'}>
                         {LABELS[row.status] ?? row.status}
                       </StatusPill>
+                      {/* The DATE, not the rule. A pending row used to say only
+                          "pending", and the rule was restated in a footnote —
+                          so the one question this screen exists to answer
+                          ("when am I paid") had no answer on the row. This is
+                          the same instant the release job acts on. Absent only
+                          while the event has no end date, and then nothing is
+                          claimed. */}
+                      {row.status === 'pending' && row.releasable_at ? (
+                        <span className="mt-1 block whitespace-nowrap text-caption text-muted-foreground">
+                          Releases{' '}
+                          {new Date(row.releasable_at).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                          })}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="hidden max-w-0 px-3 py-2 xl:table-cell">
                       <span className="block truncate font-mono text-caption text-muted-foreground">

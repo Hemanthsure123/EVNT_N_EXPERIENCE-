@@ -346,11 +346,16 @@ export type SettlementStatus = 'pending' | 'paid' | 'failed' | 'zero';
 /**
  * Exactly the fields `SettlementSerializer` returns — no more.
  *
- * `releasable_at`, `attempts` and `error` exist on the model and appear on the
- * ADMIN settlement payload, but are deliberately absent here: retry counts and
- * vendor error strings are operator diagnostics, not something to surface to
- * the organizer whose money it is. Declaring them anyway would have produced a
- * field that is always `undefined` and a UI that renders "attempt 0 of 5".
+ * `releasable_at` is here now: "when do I get paid" is the organizer's own
+ * question, and the payouts screen could previously only restate the RULE
+ * ("after the event and its refund window") because it had no date. It is the
+ * same instant the release job acts on, so it cannot drift from what happens.
+ *
+ * `attempts` and `error` remain deliberately absent, and appear only on the
+ * ADMIN payload: retry counts and vendor error strings are operator
+ * diagnostics, not something to surface to the organizer whose money it is.
+ * Declaring them anyway would have produced a field that is always `undefined`
+ * and a UI that renders "attempt 0 of 5".
  */
 export type OrganizerSettlement = {
   id: string;
@@ -361,6 +366,8 @@ export type OrganizerSettlement = {
   platform_fee: number;
   refunds: number;
   net: number;
+  /** When the scheduler may release it. Null until the event has an end. */
+  releasable_at: string | null;
   payout_at: string | null;
   provider_ref: string;
   created_at: string;

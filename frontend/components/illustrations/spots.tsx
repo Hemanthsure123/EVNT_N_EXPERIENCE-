@@ -101,13 +101,16 @@ function Spot({
       <defs>
         {/* Volume: light at the top-left where the light is, saturated at the
             bottom-right. The same two ramps as the scenes, so the sets match. */}
+        {/* Butter and violet, matching scenes.tsx exactly — see the longer note
+            there for why the old violet-400 -> pink-500 pair had to go. The two
+            sets share one vocabulary or they stop looking like one family. */}
         <linearGradient id={ids.warm} x1="0" y1="0" x2="0.85" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--violet-400))" />
-          <stop offset="100%" stopColor="rgb(var(--pink-500))" />
+          <stop offset="0%" stopColor="rgb(var(--butter-300))" />
+          <stop offset="100%" stopColor="rgb(var(--butter-800))" />
         </linearGradient>
         <linearGradient id={ids.cool} x1="0" y1="0" x2="0.85" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--violet-600))" />
-          <stop offset="100%" stopColor="rgb(var(--violet-800))" />
+          <stop offset="0%" stopColor="rgb(var(--violet-500))" />
+          <stop offset="100%" stopColor="rgb(var(--violet-700))" />
         </linearGradient>
         {/* The specular highlight: light at the top, gone by the middle. This
             is the move that sells "matte solid" over "coloured shape". */}

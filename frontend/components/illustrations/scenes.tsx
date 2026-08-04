@@ -87,15 +87,25 @@ function Scene({
       role="presentation"
     >
       <defs>
-        {/* The brand ramp, soft. These are quiet screens; a saturated
-            illustration here shouts over the sentence that matters. */}
+        {/* Warm is BUTTER, not the old violet-400 -> pink-500.
+            tokens.css retired pink from the semantic layer and demoted violet
+            to a wayfinding accent, and said `--gradient-brand` should "stop
+            shouting" — but every picture in this folder kept painting the loud
+            old brand, which left the illustrations as the last surface still
+            wearing it, on a warm cream page. results-empty.tsx had already
+            diagnosed the result as "a violet bruise" and fixed it for its own
+            halo only. These are quiet screens; a saturated illustration here
+            shouts over the sentence that matters. */}
         <linearGradient id={ids.warm} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--violet-400))" />
-          <stop offset="100%" stopColor="rgb(var(--pink-500))" />
+          <stop offset="0%" stopColor="rgb(var(--butter-300))" />
+          <stop offset="100%" stopColor="rgb(var(--butter-800))" />
         </linearGradient>
+        {/* Cool stays violet — it is the wayfinding accent, so it still reads
+            as "this product" — but starts a step lower so the pair sits in the
+            page rather than on top of it. */}
         <linearGradient id={ids.cool} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--violet-600))" />
-          <stop offset="100%" stopColor="rgb(var(--violet-800))" />
+          <stop offset="0%" stopColor="rgb(var(--violet-500))" />
+          <stop offset="100%" stopColor="rgb(var(--violet-700))" />
         </linearGradient>
         <radialGradient id={ids.ground}>
           <stop offset="0%" stopColor="rgb(var(--overlay))" stopOpacity="0.18" />

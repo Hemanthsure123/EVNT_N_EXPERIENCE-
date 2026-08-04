@@ -117,9 +117,18 @@ export function EmptyState({
   body: string;
   action?: React.ReactNode;
   /**
-   * An override. Every one of the thirty callers omits it, so the default
-   * below is what an empty state on this dashboard actually looks like — the
-   * icon slot had quietly rendered NOTHING everywhere since it was added.
+   * A SUBJECT hint, not a replacement for the illustration.
+   *
+   * This prop used to swap the scene out for a 20px lucide glyph in a grey
+   * square, and its docstring claimed "every one of the thirty callers omits
+   * it". That stopped being true: about two dozen callers now pass one, so
+   * the drawn empty state had silently disappeared from the entire organizer
+   * dashboard and admin console — including empty tickets and empty saved
+   * lists — and every one of them showed the same grey circle.
+   *
+   * Both are worth keeping: the scene carries the tone, the icon says which
+   * list is empty. So the icon is now a small badge ON the scene rather than
+   * instead of it, and no caller had to change.
    */
   icon?: React.ComponentType<{ className?: string }>;
 }) {
@@ -128,19 +137,19 @@ export function EmptyState({
     // working screen: the scene says "nothing here yet" without spending half
     // a viewport saying it, so the next panel stays above the fold.
     <div className="flex flex-col items-center gap-stack px-card py-block-lg text-center">
-      {Icon ? (
-        <span
-          className="inline-flex size-10 items-center justify-center rounded-lg bg-muted"
-          aria-hidden
-        >
-          <Icon className="size-5 text-muted-foreground" />
-        </span>
-      ) : (
-        // "Nothing here yet" rather than "nothing matched": these are lists
-        // waiting to be filled, not searches that failed, and the two scenes
-        // are drawn differently on purpose.
+      {/* "Nothing here yet" rather than "nothing matched": these are lists
+          waiting to be filled, not searches that failed, and the two scenes
+          are drawn differently on purpose. */}
+      <span className="relative inline-flex" aria-hidden>
         <SceneNothingYet className="h-20" />
-      )}
+        {Icon ? (
+          // Sits on the scene's lower-right, on a surface chip so it reads as
+          // a label on the picture rather than a shape floating in it.
+          <span className="absolute -bottom-1 -right-1 inline-flex size-7 items-center justify-center rounded-full border border-border bg-surface shadow-sm">
+            <Icon className="size-3.5 text-muted-foreground" />
+          </span>
+        ) : null}
+      </span>
       <p className="text-body font-medium text-foreground">{title}</p>
       <p className="max-w-sm text-body-sm text-muted-foreground">{body}</p>
       {action}
