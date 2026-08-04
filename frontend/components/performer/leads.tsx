@@ -2,17 +2,7 @@
 
 import * as React from 'react';
 import { useMutation } from '@tanstack/react-query';
-import {
-  CalendarDays,
-  Check,
-  Inbox,
-  MapPin,
-  Search,
-  Send,
-  Users,
-  Wallet,
-  X,
-} from 'lucide-react';
+import { CalendarDays, Check, MapPin, Search, Send, Users, Wallet, X } from 'lucide-react';
 import {
   OCCASION_LABELS,
   submitQuote,
@@ -21,15 +11,11 @@ import {
 } from '@/lib/api/performers';
 import { ApiError } from '@/lib/api/errors';
 import { formatMoney } from '@/lib/discovery/format';
-import {
-  parseDayLocal,
-  useAct,
-  useInvalidatePerformer,
-  usePipeline,
-} from '@/lib/performer/studio';
+import { parseDayLocal, useAct, useInvalidatePerformer, usePipeline } from '@/lib/performer/studio';
 import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
+import { SceneNoResults, SceneNothingYet } from '@/components/illustrations/scenes';
 
 /**
  * The leads inbox.
@@ -97,8 +83,8 @@ export function LeadsInbox({ performerId }: { performerId: string }) {
       <header className="flex flex-col gap-1">
         <h1 className="text-h2">Leads</h1>
         <p className="text-body-sm text-muted-foreground">
-          Briefs from customers whose act, city and budget match yours. Answer with a quote and
-          they compare you against everyone else who did.
+          Briefs from customers whose act, city and budget match yours. Answer with a quote and they
+          compare you against everyone else who did.
         </p>
       </header>
 
@@ -169,12 +155,16 @@ export function LeadsInbox({ performerId }: { performerId: string }) {
         </div>
       ) : leads.length === 0 ? (
         <div className="flex flex-col items-center gap-stack rounded-xl border border-dashed border-border px-card py-section text-center">
-          <span
-            className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
-            aria-hidden
-          >
-            <Inbox className="size-5 text-muted-foreground" />
-          </span>
+          {/* Two different situations, two different pictures. A filter that
+              matched nothing is a SEARCH that failed; an empty inbox is a list
+              waiting to be filled. Drawing one mark for both is how an act
+              owner reads "nobody wants you" into what is actually "clear the
+              filter". */}
+          {pipeline.leads.length ? (
+            <SceneNoResults className="h-24 w-auto sm:h-28" />
+          ) : (
+            <SceneNothingYet className="h-24 w-auto sm:h-28" />
+          )}
           <p className="text-body font-medium">
             {pipeline.leads.length ? 'Nothing matches that' : 'No briefs waiting'}
           </p>
@@ -236,7 +226,7 @@ function FilterChip({
       aria-pressed={active}
       className={cn(
         'inline-flex h-control-sm items-center rounded-full border px-3 text-caption transition-colors duration-fast',
-        'motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none',
         active
           ? 'border-nav-active bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
           : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -439,7 +429,7 @@ function QuoteComposer({
 
   return (
     <div
-      className="fixed inset-0 z-modal flex items-end justify-center bg-overlay/70 p-0 sm:items-center sm:p-4 animate-in fade-in-0"
+      className="fixed inset-0 z-modal flex items-end justify-center bg-overlay/70 p-0 animate-in fade-in-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
@@ -454,7 +444,7 @@ function QuoteComposer({
           // A bottom sheet on a phone, a centred dialog above it. Modals keep
           // the 2xl radius; cards sit one rung down at xl.
           'rounded-t-2xl sm:rounded-2xl',
-          'animate-in slide-in-from-bottom-4 sm:zoom-in-95 motion-reduce:animate-none',
+          'animate-in slide-in-from-bottom-4 motion-reduce:animate-none sm:zoom-in-95',
         )}
       >
         {sent ? (

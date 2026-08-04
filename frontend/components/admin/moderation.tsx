@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Image from 'next/image';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, ExternalLink, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, ExternalLink, ShieldCheck, X } from 'lucide-react';
 import Link from 'next/link';
 import {
   fetchModerationQueue,
@@ -278,7 +278,8 @@ export function ModerationQueue() {
                     ref={(node) => {
                       // Indeterminate is a DOM property, not an attribute —
                       // React cannot set it declaratively.
-                      if (node) node.indeterminate = selected.size > 0 && selected.size < rows.length;
+                      if (node)
+                        node.indeterminate = selected.size > 0 && selected.size < rows.length;
                     }}
                     onChange={() =>
                       setSelected(
@@ -347,7 +348,7 @@ export function ModerationQueue() {
           className={cn(
             'fixed inset-x-0 bottom-4 z-sticky mx-auto flex w-[calc(100%-2rem)] max-w-2xl items-center gap-3',
             'rounded-xl border border-border bg-surface px-card py-2.5 shadow-lg',
-            'animate-in slide-in-from-bottom-2 fade-in-0 motion-reduce:animate-none',
+            'animate-in fade-in-0 slide-in-from-bottom-2 motion-reduce:animate-none',
           )}
         >
           <span className="text-body-sm font-medium tabular-nums">{selected.size} selected</span>
@@ -487,17 +488,31 @@ function ModerationRow({
               event would 404 — the public detail query filters on `live`, and
               previewing an unapproved event as an attendee needs a staff
               override the endpoint does not have (BACKLOG item 51). */}
-          {row.status === 'live' ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            {/* The operator's own screen for this event: its analytics, an
+                edit, and a delete. Always available — unlike the public page,
+                it does not require the event to be live, and it is where the
+                numbers behind a moderation decision actually live. */}
             <Link
-              href={`/events/${row.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={`/admin/events/${row.id}`}
               className="inline-flex w-fit items-center gap-1.5 text-caption text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              View the public page
-              <ExternalLink className="size-3" aria-hidden />
+              Open in console
+              <ArrowUpRight className="size-3" aria-hidden />
             </Link>
-          ) : null}
+
+            {row.status === 'live' ? (
+              <Link
+                href={`/events/${row.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-fit items-center gap-1.5 text-caption text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                View the public page
+                <ExternalLink className="size-3" aria-hidden />
+              </Link>
+            ) : null}
+          </div>
         </div>
       </div>
 

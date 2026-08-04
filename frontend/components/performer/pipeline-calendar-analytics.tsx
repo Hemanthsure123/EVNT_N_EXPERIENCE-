@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useMutation } from '@tanstack/react-query';
-import { CalendarDays, MapPin, Undo2 } from 'lucide-react';
+import { MapPin, Undo2 } from 'lucide-react';
 import {
   OCCASION_LABELS,
   withdrawQuote,
@@ -27,6 +27,7 @@ import {
 import { ErrorState, Skeleton, StatusPill } from '@/components/organizer/primitives';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
+import { SceneNothingYet } from '@/components/illustrations/scenes';
 
 /* ------------------------------------------------------------- pipeline */
 
@@ -165,13 +166,14 @@ function LeadChip({ lead, performerId }: { lead: OpenRequest; performerId: strin
   return (
     <Link
       href={`/studio/${performerId}/leads`}
-      className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-stack-lg shadow-sm transition-colors duration-fast hover:bg-muted motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-stack-lg shadow-sm transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
     >
       <p className="truncate text-body-sm font-medium capitalize">
         {OCCASION_LABELS[lead.occasion] ?? lead.occasion}
       </p>
       <p className="truncate text-caption text-muted-foreground">
-        {lead.city} · {parseDayLocal(lead.event_date).toLocaleDateString('en-IN', {
+        {lead.city} ·{' '}
+        {parseDayLocal(lead.event_date).toLocaleDateString('en-IN', {
           day: 'numeric',
           month: 'short',
         })}
@@ -295,12 +297,9 @@ export function StudioCalendar({ performerId }: { performerId: string }) {
         <Skeleton className="h-64 w-full rounded-xl" />
       ) : entries.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-card py-section text-center">
-          <span
-            className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
-            aria-hidden
-          >
-            <CalendarDays className="size-5 text-muted-foreground" />
-          </span>
+          {/* A diary with nothing in it is a list waiting to be filled, not a
+              failure — the same scene the rest of the product uses for that. */}
+          <SceneNothingYet className="h-24 w-auto sm:h-28" />
           <p className="text-body font-medium">Nothing in the diary</p>
           <p className="max-w-sm text-body-sm text-muted-foreground">
             Confirmed bookings and the briefs you can answer both appear here, with the soonest
@@ -321,9 +320,9 @@ export function StudioCalendar({ performerId }: { performerId: string }) {
       )}
 
       <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-        Blocking out dates you are unavailable is not possible yet — there is nowhere to store
-        them, so a calendar showing you as free would be guessing.{' '}
-        <code>frontend/BACKLOG.md</code> item 74.
+        Blocking out dates you are unavailable is not possible yet — there is nowhere to store them,
+        so a calendar showing you as free would be guessing. <code>frontend/BACKLOG.md</code> item
+        74.
       </p>
     </div>
   );
@@ -348,7 +347,7 @@ function Agenda({
             <li key={`${entry.date}-${index}`}>
               <Link
                 href={entry.href}
-                className="flex items-center gap-4 rounded-xl border border-border bg-surface p-card shadow-sm transition-colors duration-fast hover:bg-muted motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex items-center gap-4 rounded-xl border border-border bg-surface p-card shadow-sm transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
               >
                 <div className="flex size-14 shrink-0 flex-col items-center justify-center rounded-xl bg-sunken">
                   <span className="text-caption uppercase text-muted-foreground">
@@ -427,11 +426,7 @@ export function StudioAnalytics({ performerId }: { performerId: string }) {
       </header>
 
       <dl className="grid gap-stack sm:grid-cols-2 xl:grid-cols-4">
-        <Metric
-          label="Quotes sent"
-          value={stats.isPending ? null : String(sent)}
-          hint="All time"
-        />
+        <Metric label="Quotes sent" value={stats.isPending ? null : String(sent)} hint="All time" />
         <Metric
           label="Win rate"
           value={stats.isPending ? null : stats.winRate === null ? '—' : `${stats.winRate}%`}
@@ -463,8 +458,7 @@ export function StudioAnalytics({ performerId }: { performerId: string }) {
         <h2 className="text-body font-semibold">Where your enquiries stand</h2>
         <ul className="flex flex-col gap-2">
           {LANES.map((lane) => {
-            const count =
-              lane.id === 'leads' ? pipeline.leads.length : pipeline[lane.id].length;
+            const count = lane.id === 'leads' ? pipeline.leads.length : pipeline[lane.id].length;
             const total =
               pipeline.leads.length +
               pipeline.quoted.length +
@@ -537,15 +531,7 @@ export function StudioAnalytics({ performerId }: { performerId: string }) {
   );
 }
 
-function Metric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string | null;
-  hint: string;
-}) {
+function Metric({ label, value, hint }: { label: string; value: string | null; hint: string }) {
   return (
     <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-card shadow-sm">
       <dt className="text-caption uppercase tracking-wide text-muted-foreground">{label}</dt>

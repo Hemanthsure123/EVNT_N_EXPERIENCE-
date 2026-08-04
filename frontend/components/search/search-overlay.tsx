@@ -23,6 +23,7 @@ import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
 import { cn } from '@/lib/utils/cn';
 import { placeAnchoredPanel } from './anchored-position';
 import { RollingHint, useRollingTerm } from './rolling-placeholder';
+import { SceneNoResults } from '@/components/illustrations/scenes';
 
 /**
  * Deep search — a command-palette overlay.
@@ -585,7 +586,13 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           ) : null}
 
           {showEmpty ? (
-            <div className="px-3 py-8 text-center">
+            <div className="flex flex-col items-center px-3 py-8 text-center">
+              {/* The same picture the browse page draws for a search that
+                  found nothing, so the two surfaces answer one situation the
+                  same way. Small here: this is a panel a few hundred pixels
+                  tall, and the scene has to leave room for the way out below
+                  it. */}
+              <SceneNoResults className="mb-stack h-20 w-auto" />
               <p className="text-body text-foreground">
                 Nothing matched &ldquo;{debouncedQuery}&rdquo;
               </p>

@@ -112,7 +112,9 @@ export function VerificationsList() {
       header: 'Requested',
       sortValue: (row) => row.created_at,
       cell: (row) => (
-        <span className="tabular-nums text-muted-foreground">{formatEventDate(row.created_at)}</span>
+        <span className="tabular-nums text-muted-foreground">
+          {formatEventDate(row.created_at)}
+        </span>
       ),
     },
     {
@@ -193,7 +195,18 @@ export function OrganizationsList() {
       header: 'Name',
       searchValue: (row) => row.name,
       sortValue: (row) => row.name.toLowerCase(),
-      cell: (row) => <span className="font-medium text-foreground">{row.name}</span>,
+      // The name is the way IN to the organisation's own dashboard — the
+      // figures its owner sees, which is what an operator investigating one
+      // actually needs. A row that only displays is a row somebody has to
+      // leave the console to act on.
+      cell: (row) => (
+        <Link
+          href={`/admin/organizations/${row.id}`}
+          className="rounded-sm font-medium text-foreground underline-offset-4 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {row.name}
+        </Link>
+      ),
     },
     {
       id: 'verified',
@@ -218,7 +231,9 @@ export function OrganizationsList() {
       header: 'Created',
       sortValue: (row) => row.created_at,
       cell: (row) => (
-        <span className="tabular-nums text-muted-foreground">{formatEventDate(row.created_at)}</span>
+        <span className="tabular-nums text-muted-foreground">
+          {formatEventDate(row.created_at)}
+        </span>
       ),
     },
     {
@@ -288,7 +303,9 @@ export function UsersList() {
       header: 'Joined',
       sortValue: (row) => row.date_joined,
       cell: (row) => (
-        <span className="tabular-nums text-muted-foreground">{formatEventDate(row.date_joined)}</span>
+        <span className="tabular-nums text-muted-foreground">
+          {formatEventDate(row.date_joined)}
+        </span>
       ),
     },
   ];

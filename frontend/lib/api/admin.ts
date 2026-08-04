@@ -1,5 +1,11 @@
 import { api } from './client';
 import type { Paginated } from './types';
+import type {
+  EventAnalytics,
+  OrganizerOverview,
+  OrganizerTimeseries,
+  SeriesMetric,
+} from './organizer';
 
 /**
  * The operator console's read surface (`/api/v1/admin/*`).
@@ -195,9 +201,8 @@ export type ModerationEntry = {
  */
 export type ModerationStatus = 'pending_review' | 'live' | 'rejected' | 'archived';
 
-export const fetchModerationQueue = (
-  params: { status?: ModerationStatus; cursor?: string } = {},
-) => api.get<Paginated<ModerationEntry>>(`/admin/events/pending${query(params)}`);
+export const fetchModerationQueue = (params: { status?: ModerationStatus; cursor?: string } = {}) =>
+  api.get<Paginated<ModerationEntry>>(`/admin/events/pending${query(params)}`);
 
 /** Approve, or reject with a reason the organizer can act on (required). */
 export const moderateEvent = (eventId: string, approve: boolean, note = '') =>
@@ -274,9 +279,8 @@ export type AdminPayment = {
   event_title: string;
 };
 
-export const fetchAdminPayments = (
-  params: { status?: string; q?: string; cursor?: string } = {},
-) => api.get<Paginated<AdminPayment>>(`/admin/payments${query(params)}`);
+export const fetchAdminPayments = (params: { status?: string; q?: string; cursor?: string } = {}) =>
+  api.get<Paginated<AdminPayment>>(`/admin/payments${query(params)}`);
 
 /**
  * A refund RECORD — money already returned.
@@ -304,3 +308,53 @@ export type AdminRefund = {
 
 export const fetchAdminRefunds = (params: { q?: string; cursor?: string } = {}) =>
   api.get<Paginated<AdminRefund>>(`/admin/refunds${query(params)}`);
+
+/* ─────────────────────── one event, as an operator ─────────────────────── */
+
+/**
+ * An operator's view of a single event, and their power over it.
+ *
+ * The two analytics reads return the ORGANIZER's own payloads, which is why
+ * they are typed from `lib/api/organizer` rather than redeclared here. That is
+ * deliberate on the server too: an operator answering "my numbers look wrong"
+ * has to be reading the same numbers the organizer is reading, and a second
+ * shape here would be the first step towards the two disagreeing.
+ */
+export const fetchAdminEventAnalytics = (eventId: string, days = 30) =>
+  api.get<EventAnalytics>(`/admin/events/${encodeURIComponent(eventId)}/analytics?days=${days}`);
+
+export const fetchAdminOrganizationAnalytics = (
+  organizationId: string,
+  params: { metric?: SeriesMetric; days?: number } = {},
+) =>
+  api.get<{ overview: OrganizerOverview; timeseries: OrganizerTimeseries }>(
+    `/admin/organizations/${encodeURIComponent(organizationId)}/analytics${query({
+      metric: params.metric,
+      days: params.days === undefined ? undefined : String(params.days),
+    })}`,
+  );
+
+/**
+ * Edit any event. `version` is the optimistic lock the organizer's own edits
+ * take — an operator editing without one would be exactly the clobber the lock
+ * exists to prevent, and the server refuses a request that omits it.
+ */
+export const updateAdminEvent = (
+  eventId: string,
+  version: number,
+  changes: Record<string, unknown>,
+) =>
+  api.patch<{ id: string; status: string; version: number }>(
+    `/admin/events/${encodeURIComponent(eventId)}`,
+    { version, ...changes },
+  );
+
+/**
+ * Remove an event. SOFT, and the server refuses when anybody holds a place —
+ * `Booking.event` is `PROTECT`, so an event somebody bought a ticket to cannot
+ * be made to vanish without stranding that ticket. The reason is audited.
+ */
+export const deleteAdminEvent = (eventId: string, reason: string) =>
+  api.delete<void>(
+    `/admin/events/${encodeURIComponent(eventId)}?reason=${encodeURIComponent(reason)}`,
+  );
