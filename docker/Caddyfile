@@ -1,0 +1,87 @@
+# TLS termination and the split between the app and the API.
+#
+# ── ONE ORIGIN, TWO UPSTREAMS ─────────────────────────────────────────────
+#
+# Everything under `/api`, `/media`, `/admin` (Django's own admin), `/health`
+# and `/static` goes to the backend; everything else goes to Next.js. Serving
+# both from ONE origin is deliberate — it means the browser makes same-origin
+# API calls, so there is no CORS preflight on the booking path and no
+# third-party-cookie question to answer later.
+#
+# ── WHY THE FORWARDED HEADERS MATTER ──────────────────────────────────────
+#
+# Django is behind this proxy, so it sees Caddy's IP and Caddy's scheme unless
+# told otherwise. Two things break silently when that is wrong: every IP rate
+# limit becomes one shared bucket keyed on the proxy (see `NUM_PROXIES` in
+# ENVIRONMENT_VARIABLES.md), and `request.is_secure()` returns false, which
+# makes Django emit http:// URLs and refuse secure cookies. `X-Forwarded-*` is
+# set here and `NUM_PROXIES=1` is set in `.env`; the two have to agree.
+
+{
+	# An email gets expiry warnings from Let's Encrypt. Blank is allowed and
+	# simply means no warnings — the certificate still issues and renews.
+	email {$ACME_EMAIL}
+}
+
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# ── The backend ─────────────────────────────────────────────────────
+	# `/media` is here because STORAGE_BACKEND=local serves uploads from the
+	# API. On OCI it should be `s3` (see DEPLOY_ORACLE.md §6), in which case
+	# this route simply never gets traffic — harmless, and it means switching
+	# storage back for a local test does not need a proxy change.
+	#
+	# `/admin` IS DELIBERATELY ABSENT, and this is the one routing decision on
+	# this file worth reading twice. Django serves its own admin at `/admin/`
+	# (config/urls.py) and the Next.js OPERATOR CONSOLE is also `/admin` — the
+	# same path, two applications. Sending it to Django would take the console
+	# every operator actually uses off the internet.
+	#
+	# So `/admin` belongs to the console, and Django's admin is not published
+	# at all. That is the safer half of the trade anyway: a session-cookie
+	# admin with model-level delete on a public origin is a large surface for a
+	# tool this platform treats as optional. Reach it over SSH when it is
+	# genuinely needed — DEPLOY_ORACLE.md §11 has the one-line tunnel.
+	#
+	# The console's own API is under `/api/v1/admin/...`, so it matches the
+	# `/api/*` rule below and is unaffected.
+	@backend {
+		path /api/* /media/* /health/* /static/*
+	}
+	handle @backend {
+		reverse_proxy web:8000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+			header_up Host {host}
+		}
+	}
+
+	# ── Everything else is the Next.js app ──────────────────────────────
+	handle {
+		reverse_proxy frontend:3000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+			header_up Host {host}
+		}
+	}
+
+	header {
+		# HSTS is deliberately NOT set here. It is a promise you cannot take
+		# back for `max-age`, and setting it before the domain is confirmed
+		# working over TLS is how a misconfigured first deploy becomes an
+		# unreachable site. Add it once the deployment is stable — one line,
+		# and PRODUCTION_CHECKLIST.md is the right place to gate it.
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		# Caddy advertises itself otherwise; the version is free reconnaissance.
+		-Server
+	}
+
+	# Requests that reached the proxy but never a backend. Without this the
+	# only record of a 502 is in the container that did not answer.
+	log {
+		output stdout
+		format console
+	}
+}

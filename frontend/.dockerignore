@@ -1,0 +1,32 @@
+# Without this file the build context is ~700 MB of `node_modules` and build
+# output, which is slow to upload on a free-tier box AND actively harmful:
+# a host-built `.next` copied into the image would be an amd64 build running on
+# an arm64 server, and `node_modules` would carry native bindings compiled for
+# the wrong platform. The image builds its own.
+node_modules
+.next
+out
+storybook-static
+
+# Test and tooling output — never part of a runtime image.
+coverage
+test-results
+playwright-report
+blob-report
+playwright/.cache
+tsconfig.tsbuildinfo
+
+# Real secrets. `.env.local` holds development credentials and must not be
+# baked into an image; the deployed values arrive as build args (public) and
+# compose env (private). The `.example` templates are harmless but pointless.
+.env
+.env.*
+!.env*.example
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+BACKLOG.md
+DESIGN_SYSTEM.md

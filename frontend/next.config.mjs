@@ -46,6 +46,20 @@ function remotePatterns() {
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  /**
+   * Emit `.next/standalone` — a self-contained server with only the modules it
+   * actually imports.
+   *
+   * This is what makes a deployable image possible at all: without it the
+   * runtime stage has to carry the whole `node_modules` tree (~500 MB on this
+   * project) because `next start` resolves dependencies at request time. With
+   * it, the runner copies one traced folder and the image lands near 200 MB —
+   * which matters on a free-tier box where the boot volume and the network are
+   * both finite.
+   *
+   * `next start` and `next dev` are unaffected; this only ADDS an output.
+   */
+  output: 'standalone',
   // Performance: tree-shake icon imports so we never ship the whole Lucide set.
   experimental: {
     optimizePackageImports: ['lucide-react', 'framer-motion'],

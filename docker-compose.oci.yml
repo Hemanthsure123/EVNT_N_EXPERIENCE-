@@ -1,0 +1,184 @@
+# Single-host deployment: everything on one Oracle Ampere A1 box.
+#
+# Used as an OVERLAY on the production file, never alone:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.oci.yml up -d
+#
+# ── WHY THIS FILE EXISTS ──────────────────────────────────────────────────
+#
+# `docker-compose.yml` is the production topology and deliberately provides no
+# database and no cache: it expects managed ones (Supabase, Upstash), which is
+# the right default and what DEPLOYMENT.md describes. Oracle's Always Free tier
+# has no managed PostgreSQL — its Autonomous Database is Oracle DB, which this
+# application does not speak — so a single-box deployment has to bring its own.
+# That is a legitimate topology, and `core/preflight.py` says so in as many
+# words; it is not the development override wearing a different hat.
+#
+# ── WHY THE SERVICES ARE NOT NAMED `postgres` AND `redis` ─────────────────
+#
+# Because preflight REFUSES to boot production when the database host is one of
+# `postgres`, `pgbouncer`, `redis` or `db`. That guard exists because
+# `docker-compose.override.yml` auto-loads, and a production process quietly
+# talking to the development containers — holding real credentials while every
+# read and write goes to an empty box — was the worst thing the readiness audit
+# found. The guard cannot tell "the override leaked in" from "I meant it", so
+# these are named `eventful-db` and `eventful-cache`: unambiguous, and outside
+# the blocked set.
+#
+# ── WHAT IS STILL EXTERNAL ────────────────────────────────────────────────
+#
+# Object storage. `STORAGE_BACKEND=local` is refused in production because
+# uploads would land on the container filesystem and vanish on the next deploy,
+# taking every event poster with them. OCI Object Storage speaks the S3 API and
+# is in the Always Free tier — see DEPLOY_ORACLE.md §6.
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────
+  # No PgBouncer. It exists in development to prove the app works behind a
+  # transaction pooler (Supabase's own topology); with the database on the same
+  # host and `CONN_MAX_AGE` doing the reuse, a pooler here would be a second
+  # process to run and monitor for no benefit.
+  eventful-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # NOT published to the host. The only things that need it are on this
+    # network, and a Postgres reachable from the internet on a box whose
+    # firewall somebody will eventually widen is not worth the convenience.
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eventful}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-eventful}
+      # Postgres builds its collation indexes from these; changing them later
+      # means a reindex, so they are pinned rather than inherited from the host.
+      LANG: C.UTF-8
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - eventful-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `-U` matters: without it pg_isready asks for a role named after the
+      # container user and reports the server down while it is perfectly fine.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eventful} -d ${POSTGRES_DB:-eventful}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Redis ───────────────────────────────────────────────────────────────
+  # Cache, rate-limit counters and the stampede locks. Not a queue: the worker
+  # polls the outbox in Postgres, so losing Redis costs latency, not work.
+  eventful-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    # `--appendonly no`: everything in here is derivable from Postgres, so
+    # paying for fsyncs to persist a cache is cost without a benefit. The
+    # maxmemory policy makes it behave like a cache under pressure rather than
+    # refusing writes, which is what an unbounded Redis does when it fills.
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── The three backend processes ─────────────────────────────────────────
+  # Only the dependency wiring is added here; the commands, the healthcheck and
+  # the `env_file` all come from docker-compose.yml and are not restated, so
+  # there is one definition of how the backend runs.
+  # Caddy reaches this over the compose network, so nothing here needs to be
+  # published to the world. The base file publishes `${WEB_PORT:-8000}:8000`,
+  # and compose APPENDS port lists across files rather than replacing them —
+  # so the way to close it is the variable, not an override. `.env` sets
+  #
+  #   WEB_PORT=127.0.0.1:8000
+  #
+  # which binds gunicorn to loopback only: unreachable from the internet, still
+  # reachable over an SSH tunnel for a shell or a one-off management command.
+  web:
+    depends_on:
+      eventful-db:
+        condition: service_healthy
+      eventful-cache:
+        condition: service_healthy
+
+  scheduler:
+    depends_on:
+      eventful-db:
+        condition: service_healthy
+      eventful-cache:
+        condition: service_healthy
+
+  worker:
+    depends_on:
+      eventful-db:
+        condition: service_healthy
+      eventful-cache:
+        condition: service_healthy
+
+  migrate:
+    depends_on:
+      eventful-db:
+        condition: service_healthy
+
+  # ── The Next.js frontend ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # BAKED IN AT BUILD TIME. Changing any of these needs a rebuild, not a
+        # restart — see the note at the top of frontend/Dockerfile.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set in .env}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set in .env}
+        NEXT_PUBLIC_MEDIA_BASE_URL: ${NEXT_PUBLIC_MEDIA_BASE_URL:-}
+        NEXT_PUBLIC_RAZORPAY_KEY_ID: ${NEXT_PUBLIC_RAZORPAY_KEY_ID:-}
+        NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}
+    image: eventful-frontend:latest
+    restart: unless-stopped
+    expose:
+      - "3000"
+    healthcheck:
+      # `/` and not a bespoke health route: it exercises the actual render path,
+      # so a server that boots but cannot render is reported unhealthy.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      - web
+
+  # ── TLS and routing ─────────────────────────────────────────────────────
+  # Caddy obtains and renews a Let's Encrypt certificate on its own, which is
+  # the entire reason it is here rather than nginx: a certificate nobody has to
+  # remember to renew is one fewer way for the site to go down in ninety days.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # QUIC. Harmless if the security list does not allow UDP; simply unused.
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account key. WITHOUT THIS VOLUME every
+      # restart re-issues a certificate and Let's Encrypt's rate limit (5 per
+      # domain per week) locks the site out of HTTPS by the fifth deploy.
+      - eventful-caddy-data:/data
+      - eventful-caddy-config:/config
+    environment:
+      # Caddy reads these two from its own environment, not from `.env` — it is
+      # not a backend service and does not share that file.
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN, or use :80 for an IP-only host}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    depends_on:
+      - web
+      - frontend
+
+volumes:
+  eventful-pgdata:
+  eventful-caddy-data:
+  eventful-caddy-config:
