@@ -71,19 +71,33 @@ export function TicketPanel({
   eventId,
   initialTiers,
   className,
+  preview = false,
 }: {
   eventId: string;
   /** The server's first response — real numbers on first paint. */
   initialTiers: TicketTier[];
   className?: string;
+  /**
+   * Rendered inside the Studio's preview of an unpublished draft.
+   *
+   * Two things have to stop: the live availability poll (a draft's tiers may
+   * not exist on the server at all, so the request would 404 in a loop), and
+   * the buy action (there is nothing to buy yet). Everything else — the tier
+   * rows, prices, phase badges, the sold-out and urgency states — renders
+   * exactly as a visitor will see it, which is the whole point of the preview.
+   */
+  preview?: boolean;
 }) {
   const query = useQuery({
     queryKey: ['event-tiers', eventId],
     queryFn: () => fetchEventTiers(eventId),
     initialData: { data: initialTiers },
     staleTime: 0,
-    refetchOnWindowFocus: true,
-    refetchInterval: REFRESH_MS,
+    // A preview holds the draft's own tiers and must never ask the server for
+    // them: `enabled: false` keeps `initialData` as the answer forever.
+    enabled: !preview,
+    refetchOnWindowFocus: !preview,
+    refetchInterval: preview ? false : REFRESH_MS,
   });
 
   const summary = summariseTiers(query.data?.data);
@@ -196,7 +210,20 @@ export function TicketPanel({
         than making someone choose twice.
       */}
       <div className="flex flex-col gap-2">
-        {state.kind === 'sold_out' || !selected ? (
+        {preview ? (
+          // The real control, inert. Rendering the live pill would offer a
+          // checkout for an event that does not exist yet; hiding it would
+          // misrepresent the page being previewed. So it keeps its size and
+          // position — the thing the preview exists to show — and says why it
+          // cannot be pressed.
+          <Button
+            size="lg"
+            disabled
+            className="h-control-lg w-full rounded-full bg-cta px-pill-lg text-cta-foreground"
+          >
+            Book tickets
+          </Button>
+        ) : state.kind === 'sold_out' || !selected ? (
           <Button
             size="lg"
             variant="outline"
@@ -224,7 +251,9 @@ export function TicketPanel({
         )}
         <p className="flex items-start gap-2 text-caption text-foreground-subtle">
           <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          Availability is re-checked when you book — nothing is held until then.
+          {preview
+            ? 'Preview — this is how the panel will look once the event is live.'
+            : 'Availability is re-checked when you book — nothing is held until then.'}
         </p>
       </div>
 

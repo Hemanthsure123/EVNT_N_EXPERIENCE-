@@ -113,12 +113,24 @@ class EventService:
         return self._storage.upload(path=path, content=poster.read(), content_type=content_type)
 
     def _load_owned_for_write(
-        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        require_owner: bool = True,
     ) -> Event:
+        """Load an event this actor may write to.
+
+        `require_owner=False` is for a PLATFORM OPERATOR acting through
+        `EventModerationService`, which proves staff for itself before calling
+        in. It is a keyword-only argument with an owner-checking default so the
+        skip can never happen by forgetting an argument — the caller has to
+        name it, and only one caller does.
+        """
         event = self._events.get_active_for_write(event_id)
         if event is None:
             raise EventNotFoundError(str(event_id))
-        if str(event.organization.owner_id) != str(actor_id):
+        if require_owner and str(event.organization.owner_id) != str(actor_id):
             raise NotEventOwnerError()
         return event
 
@@ -206,8 +218,11 @@ class EventService:
         expected_version: int,
         changes: dict,
         poster: UploadedFile | None = None,
+        require_owner: bool = True,
     ) -> Event:
-        event = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
+        event = self._load_owned_for_write(
+            event_id=event_id, actor_id=actor_id, require_owner=require_owner
+        )
 
         applied_changes = {k: v for k, v in changes.items() if k in _EDITABLE_FIELDS}
         poster_url = self._upload_poster(event.id, poster) if poster is not None else None
@@ -524,6 +539,108 @@ class EventModerationService:
         if refreshed is None:  # pragma: no cover
             raise EventNotFoundError(str(event_id))
         return refreshed
+
+    def update_event(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        expected_version: int,
+        changes: dict,
+        events_service: EventService,
+    ) -> Event:
+        """An operator editing SOMEBODY ELSE'S event.
+
+        It delegates to `EventService.update_event` rather than reimplementing
+        the write: the optimistic lock, the editable-field allow-list, the
+        cache invalidation and the outbox event are all business rules that
+        must not have a second, operator-flavoured copy that drifts. The only
+        thing that changes is the ownership check, which this service has
+        already replaced with a staff check of its own.
+
+        The audit row records the OPERATOR, because the operator is who did it.
+        """
+        self._require_operator(actor_id)
+        event = events_service.update_event(
+            event_id=event_id,
+            actor_id=actor_id,
+            expected_version=expected_version,
+            changes=changes,
+            require_owner=False,
+        )
+        record_audit(
+            actor_id=str(actor_id),
+            action="event.edited_by_operator",
+            target_type="event",
+            target_id=str(event.id),
+            metadata={"fields": sorted(k for k in changes if k in _EDITABLE_FIELDS)},
+        )
+        return event
+
+    def delete_event(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, reason: str
+    ) -> None:
+        """Remove an event from the platform.
+
+        ── IT REFUSES WHEN ANYBODY HOLDS A TICKET ────────────────────────────
+
+        Deleting an event somebody bought a ticket to is not an operator
+        decision this endpoint can carry out honestly. The attendee would keep
+        a ticket whose event no longer resolves, the organizer would keep a
+        settlement referencing a row that reads as gone, and `Booking.event`
+        and `Settlement.event` are `PROTECT` precisely so the database refuses
+        to make that state reachable.
+
+        So an event with any booking that is not merely an expired hold is
+        refused, and the operator is told what to do instead: unpublish takes
+        it off sale immediately and leaves the money path intact, and refunding
+        is a separate deliberate decision in `payments`. Spam and mistakes —
+        the events this endpoint exists for — have no bookings and delete
+        cleanly.
+
+        The delete itself is SOFT (`deleted_at`), which is what every read path
+        on this platform already means by gone.
+        """
+        self._require_operator(actor_id)
+
+        if not reason.strip():
+            raise InvalidInputError("Deleting an event needs a reason.")
+
+        event = self._events.get_active_by_id(event_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+
+        if self._events.has_committed_bookings(event.id):
+            raise InvalidEventStateError(
+                "This event has bookings, so it cannot be deleted. Take it off sale "
+                "instead, and refund the bookings if that is the intent.",
+                status=str(event.status),
+            )
+
+        with UnitOfWork() as uow:
+            if not self._events.soft_delete_event(event.id):
+                # Someone deleted it between the read and here.
+                raise EventNotFoundError(str(event_id))
+            uow.publish(
+                EVENT_ARCHIVED,
+                {
+                    "event_id": str(event.id),
+                    "organization_id": str(event.organization_id),
+                    "title": event.title,
+                    "reason": reason,
+                },
+                aggregate_id=str(event.id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.deleted_by_operator",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"reason": reason, "status": str(event.status)},
+            )
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        logger.info("event_deleted_by_operator", extra={"event_id": str(event.id)})
 
 
 # What an in-place edit of a content row may touch. Same shape as

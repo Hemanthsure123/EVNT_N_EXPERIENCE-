@@ -538,6 +538,42 @@ class EventRepository(BaseRepository[Event]):
         less clear, not more."""
         return self.list_for_moderation(status=EventStatus.PENDING_REVIEW)
 
+    def has_committed_bookings(self, event_id: uuid.UUID | str) -> bool:
+        """Whether anybody holds, or held, a real place at this event.
+
+        An EXPIRED or CANCELLED hold does not count: nothing was ever issued
+        and nobody is owed anything, so an event whose only bookings lapsed is
+        still a clean delete. Everything else does — including a live
+        `reserved` hold, because somebody is in checkout right now.
+        """
+        from apps.booking.models import Booking, BookingStatus
+
+        return (
+            Booking.objects.filter(event_id=event_id)
+            .exclude(status__in=(BookingStatus.EXPIRED, BookingStatus.CANCELLED))
+            .exists()
+        )
+
+    def soft_delete_event(self, event_id: uuid.UUID | str) -> bool:
+        """Remove an event from every read path, conditionally.
+
+        A soft delete and not a real one: `Booking.event` and
+        `Settlement.event` are both `PROTECT`, so a hard delete of an event
+        anybody ever bought a ticket to would either raise or orphan a
+        financial record. Every read path already filters
+        `deleted_at__isnull=True`, so this is what "gone" means here.
+
+        Conditional on `deleted_at__isnull=True` so a double delete writes
+        nothing and reports False, rather than moving the timestamp and
+        rewriting when it happened.
+        """
+        return (
+            self.get_queryset()
+            .filter(id=event_id, deleted_at__isnull=True)
+            .update(deleted_at=timezone.now())
+            > 0
+        )
+
 
 class EventContentRepository:
     """Media, FAQs and timeline for one event.

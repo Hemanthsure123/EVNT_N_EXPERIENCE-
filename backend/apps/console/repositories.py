@@ -24,6 +24,7 @@ and both are deliberate:
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from collections.abc import Iterable
 
 from django.contrib.auth import get_user_model
@@ -44,6 +45,31 @@ User = get_user_model()
 
 class ConsoleRepository:
     """Read-only aggregates across the platform."""
+
+    # ------------------------------------------------------------- ownership
+
+    def event_owner_id(self, event_id: uuid.UUID) -> uuid.UUID | None:
+        """Who owns the event, so an operator can be shown the organizer's own
+        analytics rather than a second, parallel implementation of them.
+
+        Returns None for an unknown or deleted event, which the view turns into
+        a 404 — the same answer a stranger gets, so an id-guesser learns
+        nothing from the difference.
+        """
+        row = (
+            Event.objects.filter(id=event_id, deleted_at__isnull=True)
+            .values_list("organization__owner_id", flat=True)
+            .first()
+        )
+        return row
+
+    def organization_owner_id(self, organization_id: uuid.UUID) -> uuid.UUID | None:
+        """Same, for an organization's dashboard."""
+        return (
+            Organization.objects.filter(id=organization_id, deleted_at__isnull=True)
+            .values_list("owner_id", flat=True)
+            .first()
+        )
 
     # ---------------------------------------------------------------- counts
 

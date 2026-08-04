@@ -244,3 +244,23 @@ class AuditEntrySerializer(serializers.Serializer):
     target_id = serializers.CharField(allow_blank=True)
     metadata = serializers.JSONField()
     created_at = serializers.DateTimeField()
+
+
+class OrganizerEventAnalyticsSerializer(serializers.Serializer):
+    """One event's analytics, passed through from `apps.organizer`.
+
+    Deliberately a PASS-THROUGH rather than a re-declaration of every field:
+    the payload is built by that module's selector, and pinning its shape here
+    too would mean two places to update whenever a metric is added — with the
+    console silently dropping the new field until somebody noticed.
+    """
+
+    def to_representation(self, instance: dict) -> dict:
+        return instance
+
+
+class OrganizationAnalyticsSerializer(serializers.Serializer):
+    """An organizer's own dashboard — KPI tiles plus a daily series."""
+
+    def to_representation(self, instance: dict) -> dict:
+        return instance

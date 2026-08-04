@@ -47,6 +47,21 @@ urlpatterns = [
         name="console-event-unpublish",
     ),
     path(
+        "admin/events/<uuid:event_id>",
+        api.AdminEventDetailView.as_view(),
+        name="console-event-detail",
+    ),
+    path(
+        "admin/events/<uuid:event_id>/analytics",
+        api.AdminEventAnalyticsView.as_view(),
+        name="console-event-analytics",
+    ),
+    path(
+        "admin/organizations/<uuid:organization_id>/analytics",
+        api.AdminOrganizationAnalyticsView.as_view(),
+        name="console-organization-analytics",
+    ),
+    path(
         "admin/organizations/<uuid:organization_id>/verification",
         api.VerificationDecisionView.as_view(),
         name="console-verification-decision",

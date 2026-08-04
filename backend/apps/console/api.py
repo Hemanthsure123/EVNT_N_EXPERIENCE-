@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
+from core.errors import InvalidInputError, NotFoundError
 
 from . import selectors
 from .health import get_health
@@ -49,6 +50,8 @@ from .schemas import (
     HealthSerializer,
     ModerationDecisionSerializer,
     ModerationQueueSerializer,
+    OrganizationAnalyticsSerializer,
+    OrganizerEventAnalyticsSerializer,
     OverviewSerializer,
     PendingVerificationSerializer,
     SuspendUserSerializer,
@@ -393,6 +396,130 @@ class EventUnpublishView(ConsoleView):
             event_id=event_id, actor_id=cast(User, request.user).id, note=note
         )
         return _no_store(Response({"id": str(event.id), "status": event.status}))
+
+
+class AdminEventDetailView(ConsoleView):
+    """Edit or remove ANY event, as a platform operator.
+
+    Both delegate to `EventModerationService`, which proves staff for itself
+    and then reuses `EventService`'s own write — so an operator edit takes the
+    same optimistic lock, the same editable-field allow-list and the same cache
+    invalidation an organizer's edit takes. There is no operator-only write
+    path that could drift from the rules.
+    """
+
+    @extend_schema(request=None, responses={200: None})
+    def patch(self, request: Request, event_id: UUID) -> Response:
+        from config.di import build_event_moderation_service, build_event_service
+
+        version = request.data.get("version")
+        if version is None:
+            raise InvalidInputError("An edit must carry the version it is based on.")
+        try:
+            expected_version = int(version)
+        except (TypeError, ValueError) as exc:
+            raise InvalidInputError("`version` must be a number.") from exc
+
+        changes = {k: v for k, v in request.data.items() if k != "version"}
+        event = build_event_moderation_service().update_event(
+            event_id=event_id,
+            actor_id=cast(User, request.user).id,
+            expected_version=expected_version,
+            changes=changes,
+            events_service=build_event_service(),
+        )
+        return _no_store(
+            Response({"id": str(event.id), "status": event.status, "version": event.version})
+        )
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request: Request, event_id: UUID) -> Response:
+        from config.di import build_event_moderation_service
+
+        # The reason rides a query parameter because a DELETE body is not
+        # reliably forwarded by every proxy, and this one is audited.
+        reason = str(request.query_params.get("reason", "") or request.data.get("reason", ""))
+        build_event_moderation_service().delete_event(
+            event_id=event_id, actor_id=cast(User, request.user).id, reason=reason
+        )
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class AdminEventAnalyticsView(ConsoleView):
+    """One event's analytics, for an operator.
+
+    ── IT IS THE ORGANIZER'S OWN REPORT, NOT A SECOND ONE ────────────────────
+
+    This delegates to `apps.organizer.selectors.get_event_analytics` after
+    resolving who owns the event, rather than growing a console-shaped copy.
+    Two reasons, and the second is the important one:
+
+    1. An operator answering "my numbers look wrong" has to be looking at the
+       SAME numbers the organizer is looking at. A parallel implementation
+       would eventually disagree, and the support conversation would then be
+       about which screen to believe.
+    2. It is the module that owns the rule — revenue counted at capture,
+       admissions from ticket rows rather than scan logs, refunds netted — and
+       those definitions should live in exactly one place.
+
+    Reading across a module boundary is what this module does (see the class
+    docstring): console reads, and never writes through anything but the owning
+    module's service.
+    """
+
+    @extend_schema(
+        parameters=[OpenApiParameter("days", int)],
+        responses={200: OrganizerEventAnalyticsSerializer},
+    )
+    def get(self, request: Request, event_id: UUID) -> Response:
+        from apps.organizer import selectors as organizer_selectors
+
+        owner_id = ConsoleRepository().event_owner_id(event_id)
+        if owner_id is None:
+            raise NotFoundError("Event not found.")
+        try:
+            days = int(request.query_params.get("days", organizer_selectors.DEFAULT_SERIES_DAYS))
+        except (TypeError, ValueError):
+            days = organizer_selectors.DEFAULT_SERIES_DAYS
+        payload = organizer_selectors.get_event_analytics(owner_id, event_id, days)
+        return _no_store(Response(OrganizerEventAnalyticsSerializer(payload).data))
+
+
+class AdminOrganizationAnalyticsView(ConsoleView):
+    """One organizer's dashboard, for an operator — same reasoning as above.
+
+    Returns the organizer's own KPI tiles and their daily series, so an
+    operator investigating an organization sees what that organization sees.
+    """
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("metric", str, description="revenue | bookings | tickets"),
+            OpenApiParameter("days", int),
+        ],
+        responses={200: OrganizationAnalyticsSerializer},
+    )
+    def get(self, request: Request, organization_id: UUID) -> Response:
+        from apps.organizer import selectors as organizer_selectors
+
+        owner_id = ConsoleRepository().organization_owner_id(organization_id)
+        if owner_id is None:
+            raise NotFoundError("Organization not found.")
+        metric = request.query_params.get("metric", "revenue")
+        try:
+            days = int(request.query_params.get("days", organizer_selectors.DEFAULT_SERIES_DAYS))
+        except (TypeError, ValueError):
+            days = organizer_selectors.DEFAULT_SERIES_DAYS
+        return _no_store(
+            Response(
+                OrganizationAnalyticsSerializer(
+                    {
+                        "overview": organizer_selectors.get_overview(owner_id),
+                        "timeseries": organizer_selectors.get_timeseries(owner_id, metric, days),
+                    }
+                ).data
+            )
+        )
 
 
 class AuditLogView(ConsoleView):
