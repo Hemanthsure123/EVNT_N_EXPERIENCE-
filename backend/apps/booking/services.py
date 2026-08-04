@@ -124,8 +124,10 @@ class BookingService:
         if event is None:
             raise EventNotBookableError()
 
-        # Read (no lock): validate every requested tier belongs to this event
-        # and capture the price to bill — the price the buyer is seeing now.
+        # Read (no lock): validate every requested tier belongs to this event.
+        # Deliberately NOT the price — nothing read here may reach the money.
+        # The price comes from the locked reserve decision below, and there is
+        # no face price carried forward for a later line to bill by mistake.
         tiers = {str(t.id): t for t in self._ticket_types.list_for_event(event_id)}
         requested = self._validate_items(items, tiers)
 
@@ -152,9 +154,9 @@ class BookingService:
         # OUTSIDE the transaction/lock: the external payment-order call.
         return self._creation_result(self._ensure_payment_order(booking))
 
-    def _validate_items(self, items: list[dict], tiers: dict) -> list[tuple]:
+    def _validate_items(self, items: list[dict], tiers: dict) -> list[tuple[uuid.UUID | str, int]]:
         seen: set[str] = set()
-        requested: list[tuple] = []
+        requested: list[tuple[uuid.UUID | str, int]] = []
         for item in items:
             tier_id = item["ticket_type_id"]
             quantity = item["quantity"]
@@ -169,15 +171,19 @@ class BookingService:
                 raise InvalidBookingItemsError(
                     "A requested ticket type doesn't belong to this event."
                 )
-            requested.append((tier_id, quantity, tier.price_minor))
+            requested.append((tier_id, quantity))
         return requested
 
     def _reserve_and_insert(
-        self, user_id, event_id, requested: list[tuple], idempotency_key: str | None
+        self,
+        user_id,
+        event_id,
+        requested: list[tuple[uuid.UUID | str, int]],
+        idempotency_key: str | None,
     ) -> Booking:
         booking_id = uuid.uuid4()
         hold_expires_at = timezone.now() + timedelta(minutes=self._hold_minutes)
-        total_quantity = sum(q for _, q, _ in requested)
+        total_quantity = sum(q for _, q in requested)
         platform_fee = self._platform_fee_per_ticket * total_quantity
 
         try:
@@ -200,12 +206,23 @@ class BookingService:
                 # This is the same rule the tier counters follow — display is
                 # cached and fast, the DECISION is made under the row lock and
                 # nowhere else — applied to the money rather than to the count.
-                priced: list[tuple] = []
-                for tier_id, quantity, _ in requested:
+                #
+                # `priced` is the ONE source for both the total and the line
+                # items below. The items used to be built from `requested`
+                # instead, whose price came off that unlocked read — so under
+                # any live sale phase the line items and the billed total
+                # disagreed, and the total is what payments' webhook
+                # amount-checks. An invoice that doesn't add up to the amount
+                # charged is not a display bug on the money path.
+                priced: list[tuple[uuid.UUID | str, int, int, str | None]] = []
+                for tier_id, quantity in requested:
                     outcome = self._ticketing.reserve(ticket_type_id=tier_id, quantity=quantity)
-                    priced.append((tier_id, quantity, outcome.unit_price_minor))
+                    # reserve() always decides a price; the Optional on the
+                    # outcome is for release/confirm, which decide none.
+                    assert outcome.unit_price_minor is not None
+                    priced.append((tier_id, quantity, outcome.unit_price_minor, outcome.phase_name))
 
-                total_amount = sum(q * price for _, q, price in priced)
+                total_amount = sum(q * price for _, q, price, _ in priced)
 
                 booking = self._bookings.create(
                     id=booking_id,
@@ -224,8 +241,9 @@ class BookingService:
                             ticket_type_id=tier_id,
                             quantity=quantity,
                             unit_price_minor=price,
+                            phase_name=phase_name,
                         )
-                        for tier_id, quantity, price in requested
+                        for tier_id, quantity, price, phase_name in priced
                     ]
                 )
                 uow.publish(

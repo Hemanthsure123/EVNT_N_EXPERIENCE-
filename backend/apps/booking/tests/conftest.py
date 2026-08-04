@@ -86,16 +86,30 @@ def event(organizer) -> Event:
 
 @pytest.fixture
 def make_tier(event):
+    """A tier, optionally with a sale-phase schedule — each phase a dict of
+    name/price_minor/ends_at/quantity, array order becoming position (exactly
+    as the ticketing write API sets them)."""
+
     def _make(
-        *, name="General", price_minor=50000, quantity=100, max_per_order=10, ev=None
+        *,
+        name="General",
+        price_minor=50000,
+        quantity=100,
+        max_per_order=10,
+        phases: list[dict] | None = None,
+        ev=None,
     ) -> TicketType:
-        return TicketTypeRepository().create(
+        repo = TicketTypeRepository()
+        tier = repo.create(
             event_id=(ev or event).id,
             name=name,
             price_minor=price_minor,
             quantity=quantity,
             max_per_order=max_per_order,
         )
+        if phases:
+            repo.set_phases(ticket_type_id=tier.id, phases=phases)
+        return tier
 
     return _make
 

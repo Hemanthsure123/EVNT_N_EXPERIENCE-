@@ -280,7 +280,8 @@ class EventService:
 
         if event.status not in (EventStatus.DRAFT, EventStatus.REJECTED):
             raise InvalidEventStateError(
-                f"Only draft or rejected events can be submitted (this one is '{event.status}')."
+                f"Only draft or rejected events can be submitted (this one is '{event.status}').",
+                status=str(event.status),
             )
 
         # Extensible readiness gate — core checks now, ticketing's "has a

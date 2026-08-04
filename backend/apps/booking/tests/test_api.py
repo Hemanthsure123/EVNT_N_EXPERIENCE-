@@ -131,7 +131,30 @@ def test_get_booking_detail_returns_items(authed_client, booking_service, buyer,
     assert len(body["items"]) == 1
     assert body["items"][0]["ticket_type_name"] == "Gold"
     assert body["items"][0]["unit_price"] == 50000
+    assert body["items"][0]["phase_name"] is None  # billed at the face price
     assert resp.headers["Cache-Control"] == "private, no-store"
+
+
+@pytest.mark.django_db
+def test_get_booking_detail_labels_the_phase_a_line_was_billed_under(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    """The funnel labels a line "Gold — Early bird", so the phase that priced it
+    has to reach the response alongside the price it produced."""
+    tier = make_tier(
+        name="Gold",
+        price_minor=50000,
+        quantity=100,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 10}],
+    )
+    result = _create_via_service(booking_service, buyer, event, tier)
+
+    resp = authed_client.get(f"/api/v1/bookings/{result.booking.id}")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["unit_price"] == 30000
+    assert item["phase_name"] == "Early bird"
 
 
 @pytest.mark.django_db

@@ -19,6 +19,7 @@ import { Button } from '@/components/ui';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { useOrganizations } from '@/lib/identity/scope';
 import { useInvalidateOrganizer } from '@/lib/organizer/queries';
+import { describePublishFailure } from '@/lib/organizer/publish-error';
 import { STEPS, completion, stepStatus, validate, type StepId } from '@/lib/organizer/wizard/model';
 import { useWizard, type SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { cn } from '@/lib/utils/cn';
@@ -113,6 +114,10 @@ export function EventWizard() {
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const [posterFile, setPosterFile] = React.useState<File | null>(null);
   const [publishing, setPublishing] = React.useState(false);
+  // Guards the submit itself, not its appearance. `publishing` disables the
+  // button one render late, which two fast clicks beat; this ref is checked
+  // and set synchronously in the same tick.
+  const submitting = React.useRef(false);
   // The THROWN value, not a message: `describePublishFailure` reads the
   // backend's machine `code` and `details` to turn a refusal into a
   // destination, and a pre-flattened string has already discarded both.
@@ -208,6 +213,15 @@ export function EventWizard() {
   };
 
   const publish = async () => {
+    // A REF, not the `publishing` state, is what makes this safe to press
+    // twice. `setPublishing(true)` only disables the button on the NEXT
+    // render, so two fast clicks both get past a state check and fire two
+    // submits — the same trailing-state bug the ticket stepper had, on a
+    // lifecycle transition instead of a quantity. The second request used to
+    // be refused with "this one is 'pending_review'" and rendered in red, on
+    // the screen of somebody whose event had just been submitted correctly.
+    if (submitting.current) return;
+    submitting.current = true;
     setPublishing(true);
     setPublishError(null);
     try {
@@ -215,10 +229,27 @@ export function EventWizard() {
       void invalidate();
       router.push(`/dashboard/events?event=${published.id}`);
     } catch (thrown) {
+      // ALREADY SUBMITTED IS NOT A FAILURE. If the refusal only says the event
+      // is already in the review queue (or already live), the organizer has
+      // the outcome they pressed for — finish the way a success finishes:
+      // clear the local draft, refresh the lists and go to the dashboard. The
+      // wizard keeps no server truth of its own, so a restored page or a
+      // second tab can genuinely arrive here with a stale idea of the status.
+      const failure = describePublishFailure(thrown);
+      if (failure.alreadyDone) {
+        // `reset` and not just a navigation: it clears the STORED draft, so
+        // returning here (Back, bfcache, a bookmarked /new) opens a fresh form
+        // instead of a finished event with an armed Submit button.
+        wizard.reset();
+        void invalidate();
+        router.push('/dashboard/events');
+        return;
+      }
       // The THROWN value, not its message: `describePublishFailure` needs the
       // `code` and `details` to turn a refusal into a destination.
       setPublishError(thrown);
       setPublishing(false);
+      submitting.current = false;
     }
   };
 

@@ -6,7 +6,7 @@ from .models import Booking, BookingItem, Ticket
 class BookingItemInline(admin.TabularInline):
     model = BookingItem
     extra = 0
-    readonly_fields = ["ticket_type", "quantity", "unit_price_minor"]
+    readonly_fields = ["ticket_type", "quantity", "unit_price_minor", "phase_name"]
     can_delete = False
 
 

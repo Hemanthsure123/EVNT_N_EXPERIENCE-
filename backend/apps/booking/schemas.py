@@ -35,12 +35,21 @@ class AssignAttendeesRequestSerializer(serializers.Serializer):
 
 
 class BookingItemSerializer(serializers.ModelSerializer):
+    """One line of the order, at the price it was actually billed.
+
+    `phase_name` is the sale phase that priced it, `null` when it billed at the
+    tier's face price — so the funnel can label the line "Gold — Early bird"
+    rather than leaving a buyer to wonder why the number is lower than the one
+    on the tier. It's the label they were shown at checkout, recorded at
+    purchase time; the phase row itself may be gone by the time this is read.
+    """
+
     ticket_type_name = serializers.CharField(source="ticket_type.name", read_only=True)
     unit_price = serializers.IntegerField(source="unit_price_minor", read_only=True)
 
     class Meta:
         model = BookingItem
-        fields = ["ticket_type_id", "ticket_type_name", "quantity", "unit_price"]
+        fields = ["ticket_type_id", "ticket_type_name", "quantity", "unit_price", "phase_name"]
         read_only_fields = fields
 
 

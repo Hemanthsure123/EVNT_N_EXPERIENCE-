@@ -89,12 +89,20 @@ class EventNotPublishableError(ConflictError):
 
 
 class InvalidEventStateError(ConflictError):
-    """The requested lifecycle transition isn't allowed from the current status."""
+    """The requested lifecycle transition isn't allowed from the current status.
+
+    Carries the CURRENT `status` in `details` for the same reason
+    `OrganizationNotVerifiedError` carries `verified_level`: the caller cannot
+    otherwise tell a refusal it should treat as success from one it must
+    report. Re-submitting an event that is already `pending_review` is the
+    outcome the organizer asked for — the frontend needs the status to know
+    that, and parsing it back out of the sentence would break on any rewording.
+    """
 
     code = "invalid_event_state"
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
+    def __init__(self, message: str, **details: object) -> None:
+        super().__init__(message, **details)
 
 
 class EventNotUnderReviewError(ConflictError):

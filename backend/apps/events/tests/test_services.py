@@ -383,6 +383,28 @@ def test_publish_event_rejects_a_non_draft(service, make_event, owner):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("status", [EventStatus.PENDING_REVIEW, EventStatus.LIVE])
+def test_publish_event_names_the_current_status_in_details(service, make_event, owner, status):
+    """The refusal carries the status in `details`, not only in the sentence.
+
+    Re-submitting an event that is already in the review queue is the outcome
+    the organizer asked for, and the frontend treats it as success rather than
+    painting a red wall on the screen of somebody who did the right thing. It
+    can only tell that case apart from a genuinely wrong transition (archived,
+    finished) by the status — and reading it back out of the message would
+    break the first time the wording changed.
+    """
+    event = make_event(status=status)
+
+    with pytest.raises(InvalidEventStateError) as caught:
+        service.publish_event(event_id=event.id, actor_id=owner.id)
+
+    assert caught.value.details["status"] == status
+    # The sentence still names it too, for anything reading only the message.
+    assert status in caught.value.message
+
+
+@pytest.mark.django_db
 def test_publish_event_runs_readiness_checks(service, make_event, owner):
     # A draft whose start has already passed fails the built-in future-start check.
     event = make_event(status=EventStatus.DRAFT, starts_at=timezone.now() - timedelta(days=1))

@@ -50,6 +50,22 @@ type AuthValue = {
   resendVerification: (email: string) => Promise<void>;
   /** Adopt a session minted by the Google callback's one-time handoff. */
   completeGoogleSignIn: (handoff: string) => Promise<User>;
+  /**
+   * Replace the cached profile with one the SERVER just returned.
+   *
+   * For write endpoints that answer with the whole `UserSerializer` payload
+   * rather than 204 — `POST`/`DELETE /auth/me/avatar` are the first. Those
+   * views return the full profile precisely so a caller can swap the object
+   * outright, and this is the swap: one state update, and every surface that
+   * reads `useAuth().user` (the header medallion, the account menu, the
+   * overview) shows the new picture on the same render.
+   *
+   * Deliberately NOT a refetch. The response IS the fresh profile, so asking
+   * `/auth/me` for it again would be a second round trip to learn what we were
+   * just told — and it must NOT be a local patch of one field either, or the
+   * cached user becomes a second source of truth that drifts from the server's.
+   */
+  applyProfile: (profile: User) => void;
   signOut: () => Promise<void>;
 };
 
@@ -120,6 +136,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setStatus('authenticated');
         return signedIn;
       },
+      // Only ever called with a payload the server just sent, so it cannot
+      // claim a change the backend did not make.
+      applyProfile: (profile) => setUser(profile),
       signOut: async () => {
         await logoutRequest();
         setUser(null);

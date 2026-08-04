@@ -103,9 +103,20 @@ class BookingItem(models.Model):
         "ticketing.TicketType", on_delete=models.PROTECT, related_name="booking_items"
     )
     quantity = models.PositiveIntegerField()
-    # Price captured at purchase time, so a later tier re-price never changes
-    # what this order was billed.
+    # THE PRICE THIS LINE WAS BILLED — written from the locked reserve
+    # decision, so a later tier re-price (or a sale phase closing) never
+    # changes what this order was charged. Every item's
+    # `unit_price_minor x quantity` sums to the booking's
+    # `total_amount_minor`, which is the figure payments' webhook
+    # amount-checks; a line item that disagreed with it would make the
+    # invoice and the money two different stories.
     unit_price_minor = models.PositiveIntegerField()
+    # WHICH sale phase priced it ("Early bird"), NULL when it billed at the
+    # tier's face price. A name, not an FK: phases are replaced wholesale on
+    # every schedule edit (CASCADE, no financial record kept), so a reference
+    # would dangle while what the buyer needs on their invoice is the label
+    # they were shown at checkout. Nothing queries by it, so no index.
+    phase_name = models.CharField(max_length=40, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

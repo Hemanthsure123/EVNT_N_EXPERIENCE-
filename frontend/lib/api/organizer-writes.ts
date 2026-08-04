@@ -27,6 +27,17 @@ export type CreateEventInput = {
   /** ISO 8601. The backend rejects anything not in the future. */
   starts_at: string;
   ends_at?: string | null;
+  /**
+   * Where the venue is: which Google place, and the pin.
+   *
+   * All three are written together by the venue picker and cleared together
+   * (`''`, `null`, `null`). The serializer enforces both-or-neither on the
+   * coordinate pair and 400s a lone value — half a pair would put the marker on
+   * the Greenwich meridian rather than nowhere.
+   */
+  place_id?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 /**
@@ -47,6 +58,9 @@ export type EventContentFields = {
   seo_description: string;
 };
 
+/** Everything creatable is editable except the owning organisation — which
+ *  includes the venue's place and pin, because a column the event page renders
+ *  must be reachable by a PATCH or it is decoration. */
 export type UpdateEventInput = Partial<Omit<CreateEventInput, 'organization_id'>> &
   Partial<EventContentFields> & {
     version: number;

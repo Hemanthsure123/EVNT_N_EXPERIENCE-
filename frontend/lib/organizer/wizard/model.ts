@@ -7,9 +7,13 @@
  * `city`, `starts_at`, `ends_at` and a `poster` file. `PATCH /events/{id}`
  * takes those plus the seven content fields (`short_description`,
  * `duration_minutes`, `language`, `age_restriction`, `accessibility_notes`,
- * `seo_title`, `seo_description`). Gallery images, FAQs and the running order
- * are their own endpoints under `/events/{id}/…` and are edited directly
- * against the server rather than held in this draft — see below.
+ * `seo_title`, `seo_description`). Both also take `place_id`, `latitude` and
+ * `longitude` — which Google place the venue is, and where its pin goes. Those
+ * three are written together by the venue picker and cleared together, and the
+ * serializer refuses HALF a coordinate pair (`_validate_coordinate_pair`), so
+ * the mapping below never sends one without the other. Gallery images, FAQs and
+ * the running order are their own endpoints under `/events/{id}/…` and are
+ * edited directly against the server rather than held in this draft — see below.
  *
  * So this model has exactly those fields and no others. The brief asked for a
  * good many more — category, tags, street address, state, country, pin code,
@@ -75,6 +79,19 @@ export type Draft = {
   description: string;
   venue: string;
   city: string;
+  /**
+   * Google's id for the venue, or `''` when it was typed freehand.
+   *
+   * Non-empty means the coordinates below are GOOGLE'S for that place. Placing
+   * the pin by hand clears it, which keeps that one invariant true — see
+   * `VenueStep`, where both halves are written.
+   */
+  placeId: string;
+  /** The pin. Null — never 0 — when there is no pin: (0, 0) is a real place in
+   *  the Atlantic, and the event page renders a map only when both are set.
+   *  Rounded to 7dp by whoever writes them, matching the column. */
+  latitude: number | null;
+  longitude: number | null;
   /** `datetime-local` strings, i.e. local wall time with no zone. */
   startsAt: string;
   endsAt: string;
@@ -118,6 +135,9 @@ export function emptyDraft(organizationId = ''): Draft {
     description: '',
     venue: '',
     city: '',
+    placeId: '',
+    latitude: null,
+    longitude: null,
     startsAt: '',
     endsAt: '',
     posterUrl: '',
@@ -542,6 +562,30 @@ export function canCreate(draft: Draft): boolean {
   );
 }
 
+/**
+ * Where the venue is, in the shape the serializer demands: both coordinates or
+ * neither.
+ *
+ * `_validate_coordinate_pair` 400s a lone latitude, and a 400 here is not a
+ * cosmetic failure — it is EVERY autosave on the draft refused until somebody
+ * clears their browser storage. The venue picker only ever writes the pair, but
+ * a draft restored from an older build, or a hand-edited `localStorage`, can
+ * hold half of one, so the pair is normalised at the boundary rather than
+ * trusted.
+ *
+ * Re-rounded to 7dp for the same reason: the columns are
+ * `DecimalField(decimal_places=7)` and DRF refuses more digits than they hold.
+ * The picker already rounds on the way in; this covers everything that did not
+ * come from the picker.
+ */
+function coordinates(draft: Draft): { latitude: number | null; longitude: number | null } {
+  const dp7 = (value: number) => Math.round(value * 1e7) / 1e7;
+  if (draft.latitude === null || draft.longitude === null) {
+    return { latitude: null, longitude: null };
+  }
+  return { latitude: dp7(draft.latitude), longitude: dp7(draft.longitude) };
+}
+
 export function toCreateInput(draft: Draft): CreateEventInput {
   return {
     organization_id: draft.organizationId,
@@ -551,6 +595,8 @@ export function toCreateInput(draft: Draft): CreateEventInput {
     city: draft.city.trim(),
     starts_at: toIso(draft.startsAt),
     ends_at: draft.endsAt ? toIso(draft.endsAt) : null,
+    place_id: draft.placeId,
+    ...coordinates(draft),
   };
 }
 
@@ -561,6 +607,11 @@ export function toCreateInput(draft: Draft): CreateEventInput {
  * is what makes CLEARING a field work. Omitting blanks would mean an organizer
  * who deletes an age restriction sees it reappear on reload, because the
  * serializer treats a missing key as "leave it alone".
+ *
+ * The venue's place and pin follow the same rule and for the same reason:
+ * removing a pin sends `place_id: ''`, `latitude: null`, `longitude: null`
+ * together. Omitting them would leave the old pin on the event forever, with
+ * the map on the public page still pointing at it.
  */
 export function toPatchInput(draft: Draft): UpdateEventInput {
   return {
@@ -569,6 +620,8 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     description: draft.description,
     venue: draft.venue.trim(),
     city: draft.city.trim(),
+    place_id: draft.placeId,
+    ...coordinates(draft),
     starts_at: toIso(draft.startsAt),
     ...(draft.endsAt ? { ends_at: toIso(draft.endsAt) } : {}),
     short_description: draft.shortDescription.trim(),
@@ -602,6 +655,12 @@ export function patchFingerprint(draft: Draft): string {
     draft.description,
     draft.venue,
     draft.city,
+    // The pin is part of the PATCH, so it has to be part of the fingerprint —
+    // without it, dragging the marker changes nothing the save engine can see
+    // and the pin is never sent at all.
+    draft.placeId,
+    draft.latitude,
+    draft.longitude,
     draft.startsAt,
     draft.endsAt,
     draft.shortDescription,

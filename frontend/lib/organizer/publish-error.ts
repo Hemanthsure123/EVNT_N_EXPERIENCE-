@@ -39,6 +39,19 @@ export type PublishFailure = {
   /** `warning` for "you are waiting on somebody", `error` for "you must change
    *  something". A pending review is not a mistake and should not read as one. */
   tone: 'warning' | 'error';
+  /**
+   * True when the refusal means the event is ALREADY where the organizer was
+   * trying to get it — submitted for review, or already live.
+   *
+   * The caller must treat this as SUCCESS, not as a failure to render: the
+   * outcome they asked for is the outcome they have. This is the same
+   * idempotent-replay shape `booking.confirm_booking` uses when it answers
+   * `already_confirmed` — the second attempt is a no-op that reports the first
+   * one's result, never an error. Without it, a re-press (a double click, a
+   * Back into a restored page, a second tab) put a red wall on the screen of
+   * somebody whose event was sitting in the review queue exactly as intended.
+   */
+  alreadyDone?: true;
 };
 
 const FALLBACK = 'Could not submit. Your draft is safe — try again in a moment.';
@@ -81,6 +94,31 @@ export function describePublishFailure(thrown: unknown): PublishFailure {
       tone: 'error',
       action: match ? { label: 'Fix this', step: match.step } : undefined,
     };
+  }
+
+  if (thrown.code === 'invalid_event_state') {
+    // The transition was refused because of the status the event is ALREADY
+    // in. Two of those statuses mean the organizer has what they wanted:
+    // `pending_review` is the queue Submit exists to join, and `live` is the
+    // far side of it. Reporting either as a failure is how "your event is
+    // published" gets shown in red.
+    //
+    // `details.status` and not a substring of the sentence: the backend sends
+    // the status precisely so this decision does not rest on wording.
+    const status = (thrown.details as { status?: string } | undefined)?.status;
+    if (status === 'pending_review' || status === 'live') {
+      return {
+        message:
+          status === 'live'
+            ? 'This event is already published and live.'
+            : 'This event is already in the review queue.',
+        tone: 'warning',
+        alreadyDone: true,
+      };
+    }
+    // Any other status (archived, finished) is a genuine wrong turn: keep the
+    // server's sentence, which names the status and what to do instead.
+    return { message: thrown.message, tone: 'error' };
   }
 
   if (thrown.code === 'stale_event_version') {

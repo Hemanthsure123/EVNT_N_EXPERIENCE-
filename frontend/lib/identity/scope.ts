@@ -134,14 +134,8 @@ export function useScope() {
   };
 }
 
-export function initialsOf(value: string): string {
-  return (
-    value
-      .split(/[\s@.]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0])
-      .join('')
-      .toUpperCase() || '?'
-  );
-}
+// Lives in `lib/identity/initials` now — a pure module with no imports, so
+// `components/ui/avatar` can use it without pulling react-query, the API client
+// and the auth provider into the design system. Re-exported here so every
+// existing `initialsOf` import keeps resolving to the SAME implementation.
+export { initialsOf } from './initials';

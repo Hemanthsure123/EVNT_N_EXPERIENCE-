@@ -322,6 +322,14 @@ function ModerationBanner({ row }: { row: EventRow }) {
       await publishEvent(row.id);
       void invalidate();
     } catch (thrown) {
+      // If the refusal only means it is already submitted, the row we are
+      // looking at is stale — refresh rather than argue with the server. The
+      // banner then re-renders as the "waiting for approval" state, which is
+      // the truth.
+      if (describePublishFailure(thrown).alreadyDone) {
+        void invalidate();
+        return;
+      }
       setError(thrown);
       setBusy(false);
     }

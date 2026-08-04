@@ -13,7 +13,7 @@ from apps.booking.exceptions import (
     InvalidBookingItemsError,
     NotBookingOwnerError,
 )
-from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
+from apps.booking.models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
 from apps.booking.qr import verify_ticket_token
 from apps.booking.services import TICKET_ASSIGNED
 from apps.booking.tests.conftest import QR_SECRET
@@ -32,6 +32,10 @@ def _sold(tier_id) -> int:
     tt = TicketTypeRepository().get_active_by_id(tier_id)
     assert tt is not None
     return tt.sold
+
+
+def _items(booking_id) -> list[BookingItem]:
+    return list(BookingItem.objects.filter(booking_id=booking_id).order_by("unit_price_minor"))
 
 
 # --- CreateBooking ---------------------------------------------------------
@@ -54,6 +58,107 @@ def test_create_booking_reserves_and_holds(booking_service, event, buyer, make_t
     assert result.payment_order_id.startswith("fake_order_")
     assert _reserved(tier.id) == 2
     assert OutboxEvent.objects.filter(event_type="booking.booking_created").exists()
+
+
+@pytest.mark.django_db
+def test_line_items_are_billed_at_the_locked_phase_price(booking_service, event, buyer, make_tier):
+    """The line items must carry the price the LOCK decided, not the face price
+    read a moment before it — the total is what payments' webhook amount-checks,
+    and an order whose lines don't add up to it is two different stories about
+    the same money."""
+    tier = make_tier(
+        name="Gold",
+        price_minor=50000,
+        quantity=100,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 10}],
+    )
+
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": 2}],
+    )
+
+    booking = result.booking
+    assert booking.total_amount_minor == 60000  # 2 x the phase price, not the face price
+    (item,) = _items(booking.id)
+    assert item.unit_price_minor == 30000
+    assert item.phase_name == "Early bird"
+    assert item.quantity * item.unit_price_minor == booking.total_amount_minor
+
+
+@pytest.mark.django_db
+def test_a_face_priced_line_records_no_phase(booking_service, event, buyer, make_tier):
+    tier = make_tier(price_minor=50000, quantity=100)  # no schedule at all
+
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": 2}],
+    )
+
+    (item,) = _items(result.booking.id)
+    assert item.unit_price_minor == 50000
+    # NULL means "billed at the face price" — not a phase whose name was lost.
+    assert item.phase_name is None
+
+
+@pytest.mark.django_db
+def test_line_items_sum_to_the_billed_total_across_mixed_tiers(
+    booking_service, event, buyer, make_tier
+):
+    phased = make_tier(
+        name="Gold",
+        price_minor=80000,
+        quantity=100,
+        phases=[{"name": "Phase 1", "price_minor": 60000, "quantity": 10}],
+    )
+    face = make_tier(name="Basic", price_minor=20000, quantity=100)
+
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[
+            {"ticket_type_id": phased.id, "quantity": 2},
+            {"ticket_type_id": face.id, "quantity": 3},
+        ],
+    )
+
+    booking = result.booking
+    items = _items(booking.id)
+    assert [(i.unit_price_minor, i.phase_name) for i in items] == [
+        (20000, None),
+        (60000, "Phase 1"),
+    ]
+    assert sum(i.quantity * i.unit_price_minor for i in items) == booking.total_amount_minor
+    assert booking.total_amount_minor == 180000  # 2 x 60000 + 3 x 20000
+
+
+@pytest.mark.django_db
+def test_an_order_straddling_a_phase_threshold_records_what_it_paid(
+    booking_service, event, buyer, make_tier
+):
+    """The phase's cumulative threshold leaves room for one seat, so an order of
+    two falls through to the face price for the WHOLE order (ticketing's
+    straddle rule). The invoice must say that, phase name and all."""
+    tier = make_tier(
+        price_minor=50000,
+        quantity=100,
+        phases=[{"name": "Early bird", "price_minor": 30000, "quantity": 1}],
+    )
+
+    result = booking_service.create_booking(
+        user_id=buyer.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": 2}],
+    )
+
+    booking = result.booking
+    (item,) = _items(booking.id)
+    assert item.unit_price_minor == 50000
+    assert item.phase_name is None
+    assert booking.total_amount_minor == 100000
+    assert item.quantity * item.unit_price_minor == booking.total_amount_minor
 
 
 @pytest.mark.django_db

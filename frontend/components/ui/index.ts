@@ -1,6 +1,12 @@
 // Barrel export for the core UI primitives.
 export { Alert, AlertDescription, AlertTitle, alertVariants } from './alert';
-export { Avatar, AvatarFallback, AvatarImage } from './avatar';
+export {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+  IdentityAvatar,
+  type IdentityAvatarSize,
+} from './avatar';
 export { Badge, badgeVariants } from './badge';
 export { Breadcrumb, type BreadcrumbItem } from './breadcrumb';
 export { Button, type ButtonProps, buttonVariants } from './button';
