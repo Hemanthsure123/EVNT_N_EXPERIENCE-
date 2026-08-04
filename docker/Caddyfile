@@ -17,11 +17,28 @@
 # makes Django emit http:// URLs and refuse secure cookies. `X-Forwarded-*` is
 # set here and `NUM_PROXIES=1` is set in `.env`; the two have to agree.
 
-{
-	# An email gets expiry warnings from Let's Encrypt. Blank is allowed and
-	# simply means no warnings — the certificate still issues and renews.
-	email {$ACME_EMAIL}
-}
+# NO GLOBAL OPTIONS BLOCK, and specifically no `email` directive.
+#
+# `email {$ACME_EMAIL}` fails to PARSE when the variable is empty — Caddy sees
+# a directive with no argument and refuses the whole config, which takes the
+# site down rather than degrading. An expiry-notice address is optional to
+# Let's Encrypt (registration without one is fine), so the safe default is to
+# omit it entirely rather than to interpolate something that might be blank.
+#
+# To receive expiry warnings, add a global block with a literal address.
+#
+# ── X-Forwarded-Proto IS PINNED TO https, NOT {scheme} ────────────────────
+#
+# `{scheme}` is the scheme CADDY was reached on, which is not the scheme the
+# BROWSER used whenever something terminates TLS in front of it. Behind a
+# Cloudflare tunnel that is plain http, so `{scheme}` told Django the request
+# was insecure, `SECURE_SSL_REDIRECT` sent a 301 to https, Cloudflare forwarded
+# it back over http, and every API call became a redirect loop.
+#
+# The public scheme is https in BOTH supported topologies — Caddy terminating
+# its own certificate on a real domain, or Cloudflare terminating at its edge —
+# so https is the truthful value. `FORWARDED_PROTO` can override it for a
+# genuinely plaintext test.
 
 {$SITE_DOMAIN} {
 	encode zstd gzip
@@ -51,7 +68,7 @@
 	}
 	handle @backend {
 		reverse_proxy web:8000 {
-			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Proto {$FORWARDED_PROTO:https}
 			header_up X-Forwarded-For {remote_host}
 			header_up Host {host}
 		}
@@ -59,8 +76,8 @@
 
 	# ── Everything else is the Next.js app ──────────────────────────────
 	handle {
-		reverse_proxy frontend:3000 {
-			header_up X-Forwarded-Proto {scheme}
+		reverse_proxy {$FRONTEND_UPSTREAM:frontend:3000} {
+			header_up X-Forwarded-Proto {$FORWARDED_PROTO:https}
 			header_up X-Forwarded-For {remote_host}
 			header_up Host {host}
 		}
