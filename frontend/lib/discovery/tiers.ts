@@ -15,6 +15,21 @@ import type { TicketTier } from '@/lib/api/types';
  * number is how you tell someone an event is sold out when it isn't.
  */
 
+/**
+ * What ONE ticket of this tier costs RIGHT NOW, in minor units.
+ *
+ * `effective_price` is the backend's own answer, computed by the same pure rule
+ * (`apps/ticketing/pricing.py`) the locked reserve uses to decide what to
+ * charge — so this is the number to render as "the price" wherever a buyer is
+ * being quoted, and `price` is only ever the face price a phase is off.
+ *
+ * The `?? price` fallback is not belt-and-braces: `TicketTier` is a
+ * hand-written type, a backend that predates sale phases sends no
+ * `effective_price` at all, and `undefined * quantity` is `NaN` on the money
+ * path — an order total reading "₹NaN" at checkout.
+ */
+export const unitPriceFor = (tier: TicketTier): number => tier.effective_price ?? tier.price;
+
 /** At or below this, name the exact number — it's the honest kind of urgency. */
 export const FEW_LEFT = 10;
 /** At or below this, it's genuinely moving. Above it, say nothing. */
@@ -34,7 +49,17 @@ export type TierSummary = {
   available: number;
   /** Real bookings across all tiers. Zero is a perfectly good answer. */
   sold: number;
-  /** Cheapest tier still on sale, in minor units; null if none is. */
+  /**
+   * The cheapest ticket somebody can actually buy right now, in minor units;
+   * null when nothing is on sale.
+   *
+   * It is the lowest EFFECTIVE price, not the lowest face price — the sticky
+   * booking bar reads this while the panel beside it renders the live phase
+   * price, and "from ₹999" over a ₹799 Early bird is the same screen
+   * contradicting itself. Taken as a minimum across the on-sale tiers rather
+   * than off the first one, so it stays correct even when a phase discounts a
+   * higher tier below a cheaper one's face price.
+   */
   fromPrice: number | null;
   state: AvailabilityState;
 };
@@ -44,11 +69,14 @@ export function summariseTiers(tiers: TicketTier[] | null | undefined): TierSumm
     return { tiers: [], available: 0, sold: 0, fromPrice: null, state: { kind: 'unknown' } };
   }
 
+  // Sorted on FACE price, which is the tier ladder the organiser built — Basic
+  // under Gold under Premium — and what `tierRank` reads for elevation. A phase
+  // discount changes what a tier costs today, not where it sits in that ladder.
   const ordered = [...tiers].sort((a, b) => a.price - b.price);
   const available = ordered.reduce((sum, tier) => sum + Math.max(tier.available, 0), 0);
   const sold = ordered.reduce((sum, tier) => sum + Math.max(tier.sold, 0), 0);
   const onSale = ordered.filter((tier) => tier.is_on_sale);
-  const fromPrice = onSale.length ? (onSale[0]?.price ?? null) : null;
+  const fromPrice = onSale.length ? Math.min(...onSale.map(unitPriceFor)) : null;
 
   return { tiers: ordered, available, sold, fromPrice, state: availabilityState(ordered) };
 }

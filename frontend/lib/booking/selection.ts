@@ -1,4 +1,5 @@
 import type { TicketTier } from '@/lib/api/types';
+import { unitPriceFor } from '@/lib/discovery/tiers';
 
 /**
  * What the user has chosen, and what it costs.
@@ -54,8 +55,20 @@ export const quantityFor = (selection: Selection, tierId: string): number =>
 export type SelectionLine = {
   tier: TicketTier;
   quantity: number;
-  /** `unit price × quantity`, minor units. */
+  /** `unit price × quantity`, minor units — at the tier's EFFECTIVE price. */
   subtotal: number;
+  /**
+   * What one ticket of this tier costs right now, minor units. Carried on the
+   * line so a caller renders the same number the subtotal was built from rather
+   * than reaching back into `tier.price`, which is the face price.
+   */
+  unitPrice: number;
+  /**
+   * The live sale phase's name, null when this line is at face price. It is the
+   * label to show BEFORE a booking exists; once one does, the booking item's own
+   * recorded `phase_name` is authoritative.
+   */
+  phaseName: string | null;
 };
 
 export type SelectionTotals = {
@@ -76,12 +89,36 @@ export type SelectionTotals = {
 /** Matches the backend's `PLATFORM_FEE_PER_TICKET` (paise). */
 export const PLATFORM_FEE_PER_TICKET = 10;
 
+/**
+ * THIS IS AN ESTIMATE, AND IT HAS TO MATCH WHAT THE LOCK WILL CHARGE.
+ *
+ * It prices every line at `effective_price` — the live sale-phase price — not at
+ * the tier's face price. Quoting the face price OVERSTATED a discounted order:
+ * somebody choosing two ₹799 Early bird tickets was shown ₹1,998, pressed
+ * "Continue", and the booking the backend then created said ₹1,598. A funnel
+ * whose first number is wrong about money is the one place that cannot be
+ * hand-waved as a display detail.
+ *
+ * It stays an estimate for a reason this cannot fix: the CHARGE is decided under
+ * the tier's row lock, and the straddle rule means an order that does not fit
+ * inside the phase's remaining seats bills at the NEXT price for the whole
+ * order. So the moment a booking exists the funnel stops using this and reads
+ * the booking's own `total_amount` and each item's recorded `unit_price` —
+ * which is what every screen after the picker already does.
+ */
 export function totalsFor(selection: Selection, tiers: TicketTier[]): SelectionTotals {
   const lines: SelectionLine[] = [];
   for (const line of selection) {
     const tier = tiers.find((candidate) => candidate.id === line.tierId);
     if (!tier) continue; // a tier that vanished between screens simply drops out
-    lines.push({ tier, quantity: line.quantity, subtotal: tier.price * line.quantity });
+    const unitPrice = unitPriceFor(tier);
+    lines.push({
+      tier,
+      quantity: line.quantity,
+      subtotal: unitPrice * line.quantity,
+      unitPrice,
+      phaseName: tier.current_phase?.name ?? null,
+    });
   }
   const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
   return {

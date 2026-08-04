@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from django.conf import settings
 from django.utils import timezone
@@ -21,11 +23,38 @@ from django.utils import timezone
 from .models import NotificationType
 from .templates import _site_url, format_when
 
+if TYPE_CHECKING:  # pragma: no cover — annotation only; the runtime import is lazy
+    from apps.events.models import Event
+
 logger = logging.getLogger(__name__)
 
 
 def _amount_display(minor: int) -> str:
     return f"₹{minor / 100:.2f}"
+
+
+def _directions_url(event: Event) -> str:
+    """A Google Maps link to the venue, built exactly the way the site builds it
+    (`frontend/lib/api/maps.ts` `directionsUrl`) — same path, same `api=1`, same
+    percent-encoding. One product, two renderers: a directions link on a ticket
+    that lands somewhere other than the one on the event page is a link somebody
+    stops trusting at the point they are already late.
+
+    Coordinates win when the event has them, because a venue name is ambiguous
+    and a lat/lng is not. They are never INVENTED — `Event.latitude`/`longitude`
+    are nullable and (0, 0) is a real place in the Atlantic, so an event with no
+    pin falls back to the venue text rather than to a default marker.
+
+    Returns "" when there is nothing to point at, which draws no link at all
+    rather than a button that opens an empty map.
+    """
+    if event.latitude is not None and event.longitude is not None:
+        destination = f"{event.latitude},{event.longitude}"
+    else:
+        destination = ", ".join(part for part in (event.venue, event.city) if part)
+    if not destination:
+        return ""
+    return f"https://www.google.com/maps/search/?api=1&query={quote(destination, safe='')}"
 
 
 def handle_user_registered(payload: dict) -> None:
@@ -62,10 +91,31 @@ def handle_booking_confirmed(payload: dict) -> None:
         logger.warning("notifications.booking_confirmed.missing", extra={"booking_id": booking_id})
         return
 
-    tickets = [
-        {"ticket_type": t.ticket_type.name, "qr_token": t.qr_token}
-        for t in TicketRepository().list_for_booking(booking_id)
-    ]
+    # WHAT EACH LINE WAS BILLED, by tier. `booking.items` is already prefetched
+    # by `get_detail`, so this costs no query — and the price is read off the
+    # ITEM, never off the tier: `BookingItem.unit_price_minor` is what this order
+    # was actually charged, so a later re-price (or a sale phase closing) cannot
+    # rewrite an invoice somebody has already filed.
+    items_by_tier = {item.ticket_type_id: item for item in booking.items.all()}
+    tickets: list[dict] = []
+    for t in TicketRepository().list_for_booking(booking_id):
+        item = items_by_tier.get(t.ticket_type_id)
+        tickets.append(
+            {
+                "ticket_type": t.ticket_type.name,
+                "qr_token": t.qr_token,
+                # WHO THIS ONE ADMITS, when the buyer named somebody. Blank stays
+                # blank — the document omits the row rather than printing the
+                # buyer's name on a seat they gave away.
+                "attendee": t.attendee_name,
+                # Which sale phase priced it. NULL on the column means it billed
+                # at the tier's face price, so "" here and the label omits it.
+                "phase_name": (item.phase_name or "") if item is not None else "",
+                "unit_price_display": (
+                    _amount_display(item.unit_price_minor) if item is not None else ""
+                ),
+            }
+        )
     event = booking.event
     reference = str(booking.id)
     service = build_notification_service()
@@ -86,8 +136,8 @@ def handle_booking_confirmed(payload: dict) -> None:
         if booking.payment_order_id
         else None
     )
-    payment_context = (
-        {
+    if payment is not None:
+        payment_context: dict[str, str] = {
             "amount_display": _amount_display(payment.amount_minor),
             # INCLUDED in the total, never added to it — the platform takes its
             # fee OUT at settlement, and the receipt has to say so or it reads
@@ -97,9 +147,26 @@ def handle_booking_confirmed(payload: dict) -> None:
             "paid_at": format_when(payment.updated_at),
             "status_label": payment.get_status_display(),
         }
-        if payment is not None
-        else None
-    )
+    else:
+        # NO PAYMENT ROW, BUT THE BOOKING IS PAID. `confirm_booking` is what
+        # published the event this handler consumes, so the money moved — the row
+        # can simply be unresolvable here (a booking confirmed without a Razorpay
+        # order has a blank `payment_order_id`, and there is nothing to look up).
+        #
+        # The AMOUNT is still known: `total_amount_minor` is what the booking was
+        # reserved at and the exact figure payments' webhook amount-checks
+        # against, so it is the charged total rather than a guess. It goes through
+        # `_amount_display` like every other figure here, so the `₹` -> `INR `
+        # WinAnsi mapping in the PDF applies to it too.
+        #
+        # NOTHING else is filled in. There is no provider reference, no
+        # captured-at and no provider status to print, and a receipt that
+        # invented any of the three would be a receipt that lies about where the
+        # money is — so those rows are simply absent.
+        payment_context = {
+            "amount_display": _amount_display(booking.total_amount_minor),
+            "platform_fee_display": _amount_display(booking.platform_fee_minor),
+        }
 
     # The ticket delivery email — event details + booking reference + the QR(s).
     service.notify(
@@ -111,6 +178,16 @@ def handle_booking_confirmed(payload: dict) -> None:
             "event_when": format_when(event.starts_at),
             "event_where": f"{event.venue}, {event.city}",
             "booking_reference": reference,
+            # WHEN IT WAS ISSUED. `confirm_booking` marks the booking paid and
+            # issues its tickets in ONE transaction, so the booking's
+            # `updated_at` is the issue instant — there is no separate column,
+            # and adding one would be a second answer to the same question.
+            "issued_at": format_when(booking.updated_at),
+            # WHO IS PRESENTING IT — the counterparty of the purchase, and the
+            # name a dispute is opened against. Joined by `get_detail`, so
+            # reading it here is no extra statement on the money path.
+            "organizer_name": event.organization.name,
+            "maps_url": _directions_url(event),
             "tickets": tickets,
             "payment": payment_context,
         },

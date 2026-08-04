@@ -41,6 +41,11 @@ from apps.notifications.ticket_pdf import (
 )
 
 SITE = "https://curatix.test"
+# Built by `handlers._directions_url`, which builds it the same way
+# frontend/lib/api/maps.ts does — asserted here as a literal so a change to
+# either side of that pair has to be made deliberately.
+MAPS_URL = "https://www.google.com/maps/search/?api=1&query=Phoenix%20Arena%2C%20Mumbai"
+ISSUED = "Fri 01 Aug 2026, 11:04 IST"
 
 # Annotated because a render context is heterogeneous by nature — strings
 # alongside a list of ticket dicts. Left to inference the values collapse to a
@@ -288,15 +293,24 @@ class TestTheCodeIsNotInTheDocument:
 # ── the link back to the app ─────────────────────────────────────────────
 
 
+def uris(pdf: bytes) -> set[bytes]:
+    """Every URL the file is actually clickable to.
+
+    A SET, and that matters: this used to be compared against one URI repeated
+    once per page, which is an assertion about how many links the document has
+    rather than which — so adding the directions link broke a test that was
+    checking the ticket link. The property is "these addresses are reachable".
+    """
+    return set(re.findall(rb"/URI\s*\(([^)]*)\)", pdf))
+
+
 class TestTheViewEventTicketButton:
     def test_it_is_a_real_link_annotation_not_a_drawn_rectangle(self, placed):
-        pdf = build(payment=FULL_PAYMENT, site_url=SITE)
+        pdf = build(payment=FULL_PAYMENT, site_url=SITE, maps_url=MAPS_URL)
 
         assert "View Event Ticket" in texts(placed)
         # `/URI` is the annotation; a picture of a button has none.
-        assert (
-            re.findall(rb"/URI\s*\(([^)]*)\)", pdf) == [b"https://curatix.test/account/tickets"] * 2
-        )
+        assert uris(pdf) == {b"https://curatix.test/account/tickets", MAPS_URL.encode()}
 
     def test_the_url_is_printed_as_well_as_linked(self, placed):
         """A PDF gets printed, and a printed button is a coloured box. The
@@ -312,6 +326,135 @@ class TestTheViewEventTicketButton:
         assert "View Event Ticket" not in texts(placed)
         # …and the sentence that replaces it still says what to do.
         assert "app to be scanned at the gate" in page(placed)
+
+
+# ── the way to the venue ─────────────────────────────────────────────────
+
+
+class TestTheDirectionsLink:
+    def test_it_is_a_real_annotation_with_the_address_printed_beside_it(self, placed):
+        pdf = build(payment=FULL_PAYMENT, site_url=SITE, maps_url=MAPS_URL)
+
+        assert "Get directions" in texts(placed)
+        assert MAPS_URL.encode() in uris(pdf)
+        # Printed as well as linked: a PDF gets printed, and an outlined box on
+        # paper is not a route.
+        assert MAPS_URL in texts(placed)
+
+    def test_it_is_on_every_page(self, placed):
+        """A party of four splits up, and the person holding page 2 is as likely
+        to be the one who does not know the venue."""
+        build(payment=FULL_PAYMENT, site_url=SITE, maps_url=MAPS_URL)
+
+        assert texts(placed).count("Get directions") == 2
+
+    def test_no_maps_url_draws_nothing_at_all(self, placed):
+        """The same rule the ticket button follows: a control that opens an empty
+        map reads as the product being broken."""
+        pdf = build(payment=FULL_PAYMENT, site_url=SITE, maps_url="")
+
+        assert "Get directions" not in page(placed)
+        assert uris(pdf) == {b"https://curatix.test/account/tickets"}
+
+
+# ── who is presenting it, and when it was issued ─────────────────────────
+
+
+class TestTheBookingBlock:
+    def test_the_organizer_is_named_when_the_caller_has_one(self, placed):
+        """The counterparty of the purchase — the name a dispute is opened
+        against, which a receipt without it cannot answer."""
+        build(payment=FULL_PAYMENT, site_url=SITE, organizer="Notify Demo Co")
+
+        printed = page(placed)
+        assert "Organizer" in printed
+        assert "Notify Demo Co" in printed
+
+    def test_no_organizer_draws_no_row(self, placed):
+        build(payment=FULL_PAYMENT, site_url=SITE)
+
+        assert "Organizer" not in page(placed)
+
+    def test_the_issue_date_appears_only_when_supplied(self, placed):
+        build(booking=PdfBooking(reference="ref-1"), site_url=SITE)
+        assert "Issued" not in page(placed)
+
+        placed.clear()
+        build(booking=PdfBooking(reference="ref-1", issued_at=ISSUED), site_url=SITE)
+        printed = page(placed)
+        assert "Issued" in printed
+        assert ISSUED in printed
+
+    def test_a_full_block_carries_every_fact_and_still_fits(self, placed):
+        """The maximal page: a three-line title, every booking row, every payment
+        row, both links and the terms. MEASURED, not assumed — the geometry here
+        is the whole reason this file records positions."""
+        build_ticket_pdf(
+            event_title="The " + ("Extraordinarily Long Festival Of Things " * 4),
+            event_when=str(CONTEXT["event_when"]),
+            event_where="A venue with an implausibly long name, " * 3,
+            booking_reference=str(CONTEXT["booking_reference"]),
+            tickets=[PdfTicket("Gold — Early bird — INR 300.00 each", attendee="Asha Rao")],
+            booking=PdfBooking(reference="ref-1", issued_at=ISSUED, attendee="Ravi Kumar"),
+            payment=FULL_PAYMENT,
+            site_url=SITE,
+            organizer="An Organisation With A Very Long Trading Name Indeed Pvt Ltd",
+            maps_url=MAPS_URL,
+        )
+
+        printed = page(placed)
+        for fact in ("Organizer", "Issued", "Attendee", "Get directions", "ENTRY TERMS"):
+            assert fact in printed
+        for item in placed:
+            assert item.left >= MARGIN - 1, item
+            assert item.right <= PAGE_W - MARGIN + 1, item
+        # Nothing has been pushed into the footer, which is where an added block
+        # goes to become invisible.
+        assert min(item.y for item in placed) >= MARGIN
+
+
+# ── the entry terms ──────────────────────────────────────────────────────
+
+
+class TestTheEntryTerms:
+    def test_the_four_rules_are_printed_by_default(self, placed):
+        """The default is CONTENT, not an omission: these are true of every
+        ticket this platform issues, so they are the document's own text rather
+        than something a caller has to remember to pass."""
+        build_ticket_pdf(
+            event_title="Gig",
+            event_when="Sat",
+            event_where="Venue, City",
+            booking_reference="ref-1",
+            tickets=[PdfTicket("Gold")],
+        )
+
+        printed = page(placed)
+        assert "ENTRY TERMS" in printed
+        assert "One scan admits one person" in printed
+        assert "bring photo ID matching that name" in printed
+        assert "A refund voids every ticket" in printed
+        assert "Entry is only within the scan window" in printed
+
+    def test_the_scan_window_is_never_given_a_number(self, placed):
+        """The window is a deployment setting
+        (`CHECKIN_WINDOW_OPENS_BEFORE_MINUTES`). A figure printed here would be
+        one this document invented, on the line somebody plans their arrival
+        around."""
+        build(payment=FULL_PAYMENT, site_url=SITE)
+
+        window_line = next(line for line in texts(placed) if "scan window" in line)
+        assert not re.search(r"\d", window_line)
+
+    def test_they_are_on_every_page(self, placed):
+        build(payment=FULL_PAYMENT, site_url=SITE)
+
+        assert texts(placed).count("ENTRY TERMS") == 2
+
+    def test_a_caller_with_its_own_terms_can_drop_the_block(self, placed):
+        build(payment=FULL_PAYMENT, site_url=SITE, terms=())
+
+        assert "ENTRY TERMS" not in page(placed)
 
 
 # ── the payment block ────────────────────────────────────────────────────
@@ -476,6 +619,39 @@ def test_the_email_context_reaches_the_payment_block(placed):
 
     assert "INR 2,400.00" in page(placed)
     assert "pay_QwErTy123456" in page(placed)
+
+
+def test_everything_the_handler_gathers_survives_the_trip_through_the_template(placed):
+    """A context key the template quietly drops is a fact nobody ever sees
+    again, so each of the handler's additions is asserted on the page itself
+    rather than on the context."""
+    TemplateService().render(
+        notification_type=NotificationType.TICKET_DELIVERY,
+        channel="email",
+        context={
+            **CONTEXT,
+            "organizer_name": "Notify Demo Co",
+            "maps_url": MAPS_URL,
+            "tickets": [
+                {
+                    "ticket_type": "Gold",
+                    "qr_token": "v1.eyJ0IjoiYSJ9.deadbeef",
+                    "attendee": "Asha Rao",
+                    "phase_name": "Early bird",
+                    "unit_price_display": "₹300.00",
+                }
+            ],
+        },
+    )
+
+    printed = page(placed)
+    # The tier, the sale phase that priced it, and what the line was billed —
+    # with the rupee mapped to `INR `, not drawn as a black box.
+    assert "Gold — Early bird — INR 300.00 each" in printed
+    assert "Notify Demo Co" in printed
+    assert "Asha Rao" in printed
+    assert str(CONTEXT["issued_at"]) in printed
+    assert MAPS_URL in printed
 
 
 def test_a_broken_pdf_never_costs_the_email(monkeypatch):

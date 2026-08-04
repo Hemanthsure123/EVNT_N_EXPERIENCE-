@@ -11,6 +11,8 @@ from apps.notifications.exceptions import TemplateMissingError, UnknownNotificat
 from apps.notifications.models import NotificationChannel, NotificationType
 from apps.notifications.templates import (
     TemplateService,
+    _tier_label,
+    _tier_lines,
     channel_for_type,
     dlt_template_id_for_type,
     format_when,
@@ -45,6 +47,39 @@ def test_ticket_email_renders_event_reference_and_every_qr():
     assert "bk-123" in rendered.body  # booking reference
     assert "Grand Arena, Mumbai" in rendered.body  # venue
     assert "v1.aaa.bbb" in rendered.body and "v1.ccc.ddd" in rendered.body  # every QR
+
+
+def test_a_tier_label_carries_the_phase_and_the_price_that_was_billed():
+    assert (
+        _tier_label(
+            {"ticket_type": "Gold", "phase_name": "Early bird", "unit_price_display": "₹300.00"}
+        )
+        == "Gold — Early bird — ₹300.00 each"
+    )
+
+
+def test_a_tier_label_omits_what_it_was_not_given_rather_than_filling_it_in():
+    """A NULL `BookingItem.phase_name` means the line billed at the tier's face
+    price, and a caller that has not been updated carries no price at all.
+    Neither is inferred — the label just gets shorter."""
+    assert _tier_label({"ticket_type": "Basic"}) == "Basic"
+    assert _tier_label({"ticket_type": "Basic", "phase_name": ""}) == "Basic"
+    assert (
+        _tier_label({"ticket_type": "Basic", "unit_price_display": "₹300.00"})
+        == "Basic — ₹300.00 each"
+    )
+
+
+def test_tier_lines_count_identical_labels_and_keep_the_order_they_were_chosen():
+    lines = _tier_lines(
+        [
+            {"ticket_type": "Gold", "phase_name": "Early bird", "unit_price_display": "₹300.00"},
+            {"ticket_type": "Gold", "phase_name": "Early bird", "unit_price_display": "₹300.00"},
+            {"ticket_type": "Basic"},
+        ]
+    )
+
+    assert lines == ["2 × Gold — Early bird — ₹300.00 each", "1 × Basic"]
 
 
 def test_otp_template_has_no_subject_and_carries_the_code():

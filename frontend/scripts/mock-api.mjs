@@ -507,6 +507,51 @@ const TIER_SHAPE = [
   { name: 'Premium', multiplier: 4, share: 0.15 },
 ];
 
+/**
+ * Sale phases: ONE event has a live one, everything else is at face price.
+ *
+ * The frontend has two states to render and they are not symmetrical — "no
+ * phase" is every tier on the platform and "a phase is running" is the one that
+ * strikes a price through, badges a name, counts seats and starts a clock. So
+ * exactly one fixture event carries it, deterministically, and it is the
+ * CHEAPEST tier of that event: an active phase on a higher tier could reorder
+ * what a buyer sees as cheapest, and a fixture is not the place to make an
+ * ordering assertion depend on a discount.
+ *
+ * Everything a real tier payload carries is carried here in the same shape —
+ * `effective_price` equal to `price` and `current_phase: null` when nothing is
+ * running, because that IS what the serializer sends (they are not omitted), and
+ * a component that only ever meets the phase-shaped fixture is a component that
+ * has never been rendered against the normal case.
+ */
+/** ~2 days out, quantised to the hour so a restart does not move it. */
+const PHASE_ENDS_AT = new Date(Math.ceil((Date.now() + 2 * DAY) / HOUR) * HOUR).toISOString();
+const PHASE_NAME = 'Early bird';
+/** Seats still inside the phase's CUMULATIVE cap, before any live holds. Set
+ *  rather than null on purpose: "Only N left at this price" renders only from a
+ *  real number, so the fixture has to supply one to exercise that line at all. */
+const PHASE_HEADROOM = 18;
+
+/**
+ * Which event carries the schedule — chosen by predicate, memoised.
+ *
+ * Not a hard-coded index: `from_price` and `tickets_available` come off the
+ * seeded random ladder, so index 2 might be a free event, an unpriced one or one
+ * with four tickets left, and a phase on any of those exercises nothing. The
+ * predicate ("priced, and with real stock") is just as deterministic and cannot
+ * pick a degenerate event.
+ */
+let phasedEventId;
+function phasedEvent() {
+  if (phasedEventId === undefined) {
+    const candidate = buildEvents().find(
+      (event) => event.from_price > 0 && (event.tickets_available ?? 0) > 200,
+    );
+    phasedEventId = candidate?.id ?? '';
+  }
+  return phasedEventId;
+}
+
 function buildTiers(event) {
   const rnd = makeRandom(Number.parseInt(event.id.slice(-8), 16) || 7);
   // Unpriced events have no tiers at all — that's what a null `from_price`
@@ -525,13 +570,20 @@ function buildTiers(event) {
     const sold = Math.round(nominal * (0.6 + rnd() * 2.4)) + (last ? 0 : 5);
     const quantity = nominal + sold;
     const id = fixtureId(9000 + index * 137 + (Number.parseInt(event.id.slice(-4), 16) % 500));
+    const held = reservedByTier.get(id) ?? 0;
     // Live availability = the nominal stock minus whatever bookings hold.
-    const available = Math.max(nominal - (reservedByTier.get(id) ?? 0), 0);
+    const available = Math.max(nominal - held, 0);
+    const price = Math.round((base * tier.multiplier) / 100) * 100;
     return {
       id,
       event_id: event.id,
       name: tier.name,
-      price: Math.round((base * tier.multiplier) / 100) * 100,
+      price,
+      // The three phase fields the real serializer always sends, computed by the
+      // same rule it uses (`apps/ticketing/pricing.py`): no schedule, or one
+      // that has lapsed, means `effective_price === price`, `current_phase: null`
+      // and `next_price: null` — there is nothing after the face price.
+      ...phaseFields({ event, index, price, sold, held }),
       quantity,
       sold,
       available,
@@ -543,6 +595,60 @@ function buildTiers(event) {
       created_at: new Date(Date.now() - 30 * DAY).toISOString(),
     };
   });
+}
+
+/**
+ * The `effective_price` / `current_phase` / `next_price` / `phases` block.
+ *
+ * Only the CHEAPEST tier of the one phased event gets a schedule, and the
+ * cumulative cap is expressed the way the real column is: `sold + headroom`,
+ * counting every seat already sold or held. So booking against the fixture walks
+ * the count down and eventually exhausts the phase, exactly as it would in
+ * production — which is the only way the "phase lapsed" branch ever gets
+ * rendered without editing the fixture.
+ */
+function phaseFields({ event, index, price, sold, held }) {
+  if (index !== 0 || event.id !== phasedEvent()) {
+    return { effective_price: price, current_phase: null, next_price: null, phases: [] };
+  }
+  // 20% off, rounded to whole rupees like every other price here.
+  const phasePrice = Math.round((price * 0.8) / 100) * 100;
+  const cap = sold + PHASE_HEADROOM;
+  const remaining = Math.max(0, cap - (sold + held));
+  const live = remaining > 0 && Date.parse(PHASE_ENDS_AT) > Date.now();
+  const phase = {
+    id: fixtureId(9500 + index),
+    name: PHASE_NAME,
+    price: phasePrice,
+    ends_at: PHASE_ENDS_AT,
+    quantity: cap,
+    position: 0,
+  };
+  return {
+    effective_price: live ? phasePrice : price,
+    current_phase: live ? { name: PHASE_NAME, ends_at: PHASE_ENDS_AT, remaining } : null,
+    // The face price is what comes next — there is no later phase.
+    next_price: live ? price : null,
+    // The schedule is still reported once it has lapsed: the rows exist, and the
+    // organizer's own editor reads them.
+    phases: [phase],
+  };
+}
+
+/**
+ * What ONE unit of an order of this size is billed, and the phase that priced it
+ * — the fixture's copy of `decide_unit_price`, including the STRADDLE rule: an
+ * order that does not fit inside the phase's remaining seats pays the next price
+ * for the WHOLE order, never a split one. Without it the fixture would quote a
+ * discount the real backend refuses, which is the one thing a money-path fixture
+ * must not do.
+ */
+function billFor(tier, quantity) {
+  const phase = tier.current_phase;
+  if (!phase || (phase.remaining !== null && quantity > phase.remaining)) {
+    return { unit_price: tier.price, phase_name: null };
+  }
+  return { unit_price: tier.effective_price, phase_name: phase.name };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -992,13 +1098,18 @@ const server = createServer((req, res) => {
             `Up to ${tier.max_per_order} per order.`,
           );
         }
+        // Priced under the same rule the locked reserve uses, so the booking the
+        // funnel reads back agrees with the estimate it showed — and disagrees in
+        // exactly the case the real one would, when an order straddles the cap.
+        const billed = billFor(tier, qty);
         items.push({
           ticket_type_id: tier.id,
           ticket_type_name: tier.name,
           quantity: qty,
-          unit_price: tier.price,
+          unit_price: billed.unit_price,
+          phase_name: billed.phase_name,
         });
-        total += tier.price * qty;
+        total += billed.unit_price * qty;
         quantity += qty;
       }
       if (!items.length) {

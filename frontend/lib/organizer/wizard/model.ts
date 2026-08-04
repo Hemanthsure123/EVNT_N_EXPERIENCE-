@@ -401,6 +401,30 @@ export function phaseIssues(tier: DraftTier): string[] {
   return problems;
 }
 
+/**
+ * Whether this tier may be SENT to the API yet.
+ *
+ * The save engine's gate, and it has to include the schedule. A phase is typed
+ * one field at a time, so for as long as it takes to fill in four inputs the
+ * tier carries a schedule the serializer refuses — a phase with a blank name, or
+ * no price, or neither bound. Sending it means every autosave from that
+ * keystroke until the last one is a 400, on the screen whose entire promise is
+ * that work is never lost, with nothing the organizer can act on: the tier's own
+ * fields are all valid.
+ *
+ * So an incomplete schedule makes the tier unsavable rather than unsendable-and-
+ * failing, exactly as an unnamed tier already does. `phaseIssues` is the single
+ * statement of the rules; this is the one place that turns them into a verdict.
+ */
+export function tierIsSavable(tier: DraftTier): boolean {
+  return Boolean(
+    tier.name.trim() &&
+      tier.price !== '' &&
+      Number(tier.quantity) >= 1 &&
+      phaseIssues(tier).length === 0,
+  );
+}
+
 /** Rupees typed in a field -> integer paise. Exported nowhere: the two callers
  *  that need it are in this module, and one of them is the API boundary. */
 function toMinor(rupees: string): number {

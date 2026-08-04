@@ -3,9 +3,10 @@
 import * as React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Minus, Plus } from 'lucide-react';
+import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
-import { tierRank } from '@/lib/discovery/tiers';
+import { tierRank, unitPriceFor } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { EASE_OUT } from './motion';
 import { useBooking } from './booking-context';
@@ -18,6 +19,12 @@ import { useBooking } from './booking-context';
  * "Selling fast" only appears when a tier is genuinely near the end of its
  * stock. Neither is decorative, because the moment one of them is, none of them
  * are believed.
+ *
+ * A LIVE SALE PHASE PRICES THE ROW. The big number is `effective_price` — what
+ * the reserve will actually be billed — with the face price struck through under
+ * it and the phase's own name on a pill, so a total lower than the list price
+ * explains itself. The subtotal multiplies the same number, because a subtotal
+ * that disagrees with the price above it is the funnel's worst possible bug.
  *
  * Sold-out tiers stay VISIBLE and disabled. Knowing the ₹499 tier is gone is
  * what makes the ₹1,099 one make sense; hiding it just makes the event look
@@ -62,8 +69,14 @@ export function TierPicker({ className }: { className?: string }) {
   const { tiers, selection, setQuantity } = useBooking();
 
   const buyable = tiers.filter((tier) => tier.is_on_sale && tier.available > 0);
+  // Compared on what a buyer would actually PAY, not on the face price — with a
+  // phase running they are different numbers, and a "Best value" badge on the
+  // tier that is not the cheapest one on the screen is the badge that stops all
+  // of them being believed.
   const bestValueId =
-    buyable.length > 1 ? [...buyable].sort((a, b) => a.price - b.price)[0]?.id : undefined;
+    buyable.length > 1
+      ? [...buyable].sort((a, b) => unitPriceFor(a) - unitPriceFor(b))[0]?.id
+      : undefined;
 
   if (!tiers.length) {
     return (
@@ -110,6 +123,10 @@ function TierCard({
   const max = Math.max(Math.min(tier.max_per_order, tier.available), 0);
   const sellingFast = !soldOut && tier.available <= SELLING_FAST_AT;
   const groupId = `tier-${tier.id}`;
+  // What one ticket costs right now. The face price is kept only to strike it
+  // through beside the phase price — every arithmetic below uses this one.
+  const phase = tier.current_phase;
+  const unitPrice = unitPriceFor(tier);
 
   return (
     <motion.div
@@ -137,6 +154,7 @@ function TierCard({
             <h3 id={`${groupId}-name`} className="text-body-lg font-semibold text-foreground">
               {tier.name}
             </h3>
+            {phase ? <PhaseBadge name={phase.name} /> : null}
             {bestValue ? (
               <span className="rounded-full bg-nav-active px-2.5 py-0.5 text-caption text-nav-active-foreground">
                 Best value
@@ -162,6 +180,11 @@ function TierCard({
                   ? `Only ${tier.available} left · up to ${tier.max_per_order} per order`
                   : `Up to ${tier.max_per_order} per order`}
           </p>
+          {/* Not on a tier nobody can buy: `remaining` counts seats inside the
+              phase's threshold and `available` counts stock, so a sold-out tier
+              can still have phase seats left — and "Only 3 left at this price"
+              under "No tickets left in this tier" is a contradiction. */}
+          {phase && !disabled ? <PhaseNotes phase={phase} nextPrice={tier.next_price} /> : null}
         </div>
 
         <p className="shrink-0 text-right">
@@ -171,8 +194,16 @@ function TierCard({
               soldOut && 'text-muted-foreground line-through',
             )}
           >
-            {formatFromPrice(tier.price) === 'Free' ? 'Free' : formatFromPrice(tier.price)}
+            {formatFromPrice(unitPrice) === 'Free' ? 'Free' : formatFromPrice(unitPrice)}
           </span>
+          {/* The face price, struck, only while a phase is actually off it. A
+              sold-out tier already strikes the price above for a different
+              reason, so this line would be two strikes saying two things. */}
+          {phase && !soldOut ? (
+            <span className="block text-caption tabular-nums text-muted-foreground line-through">
+              {formatFromPrice(tier.price)}
+            </span>
+          ) : null}
           <span className="text-caption text-muted-foreground">per ticket</span>
         </p>
       </div>
@@ -183,7 +214,7 @@ function TierCard({
             <>
               Subtotal{' '}
               <span className="font-semibold tabular-nums text-foreground">
-                {formatFromPrice(tier.price * quantity)}
+                {formatFromPrice(unitPrice * quantity)}
               </span>
             </>
           ) : (

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Check, Info, Loader2, Minus, Plus, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import { fetchEventTiers } from '@/lib/api/events';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
@@ -14,6 +15,7 @@ import {
   isUrgent,
   summariseTiers,
   tierRank,
+  unitPriceFor,
 } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 
@@ -30,6 +32,15 @@ import { cn } from '@/lib/utils/cn';
  * The server hands over the first response as `initialData`, so the panel paints
  * with real numbers instead of a spinner, and the client immediately verifies
  * them. No layout shift, no stale figure.
+ *
+ * A LIVE SALE PHASE IS THE PRICE, and the face price is struck through beside
+ * it. `effective_price` comes from the same rule the locked reserve uses to
+ * decide what to CHARGE, so the number here is the number the funnel quotes and
+ * the lock bills; `price` is only what the phase is off. Everything else the
+ * phase says — how many seats are left at it, when it lifts — is rendered by
+ * `components/pricing/sale-phase.tsx` and only from fields the backend actually
+ * sent (see its header): no count without `remaining`, no clock without
+ * `ends_at`.
  *
  * TIERS ARE DISTINGUISHED BY ELEVATION AND RANK, not by colour. Rank comes from
  * PRICE ORDER, not from the tier's name — "Basic/Gold/Premium" is one
@@ -98,7 +109,10 @@ export function TicketPanel({
     setQuantity((current) => Math.min(current, maxQuantity));
   }, [maxQuantity]);
 
-  const total = selected ? selected.price * quantity : 0;
+  // The EFFECTIVE price, so the total on this panel is the total the funnel will
+  // quote and the lock will charge. `price` here is the face price a phase is
+  // off, and multiplying it would overstate a discounted order by the discount.
+  const total = selected ? unitPriceFor(selected) * quantity : 0;
 
   return (
     <section
@@ -265,7 +279,12 @@ function TierOption({
 }) {
   const soldOut = tier.available <= 0;
   const disabled = soldOut || !tier.is_on_sale;
-  const price = formatFromPrice(tier.price);
+  // The live phase price is THE price; the face price is only shown alongside it,
+  // struck through, so the discount is visible as a discount. With no phase
+  // running there is one number and nothing to strike.
+  const phase = tier.current_phase;
+  const price = formatFromPrice(unitPriceFor(tier));
+  const facePrice = phase ? formatFromPrice(tier.price) : null;
 
   return (
     <button
@@ -293,8 +312,9 @@ function TierOption({
       )}
     >
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center gap-2">
           <span className="truncate text-body font-semibold text-foreground">{tier.name}</span>
+          {phase ? <PhaseBadge name={phase.name} /> : null}
           {selected && !disabled ? (
             <Check className="size-4 shrink-0 text-primary" aria-hidden />
           ) : null}
@@ -308,9 +328,21 @@ function TierOption({
                 ? `Only ${tier.available} left`
                 : 'Available'}
         </span>
+        {/* Not on a tier nobody can buy: `remaining` counts seats inside the
+            phase's threshold and `available` counts stock, so a sold-out tier
+            can still have phase seats left — and "Only 3 left at this price"
+            under the word "Sold out" is a contradiction, not a nudge. */}
+        {phase && !disabled ? <PhaseNotes phase={phase} nextPrice={tier.next_price} /> : null}
       </span>
-      <span className="shrink-0 text-body font-semibold tabular-nums text-foreground">
-        {price === 'Free' ? 'Free' : price}
+      <span className="shrink-0 text-right">
+        <span className="block text-body font-semibold tabular-nums text-foreground">
+          {price === 'Free' ? 'Free' : price}
+        </span>
+        {facePrice ? (
+          <span className="block text-caption tabular-nums text-muted-foreground line-through">
+            {facePrice}
+          </span>
+        ) : null}
       </span>
     </button>
   );

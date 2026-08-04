@@ -226,18 +226,43 @@ def _payment_block(ctx: dict) -> PdfPayment | None:
     return block if block.has_content() else None
 
 
+def _tier_label(ticket: dict) -> str:
+    """ "Gold — Early bird — ₹300.00 each": the tier, the sale phase that priced
+    it, and what that line was actually billed.
+
+    ONE function for both renderers — the email lists these with a count in
+    front and the PDF puts the same string in each page's "Ticket type" cell.
+    Two builders would be two answers to "what is this seat called", on the two
+    artifacts a buyer compares when a charge looks wrong.
+
+    Phase and price are each OMITTED when absent rather than filled in: an item
+    that billed at the tier's face price has no phase name (that is what NULL
+    means on `BookingItem.phase_name`), and a caller that has not been updated
+    carries no price. Neither is inferred.
+    """
+    label = str(ticket["ticket_type"])
+    phase = str(ticket.get("phase_name") or "").strip()
+    price = str(ticket.get("unit_price_display") or "").strip()
+    if phase:
+        label = f"{label} — {phase}"
+    if price:
+        label = f"{label} — {price} each"
+    return label
+
+
 def _tier_lines(tickets: list[dict]) -> list[str]:
-    """ "2 x Gold", "1 x Basic" — counted, not enumerated.
+    """ "2 × Gold — Early bird — ₹300.00 each" — counted, not enumerated.
 
     A numbered list of every admission is the same tier name printed four
-    times; the fact somebody wants is how many of each they bought. Insertion
-    order is preserved so the list reads in the order the tiers were chosen.
+    times; the fact somebody wants is how many of each they bought, and at what
+    price. Insertion order is preserved so the list reads in the order the tiers
+    were chosen.
     """
     counts: dict[str, int] = {}
     for ticket in tickets:
-        name = str(ticket["ticket_type"])
-        counts[name] = counts.get(name, 0) + 1
-    return [f"{count} × {name}" for name, count in counts.items()]
+        label = _tier_label(ticket)
+        counts[label] = counts.get(label, 0) + 1
+    return [f"{count} × {label}" for label, count in counts.items()]
 
 
 def _ticket_delivery(ctx: dict) -> RenderedMessage:
@@ -330,7 +355,7 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
             booking_reference=reference,
             tickets=[
                 PdfTicket(
-                    ticket_type=str(t["ticket_type"]),
+                    ticket_type=_tier_label(t),
                     qr_token=str(t.get("qr_token") or ""),
                     attendee=str(t.get("attendee") or ""),
                 )
@@ -343,6 +368,10 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
             ),
             payment=payment,
             site_url=site,
+            # Both blank unless the handler carried them, and blank draws
+            # nothing — the PDF omits a row rather than printing an empty one.
+            organizer=str(ctx.get("organizer_name") or ""),
+            maps_url=str(ctx.get("maps_url") or ""),
         )
     except Exception:  # noqa: BLE001 — deliberate: see the note above
         logger.exception(

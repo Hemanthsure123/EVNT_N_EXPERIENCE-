@@ -13,7 +13,13 @@ import {
   Trash2,
 } from 'lucide-react';
 import { formatMoney } from '@/lib/discovery/format';
-import { newTier, type DraftTier } from '@/lib/organizer/wizard/model';
+import {
+  MAX_PHASES,
+  newPhase,
+  newTier,
+  type DraftPhase,
+  type DraftTier,
+} from '@/lib/organizer/wizard/model';
 import { Button, Input } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { EmptyState } from '../primitives';
@@ -56,6 +62,22 @@ import { EmptyState } from '../primitives';
  *
  * Add and duplicate are `outline` and `ghost`; the one filled pill on the
  * tickets step is the wizard footer's Next.
+ *
+ * ── PRICING PHASES ARE PART OF THE TIER, SO THEY LIVE INSIDE ITS CARD ─────
+ *
+ * A phase is a step in ONE tier's price, not a sibling of the tier, and the
+ * schedule is written as part of the tier's own PATCH (array order is position —
+ * see `SalePhaseInput`). So the repeater is inside the expanded card, built from
+ * the same `Field` primitive as the six fields above it, and each row can only
+ * be removed — there is no per-phase save to get out of step, because the whole
+ * schedule is replaced on every write.
+ *
+ * The seat cap is the field an organizer will otherwise get wrong, so the panel
+ * states BOTH of the backend's actual rules: the cap is CUMULATIVE (the first N
+ * seats of the tier, not N seats set aside at this price), and an order that
+ * straddles it pays the NEXT phase's price for the whole order rather than being
+ * split. Neither is guessable from the label, and both change what the organizer
+ * would type.
  */
 
 export function TicketBuilder({
@@ -187,6 +209,11 @@ export function TicketBuilder({
                         ? 'No price set'
                         : formatMoney(Math.round(Number(tier.price) * 100))}
                       {tier.quantity ? ` · ${tier.quantity} available` : ''}
+                      {/* A schedule is invisible once the card is collapsed, and
+                          it is the thing most likely to be half-finished. */}
+                      {tier.phases.length
+                        ? ` · ${tier.phases.length} pricing phase${tier.phases.length === 1 ? '' : 's'}`
+                        : ''}
                       {tier.serverId ? ' · saved' : ''}
                     </span>
                   </span>
@@ -302,6 +329,8 @@ export function TicketBuilder({
                     />
                   </div>
 
+                  <PhaseEditor tier={tier} onChange={(phases) => patch(tier.key, { phases })} />
+
                   {problems.length ? (
                     <ul className="mt-stack-lg flex flex-col gap-1" role="alert">
                       {problems.map((problem) => (
@@ -336,6 +365,153 @@ export function TicketBuilder({
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * The sale-phase schedule for one tier.
+ *
+ * Ordered top to bottom, which IS the position the write sends — so the note
+ * says so rather than leaving somebody to discover that dragging is the only
+ * thing missing. There is no reorder control and no per-phase save: the schedule
+ * is submitted whole, and a phase has no server identity to preserve.
+ *
+ * Every rule the schedule has to satisfy is reported by `phaseIssues` into the
+ * card's existing error list below these fields, so this component holds no
+ * validation of its own — one statement of the rules, in the module the save
+ * engine also consults.
+ */
+function PhaseEditor({
+  tier,
+  onChange,
+}: {
+  tier: DraftTier;
+  onChange: (phases: DraftPhase[]) => void;
+}) {
+  const phases = tier.phases;
+  const atLimit = phases.length >= MAX_PHASES;
+
+  const update = (key: string, changes: Partial<DraftPhase>) =>
+    onChange(phases.map((phase) => (phase.key === key ? { ...phase, ...changes } : phase)));
+
+  return (
+    <section className="mt-stack-lg flex flex-col gap-stack border-t border-border pt-stack-lg">
+      <div className="flex flex-wrap items-start justify-between gap-stack">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h4 className="text-body-sm font-medium text-foreground">Pricing phases</h4>
+          <p className="text-caption text-muted-foreground">
+            Optional. Sell the first seats cheaper, then step the price up. Buyers see the live
+            phase price with this ticket&apos;s normal price struck through beside it.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={atLimit}
+          onClick={() => onChange([...phases, newPhase(phases.length)])}
+          leftIcon={<Plus className="size-4" aria-hidden />}
+        >
+          Add pricing phase
+        </Button>
+      </div>
+
+      {phases.length ? (
+        <ul className="flex flex-col gap-stack">
+          {phases.map((phase, index) => (
+            <li
+              key={phase.key}
+              className="flex flex-col gap-stack rounded-lg border border-border bg-surface p-stack"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-caption font-medium text-muted-foreground">
+                  {/* The position, which is what decides the order these apply
+                      in — not a name, which may well still be blank. */}
+                  Phase {index + 1} of {phases.length}
+                </span>
+                <IconButton
+                  destructive
+                  label={`Remove phase ${index + 1} from ${tier.name || 'this ticket'}`}
+                  onClick={() =>
+                    onChange(phases.filter((candidate) => candidate.key !== phase.key))
+                  }
+                >
+                  <Trash2 className="size-4" aria-hidden />
+                </IconButton>
+              </div>
+              <div className="grid gap-stack-lg sm:grid-cols-2">
+                <Field
+                  label="Name"
+                  id={`${phase.key}-name`}
+                  value={phase.name}
+                  onChange={(value) => update(phase.key, { name: value })}
+                  // A suggestion, not a default: the placeholder is what most
+                  // organizers call these, and it disappears the moment they
+                  // call theirs something else.
+                  placeholder={index === 0 ? 'Early bird' : `Phase ${index}`}
+                  hint="Buyers see this on the ticket and on their order."
+                />
+                <Field
+                  label="Price (₹)"
+                  id={`${phase.key}-price`}
+                  value={phase.price}
+                  onChange={(value) => update(phase.key, { price: value })}
+                  type="number"
+                  min="1"
+                  placeholder="399"
+                  hint="At or below the normal price, and never cheaper than the phase above."
+                />
+                <Field
+                  label="Ends at"
+                  id={`${phase.key}-ends`}
+                  value={phase.endsAt}
+                  onChange={(value) => update(phase.key, { endsAt: value })}
+                  type="datetime-local"
+                  hint="Leave blank to end it on the seat cap alone."
+                />
+                <Field
+                  label="Seat cap"
+                  id={`${phase.key}-qty`}
+                  value={phase.quantity}
+                  onChange={(value) => update(phase.key, { quantity: value })}
+                  type="number"
+                  min="1"
+                  placeholder="100"
+                  hint="Cumulative — see below. Leave blank to end it on the time alone."
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/*
+        The two rules that decide whether the seat cap means what the organizer
+        thinks it means. Both are the backend's actual behaviour
+        (`apps/ticketing/pricing.py`), and neither is guessable from the label —
+        an organizer reading "Seat cap: 100" reasonably assumes 100 seats are set
+        aside at this price, and that a 3-ticket order taking the last one would
+        get one cheap seat and two at the next price. Both assumptions are wrong,
+        and both cost them money.
+      */}
+      <div className="flex flex-col gap-1 text-caption text-muted-foreground">
+        <p>Phases apply top to bottom — the first one still open prices the ticket.</p>
+        <p>
+          <strong className="font-medium text-foreground">The seat cap is cumulative.</strong> It
+          counts every seat of this ticket already sold or held, so 100 means &ldquo;the first 100
+          seats&rdquo;, not &ldquo;100 seats at this price&rdquo;. A later phase&apos;s cap has to
+          be higher than the one before it to do anything.
+        </p>
+        <p>
+          <strong className="font-medium text-foreground">
+            An order that would cross the cap pays the next phase&apos;s price
+          </strong>{' '}
+          — for the whole order, never split across two prices. With 1 seat left inside the cap, a
+          3-ticket order is billed 3 at the next price. Buyers are shown how many are left at the
+          current price, so this is visible before they choose.
+        </p>
+        {atLimit ? <p>That is the limit of {MAX_PHASES} phases.</p> : null}
+      </div>
+    </section>
   );
 }
 

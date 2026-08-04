@@ -71,17 +71,24 @@ class BookingRepository(BaseRepository[Booking]):
         return Booking.objects.filter(payment_order_id=rzp_order_id).first()
 
     def get_detail(self, booking_id: uuid.UUID | str) -> Booking | None:
-        """Booking + event + items(+tier) + issued tickets(+tier) in a fixed
-        number of queries, for GET /bookings/{id}.
+        """Booking + event(+organization) + items(+tier) + issued tickets(+tier)
+        in a fixed number of queries, for GET /bookings/{id}.
 
         The tickets are prefetched (one extra query, never one per ticket)
         because the detail response carries who each ticket admits — the screen
         that names attendees is the booking screen, and making it fetch the
         tickets separately would be a second round trip for data this query is
         already positioned to return. A booking that hasn't been paid yet has
-        no tickets, so the prefetch comes back empty rather than absent."""
+        no tickets, so the prefetch comes back empty rather than absent.
+
+        The organization is JOINED, not fetched after: the ticket PDF prints who
+        the event is presented by, and reading `event.organization.name` off a
+        row loaded without it is one extra statement per booking confirmation on
+        the money path. A join costs nothing here — this is already a
+        select_related on the same row's FK chain, and the query budgets this
+        method is measured against (4 for GET /bookings/{id}) do not move."""
         return (
-            Booking.objects.select_related("event")
+            Booking.objects.select_related("event", "event__organization")
             .prefetch_related(
                 Prefetch("items", queryset=BookingItem.objects.select_related("ticket_type")),
                 Prefetch(

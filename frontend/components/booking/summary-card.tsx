@@ -57,16 +57,21 @@ export function SummaryCard({ className }: { className?: string }) {
   // selection is the best available answer.
   const total = booking?.total_amount ?? totals.total;
   const fee = booking?.platform_fee ?? totals.platformFee;
+  // `phase_name` is the label the server RECORDED at reserve time, so a line
+  // stays truthfully "Early bird" even after the phase itself has lapsed. Before
+  // a booking exists the selection's live phase is the best answer there is.
   const lines = booking?.items?.length
     ? booking.items.map((item) => ({
         id: item.ticket_type_id,
         name: item.ticket_type_name,
+        phaseName: item.phase_name ?? null,
         quantity: item.quantity,
         subtotal: item.unit_price * item.quantity,
       }))
     : totals.lines.map((line) => ({
         id: line.tier.id,
         name: line.tier.name,
+        phaseName: line.phaseName,
         quantity: line.quantity,
         subtotal: line.subtotal,
       }));
@@ -126,7 +131,11 @@ export function SummaryCard({ className }: { className?: string }) {
               {lines.map((line) => (
                 <li key={line.id} className="flex items-baseline justify-between gap-3">
                   <span className="min-w-0 truncate text-body-sm text-muted-foreground">
-                    {line.name}
+                    {/* The phase, as part of the line's name — "Gold — Early
+                        bird". It is what makes a subtotal below the tier's list
+                        price self-explanatory, and it is a recorded fact about
+                        this order, not a badge. */}
+                    {line.phaseName ? `${line.name} — ${line.phaseName}` : line.name}
                     <span className="ml-1.5 text-caption">× {line.quantity}</span>
                   </span>
                   <span className="shrink-0 text-body-sm tabular-nums text-foreground">

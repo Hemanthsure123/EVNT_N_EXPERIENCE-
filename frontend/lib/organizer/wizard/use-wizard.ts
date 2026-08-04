@@ -19,6 +19,7 @@ import {
   resolveOrganizationId,
   restoreDraft,
   tierFingerprint,
+  tierIsSavable,
   toCreateInput,
   toPatchInput,
   toTierInput,
@@ -355,8 +356,10 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
       // meaningful latency win at these counts.
       const tiers: DraftTier[] = [];
       for (const tier of working.tiers) {
-        const complete = tier.name.trim() && tier.price !== '' && Number(tier.quantity) >= 1;
-        if (!complete) {
+        // Includes the sale-phase schedule: a half-typed phase is a payload the
+        // serializer refuses, and sending it would make every autosave a 400 the
+        // organizer cannot act on. See `tierIsSavable`.
+        if (!tierIsSavable(tier)) {
           tiers.push(tier);
           continue;
         }

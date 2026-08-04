@@ -52,9 +52,24 @@ file.
 
 ── NEVER PRINT `None` ────────────────────────────────────────────────────
 
-Every optional field — payment method, attendee, paid-at, even the whole
-payment block — is drawn only when it has a value. A receipt that says
-"Method: None" is worse than one that does not mention the method.
+Every optional field — payment method, attendee, paid-at, organizer, the
+directions link, even the whole payment block — is drawn only when it has a
+value. A receipt that says "Method: None" is worse than one that does not
+mention the method, and an empty "Organizer" row reads as a failed lookup.
+
+── WHAT ELSE A FILED RECEIPT HAS TO ANSWER ───────────────────────────────
+
+Three things were missing from a document somebody opens at a venue or
+forwards to whoever is paying, and each is now on it: **who is presenting the
+event** (the counterparty of the purchase, and the name a dispute is opened
+against), **how to get to the venue** (a real link annotation, not a printed
+address to retype), and **the four rules that decide whether they get in**.
+None of the three is inferred: the organizer name comes from the booking's
+own event row, the directions URL is built from the venue the event stores,
+and the terms are the rules this codebase actually enforces — the scan
+window's configured minutes are deliberately NOT printed, because that is a
+deployment setting and a number this document invented is the one somebody
+would plan their arrival around.
 """
 
 from __future__ import annotations
@@ -88,6 +103,26 @@ BAND_H = 26 * mm  # the ink masthead
 CONTENT_W = PAGE_W - (2 * MARGIN)
 
 PRODUCT_NAME = "Curatix"
+
+#: The entry rules, in the order somebody at a gate needs them. STATIC, and
+#: every line is a rule the backend actually enforces — one scan admits one
+#: person is `checkin`'s per-ticket row lock, the ID check is what the gate does
+#: with an assigned attendee name, and `payments.execute_refund` voids a
+#: booking's still-active tickets in the same transaction as the refund record.
+#: The scan window says "published for the event" rather than a number of
+#: minutes: the window is a deployment setting
+#: (`CHECKIN_WINDOW_OPENS_BEFORE_MINUTES`), so a figure printed here would be
+#: one this document made up, on the line somebody plans their arrival around.
+DEFAULT_TERMS: tuple[str, ...] = (
+    "One scan admits one person. A ticket cannot be re-used, split or transferred "
+    "once it has been scanned.",
+    "Where a ticket names an attendee, bring photo ID matching that name. "
+    "Otherwise bring ID matching the booking name.",
+    "A refund voids every ticket on the booking immediately — a refunded ticket "
+    "will not admit anybody.",
+    "Entry is only within the scan window published for the event. Arrive inside "
+    "it; the gate cannot admit you outside it.",
+)
 
 # Rupee is not in WinAnsi; see the module docstring. Curly quotes and the
 # ellipsis ARE, but only via cp1252 — normalising them here keeps the mapping
@@ -385,19 +420,30 @@ def _row(pdf: canvas.Canvas, y: float, label: str, value: str, *, bold: bool = F
     )
 
 
-def _link_button(pdf: canvas.Canvas, cursor: _Cursor, *, label: str, url: str) -> None:
+def _link_button(
+    pdf: canvas.Canvas, cursor: _Cursor, *, label: str, url: str, primary: bool = True
+) -> None:
     """The "View Event Ticket" button — a drawn rectangle PLUS a real PDF link
     annotation over it (`linkURL`), because a rounded rectangle with white
     text in it is a picture of a button until something makes it clickable.
+
+    `primary=False` draws the SAME control outlined rather than filled, and is
+    what "Get directions" uses. Two filled violet buttons on one page are two
+    primaries competing for the same press, and the one this document is about
+    is the ticket; the outline keeps directions recognisably the same
+    affordance — same geometry, same annotation, same printed URL — without
+    claiming to be the page's action.
     """
     height = 11 * mm
     width = min(CONTENT_W, pdf.stringWidth(label, "Helvetica-Bold", 11) + (26 * mm))
     x = MARGIN
     y = cursor.y - height
 
-    pdf.setFillColor(BRAND)
-    pdf.roundRect(x, y, width, height, 2.6 * mm, stroke=0, fill=1)
-    pdf.setFillColor(PAPER)
+    pdf.setFillColor(BRAND if primary else PAPER)
+    pdf.setStrokeColor(BRAND_EDGE)
+    pdf.setLineWidth(0.9)
+    pdf.roundRect(x, y, width, height, 2.6 * mm, stroke=0 if primary else 1, fill=1)
+    pdf.setFillColor(PAPER if primary else BRAND_DEEP)
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawCentredString(x + (width / 2), y + (height / 2) - 4, _pdf_text(label))
 
@@ -415,6 +461,31 @@ def _link_button(pdf: canvas.Canvas, cursor: _Cursor, *, label: str, url: str) -
     cursor.down(height + 14)
 
 
+def _terms_block(pdf: canvas.Canvas, cursor: _Cursor, terms: tuple[str, ...]) -> None:
+    """The entry rules, as a bulleted list in the smallest type on the page that
+    is still legible in print (`SUBTLE` is 5.28:1 on white, unlike --ink-400).
+
+    Wrapped against real font metrics like everything else here, and indented so
+    a wrapped second line lines up under the first rather than under the bullet
+    — a rule that has to be re-read is a rule somebody argues with at the gate.
+    """
+    if not terms:
+        return
+
+    indent = 4.5 * mm
+    _section_label(pdf, cursor, "Entry terms")
+    for term in terms:
+        lines = _wrap(term, font="Helvetica", size=8, max_width=CONTENT_W - indent)
+        for offset, line in enumerate(lines):
+            pdf.setFillColor(SUBTLE)
+            pdf.setFont("Helvetica", 8)
+            if offset == 0:
+                pdf.drawString(MARGIN, cursor.y, _pdf_text("•"))
+            pdf.drawString(MARGIN + indent, cursor.y, line)
+            cursor.down(10.5)
+        cursor.down(2)
+
+
 # ── the document ─────────────────────────────────────────────────────────
 
 
@@ -428,8 +499,12 @@ def build_ticket_pdf(
     booking: PdfBooking | None = None,
     payment: PdfPayment | None = None,
     site_url: str = "",
+    organizer: str = "",
+    maps_url: str = "",
+    terms: tuple[str, ...] = DEFAULT_TERMS,
 ) -> bytes:
-    """One page per ticket: event, booking, payment, and a link to the code.
+    """One page per ticket: event, booking, payment, directions, terms, and a
+    link to the code.
 
     `booking_reference` stays a top-level required argument even though
     `PdfBooking` also carries a reference: it is the document's identity (it
@@ -439,12 +514,15 @@ def build_ticket_pdf(
 
     Every added parameter defaults to something that renders a smaller but
     complete page, so a caller that has not been updated yet still produces a
-    valid document rather than a traceback.
+    valid document rather than a traceback. `terms` is the one whose default is
+    CONTENT rather than an omission — the entry rules are true of every ticket
+    this platform issues, so they are the document's own text, not something a
+    caller supplies. `terms=()` drops the block for a caller that has its own.
 
     `site_url` blank means no button is drawn at all — the same rule the
     emails follow. A call to action pointing at nothing reads as the product
     being broken, which on the one artifact somebody files is worse than an
-    omission.
+    omission. `maps_url` and `organizer` follow it: blank draws nothing.
     """
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -502,6 +580,13 @@ def build_ticket_pdf(
         booking_rows: list[tuple[str, str]] = [
             ("Booking reference", _pdf_text(info.reference or booking_reference))
         ]
+        # WHO SOLD IT. It sits in the booking block rather than in the event
+        # grid above because on a receipt the counterparty is a fact about the
+        # transaction — it is the name somebody opens a dispute against, and the
+        # grid is a fixed 2x2 whose fifth cell would cost 42pt of a page that
+        # now also carries directions and terms.
+        if organizer:
+            booking_rows.append(("Organizer", _pdf_text(organizer)))
         if info.issued_at:
             booking_rows.append(("Issued", _pdf_text(info.issued_at)))
         # Per-ticket attendee wins over a booking-wide one: if a specific
@@ -565,6 +650,15 @@ def build_ticket_pdf(
                 f"Open your ticket in the {PRODUCT_NAME} app to be scanned at the gate.",
             )
             cursor.down(24)
+
+        # ── the way to the venue ─────────────────────────────────────────
+        # A printed address is something to retype into a phone at the point
+        # somebody is already late. A link annotation is one press.
+        if maps_url:
+            _link_button(pdf, cursor, label="Get directions", url=maps_url, primary=False)
+
+        # ── the rules that decide whether they get in ────────────────────
+        _terms_block(pdf, cursor, terms)
 
         _footer(pdf, booking_reference)
         pdf.showPage()

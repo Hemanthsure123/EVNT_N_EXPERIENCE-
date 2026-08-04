@@ -101,14 +101,17 @@ export function PayStep() {
   const provider = resolveProvider(paymentProvider);
   const total = active?.total_amount ?? totals.total;
   // Same reason as the review step: a booking created this session has no
-  // `items` (that's the summary serializer), one restored via GET does.
+  // `items` (that's the summary serializer), one restored via GET does. And the
+  // same effective-price rule — the amount payable comes off the booking, so a
+  // line priced at face value here would itemise a total it does not add up to.
   const lines = active?.items?.length
     ? active.items
     : totals.lines.map((line) => ({
         ticket_type_id: line.tier.id,
         ticket_type_name: line.tier.name,
         quantity: line.quantity,
-        unit_price: line.tier.price,
+        unit_price: line.unitPrice,
+        phase_name: line.phaseName,
       }));
   const paid = active?.status === 'paid';
   // The provider the SERVER named, not an inference from an empty key.
@@ -248,6 +251,7 @@ export function PayStep() {
                     </span>
                     <span className="text-caption text-muted-foreground">
                       {formatFromPrice(line.unit_price)} × {line.quantity}
+                      {line.phase_name ? ` · ${line.phase_name}` : ''}
                     </span>
                   </span>
                   <span className="shrink-0 text-body-sm tabular-nums text-foreground">

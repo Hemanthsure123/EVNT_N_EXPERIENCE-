@@ -147,13 +147,19 @@ export function ReviewStep() {
   // carries them). So the lines come from the selection that was just sent,
   // which is the same data by construction. Reading `booking.items` alone
   // rendered an empty ticket list against the real backend.
+  //
+  // `unit_price` is the tier's EFFECTIVE price, not its face price: a line
+  // synthesised at the face price showed a reserved order costing more than the
+  // booking beside it actually did. `phase_name` comes along for the same reason
+  // it exists on the server's own item — a lower number needs its label.
   const lines = booking?.items?.length
     ? booking.items
     : totals.lines.map((line) => ({
         ticket_type_id: line.tier.id,
         ticket_type_name: line.tier.name,
         quantity: line.quantity,
-        unit_price: line.tier.price,
+        unit_price: line.unitPrice,
+        phase_name: line.phaseName,
       }));
   const total = booking?.total_amount ?? totals.total;
 
@@ -281,6 +287,10 @@ export function ReviewStep() {
                     </span>
                     <span className="text-caption text-muted-foreground">
                       {formatFromPrice(line.unit_price)} × {line.quantity}
+                      {/* The phase that priced it, named — otherwise the only
+                          explanation on screen for a unit price below the tier's
+                          list price is that something went wrong. */}
+                      {line.phase_name ? ` · ${line.phase_name}` : ''}
                     </span>
                   </span>
                   <span className="shrink-0 text-body-sm tabular-nums text-foreground">

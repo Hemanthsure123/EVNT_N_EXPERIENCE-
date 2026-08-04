@@ -12,6 +12,58 @@ from apps.notifications.models import NotificationLog, NotificationStatus, Notif
 from .conftest import confirm_a_booking
 
 
+@pytest.fixture
+def contexts(monkeypatch) -> list[tuple[str, dict]]:
+    """Every `(type, context)` a handler hands to the ONE entry point.
+
+    The receipt facts added for the ticket PDF — the organizer, the issue date,
+    the venue link, each line's billed price — reach the reader as an ATTACHMENT
+    and never touch `NotificationLog.body`, so the log rows cannot show whether
+    the handler gathered them at all. This WRAPS `notify` rather than replacing
+    it, so the delivery/dedupe assertions in the rest of this file still run
+    through the real service.
+    """
+    from apps.notifications.services import NotificationService
+
+    recorded: list[tuple[str, dict]] = []
+    original = NotificationService.notify
+
+    def spy(self, *, notification_type, recipient, context, dedupe_key, delay_seconds=0):
+        recorded.append((notification_type, dict(context)))
+        return original(
+            self,
+            notification_type=notification_type,
+            recipient=recipient,
+            context=context,
+            dedupe_key=dedupe_key,
+            delay_seconds=delay_seconds,
+        )
+
+    monkeypatch.setattr(NotificationService, "notify", spy)
+    return recorded
+
+
+def _ticket_delivery_context(contexts: list[tuple[str, dict]]) -> dict:
+    return next(ctx for kind, ctx in contexts if kind == NotificationType.TICKET_DELIVERY)
+
+
+def _confirm_and_notify(booking_service, *, buyer, event, tier, quantity=1):
+    from apps.notifications import handlers
+
+    result = confirm_a_booking(
+        booking_service, buyer=buyer, event=event, tier=tier, quantity=quantity
+    )
+    handlers.handle_booking_confirmed(
+        {
+            "booking_id": str(result.booking.id),
+            "user_id": str(buyer.id),
+            "event_id": str(event.id),
+            "ticket_ids": [str(t.id) for t in result.tickets],
+        }
+    )
+    return result
+
+
 @pytest.mark.django_db
 def test_user_registered_sends_a_welcome_email(buyer):
     from apps.notifications import handlers
@@ -109,6 +161,135 @@ def test_booking_confirmed_delivered_twice_sends_each_message_once(
     assert (
         NotificationLog.objects.filter(type=NotificationType.BOOKING_CONFIRMATION_SMS).count() == 1
     )
+
+
+@pytest.mark.django_db
+def test_booking_confirmed_gathers_the_receipt_facts_the_document_needs(
+    booking_service, buyer, event, tier, organization, contexts
+):
+    """Who is presenting it, when it was issued, and how to get there — none of
+    which the log body carries, and all of which a filed receipt is opened for."""
+    from apps.booking.models import Booking
+    from apps.notifications.templates import format_when
+
+    result = _confirm_and_notify(booking_service, buyer=buyer, event=event, tier=tier, quantity=2)
+    ctx = _ticket_delivery_context(contexts)
+
+    assert ctx["organizer_name"] == organization.name
+    # `confirm_booking` marks paid and issues the tickets in one transaction, so
+    # the booking's own `updated_at` IS the issue instant.
+    booking = Booking.objects.get(pk=result.booking.id)
+    assert ctx["issued_at"] == format_when(booking.updated_at)
+    # Built the same way frontend/lib/api/maps.ts builds it — the event has no
+    # coordinates, so it points at the venue text rather than an invented pin.
+    assert (
+        ctx["maps_url"]
+        == "https://www.google.com/maps/search/?api=1&query=Grand%20Arena%2C%20Mumbai"
+    )
+
+
+@pytest.mark.django_db
+def test_the_directions_link_prefers_coordinates_when_the_event_has_a_pin(
+    booking_service, buyer, event, tier, contexts
+):
+    """A venue name is ambiguous and a lat/lng is not — but a coordinate is never
+    invented, which is why the test above gets the venue text instead."""
+    from apps.events.models import Event
+
+    Event.objects.filter(pk=event.id).update(latitude="19.0759837", longitude="72.8776559")
+
+    _confirm_and_notify(booking_service, buyer=buyer, event=event, tier=tier)
+
+    assert _ticket_delivery_context(contexts)["maps_url"] == (
+        "https://www.google.com/maps/search/?api=1&query=19.0759837%2C72.8776559"
+    )
+
+
+@pytest.mark.django_db
+def test_each_ticket_carries_who_it_admits_and_what_its_line_was_billed(
+    booking_service, buyer, event, tier, contexts
+):
+    """The price comes off the BOOKING ITEM, not the tier: it is what this order
+    was actually charged, so a later re-price cannot rewrite a filed invoice."""
+    from apps.booking.models import BookingItem, Ticket
+
+    result = confirm_a_booking(booking_service, buyer=buyer, event=event, tier=tier, quantity=2)
+    BookingItem.objects.filter(booking_id=result.booking.id).update(phase_name="Early bird")
+    Ticket.objects.filter(pk=result.tickets[0].id).update(attendee_name="Asha Rao")
+
+    from apps.notifications import handlers
+
+    handlers.handle_booking_confirmed(
+        {
+            "booking_id": str(result.booking.id),
+            "user_id": str(buyer.id),
+            "event_id": str(event.id),
+            "ticket_ids": [str(t.id) for t in result.tickets],
+        }
+    )
+
+    tickets = _ticket_delivery_context(contexts)["tickets"]
+    # The named guest first (tickets are ordered by creation), the buyer's own
+    # seat blank — blank stays blank rather than being filled with the buyer.
+    assert [t["attendee"] for t in tickets] == ["Asha Rao", ""]
+    assert [t["phase_name"] for t in tickets] == ["Early bird", "Early bird"]
+    assert [t["unit_price_display"] for t in tickets] == ["₹500.00", "₹500.00"]
+
+
+@pytest.mark.django_db
+def test_the_amount_falls_back_to_the_booking_total_when_no_payment_row_resolves(
+    booking_service, buyer, event, tier, contexts
+):
+    """BOOKING_CONFIRMED means the money moved, so a receipt with no amount on it
+    would read as a charge that never happened. The total is the figure the
+    booking was reserved at and the one payments amount-checks — not a guess.
+
+    Everything the platform genuinely does not have stays ABSENT: no provider
+    reference, no captured-at, no provider status.
+    """
+    _confirm_and_notify(booking_service, buyer=buyer, event=event, tier=tier, quantity=2)
+
+    payment = _ticket_delivery_context(contexts)["payment"]
+    assert payment["amount_display"] == "₹1000.00"
+    # The platform fee is 10 paise per ticket in this fixture — shown as
+    # INCLUDED in the total, never added to it.
+    assert payment["platform_fee_display"] == "₹0.20"
+    assert "reference" not in payment
+    assert "paid_at" not in payment
+    assert "status_label" not in payment
+
+
+@pytest.mark.django_db
+def test_a_resolved_payment_row_wins_over_the_fallback(
+    booking_service, buyer, event, tier, contexts
+):
+    from apps.payments.models import Payment, PaymentStatus
+
+    result = confirm_a_booking(booking_service, buyer=buyer, event=event, tier=tier)
+    Payment.objects.create(
+        booking_id=result.booking.id,
+        rzp_order_id=result.booking.payment_order_id,
+        rzp_payment_id="pay_receipt_1",
+        amount_minor=result.booking.total_amount_minor,
+        status=PaymentStatus.PAID,
+    )
+
+    from apps.notifications import handlers
+
+    handlers.handle_booking_confirmed(
+        {
+            "booking_id": str(result.booking.id),
+            "user_id": str(buyer.id),
+            "event_id": str(event.id),
+            "ticket_ids": [str(t.id) for t in result.tickets],
+        }
+    )
+
+    payment = _ticket_delivery_context(contexts)["payment"]
+    assert payment["reference"] == "pay_receipt_1"
+    assert payment["amount_display"] == "₹500.00"
+    assert payment["status_label"]
+    assert payment["paid_at"]
 
 
 @pytest.mark.django_db
