@@ -249,12 +249,23 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
     onPick({ latitude: pending.lat, longitude: pending.lng, city: resolvedCity });
   };
 
-  const clear = () => {
+  /** Forget an uncommitted pin. The saved one, if any, is untouched — the marker
+   *  effect follows `pending ?? saved`, so it walks back to it. */
+  const discard = () => {
     setPending(null);
     setLabel(null);
     setResolvedCity('');
     setTypedError(null);
+    // Bumped so a reverse geocode still in flight for the discarded position
+    // cannot land and label the pin the organizer just went back to.
     resolveTicket.current += 1;
+    // The marker moves on its own; the CAMERA does not, and a marker that walks
+    // off the edge of a map somebody dragged across a city reads as lost.
+    if (saved) mapRef.current?.panTo(saved);
+  };
+
+  const clear = () => {
+    discard();
     onClear();
   };
 
@@ -268,7 +279,10 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
    * pasting it.
    */
   const placeTyped = () => {
-    const parts = typed.split(/[,\s]+/).filter(Boolean).map(Number);
+    const parts = typed
+      .split(/[,\s]+/)
+      .filter(Boolean)
+      .map(Number);
     const [lat, lng] = parts;
     if (
       parts.length !== 2 ||
@@ -350,9 +364,18 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
             Use this location
           </Button>
         ) : null}
+        {/* Two different acts, so two different buttons rather than one label
+            that changes: going back to the pin that IS saved is not the same as
+            removing it, and a "Discard" that also deleted the saved pin would be
+            destroying the thing it offered to keep. */}
+        {unsaved && saved ? (
+          <Button variant="ghost" size="sm" onClick={discard}>
+            Back to the saved pin
+          </Button>
+        ) : null}
         {active ? (
           <Button variant="ghost" size="sm" onClick={clear}>
-            {unsaved && saved ? 'Discard' : 'Clear pin'}
+            Clear pin
           </Button>
         ) : null}
       </div>
@@ -394,7 +417,11 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
           </Button>
         </div>
         {typedError ? (
-          <p id="event-pin-coordinates-error" role="alert" className="text-caption text-destructive">
+          <p
+            id="event-pin-coordinates-error"
+            role="alert"
+            className="text-caption text-destructive"
+          >
             {typedError}
           </p>
         ) : null}

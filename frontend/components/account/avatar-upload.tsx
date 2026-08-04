@@ -110,6 +110,15 @@ export function AvatarUpload() {
   React.useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       if (busy) return;
+      // Never steal a paste aimed at a field. The listener is on `window`
+      // because there is no element to focus first — the whole panel is the
+      // target — but that also means it sees every paste on the page, and
+      // starting an upload because somebody pasted into a text box would be a
+      // write they did not ask for.
+      // `instanceof` rather than a cast: a paste with nothing focused reports
+      // the document as its target, which has no `closest`.
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target && (target.isContentEditable || target.closest('input, textarea, select'))) return;
       const file = Array.from(event.clipboardData?.files ?? [])[0];
       if (file) start(file);
     };
@@ -157,16 +166,23 @@ export function AvatarUpload() {
         <div className="relative shrink-0">
           <IdentityAvatar name={name || '?'} imageUrl={url} size="xl" />
           {/* The overlay is the primary affordance — the medallion is the thing
-              somebody wants to change, so the control sits on it. A dark scrim
-              rather than a brand hue: it lands on an arbitrary photograph, so
-              its legibility must not depend on the theme. */}
+              somebody wants to change, so the control sits on it.
+
+              `glass-media` + `text-on-gradient` is the system's existing
+              control-on-a-photograph pair (the favourite, share and carousel
+              buttons wear it, and globals.css names that set explicitly): a warm
+              near-black scrim at 0.66 that does NOT follow the theme, with ink
+              verified at 6.36:1 over it. That matters here because what sits
+              behind this button is an arbitrary photograph — a theme-adaptive
+              surface would put white on white in light mode. It is not `.glass`
+              and carries no backdrop blur, for the reason stated there. */}
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={busy}
             className={cn(
               'absolute -bottom-1 -right-1 inline-flex size-8 items-center justify-center rounded-full',
-              'border border-border bg-scrim text-scrim-foreground shadow-sm',
+              'glass-media border text-on-gradient shadow-sm',
               'transition-opacity duration-fast hover:opacity-90 disabled:pointer-events-none disabled:opacity-60',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
             )}

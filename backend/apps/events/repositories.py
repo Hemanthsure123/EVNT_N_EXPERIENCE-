@@ -50,6 +50,12 @@ _DETAIL_FIELDS = (
     "id",
     "organization_id",
     "organization__name",
+    # Whether an operator has verified the organizer. Rides on the SAME
+    # select_related join the org name already needs, so the "is this organizer
+    # verified" question the event page asks costs no extra query — and it has
+    # to be in this field set for the same deferred-load reason as everything
+    # below.
+    "organization__verified_level",
     "title",
     "description",
     "venue",
@@ -557,8 +563,41 @@ class EventContentRepository:
             event_id=event_id, kind=kind, deleted_at__isnull=True
         ).count()
 
+    def get_media(
+        self, *, event_id: uuid.UUID | str, media_id: uuid.UUID | str
+    ) -> EventMedia | None:
+        """One media row, SCOPED TO ITS EVENT.
+
+        The event id is part of the lookup rather than just of the URL: a row
+        hanging off somebody else's event must MISS here, so an organizer who
+        owns event A cannot reach into event B by pasting a media id they found.
+        Every by-id method below scopes the same way.
+        """
+        return (
+            EventMedia.objects.filter(pk=media_id, event_id=event_id, deleted_at__isnull=True)
+            .only("id", "kind", "url", "alt_text", "caption", "position", "event_id")
+            .first()
+        )
+
     def add_media(self, **fields) -> EventMedia:
         return EventMedia.objects.create(**fields)
+
+    def update_media(
+        self, *, event_id: uuid.UUID | str, media_id: uuid.UUID | str, changes: dict
+    ) -> EventMedia | None:
+        """In-place edit of one row. Returns the fresh row, or None when nothing
+        matched — a foreign, deleted or unknown id.
+
+        `updated_at` is set explicitly because a queryset `UPDATE` bypasses
+        `auto_now` (the same reason `EventRepository.update_if_version_matches`
+        does it).
+        """
+        updated = EventMedia.objects.filter(
+            pk=media_id, event_id=event_id, deleted_at__isnull=True
+        ).update(updated_at=timezone.now(), **changes)
+        if updated != 1:
+            return None
+        return self.get_media(event_id=event_id, media_id=media_id)
 
     def soft_delete_media(self, media_id: uuid.UUID | str) -> bool:
         """Soft: an organizer pulling an image mid-sale should not lose the
@@ -570,9 +609,33 @@ class EventContentRepository:
             == 1
         )
 
-    def reorder_media(self, positions: dict[uuid.UUID | str, int]) -> None:
-        for media_id, position in positions.items():
-            EventMedia.objects.filter(pk=media_id).update(position=position)
+    def reorder_media(self, *, event_id: uuid.UUID | str, positions: dict[str, int]) -> int:
+        """Renumber one event's media. Returns how many rows moved.
+
+        SCOPED BY EVENT, and that scope is a fix rather than a nicety: this
+        filtered on the primary key alone, so any authenticated organizer could
+        renumber the gallery of an event they do not own by pasting its media
+        ids. An id outside this event now simply does not match — a no-op and
+        not an error, because the caller is describing the order of THEIR
+        gallery and an id that is not in it is not part of that order.
+
+        One `bulk_update` (a single CASE-based `UPDATE`) rather than a loop of
+        N statements: the list is bounded by the serializer, but a drag-and-drop
+        should not cost fourteen round trips.
+        """
+        rows = list(
+            EventMedia.objects.filter(
+                pk__in=list(positions), event_id=event_id, deleted_at__isnull=True
+            ).only("id", "position", "updated_at")
+        )
+        if not rows:
+            return 0
+        now = timezone.now()
+        for row in rows:
+            row.position = positions[str(row.pk)]
+            row.updated_at = now
+        EventMedia.objects.bulk_update(rows, ["position", "updated_at"])
+        return len(rows)
 
     # ---------------------------------------------------------------- faq
 
@@ -585,6 +648,21 @@ class EventContentRepository:
 
     def add_faq(self, **fields) -> EventFaq:
         return EventFaq.objects.create(**fields)
+
+    def update_faq(
+        self, *, event_id: uuid.UUID | str, faq_id: uuid.UUID | str, changes: dict
+    ) -> EventFaq | None:
+        """In-place edit, scoped by event. None when nothing matched."""
+        updated = EventFaq.objects.filter(
+            pk=faq_id, event_id=event_id, deleted_at__isnull=True
+        ).update(updated_at=timezone.now(), **changes)
+        if updated != 1:
+            return None
+        return (
+            EventFaq.objects.filter(pk=faq_id, event_id=event_id)
+            .only("id", "question", "answer", "position", "event_id")
+            .first()
+        )
 
     def soft_delete_faq(self, faq_id: uuid.UUID | str) -> bool:
         return (
@@ -611,6 +689,27 @@ class EventContentRepository:
 
     def add_timeline_entry(self, **fields) -> EventTimelineEntry:
         return EventTimelineEntry.objects.create(**fields)
+
+    def update_timeline_entry(
+        self, *, event_id: uuid.UUID | str, entry_id: uuid.UUID | str, changes: dict
+    ) -> EventTimelineEntry | None:
+        """In-place edit, scoped by event. None when nothing matched.
+
+        No `updated_at` here — this table does not have one (a running-order
+        entry is small enough that the row's history has never been asked for),
+        and inventing a column to keep three methods symmetrical is a migration
+        for nothing.
+        """
+        updated = EventTimelineEntry.objects.filter(
+            pk=entry_id, event_id=event_id, deleted_at__isnull=True
+        ).update(**changes)
+        if updated != 1:
+            return None
+        return (
+            EventTimelineEntry.objects.filter(pk=entry_id, event_id=event_id)
+            .only("id", "kind", "label", "description", "starts_at", "position", "event_id")
+            .first()
+        )
 
     def soft_delete_timeline_entry(self, entry_id: uuid.UUID | str) -> bool:
         return (

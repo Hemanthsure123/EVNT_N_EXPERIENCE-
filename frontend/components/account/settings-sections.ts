@@ -140,3 +140,21 @@ export function resolveSection(params: {
   if (params.calendar) return 'account';
   return parseSectionId(params.section);
 }
+
+/**
+ * The section the CONTENT column renders — always one, never none.
+ *
+ * The pair `resolveSection` / `contentSectionFor` is what lets ONE url be two
+ * layouts with no viewport measuring and nothing to hydrate: a bare
+ * `/account/settings` is an INDEX of section cards on a phone (`resolveSection`
+ * → `null`, so the index renders and the content column is `hidden`) and a rail
+ * plus its default section from `lg` up (`contentSectionFor` → `profile`), decided
+ * by a media query alone. Separating them is the whole reason `resolveSection`
+ * is allowed to answer "nothing was chosen" instead of quietly defaulting.
+ */
+export function contentSectionFor(params: {
+  section?: string | null;
+  calendar?: string | null;
+}): SettingsSectionId {
+  return resolveSection(params) ?? DEFAULT_SECTION_ID;
+}

@@ -17,8 +17,10 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { IdentityAvatar } from '@/components/ui/avatar';
+import { avatarUrlOf, resolveMediaUrl } from '@/lib/api/profile';
 import { useAuth } from '@/lib/auth/auth-provider';
-import { initialsOf, useScope } from '@/lib/identity/scope';
+import { useScope } from '@/lib/identity/scope';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -61,6 +63,12 @@ import { cn } from '@/lib/utils/cn';
  * personal CIRCLE, so the two are still told apart by shape and not only by
  * label.
  *
+ * The medallion itself is `IdentityAvatar` from the design system rather than a
+ * local `<span>`, so a picture uploaded on the account page appears HERE and in
+ * the header on the same render. It used to be a private component in this file,
+ * which is how one surface keeps showing initials after an upload — and the
+ * header trigger is the surface somebody checks to confirm the upload worked.
+ *
  * Rows are `min-h-control` (44px) because this menu is opened by thumb on a
  * phone as often as by cursor.
  *
@@ -76,6 +84,17 @@ export function AccountMenu() {
   const label =
     active.kind === 'organization' ? active.organization.name : user?.full_name || 'Personal';
 
+  // The picture, or `''` for "fall back to initials". Read from `useAuth().user`
+  // — the same cached profile `applyProfile` replaces after an upload — so this
+  // has no second source of truth for who is signed in.
+  const avatarUrl = avatarUrlOf(user);
+  // In organisation scope the trigger is showing the ORGANISATION, so it shows
+  // that organisation's logo (a real column, `Organization.logo_url`) and never
+  // the owner's face — borrowing it would misidentify the active scope, which is
+  // the one failure this menu exists to prevent.
+  const triggerImageUrl =
+    active.kind === 'organization' ? resolveMediaUrl(active.organization.logo_url) : avatarUrl;
+
   const close = () => setOpen(false);
 
   return (
@@ -89,7 +108,12 @@ export function AccountMenu() {
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         )}
       >
-        <Avatar seed={label} scope={active} />
+        <IdentityAvatar
+          name={label}
+          imageUrl={triggerImageUrl}
+          size="sm"
+          shape={active.kind === 'organization' ? 'tile' : 'circle'}
+        />
         {/* The active scope is on the TRIGGER, not just inside the menu — the
             whole failure mode is acting in the wrong organization without
             having opened anything. */}
@@ -102,7 +126,9 @@ export function AccountMenu() {
 
       <PopoverContent align="end" className="w-72 p-1.5">
         <div className="flex items-center gap-3 px-2.5 pb-2.5 pt-2">
-          <Avatar seed={name} scope={{ kind: 'personal' }} large />
+          {/* The identity card is always the PERSON, whatever scope is active —
+              it answers "who am I signed in as", which the scope cannot change. */}
+          <IdentityAvatar name={name} imageUrl={avatarUrl} size="md" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-body-sm font-semibold">{name}</p>
             <p className="truncate text-caption text-foreground-subtle">{user?.email}</p>
@@ -303,34 +329,11 @@ function MenuLink({
   );
 }
 
-/** A warm cream CIRCLE for personal, a neutral rounded TILE for an
- *  organization — so the two are distinguishable at a glance, not only by
- *  label. The circle used to be a violet→pink gradient; the shape was always
- *  what carried the distinction, and a gradient in the header's most prominent
- *  slot is exactly the chrome the light-first language quietens. */
-function Avatar({
-  seed,
-  scope,
-  large,
-}: {
-  seed: string;
-  scope: { kind: 'personal' | 'organization' };
-  large?: boolean;
-}) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'inline-flex shrink-0 items-center justify-center font-semibold',
-        large ? 'size-10 text-body-sm' : 'size-7 text-caption',
-        scope.kind === 'organization'
-          ? 'rounded-lg bg-secondary text-secondary-foreground'
-          : 'rounded-full bg-nav-active text-nav-active-foreground',
-      )}
-    >
-      {initialsOf(seed)}
-    </span>
-  );
-}
+// The medallion that used to live here is `IdentityAvatar` in
+// `components/ui/avatar` now — it moved because it also has to render a PICTURE,
+// and a second copy of "circle for a person, tile for an organisation" is how
+// the header ends up showing initials for somebody who has an avatar. The shape
+// language it carried (a warm cream circle vs a neutral rounded tile) is
+// unchanged; only its address is.
 
 export { Plus };

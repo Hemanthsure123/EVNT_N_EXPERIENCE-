@@ -42,7 +42,12 @@ import { cn } from '@/lib/utils/cn';
  *               EVERYONE, not only existing organizers: it is the only way
  *               to become one, so hiding it from people who are not one yet
  *               would hide it from exactly its audience.
- *   Settings  — appearance + the honest state of everything else
+ *   Settings  — five sections (profile, appearance, notifications, privacy,
+ *               account), each backed by something real, plus the honest state
+ *               of everything else. Its own sub-rail lives INSIDE the content
+ *               column and its section is a `?section=` param, not a route: it
+ *               is one destination with five views, and putting those five in
+ *               this rail would make the account nav ten entries deep.
  *
  * The rest need endpoints that do not exist: `apps/accounts` exposes exactly
  * register / login / refresh / logout / me. There is no session list, no
@@ -77,7 +82,15 @@ const SECTIONS: Section[] = [
     icon: Building2,
     hint: 'Create an organization and get verified',
   },
-  { href: '/account/settings', label: 'Settings', icon: Settings, hint: 'Appearance and account' },
+  {
+    href: '/account/settings',
+    label: 'Settings',
+    icon: Settings,
+    // Named after the sections that actually exist there, in their rail order
+    // (`components/account/settings-sections.ts`) — a hint that promises more
+    // than the destination holds is the same defect as a dead nav entry.
+    hint: 'Profile, appearance, privacy',
+  },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -108,7 +121,7 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
         </p>
         <Link
           href="/sign-in?next=%2Faccount"
-          className="mt-stack inline-flex h-control items-center rounded-full bg-cta px-pill-lg text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="mt-stack inline-flex h-control items-center rounded-full bg-cta px-pill-lg text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:bg-cta-active"
         >
           Sign in
         </Link>

@@ -63,6 +63,38 @@ export type EventDetail = EventCard & {
 };
 
 /**
+ * One step of a tier's sale-phase schedule (backend SalePhaseSerializer).
+ *
+ * `quantity` is a CUMULATIVE `sold + reserved` threshold — "the first N seats
+ * of this tier", not "N seats set aside at this price". Null means the phase is
+ * bounded only by its deadline. `position` is the schedule order the write sent.
+ */
+export type SalePhase = {
+  id: string;
+  name: string;
+  /** Minor units (paise). Always at or below the tier's face `price`. */
+  price: number;
+  ends_at: string | null;
+  quantity: number | null;
+  position: number;
+};
+
+/**
+ * The phase that is live right now (backend `TicketTypeSerializer.current_phase`),
+ * or null when the tier is at face price.
+ *
+ * `remaining` is how many seats are still inside the phase's threshold, and is
+ * NULL when the phase has no threshold — an unbounded-by-seats phase has no
+ * count to report and the backend does not invent one, so neither does any
+ * screen that reads this.
+ */
+export type CurrentPhase = {
+  name: string;
+  ends_at: string | null;
+  remaining: number | null;
+};
+
+/**
  * GET /events/{id}/ticket-types (backend TicketTypeSerializer). Money is minor
  * units. `available` = quantity − sold − reserved, computed server-side.
  *
@@ -70,13 +102,34 @@ export type EventDetail = EventCard & {
  * makes the actual reserve decision under a per-tier row lock (see the
  * "cache-for-display, decide-under-lock" rule in the repo's CLAUDE.md), so
  * "3 left" here is a nudge, never a promise — the booking flow re-checks.
+ *
+ * The same split governs the phase fields: `effective_price` is the number to
+ * SHOW, computed from the same pure rule (`apps/ticketing/pricing.py`) the
+ * locked reserve uses to decide what to CHARGE. A phase that lapses inside the
+ * cache's few seconds is briefly still on screen while the next reserve already
+ * bills the next price — which errs the safe way, because the funnel shows the
+ * BOOKING's own recorded price before anyone pays.
  */
 export type TicketTier = {
   id: string;
   event_id: string;
   name: string;
-  /** Minor units (paise). */
+  /** Minor units (paise) — the FACE price, i.e. what a phase is a discount off. */
   price: number;
+  /**
+   * What a buyer pays right now, minor units. Equals `price` when no phase is
+   * active. A screen that renders ONE number renders this one.
+   */
+  effective_price: number;
+  current_phase: CurrentPhase | null;
+  /**
+   * What the price becomes once the current phase ends or exhausts, minor
+   * units — the next phase that could still apply, else the face price. NULL
+   * when no phase is active: there is nothing after the face price.
+   */
+  next_price: number | null;
+  /** The whole schedule, ascending `position`. Empty when the tier has none. */
+  phases: SalePhase[];
   quantity: number;
   sold: number;
   available: number;
@@ -124,12 +177,20 @@ export type RegistrationResponse = {
   message: string;
 };
 
-/** One line of a booking (backend BookingItemSerializer). Money is minor units. */
+/**
+ * One line of a booking (backend BookingItemSerializer). Money is minor units.
+ *
+ * `unit_price` is what was RECORDED at reserve time under the tier's row lock —
+ * the authoritative charge, not a recomputation. `phase_name` is the sale phase
+ * that priced it, null when it billed at the face price, so a line can read
+ * "Gold — Early bird" and explain a total that is lower than today's list price.
+ */
 export type BookingItem = {
   ticket_type_id: string;
   ticket_type_name: string;
   quantity: number;
   unit_price: number;
+  phase_name: string | null;
 };
 
 /**

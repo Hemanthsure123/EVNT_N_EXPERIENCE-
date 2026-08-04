@@ -101,7 +101,12 @@ export function SettingsRow({
         {hint ? <p className="text-caption text-muted-foreground">{hint}</p> : null}
       </div>
       {children ? (
-        <div className={cn('flex min-w-0 flex-wrap items-center gap-stack', stacked ? '' : 'sm:justify-end')}>
+        <div
+          className={cn(
+            'flex min-w-0 flex-wrap items-center gap-stack',
+            stacked ? '' : 'sm:justify-end',
+          )}
+        >
           {children}
         </div>
       ) : null}
@@ -125,7 +130,9 @@ export function SettingsValue({
   className?: string;
 }) {
   return (
-    <span className={cn('min-w-0 text-body-sm text-foreground [overflow-wrap:anywhere]', className)}>
+    <span
+      className={cn('min-w-0 text-body-sm text-foreground [overflow-wrap:anywhere]', className)}
+    >
       {children}
     </span>
   );

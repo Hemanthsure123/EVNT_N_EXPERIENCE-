@@ -12,10 +12,14 @@ import {
   type Issue,
 } from '@/lib/organizer/wizard/model';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
+import { directionsUrl } from '@/lib/api/maps';
 import { Button } from '@/components/ui';
+import { PinPicker } from '@/components/maps/pin-picker';
+import { VenueAutocomplete, type VenueSelection } from '@/components/maps/venue-autocomplete';
 import { cn } from '@/lib/utils/cn';
 import {
   DateField,
+  FieldFrame,
   NeedsSavedDraft,
   NotStored,
   Section,
@@ -23,6 +27,7 @@ import {
   StepHeader,
   TextArea,
   TextField,
+  fieldMessageId,
   type DraftSave,
 } from './fields';
 import { missingForSave } from './details-step';
@@ -124,8 +129,56 @@ export function BasicsStep({
 
 /* ──────────────────────────────── venue ─────────────────────────────── */
 
+/**
+ * Where it happens — a search, a city, and a pin.
+ *
+ * ── THE VENUE IS A PLACE PICKER, AND STILL A TEXT FIELD ───────────────────
+ *
+ * `VenueAutocomplete` writes `venue`, `city`, `placeId` and both coordinates in
+ * one go when a Google suggestion is picked, and behaves as a plain text input
+ * when it is not — a farm, a new space or a private address must still be
+ * listable. It degrades itself: with no server Maps key it says so and takes
+ * typing only, so this step never has a dead search box in it.
+ *
+ * ── WHEN THE PIN SURVIVES AN EDIT TO THE NAME ─────────────────────────────
+ *
+ * Typing over a PICKED place clears its coordinates, because a name that no
+ * longer matches the pinned place would leave the map on another building. A pin
+ * the organizer DROPPED BY HAND is different — they chose it for this venue, and
+ * fixing a typo in the name is not a reason to throw it away. So only the
+ * picker's own pin is cleared by typing; a hand-placed one is cleared by the pin
+ * control, which is the thing that placed it.
+ *
+ * That is also the invariant `Draft.placeId` documents: a non-empty place id
+ * means the coordinates are GOOGLE'S for that place, so a hand-dropped pin
+ * always clears it.
+ */
 export function VenueStep({ draft, update, issues }: StepProps) {
   const mapsQuery = [draft.venue, draft.city].filter(Boolean).join(', ');
+  const venueError = errorFor(issues, 'venue');
+  /** The saved pin, as the shared `directionsUrl` wants it. Narrowed once here
+   *  rather than asserted at the call site — the pair is either whole or absent. */
+  const pin =
+    draft.latitude !== null && draft.longitude !== null
+      ? { latitude: draft.latitude, longitude: draft.longitude }
+      : null;
+
+  const pickVenue = (selection: VenueSelection) => {
+    const handPlaced = draft.placeId === '' && draft.latitude !== null && draft.longitude !== null;
+    // A cleared selection (typing, or the field's own clear button) never
+    // carries coordinates; a picked place always does. So "keep what we have"
+    // is exactly "this selection dropped a pin AND the pin was ours to keep".
+    const keepPin = handPlaced && selection.place_id === '' && selection.latitude === null;
+    update({
+      venue: selection.venue.slice(0, VENUE_MAX),
+      // A picked place names its own city; a typed one reports back whatever is
+      // already in the field, so this never blanks a city somebody chose.
+      city: selection.city || draft.city,
+      placeId: selection.place_id,
+      latitude: keepPin ? draft.latitude : selection.latitude,
+      longitude: keepPin ? draft.longitude : selection.longitude,
+    });
+  };
 
   return (
     <div className="flex flex-col gap-block">
@@ -134,16 +187,22 @@ export function VenueStep({ draft, update, issues }: StepProps) {
         blurb="Where it happens. The city drives the browse filters and the “near you” rail, so it has to match how people write it."
       />
 
-      <TextField
+      <FieldFrame
         id="event-venue"
         label="Venue"
-        value={draft.venue}
-        onChange={(venue) => update({ venue })}
-        placeholder="Phoenix Marketcity, Kurla"
-        max={VENUE_MAX}
-        error={errorFor(issues, 'venue')}
-        hint="The building or ground, as an attendee would say it."
-      />
+        count={{ used: draft.venue.length, max: VENUE_MAX }}
+        error={venueError}
+        hint="The building or ground, as an attendee would say it. Pick a suggestion and the event page gets a map."
+      >
+        <VenueAutocomplete
+          id="event-venue"
+          value={draft.venue}
+          city={draft.city}
+          onChange={pickVenue}
+          describedBy={fieldMessageId('event-venue', venueError)}
+          invalid={Boolean(venueError)}
+        />
+      </FieldFrame>
 
       <div className="flex flex-col gap-1.5">
         <TextField
@@ -169,44 +228,68 @@ export function VenueStep({ draft, update, issues }: StepProps) {
         </ul>
       </div>
 
-      {/* An OUTBOUND link, not an embedded map. Embedding Google Maps means an
-          API key, a third-party script on an authenticated page, and a
-          geocoding call per keystroke — for a preview of a string the backend
-          stores verbatim and never geocodes. The link answers the same
-          question ("is this the right place?") for nothing. */}
-      <div className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
-        <p className="flex items-center gap-2 text-body-sm font-medium">
-          <MapPin className="size-4 text-primary" aria-hidden />
-          Check the location
-        </p>
-        {mapsQuery ? (
-          <Button
-            variant="outline"
-            size="sm"
-            asChild
-            className="w-fit max-w-full justify-start overflow-hidden"
+      {/* Renders nothing where this deployment has no browser Maps key — a map
+          is the only way to place a pin, so the honest answer is no pin section
+          rather than Google's "didn't load correctly" watermark. */}
+      <PinPicker
+        venue={draft.venue}
+        city={draft.city}
+        latitude={draft.latitude}
+        longitude={draft.longitude}
+        onPick={(pin) =>
+          update({
+            latitude: pin.latitude,
+            longitude: pin.longitude,
+            // A hand-placed pin is nobody's place id — see the invariant above.
+            placeId: '',
+            // The reverse geocode's city fills a BLANK field and never
+            // overwrites one: it is what Google calls the area around the pin,
+            // which for an event on the edge of a metro is often the suburb
+            // rather than the city people search for.
+            city: draft.city.trim() ? draft.city : pin.city.slice(0, CITY_MAX),
+          })
+        }
+        onClear={() => update({ placeId: '', latitude: null, longitude: null })}
+      />
+
+      {/* The outbound link stays, next to a map rather than instead of one. It
+          answers a different question — it opens in the organizer's own Maps,
+          with street view and the surrounding roads — and it is the ONLY check
+          available where the browser key is absent and the pin map above
+          rendered nothing.
+
+          `directionsUrl` rather than a hand-built query: once there is a pin it
+          links the COORDINATES, so the link opens the exact spot being saved
+          rather than a search for a name Google may resolve elsewhere. */}
+      {mapsQuery ? (
+        <Button
+          variant="outline"
+          size="sm"
+          asChild
+          className="w-fit max-w-full justify-start overflow-hidden"
+        >
+          <a
+            href={directionsUrl(draft.venue, draft.city, pin)}
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <span className="truncate">Open “{mapsQuery}” in Maps</span>
-              <ExternalLink className="size-3.5 shrink-0" aria-hidden />
-            </a>
-          </Button>
-        ) : (
-          <p className="text-caption text-muted-foreground">
-            Enter a venue and city to check it on a map.
-          </p>
-        )}
-      </div>
+            <MapPin className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">
+              {pin ? 'Open the pin in Maps' : `Open “${mapsQuery}” in Maps`}
+            </span>
+            <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+          </a>
+        </Button>
+      ) : null}
 
       <NotStored>
-        Street address, state, country, pin code, coordinates and venue capacity are not collected:{' '}
-        <code>Event</code> stores <code>venue</code> and <code>city</code> as plain strings and
-        nothing else. A structured address is a <code>venues</code> module — which is also what
-        would make distance-based search and an embedded map possible. BACKLOG items 9 and 28.
+        The venue’s place and pin ARE stored — <code>place_id</code>, <code>latitude</code> and{' '}
+        <code>longitude</code> are columns on <code>Event</code>, and both coordinates go up
+        together or not at all. What is still missing is a structured address (street, state,
+        country, pin code) and venue capacity: <code>venue</code> and <code>city</code> are free
+        strings, so browse filters match on the city text rather than on a place. Both need a{' '}
+        <code>venues</code> module — which is also what would make distance-based search real.
+        BACKLOG items 9 and 28.
       </NotStored>
     </div>
   );

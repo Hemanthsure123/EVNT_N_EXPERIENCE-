@@ -49,8 +49,30 @@
 import type {
   CreateEventInput,
   CreateTicketTypeInput,
+  SalePhaseInput,
   UpdateEventInput,
 } from '@/lib/api/organizer-writes';
+
+/**
+ * One step of a tier's pricing schedule, as edited.
+ *
+ * There is deliberately no `serverId`: the write replaces the whole schedule by
+ * array order (see `SalePhaseInput`), so a phase has no identity to preserve
+ * across a save and pretending otherwise would invite a per-phase patch the API
+ * does not offer.
+ */
+export type DraftPhase = {
+  /** Client-side only — React's list key and the remove button's handle. */
+  key: string;
+  name: string;
+  /** MAJOR units (rupees) while editing, exactly like the tier's own price. */
+  price: string;
+  /** `datetime-local`. Blank means the phase is bounded by seats alone. */
+  endsAt: string;
+  /** CUMULATIVE sold-or-held threshold — the first N seats of the TIER, not N
+   *  seats allocated to this phase. Blank means bounded by the deadline alone. */
+  quantity: string;
+};
 
 export type DraftTier = {
   /** Client-side id. Becomes the server's id once the tier is created. */
@@ -67,6 +89,8 @@ export type DraftTier = {
   maxPerOrder: string;
   saleStart: string;
   saleEnd: string;
+  /** The sale-phase schedule, in position order. Empty means "one price". */
+  phases: DraftPhase[];
 };
 
 export type Draft = {
@@ -254,7 +278,13 @@ export function restoreDraft(
     ...fresh,
     ...stored,
     organizationId,
-    tiers: Array.isArray(stored.tiers) ? stored.tiers : [],
+    // Each tier is normalised for the same reason the draft itself is merged
+    // onto a fresh one: a tier written before phases existed has no `phases`
+    // array, and `tier.phases.map(...)` on an `undefined` is a white screen
+    // holding somebody's half-written event.
+    tiers: Array.isArray(stored.tiers)
+      ? stored.tiers.map((tier) => ({ ...tier, phases: Array.isArray(tier.phases) ? tier.phases : [] }))
+      : [],
   };
 }
 
@@ -267,6 +297,17 @@ export function newTier(index: number): DraftTier {
     maxPerOrder: '10',
     saleStart: '',
     saleEnd: '',
+    phases: [],
+  };
+}
+
+export function newPhase(index: number): DraftPhase {
+  return {
+    key: `phase-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    name: '',
+    price: '',
+    endsAt: '',
+    quantity: '',
   };
 }
 
@@ -293,6 +334,78 @@ export const SEO_TITLE_MAX = 70;
 export const SEO_DESCRIPTION_MAX = 160;
 /** 30 days. `PositiveIntegerField`, so 0 is storable but meaningless. */
 export const DURATION_MAX_MINUTES = 60 * 24 * 30;
+
+/** `TicketingService.MAX_PHASES`. A schedule is a handful of named steps, not
+ *  a curve, and the service raises `InvalidPhaseScheduleError` past this. */
+export const MAX_PHASES = 5;
+/** `SalePhase.name`'s own `max_length`. */
+export const PHASE_NAME_MAX = 40;
+
+/**
+ * Every rule `_validate_phase_schedule` enforces, as sentences.
+ *
+ * It is a separate exported function rather than inline in `validate()` because
+ * the save engine needs the same answer: a tier whose schedule the server would
+ * refuse must not be SENT (see `tierIsSavable`), or every autosave from that
+ * keystroke on is a 400 the organizer cannot act on.
+ *
+ * Prices are compared in MINOR units, the same conversion `toTierInput` does —
+ * comparing the rupee strings would make "500" and "500.00" different numbers
+ * and 0.1 + 0.2 decide whether a schedule is legal.
+ */
+export function phaseIssues(tier: DraftTier): string[] {
+  const problems: string[] = [];
+  const where = tier.name.trim() || 'This ticket';
+  if (tier.phases.length > MAX_PHASES) {
+    problems.push(`${where}: at most ${MAX_PHASES} pricing phases.`);
+  }
+
+  const facePrice = toMinor(tier.price);
+  let previous: number | null = null;
+  tier.phases.forEach((phase, index) => {
+    const label = phase.name.trim() || `Phase ${index + 1}`;
+    if (!phase.name.trim()) {
+      problems.push(`${where}: phase ${index + 1} needs a name.`);
+    } else if (phase.name.length > PHASE_NAME_MAX) {
+      problems.push(`${where}: "${label}" is capped at ${PHASE_NAME_MAX} characters.`);
+    }
+
+    const price = toMinor(phase.price);
+    if (phase.price === '' || !Number.isFinite(price) || price < 1) {
+      // > 0, matching the serializer: a free phase is a different product, not
+      // a discount, and the tier's own price is where "free" is expressed.
+      problems.push(`${where}: "${label}" needs a price above ₹0.`);
+    } else {
+      if (Number.isFinite(facePrice) && tier.price !== '' && price > facePrice) {
+        // The server IGNORES a phase priced above face price rather than
+        // billing it, so this can never overcharge anybody — but a phase that
+        // silently does nothing is worse than one that is refused.
+        problems.push(`${where}: "${label}" costs more than the ticket's own price.`);
+      }
+      if (previous !== null && price < previous) {
+        problems.push(`${where}: "${label}" is cheaper than the phase before it.`);
+      }
+      previous = price;
+    }
+
+    if (!phase.endsAt && !phase.quantity) {
+      problems.push(`${where}: "${label}" needs an end time or a seat cap.`);
+    }
+    if (phase.quantity) {
+      const cap = Number(phase.quantity);
+      if (!Number.isInteger(cap) || cap < 1) {
+        problems.push(`${where}: "${label}" needs a whole seat cap of at least 1.`);
+      }
+    }
+  });
+  return problems;
+}
+
+/** Rupees typed in a field -> integer paise. Exported nowhere: the two callers
+ *  that need it are in this module, and one of them is the API boundary. */
+function toMinor(rupees: string): number {
+  return Math.round(Number(rupees) * 100);
+}
 
 /**
  * Every rule here mirrors one the backend enforces, so the wizard never lets
@@ -419,6 +532,11 @@ export function validate(draft: Draft, now = new Date()): Issue[] {
         field: tier.key,
         message: `${where}: sales must end after they start.`,
       });
+    }
+    // Keyed on the tier, so the schedule's problems appear inside the card that
+    // holds it rather than in a list somewhere else on the step.
+    for (const message of phaseIssues(tier)) {
+      issues.push({ step: 'tickets', field: tier.key, message });
     }
   });
 
@@ -644,6 +762,27 @@ export function toTierInput(tier: DraftTier): CreateTicketTypeInput {
     max_per_order: Number(tier.maxPerOrder) || 10,
     sale_start: tier.saleStart ? toIso(tier.saleStart) : null,
     sale_end: tier.saleEnd ? toIso(tier.saleEnd) : null,
+    // ARRAY ORDER IS THE POSITION, and the whole schedule is replaced on every
+    // write — a phase has no server identity to preserve (see `DraftPhase`), so
+    // there is nothing to diff and no per-phase patch to get wrong.
+    //
+    // Omitted entirely when there are no phases rather than sent as `[]`: an
+    // absent key leaves an existing schedule alone, and a tier that never had
+    // one must not send a payload implying its schedule was just cleared.
+    ...(tier.phases.length ? { phases: tier.phases.map(toPhaseInput) } : {}),
+  };
+}
+
+/** One phase, converted the way the tier's own price is: rupees to paise in
+ *  MINOR units, blank bounds as explicit nulls. A blank `endsAt` and a blank
+ *  `quantity` cannot both happen — `phaseIssues` refuses an unbounded phase
+ *  before a save is ever attempted. */
+function toPhaseInput(phase: DraftPhase): SalePhaseInput {
+  return {
+    name: phase.name.trim(),
+    price: toMinor(phase.price),
+    ends_at: phase.endsAt ? toIso(phase.endsAt) : null,
+    quantity: phase.quantity === '' ? null : Number(phase.quantity),
   };
 }
 
@@ -681,6 +820,13 @@ export function tierFingerprint(tier: DraftTier): string {
     tier.maxPerOrder,
     tier.saleStart,
     tier.saleEnd,
+    // The schedule is part of the write, so it has to be part of the
+    // fingerprint. Without it, editing a phase price changes nothing the save
+    // engine can see — the discount is typed, the badge appears in the
+    // preview, and the tier is never PATCHed. `key` is excluded: it is a React
+    // list handle, and including it would make re-ordering identical phases
+    // look like a change.
+    tier.phases.map((phase) => [phase.name, phase.price, phase.endsAt, phase.quantity]),
   ]);
 }
 

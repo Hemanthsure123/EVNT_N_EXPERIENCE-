@@ -112,6 +112,270 @@ class TestAltText:
 
 
 @pytest.mark.django_db
+class TestInPlaceEdits:
+    """Editing a row rather than deleting and re-adding it.
+
+    The rules the create path holds have to hold here too — an invariant that
+    only the INSERT enforces is one PATCH away from being gone.
+    """
+
+    def test_a_caption_can_be_fixed_in_place(self, content, make_event, owner):
+        event = make_event(status=EventStatus.DRAFT)
+        media = add_image(content, event, owner, caption="Frotn row")
+
+        updated = content.update_media(
+            event_id=event.id,
+            actor_id=owner.id,
+            media_id=media.id,
+            changes={"caption": "Front row"},
+        )
+
+        assert updated.id == media.id
+        assert updated.caption == "Front row"
+        # Untouched fields stay untouched — a PATCH is not a replace.
+        assert updated.alt_text == media.alt_text
+
+    def test_changing_kind_re_checks_the_target_cap(self, content, make_event, owner):
+        """The one-hero invariant, via the back door: add a gallery image, then
+        PATCH it to `hero`. Without the re-check the cap would never have run
+        for the kind the row ended up in."""
+        event = make_event(status=EventStatus.DRAFT)
+        add_image(content, event, owner, kind=MediaKind.HERO)
+        gallery = add_image(content, event, owner)
+
+        with pytest.raises(InvalidInputError) as caught:
+            content.update_media(
+                event_id=event.id,
+                actor_id=owner.id,
+                media_id=gallery.id,
+                changes={"kind": MediaKind.HERO},
+            )
+        assert "maximum of 1" in str(caught.value)
+
+    def test_moving_a_row_to_a_kind_with_room_is_allowed(self, content, repo, make_event, owner):
+        event = make_event(status=EventStatus.DRAFT)
+        gallery = add_image(content, event, owner)
+
+        content.update_media(
+            event_id=event.id,
+            actor_id=owner.id,
+            media_id=gallery.id,
+            changes={"kind": MediaKind.HERO},
+        )
+
+        assert repo.count_media(event.id, MediaKind.HERO) == 1
+        assert repo.count_media(event.id, MediaKind.GALLERY) == 0
+
+    def test_re_saving_the_same_kind_is_not_a_cap_violation(self, content, make_event, owner):
+        """A client that PATCHes every field back, kind included, must not be
+        told the event is full of the row it is already holding."""
+        event = make_event(status=EventStatus.DRAFT)
+        hero = add_image(content, event, owner, kind=MediaKind.HERO)
+
+        updated = content.update_media(
+            event_id=event.id,
+            actor_id=owner.id,
+            media_id=hero.id,
+            changes={"kind": MediaKind.HERO, "caption": "The main stage"},
+        )
+        assert updated.caption == "The main stage"
+
+    def test_alt_text_cannot_be_blanked(self, content, make_event, owner):
+        """A row that HAS a description must not be able to lose it."""
+        event = make_event(status=EventStatus.DRAFT)
+        media = add_image(content, event, owner)
+
+        with pytest.raises(InvalidInputError) as caught:
+            content.update_media(
+                event_id=event.id, actor_id=owner.id, media_id=media.id, changes={"alt_text": "  "}
+            )
+        assert "screen reader" in str(caught.value)
+
+    def test_a_field_outside_the_editable_set_is_ignored(self, content, make_event, owner):
+        """`url` is not editable: repointing a row at different bytes while
+        keeping its alt text is how an image ends up described as something
+        else."""
+        event = make_event(status=EventStatus.DRAFT)
+        media = add_image(content, event, owner)
+
+        updated = content.update_media(
+            event_id=event.id,
+            actor_id=owner.id,
+            media_id=media.id,
+            changes={"position": 3, "url": "https://cdn.example/somebody-elses.jpg"},
+        )
+
+        assert updated.position == 3
+        assert updated.url == media.url
+
+    def test_media_from_another_event_is_not_editable(self, content, make_event, owner):
+        """The security half: the repository scopes every by-id lookup to the
+        event, so an id belonging to a DIFFERENT event misses — even when the
+        same organizer owns both, which is the case an ownership check alone
+        would wave through."""
+        mine = make_event(status=EventStatus.DRAFT)
+        other = make_event(status=EventStatus.DRAFT)
+        elsewhere = add_image(content, other, owner)
+
+        from apps.events.exceptions import EventNotFoundError
+
+        with pytest.raises(EventNotFoundError):
+            content.update_media(
+                event_id=mine.id,
+                actor_id=owner.id,
+                media_id=elsewhere.id,
+                changes={"position": 9},
+            )
+
+    def test_an_faq_answer_can_be_corrected(self, content, repo, make_event, owner):
+        event = make_event(status=EventStatus.DRAFT)
+        faq = content.add_faq(
+            event_id=event.id, actor_id=owner.id, question="Is there parking?", answer="No."
+        )
+
+        content.update_faq(
+            event_id=event.id, actor_id=owner.id, faq_id=faq.id, changes={"answer": "Yes, 40 bays."}
+        )
+
+        assert [item.answer for item in repo.faqs_for(event.id)] == ["Yes, 40 bays."]
+
+    def test_an_faq_half_cannot_be_blanked(self, content, make_event, owner):
+        event = make_event(status=EventStatus.DRAFT)
+        faq = content.add_faq(
+            event_id=event.id, actor_id=owner.id, question="Parking?", answer="Yes."
+        )
+
+        with pytest.raises(InvalidInputError):
+            content.update_faq(
+                event_id=event.id, actor_id=owner.id, faq_id=faq.id, changes={"answer": "   "}
+            )
+
+    def test_a_timeline_time_can_move_and_be_cleared(self, content, make_event, owner):
+        """Both directions matter: a doors time slips by half an hour (the
+        normal case), and a time the organizer turns out not to know has to be
+        removable rather than left advertising the wrong clock."""
+        event = make_event(status=EventStatus.DRAFT)
+        doors = timezone.now() + dt.timedelta(days=30)
+        entry = content.add_timeline_entry(
+            event_id=event.id,
+            actor_id=owner.id,
+            kind=TimelineKind.DOORS,
+            label="Doors",
+            starts_at=doors,
+        )
+
+        moved = content.update_timeline_entry(
+            event_id=event.id,
+            actor_id=owner.id,
+            entry_id=entry.id,
+            changes={"starts_at": doors + dt.timedelta(minutes=30)},
+        )
+        assert moved.starts_at == doors + dt.timedelta(minutes=30)
+
+        cleared = content.update_timeline_entry(
+            event_id=event.id, actor_id=owner.id, entry_id=entry.id, changes={"starts_at": None}
+        )
+        assert cleared.starts_at is None
+
+
+@pytest.mark.django_db
+class TestReorder:
+    def test_positions_are_applied_in_one_call(self, content, repo, make_event, owner):
+        event = make_event(status=EventStatus.DRAFT)
+        first = add_image(content, event, owner, position=0, caption="one")
+        second = add_image(content, event, owner, position=1, caption="two")
+
+        content.reorder_media(
+            event_id=event.id,
+            actor_id=owner.id,
+            items=[{"id": first.id, "position": 1}, {"id": second.id, "position": 0}],
+        )
+
+        assert [item.caption for item in repo.media_for(event.id)] == ["two", "one"]
+
+    def test_an_id_from_another_event_is_a_no_op(self, content, repo, make_event, owner):
+        """The bug this closes: `reorder_media` filtered on the primary key
+        alone, so any organizer could renumber somebody else's gallery by
+        pasting its ids. The foreign row must be left exactly as it was."""
+        mine = make_event(status=EventStatus.DRAFT)
+        other = make_event(status=EventStatus.DRAFT)
+        ours = add_image(content, mine, owner, position=0)
+        theirs = add_image(content, other, owner, position=0)
+
+        content.reorder_media(
+            event_id=mine.id,
+            actor_id=owner.id,
+            items=[{"id": ours.id, "position": 5}, {"id": theirs.id, "position": 9}],
+        )
+
+        assert repo.media_for(mine.id)[0].position == 5
+        assert repo.media_for(other.id)[0].position == 0
+
+
+@pytest.mark.django_db
+class TestPublicCacheInvalidation:
+    """A content edit has to reach the page an attendee is looking at — and
+    must not reach further than that.
+
+    Invalidation bumps the listing GENERATION, which orphans every cached
+    listing page on the platform at once. Doing that for a draft nobody can see
+    would throw away the whole discovery cache on private churn.
+    """
+
+    @staticmethod
+    def _cache():
+        from config.di import cache_port
+
+        return cache_port()
+
+    def test_editing_a_live_event_clears_its_public_caches(
+        self, content, make_event, owner, django_capture_on_commit_callbacks
+    ):
+        from apps.events.selectors import (
+            event_detail_cache_key,
+            get_event_detail_payload,
+            get_events_list_generation,
+        )
+
+        event = make_event(status=EventStatus.LIVE)
+        media = add_image(content, event, owner)
+        cache = self._cache()
+        get_event_detail_payload(event.id)  # warm the detail entry
+        assert cache.get(event_detail_cache_key(event.id)) is not None
+        generation = get_events_list_generation(cache)
+
+        # Invalidation runs in on_commit, which never fires inside the test's
+        # outer transaction unless it is captured and executed.
+        with django_capture_on_commit_callbacks(execute=True):
+            content.update_media(
+                event_id=event.id,
+                actor_id=owner.id,
+                media_id=media.id,
+                changes={"caption": "Front row"},
+            )
+
+        assert cache.get(event_detail_cache_key(event.id)) is None
+        assert get_events_list_generation(cache) == generation + 1
+
+    def test_editing_a_draft_touches_no_public_cache(
+        self, content, make_event, owner, django_capture_on_commit_callbacks
+    ):
+        from apps.events.selectors import get_events_list_generation
+
+        event = make_event(status=EventStatus.DRAFT)
+        media = add_image(content, event, owner)
+        cache = self._cache()
+        generation = get_events_list_generation(cache)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            content.update_media(
+                event_id=event.id, actor_id=owner.id, media_id=media.id, changes={"position": 4}
+            )
+
+        assert get_events_list_generation(cache) == generation
+
+
+@pytest.mark.django_db
 class TestOwnership:
     def test_another_organizer_cannot_add_media(self, content, make_event, other_user):
         event = make_event(status=EventStatus.DRAFT)
@@ -121,6 +385,19 @@ class TestOwnership:
         # exists to anyone guessing ids.
         with pytest.raises(EventNotFoundError):
             add_image(content, event, other_user)
+
+    def test_another_organizer_cannot_edit_media(self, content, make_event, owner, other_user):
+        event = make_event(status=EventStatus.DRAFT)
+        media = add_image(content, event, owner)
+        from apps.events.exceptions import EventNotFoundError
+
+        with pytest.raises(EventNotFoundError):
+            content.update_media(
+                event_id=event.id,
+                actor_id=other_user.id,
+                media_id=media.id,
+                changes={"caption": "Mine now"},
+            )
 
 
 @pytest.mark.django_db

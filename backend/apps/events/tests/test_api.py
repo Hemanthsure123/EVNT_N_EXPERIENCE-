@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.events.models import Event, EventStatus
+from apps.organizations.models import VerifiedLevel
 
 
 def _future_iso(days: int = 10) -> str:
@@ -146,6 +147,42 @@ def test_public_detail_query_budget_cold_then_warm(
 
     with django_assert_num_queries(0):  # from Redis/locmem
         assert api_client.get(url).status_code == 200
+
+
+@pytest.mark.django_db
+def test_public_detail_reports_the_organizer_verification_honestly(
+    api_client, make_event, unverified_organization, django_assert_num_queries
+):
+    """`organization_verified` is what lets the organiser card show a verified
+    badge without inventing one — so it has to be TRUE only when an operator
+    actually verified the organization, and false for `pending` as well as
+    `unverified` (nobody has checked yet, either way).
+
+    The budget assertion is the other half: it rides on the `select_related`
+    join the org NAME already needs, and a field the serializer touches but the
+    lean field set omits is a deferred load — one extra query per response,
+    silently. That trap is exactly how adding three columns once turned this
+    read from 1 query into 4.
+    """
+    verified = make_event(status=EventStatus.LIVE)
+    unverified = make_event(status=EventStatus.LIVE, org=unverified_organization)
+
+    with django_assert_num_queries(1):
+        payload = api_client.get(f"/api/v1/events/{verified.id}").json()
+    assert payload["organization_verified"] is True
+
+    with django_assert_num_queries(1):
+        other = api_client.get(f"/api/v1/events/{unverified.id}").json()
+    assert other["organization_verified"] is False
+
+    # `pending` is an internal review state, and to a buyer it means the same
+    # thing as unverified: nobody has checked yet. It is deliberately not
+    # exposed as a third value.
+    unverified_organization.verified_level = VerifiedLevel.PENDING
+    unverified_organization.save(update_fields=["verified_level"])
+    in_review = make_event(status=EventStatus.LIVE, org=unverified_organization)
+
+    assert api_client.get(f"/api/v1/events/{in_review.id}").json()["organization_verified"] is False
 
 
 # --- create ----------------------------------------------------------------

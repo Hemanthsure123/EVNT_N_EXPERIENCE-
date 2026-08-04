@@ -16,7 +16,10 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.organizations.models import VerifiedLevel
+
 from .models import Event, EventStatus, MediaKind, TimelineKind
+from .repositories import MEDIA_LIMITS
 
 
 def _validate_coordinate_pair(attrs: dict) -> None:
@@ -231,6 +234,19 @@ class EventDetailSerializer(serializers.ModelSerializer):
     from_price = serializers.IntegerField(
         source="from_price_minor", read_only=True, allow_null=True
     )
+    #: Has a platform operator verified this organizer?
+    #:
+    #: A BOOLEAN rather than the level, deliberately. `unverified` and `pending`
+    #: are the same fact to a buyer — nobody has checked yet — and `pending` is
+    #: an internal review state that is not an attendee's to read (the same
+    #: reasoning that keeps `moderation_note` off this serializer). It comes off
+    #: the organization row the `select_related` join already loads, so the
+    #: organiser card can finally show a verified badge instead of the frontend
+    #: inventing one or omitting the question.
+    organization_verified = serializers.SerializerMethodField()
+
+    def get_organization_verified(self, event: Event) -> bool:
+        return event.organization.verified_level == VerifiedLevel.VERIFIED
 
     class Meta:
         model = Event
@@ -238,6 +254,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
             "id",
             "organization_id",
             "organization_name",
+            "organization_verified",
             "title",
             "description",
             "venue",
@@ -324,6 +341,119 @@ class WriteEventTimelineSerializer(serializers.Serializer):
     #: times, and forcing a time would make them invent one.
     starts_at = serializers.DateTimeField(required=False, allow_null=True)
     position = serializers.IntegerField(min_value=0, default=0)
+
+
+class _PartialUpdateSerializer(serializers.Serializer):
+    """Shared "at least one field" rule for the in-place content edits.
+
+    Every field on a PATCH is optional, so an empty body would otherwise
+    validate cleanly and produce an `UPDATE` that sets nothing, an audit row
+    claiming an edit, and a cache invalidation — for a request that asked for no
+    change. `UpdateEventRequestSerializer` applies exactly this rule to the
+    event itself; the collections get it for the same reason.
+    """
+
+    #: Subclasses list the fields a PATCH may touch. A frozenset because it is
+    #: intersected with the body's keys and never mutated.
+    _EDITABLE: frozenset[str] = frozenset()
+
+    def validate(self, attrs: dict) -> dict:
+        if not (self._EDITABLE & attrs.keys()):
+            raise serializers.ValidationError("Provide at least one field to update.")
+        return attrs
+
+
+class UpdateEventMediaSerializer(_PartialUpdateSerializer):
+    """Edit one attached image or video in place.
+
+    `url` is deliberately NOT editable. Repointing a row at different bytes
+    while keeping its alt text and caption is how an image ends up described as
+    something it is not — and swapping an asset is already remove-then-add,
+    which is honest about creating a new row.
+
+    `alt_text` may be omitted, but not blanked: a row that HAS a description
+    must not be able to lose it, for the same reason the create path requires
+    one. (`CharField` refuses `""` and whitespace-only by default, so this is
+    the field declaration and not a separate check.)
+    """
+
+    kind = serializers.ChoiceField(choices=MediaKind.choices, required=False)
+    alt_text = serializers.CharField(max_length=200, required=False)
+    caption = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    position = serializers.IntegerField(min_value=0, required=False)
+
+    _EDITABLE = frozenset({"kind", "alt_text", "caption", "position"})
+
+
+class _ReorderItemSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    position = serializers.IntegerField(min_value=0)
+
+
+class ReorderEventMediaSerializer(serializers.Serializer):
+    """A whole gallery's new order, in one request.
+
+    ONE call rather than N single-row PATCHes: a drag-and-drop changes several
+    positions at once, and applying them one request at a time leaves the
+    gallery in an order nobody chose for as long as the sequence takes — or
+    forever, if the tab closes halfway.
+
+    The list is BOUNDED by the per-kind caps' total (`MEDIA_LIMITS`), computed
+    rather than typed so it cannot drift from them. An unbounded list on an
+    authenticated endpoint is an unbounded write.
+    """
+
+    items = serializers.ListField(
+        child=_ReorderItemSerializer(),
+        allow_empty=False,
+        max_length=sum(MEDIA_LIMITS.values()),
+    )
+
+    def validate_items(self, value: list[dict]) -> list[dict]:
+        ids = [item["id"] for item in value]
+        if len(set(ids)) != len(ids):
+            # Two positions for one row is a contradictory instruction, and
+            # silently letting the last one win hides a client bug.
+            raise serializers.ValidationError("Each media id may appear once.")
+        return value
+
+
+class EventMediaListSerializer(serializers.Serializer):
+    """The whole gallery in its new order — what a reorder returns.
+
+    Everything rather than only what moved, so the client replaces its local
+    order outright instead of reconciling two lists (the same reasoning as
+    `POST /me/saved-events` returning every saved id).
+    """
+
+    media = EventMediaSerializer(many=True)
+
+
+class UpdateEventFaqSerializer(_PartialUpdateSerializer):
+    """Edit one question and answer in place. Neither half may be blanked — an
+    answer-less FAQ is worse than no FAQ."""
+
+    question = serializers.CharField(max_length=200, required=False)
+    answer = serializers.CharField(required=False)
+    position = serializers.IntegerField(min_value=0, required=False)
+
+    _EDITABLE = frozenset({"question", "answer", "position"})
+
+
+class UpdateEventTimelineSerializer(_PartialUpdateSerializer):
+    """Edit one running-order entry in place.
+
+    `starts_at` is null-able here on purpose: a time an organizer entered and
+    then discovered they do not know has to be removable, or the running order
+    keeps advertising a clock time that is wrong.
+    """
+
+    label = serializers.CharField(max_length=120, required=False)  # type: ignore[assignment]
+    description = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    starts_at = serializers.DateTimeField(required=False, allow_null=True)
+    position = serializers.IntegerField(min_value=0, required=False)
+
+    _EDITABLE = frozenset({"label", "description", "starts_at", "position"})
 
 
 class EventContentSerializer(serializers.Serializer):

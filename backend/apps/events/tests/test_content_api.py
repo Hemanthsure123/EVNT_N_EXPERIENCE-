@@ -8,6 +8,7 @@ not, and that another organizer cannot touch your event's media.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 
 import pytest
 from django.utils import timezone
@@ -69,6 +70,15 @@ class TestWritePermissions:
     def test_anonymous_cannot_write(self, api_client, make_event, collection):
         event = make_event(status=EventStatus.DRAFT)
         response = api_client.post(f"/api/v1/events/{event.id}/{collection}", {}, format="json")
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("collection", ["media", "faqs", "timeline"])
+    def test_anonymous_cannot_edit(self, api_client, make_event, collection):
+        """401 and not 400: the permission runs before the body is looked at."""
+        event = make_event(status=EventStatus.DRAFT)
+        response = api_client.patch(
+            f"/api/v1/events/{event.id}/{collection}/{uuid.uuid4()}", {}, format="json"
+        )
         assert response.status_code == 401
 
     def test_another_organizer_gets_404_not_403(self, stranger, make_event):
@@ -135,6 +145,189 @@ class TestMedia:
 
 
 @pytest.mark.django_db
+class TestMediaEdits:
+    """PATCH one row in place. The rules the POST holds must survive here."""
+
+    @staticmethod
+    def _add(client, event, **overrides) -> dict:
+        return client.post(
+            f"/api/v1/events/{event.id}/media", {**IMAGE, **overrides}, format="json"
+        ).json()
+
+    def test_an_owner_can_fix_a_caption(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event, caption="Frotn row")
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media/{media['id']}",
+            {"caption": "Front row"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        assert response.json()["caption"] == "Front row"
+        # A write, so never cached — same posture as the sibling writes.
+        assert response["Cache-Control"] == "private, no-store"
+
+    def test_a_blank_alt_text_is_refused_at_the_boundary(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media/{media['id']}", {"alt_text": "   "}, format="json"
+        )
+
+        assert response.status_code == 400
+        # The one envelope every error in this codebase comes back in — a
+        # boundary rejection is normalized into it, not returned in DRF's own
+        # shape.
+        error = response.json()["error"]
+        assert set(error) == {"code", "message", "details"}
+        assert "alt_text" in error["message"]
+
+    def test_an_empty_body_is_refused(self, authed_client, make_event):
+        """Otherwise it is an UPDATE that sets nothing, an audit row claiming an
+        edit, and a cache invalidation — for a request that asked for no
+        change."""
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media/{media['id']}", {}, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_moving_a_row_into_a_full_kind_is_refused(self, authed_client, make_event):
+        """The one-hero cap, via a PATCH instead of a POST."""
+        event = make_event(status=EventStatus.DRAFT)
+        self._add(authed_client, event, kind=MediaKind.HERO)
+        gallery = self._add(authed_client, event)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media/{gallery['id']}",
+            {"kind": MediaKind.HERO},
+            format="json",
+        )
+
+        assert response.status_code == 422
+        assert "maximum of 1" in response.json()["error"]["message"]
+
+    def test_another_organizer_gets_404(self, authed_client, stranger, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event)
+
+        response = stranger.patch(
+            f"/api/v1/events/{event.id}/media/{media['id']}", {"position": 7}, format="json"
+        )
+
+        assert response.status_code == 404
+        assert (
+            authed_client.get(f"/api/v1/events/{event.id}/content").json()["media"][0]["position"]
+            == media["position"]
+        )
+
+    def test_a_media_id_from_another_event_is_a_404(self, authed_client, make_event):
+        """Both events belong to the same organizer, so this is the case an
+        ownership check alone waves through — the row lookup is scoped to the
+        event in the URL."""
+        mine = make_event(status=EventStatus.DRAFT)
+        other = make_event(status=EventStatus.DRAFT)
+        elsewhere = self._add(authed_client, other)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{mine.id}/media/{elsewhere['id']}", {"position": 7}, format="json"
+        )
+        assert response.status_code == 404
+
+
+@pytest.mark.django_db
+class TestMediaReorder:
+    @staticmethod
+    def _add(client, event, position: int) -> dict:
+        return client.post(
+            f"/api/v1/events/{event.id}/media",
+            {**IMAGE, "position": position, "caption": f"shot {position}"},
+            format="json",
+        ).json()
+
+    def test_a_whole_new_order_in_one_request(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        first = self._add(authed_client, event, 0)
+        second = self._add(authed_client, event, 1)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media",
+            {"items": [{"id": first["id"], "position": 1}, {"id": second["id"], "position": 0}]},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        # The whole gallery comes back, so the client replaces its order rather
+        # than reconciling two lists.
+        assert [item["caption"] for item in response.json()["media"]] == ["shot 1", "shot 0"]
+
+    def test_an_id_from_another_event_is_a_no_op(self, authed_client, make_event):
+        """A foreign id changes nothing rather than failing the request: the
+        caller is describing the order of THEIR gallery, and refusing the whole
+        reorder over one stale id would lose the order they actually chose."""
+        mine = make_event(status=EventStatus.DRAFT)
+        other = make_event(status=EventStatus.DRAFT)
+        ours = self._add(authed_client, mine, 0)
+        theirs = self._add(authed_client, other, 0)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{mine.id}/media",
+            {"items": [{"id": ours["id"], "position": 5}, {"id": theirs["id"], "position": 9}]},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()["media"]] == [ours["id"]]
+        untouched = authed_client.get(f"/api/v1/events/{other.id}/content").json()["media"]
+        assert untouched[0]["position"] == 0
+
+    def test_the_list_is_bounded(self, authed_client, make_event):
+        """An unbounded list on an authenticated endpoint is an unbounded
+        write. The ceiling is the per-kind caps' total."""
+        event = make_event(status=EventStatus.DRAFT)
+        items = [{"id": str(uuid.uuid4()), "position": index} for index in range(15)]
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media", {"items": items}, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_one_id_may_not_carry_two_positions(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event, 0)
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media",
+            {"items": [{"id": media["id"], "position": 0}, {"id": media["id"], "position": 1}]},
+            format="json",
+        )
+        assert response.status_code == 400
+
+    def test_an_empty_list_is_refused(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/media", {"items": []}, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_another_organizer_cannot_reorder(self, authed_client, stranger, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        media = self._add(authed_client, event, 0)
+
+        response = stranger.patch(
+            f"/api/v1/events/{event.id}/media",
+            {"items": [{"id": media["id"], "position": 4}]},
+            format="json",
+        )
+        assert response.status_code == 404
+
+
+@pytest.mark.django_db
 class TestFaqs:
     def test_adding_and_ordering(self, authed_client, make_event):
         event = make_event(status=EventStatus.DRAFT)
@@ -156,6 +349,55 @@ class TestFaqs:
             format="json",
         )
         assert response.status_code == 400
+
+    def test_an_answer_can_be_corrected_in_place(self, authed_client, make_event):
+        """A typo in a published answer is the most common edit on this
+        collection, and delete-then-re-add loses the FAQ's place in the list."""
+        event = make_event(status=EventStatus.DRAFT)
+        faq = authed_client.post(
+            f"/api/v1/events/{event.id}/faqs",
+            {"question": "Is there parking?", "answer": "No.", "position": 2},
+            format="json",
+        ).json()
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/faqs/{faq['id']}",
+            {"answer": "Yes, 40 bays."},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["answer"] == "Yes, 40 bays."
+        assert body["question"] == "Is there parking?"
+        assert body["position"] == 2
+        assert response["Cache-Control"] == "private, no-store"
+
+    def test_an_answer_cannot_be_blanked(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        faq = authed_client.post(
+            f"/api/v1/events/{event.id}/faqs",
+            {"question": "Parking?", "answer": "Yes."},
+            format="json",
+        ).json()
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/faqs/{faq['id']}", {"answer": ""}, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_another_organizer_cannot_edit_an_faq(self, authed_client, stranger, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        faq = authed_client.post(
+            f"/api/v1/events/{event.id}/faqs",
+            {"question": "Parking?", "answer": "Yes."},
+            format="json",
+        ).json()
+
+        response = stranger.patch(
+            f"/api/v1/events/{event.id}/faqs/{faq['id']}", {"answer": "No."}, format="json"
+        )
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db
@@ -199,6 +441,77 @@ class TestTimeline:
         )
         assert response.status_code == 201
         assert response.json()["starts_at"] is None
+
+    def test_a_slipped_doors_time_can_be_moved(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        doors = timezone.now() + dt.timedelta(days=30)
+        entry = authed_client.post(
+            f"/api/v1/events/{event.id}/timeline",
+            {"kind": TimelineKind.DOORS, "label": "Doors", "starts_at": doors.isoformat()},
+            format="json",
+        ).json()
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/timeline/{entry['id']}",
+            {"starts_at": (doors + dt.timedelta(minutes=30)).isoformat(), "label": "Doors open"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        assert response.json()["label"] == "Doors open"
+        assert response.json()["starts_at"] != entry["starts_at"]
+        assert response["Cache-Control"] == "private, no-store"
+
+    def test_a_time_can_be_cleared(self, authed_client, make_event):
+        """A time the organizer turns out not to know has to be removable, or
+        the running order keeps advertising a clock time that is wrong."""
+        event = make_event(status=EventStatus.DRAFT)
+        entry = authed_client.post(
+            f"/api/v1/events/{event.id}/timeline",
+            {
+                "kind": TimelineKind.MAIN,
+                "label": "Headliner",
+                "starts_at": (timezone.now() + dt.timedelta(days=30)).isoformat(),
+            },
+            format="json",
+        ).json()
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/timeline/{entry['id']}",
+            {"starts_at": None},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        assert response.json()["starts_at"] is None
+
+    def test_an_empty_body_is_refused(self, authed_client, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        entry = authed_client.post(
+            f"/api/v1/events/{event.id}/timeline",
+            {"kind": TimelineKind.MAIN, "label": "Headliner"},
+            format="json",
+        ).json()
+
+        response = authed_client.patch(
+            f"/api/v1/events/{event.id}/timeline/{entry['id']}", {}, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_another_organizer_cannot_edit_an_entry(self, authed_client, stranger, make_event):
+        event = make_event(status=EventStatus.DRAFT)
+        entry = authed_client.post(
+            f"/api/v1/events/{event.id}/timeline",
+            {"kind": TimelineKind.MAIN, "label": "Headliner"},
+            format="json",
+        ).json()
+
+        response = stranger.patch(
+            f"/api/v1/events/{event.id}/timeline/{entry['id']}",
+            {"label": "Mine now"},
+            format="json",
+        )
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db

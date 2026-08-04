@@ -526,6 +526,30 @@ class EventModerationService:
         return refreshed
 
 
+# What an in-place edit of a content row may touch. Same shape as
+# `_EDITABLE_FIELDS` above and for the same reason: the set of writable columns
+# is a business rule, so a serializer key that is not here changes nothing
+# rather than reaching the ORM. `url` is absent from the media set on purpose —
+# see `UpdateEventMediaSerializer`.
+_EDITABLE_MEDIA_FIELDS = ("kind", "alt_text", "caption", "position")
+_EDITABLE_FAQ_FIELDS = ("question", "answer", "position")
+_EDITABLE_TIMELINE_FIELDS = ("label", "description", "starts_at", "position")
+
+
+def _applied(changes: dict, editable: tuple[str, ...]) -> dict:
+    """The subset of `changes` that may be written, with text stripped.
+
+    Stripping here rather than at the boundary keeps it identical to what the
+    add paths already do — a caption of `"  "` must land as `""`, not as two
+    spaces that render as a blank line under a photo.
+    """
+    return {
+        key: value.strip() if isinstance(value, str) else value
+        for key, value in changes.items()
+        if key in editable
+    }
+
+
 class EventContentService:
     """Media, FAQs and running order for an event.
 
@@ -553,6 +577,41 @@ class EventContentService:
             raise EventNotFoundError(str(event_id))
         return event
 
+    def _require_media_slot(self, event_id: uuid.UUID | str, kind: str) -> None:
+        """Refuse when the event is already at the cap for `kind`.
+
+        One implementation for all three write paths (add, upload, and a PATCH
+        that MOVES a row to another kind) — the caps are the invariant this
+        service exists to hold, and three copies of the check is three chances
+        for one of them to be the lenient one.
+        """
+        from .repositories import MEDIA_LIMITS
+
+        # `kind` arrives as a validated plain string from the serializer;
+        # MEDIA_LIMITS is keyed by the enum, whose members ARE strings.
+        limit = MEDIA_LIMITS.get(MediaKind(kind))
+        if limit is not None and self._content.count_media(event_id, kind) >= limit:
+            raise InvalidInputError(
+                f"This event already has the maximum of {limit} "
+                f"{'item' if limit == 1 else 'items'} for {kind}."
+            )
+
+    def _invalidate_if_public(self, event: Event) -> None:
+        """Drop the event's public caches — but only if it HAS any.
+
+        Editing a draft's content must not touch them: invalidation bumps the
+        listing GENERATION, which orphans every cached listing page on the
+        platform at once, and a draft appears on none of them. Same rule as
+        `EventService.update_event`.
+
+        Always inside `on_commit`, never before it — a concurrent reader in the
+        pre-commit window would otherwise repopulate the cache from the row as
+        it was before the write.
+        """
+        if event.status != EventStatus.LIVE:
+            return
+        transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
     # -------------------------------------------------------------- media
 
     def add_media(
@@ -566,18 +625,9 @@ class EventContentService:
         caption: str = "",
         position: int = 0,
     ):
-        from .repositories import MEDIA_LIMITS
-
         event = self._owned(event_id=event_id, actor_id=actor_id)
 
-        # `kind` arrives as a validated plain string from the serializer;
-        # MEDIA_LIMITS is keyed by the enum, whose members ARE strings.
-        limit = MEDIA_LIMITS.get(MediaKind(kind))
-        if limit is not None and self._content.count_media(event.id, kind) >= limit:
-            raise InvalidInputError(
-                f"This event already has the maximum of {limit} "
-                f"{'item' if limit == 1 else 'items'} for {kind}."
-            )
+        self._require_media_slot(event.id, kind)
         if not alt_text.strip():
             # The most-viewed image on the platform must not be invisible to a
             # screen reader. The column allows blank so historical rows survive;
@@ -624,19 +674,12 @@ class EventContentService:
         """
         from core.uploads import storage_path, validate_image
 
-        from .repositories import MEDIA_LIMITS
-
         event = self._owned(event_id=event_id, actor_id=actor_id)
 
         # Cheap checks first, in this order on purpose: ownership, then the
         # cap, then the file. Reading and storing bytes for an upload we were
         # always going to reject is wasted work and wasted storage.
-        limit = MEDIA_LIMITS.get(MediaKind(kind))
-        if limit is not None and self._content.count_media(event.id, kind) >= limit:
-            raise InvalidInputError(
-                f"This event already has the maximum of {limit} "
-                f"{'item' if limit == 1 else 'items'} for {kind}."
-            )
+        self._require_media_slot(event.id, kind)
         if not alt_text.strip():
             raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
 
@@ -667,6 +710,93 @@ class EventContentService:
             )
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
         return media
+
+    def update_media(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        media_id: uuid.UUID | str,
+        changes: dict,
+    ):
+        """Edit one attached image or video in place.
+
+        `changes: dict` rather than a keyword per field, matching
+        `EventService.update_event`: on a PATCH, "absent" and "set to the
+        default" are different instructions, and a signature of optional
+        keywords cannot tell them apart without a sentinel per field.
+
+        **Changing `kind` re-checks the TARGET kind's cap.** Without that, the
+        one-hero invariant is trivially broken by adding a gallery image and then
+        PATCHing it to `hero` — the create path's cap check would never have run
+        for the kind the row ended up in.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        media = self._content.get_media(event_id=event.id, media_id=media_id)
+        if media is None:
+            # Scoped by event in the repository, so another organizer's media id
+            # is indistinguishable from one that does not exist — which is the
+            # point.
+            raise EventNotFoundError(str(media_id))
+
+        applied = _applied(changes, _EDITABLE_MEDIA_FIELDS)
+        if "alt_text" in applied and not applied["alt_text"]:
+            raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
+        kind = applied.get("kind")
+        if kind is not None and kind != media.kind:
+            self._require_media_slot(event.id, kind)
+
+        with UnitOfWork():
+            updated = self._content.update_media(
+                event_id=event.id, media_id=media_id, changes=applied
+            )
+            if updated is None:  # pragma: no cover — removed between load and write
+                raise EventNotFoundError(str(media_id))
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.media_updated",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"media_id": str(media_id), "fields": sorted(applied)},
+            )
+            self._invalidate_if_public(event)
+        return updated
+
+    def reorder_media(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        items: list[dict],
+    ):
+        """Apply a whole new order to the event's media, atomically.
+
+        Returns the full, freshly-ordered list — the client replaces its local
+        order rather than reconciling it.
+
+        An id that does not belong to this event is a NO-OP and not an error:
+        the repository scopes every row by `event_id`, so a foreign id matches
+        nothing. That is deliberate — the caller is describing the order of
+        their own gallery, and refusing the whole request over one stale id
+        (a photo someone else deleted mid-drag) would lose the reorder they
+        actually made.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        # Keyed by str so the repository can match `str(row.pk)` regardless of
+        # whether the caller passed UUID objects or strings.
+        positions = {str(item["id"]): int(item["position"]) for item in items}
+
+        with UnitOfWork():
+            moved = self._content.reorder_media(event_id=event.id, positions=positions)
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.media_reordered",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={"requested": len(positions), "moved": moved},
+            )
+            self._invalidate_if_public(event)
+        return self._content.media_for(event.id)
 
     def remove_media(
         self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, media_id: uuid.UUID | str
@@ -708,6 +838,34 @@ class EventContentService:
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
         return faq
 
+    def update_faq(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        faq_id: uuid.UUID | str,
+        changes: dict,
+    ):
+        """Edit one question or answer in place.
+
+        A typo in a published answer is the single most common content edit on
+        this collection, and delete-then-re-add loses the FAQ's place in the
+        list while the organizer retypes it.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        applied = _applied(changes, _EDITABLE_FAQ_FIELDS)
+        # Same rule as `add_faq`, applied to whichever half is present: an FAQ
+        # with an empty answer is worse than no FAQ.
+        if any(field in applied and not applied[field] for field in ("question", "answer")):
+            raise InvalidInputError("An FAQ needs both a question and an answer.")
+
+        with UnitOfWork():
+            updated = self._content.update_faq(event_id=event.id, faq_id=faq_id, changes=applied)
+            if updated is None:
+                raise EventNotFoundError(str(faq_id))
+            self._invalidate_if_public(event)
+        return updated
+
     def remove_faq(
         self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, faq_id: uuid.UUID | str
     ) -> None:
@@ -745,6 +903,34 @@ class EventContentService:
             )
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
         return entry
+
+    def update_timeline_entry(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        entry_id: uuid.UUID | str,
+        changes: dict,
+    ):
+        """Edit one running-order entry in place.
+
+        A set time moving is the normal case for this collection — a doors time
+        slips by half an hour and every entry after it shifts — so this is the
+        edit the running order most needed.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        applied = _applied(changes, _EDITABLE_TIMELINE_FIELDS)
+        if "label" in applied and not applied["label"]:
+            raise InvalidInputError("A timeline entry needs a label.")
+
+        with UnitOfWork():
+            updated = self._content.update_timeline_entry(
+                event_id=event.id, entry_id=entry_id, changes=applied
+            )
+            if updated is None:
+                raise EventNotFoundError(str(entry_id))
+            self._invalidate_if_public(event)
+        return updated
 
     def remove_timeline_entry(
         self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, entry_id: uuid.UUID | str

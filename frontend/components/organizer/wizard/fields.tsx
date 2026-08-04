@@ -273,6 +273,47 @@ function Messages({ id, hint, error }: { id: string; hint?: string; error?: stri
 }
 
 /** A step's heading block — one place, so every step has the same rhythm. */
+/**
+ * A label, somebody else's control, and the same wired message line.
+ *
+ * `VenueAutocomplete` is the one control in the Studio that is not an `Input`:
+ * it owns a combobox, a listbox and its own state captions, so it cannot go
+ * through `TextField`. Framing it here rather than hand-rolling a `<label>` and
+ * a `<p>` in the step is what keeps its label, its counter and its error line
+ * identical to the fields either side of it — and it hands back the id the
+ * control must point `aria-describedby` at, so point 1 above still holds for a
+ * control this file does not render.
+ */
+export function FieldFrame({
+  id,
+  label,
+  count,
+  hint,
+  error,
+  children,
+}: {
+  id: string;
+  label: string;
+  count?: { used: number; max: number };
+  hint?: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} count={count} />
+      {children}
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+/** The id `FieldFrame` gives its message line, for the control's
+ *  `aria-describedby`. Derived rather than passed, so the two cannot drift. */
+export function fieldMessageId(id: string, error?: string): string {
+  return error ? `${id}-error` : `${id}-hint`;
+}
+
 export function StepHeader({ title, blurb }: { title: string; blurb: string }) {
   return (
     <header className="flex flex-col gap-1.5">

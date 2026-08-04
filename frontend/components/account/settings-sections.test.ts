@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SECTION_ID,
   SETTINGS_SECTIONS,
+  contentSectionFor,
   findSection,
   parseSectionId,
   resolveSection,
@@ -68,6 +69,34 @@ describe('resolveSection', () => {
 
   it('lets the callback outcome win over a section already in the URL', () => {
     expect(resolveSection({ section: 'appearance', calendar: 'connected' })).toBe('account');
+  });
+});
+
+describe('contentSectionFor', () => {
+  it('always answers with one section, so the content column is never blank', () => {
+    expect(contentSectionFor({})).toBe(DEFAULT_SECTION_ID);
+    // A mistyped or hand-edited value must open the default rather than leave a
+    // rail beside an empty column — the one case where "treat it as absent"
+    // would otherwise render nothing at all.
+    expect(contentSectionFor({ section: 'security' })).toBe(DEFAULT_SECTION_ID);
+    expect(contentSectionFor({ section: 'privacy' })).toBe('privacy');
+    expect(contentSectionFor({ calendar: 'connected' })).toBe('account');
+  });
+
+  it('disagrees with resolveSection only when nothing was chosen', () => {
+    // This pair IS the two-layouts-one-URL contract: `null` from
+    // `resolveSection` is what makes the phone show the index, while
+    // `contentSectionFor` is what the rail shows beside it at `lg`. If they ever
+    // collapse into one function, one of the two layouts silently breaks — a
+    // phone showing Profile with no way back to the other four, or a desktop
+    // rail beside nothing.
+    expect(resolveSection({})).toBeNull();
+    expect(contentSectionFor({})).not.toBeNull();
+    for (const section of SETTINGS_SECTIONS) {
+      expect(contentSectionFor({ section: section.id })).toBe(
+        resolveSection({ section: section.id }),
+      );
+    }
   });
 });
 

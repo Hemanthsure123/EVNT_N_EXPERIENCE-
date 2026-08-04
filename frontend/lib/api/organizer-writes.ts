@@ -111,6 +111,30 @@ export const publishEvent = (eventId: string) =>
 export const archiveEvent = (eventId: string) =>
   api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/archive`, {});
 
+/**
+ * One step of the sale-phase schedule, as WRITTEN.
+ *
+ * ARRAY ORDER IS POSITION — there is no `position` field to send, and no id:
+ * the schedule is submitted whole and replaced whole, so an edit is "here is
+ * the new schedule", never a per-row patch. An empty array CLEARS it.
+ *
+ * `quantity` is the CUMULATIVE `sold + reserved` threshold at which the phase
+ * closes (the first N seats of the tier), not a per-phase allocation.
+ *
+ * The rules the service enforces, mirrored in the wizard so a save is not the
+ * first time an organizer hears them: at most 5 phases, names non-blank, every
+ * price at or below the tier's face price, prices non-decreasing across the
+ * array, and each phase bounded by `ends_at` or `quantity` (or both) — an
+ * unbounded phase never ends, which makes everything after it decoration.
+ */
+export type SalePhaseInput = {
+  name: string;
+  /** Minor units (paise), > 0. A free phase is a different product, not a discount. */
+  price: number;
+  ends_at?: string | null;
+  quantity?: number | null;
+};
+
 export type CreateTicketTypeInput = {
   name: string;
   /** Minor units (paise). */
@@ -119,6 +143,7 @@ export type CreateTicketTypeInput = {
   sale_start?: string | null;
   sale_end?: string | null;
   max_per_order?: number;
+  phases?: SalePhaseInput[];
 };
 
 export type UpdateTicketTypeInput = Partial<CreateTicketTypeInput> & { version: number };

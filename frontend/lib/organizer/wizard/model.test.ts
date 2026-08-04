@@ -12,6 +12,7 @@ import {
   publishBlockers,
   resolveOrganizationId,
   restoreDraft,
+  tierFingerprint,
   toCreateInput,
   toPatchInput,
   toTierInput,
@@ -174,6 +175,14 @@ describe('restoreDraft', () => {
     const restored = restoreDraft({ title: 'Old build', organizationId: 'org-1' }, ['org-1']);
     expect(restored.shortDescription).toBe('');
     expect(restored.tiers).toEqual([]);
+    // A draft stored before the venue picker existed has none of the pin
+    // fields. They have to come back as the empty pair rather than `undefined`:
+    // `latitude: undefined` reaches `toPatchInput` as a missing key, which the
+    // serializer reads as "leave it alone", and the pin section would render a
+    // marker at `undefined`.
+    expect(restored.placeId).toBe('');
+    expect(restored.latitude).toBeNull();
+    expect(restored.longitude).toBeNull();
     // A hand-corrupted `tiers` is coerced rather than trusted.
     expect(
       restoreDraft({ organizationId: 'org-1', tiers: 'nonsense' as unknown as [] }, ['org-1'])
@@ -273,6 +282,63 @@ describe('API mapping', () => {
 
   it('defaults max per order rather than sending NaN', () => {
     expect(toTierInput(tierWith({ maxPerOrder: '' })).max_per_order).toBe(10);
+  });
+
+  it('sends the pricing schedule in array order, in paise', () => {
+    // The phase price is what a buyer is CHARGED once the schedule is live, so
+    // it takes the same rupees-to-paise conversion as the face price — and the
+    // array order is the position the backend stores.
+    const input = toTierInput(
+      tierWith({
+        price: '999',
+        phases: [
+          { key: 'a', name: 'Early bird', price: '499', endsAt: '2026-09-01T10:00', quantity: '' },
+          { key: 'b', name: 'Phase 1', price: '699.50', endsAt: '', quantity: '250' },
+        ],
+      }),
+    );
+
+    expect(input.phases).toEqual([
+      {
+        name: 'Early bird',
+        price: 49_900,
+        // A `datetime-local` value is the organizer's WALL CLOCK, so it is
+        // interpreted in their timezone — computed here the same way rather
+        // than hardcoded, or this test would only pass in one timezone.
+        ends_at: new Date('2026-09-01T10:00').toISOString(),
+        quantity: null,
+      },
+      { name: 'Phase 1', price: 69_950, ends_at: null, quantity: 250 },
+    ]);
+  });
+
+  it('omits the schedule entirely when there are no phases', () => {
+    // Not `[]`: an absent key leaves an existing schedule alone, while an empty
+    // array would read as "clear it" on a tier that never had one.
+    expect('phases' in toTierInput(tierWith({ phases: [] }))).toBe(false);
+  });
+
+  it('includes the schedule in the tier fingerprint', () => {
+    // Without this, a typed discount never triggers a PATCH: the badge appears
+    // in the preview and the tier on the server keeps its old price.
+    const plain = tierWith({ phases: [] });
+    const scheduled = tierWith({
+      phases: [{ key: 'a', name: 'Early bird', price: '499', endsAt: '', quantity: '100' }],
+    });
+    expect(tierFingerprint(plain)).not.toBe(tierFingerprint(scheduled));
+
+    // And editing a phase's price is a change the save engine can see.
+    const repriced = tierWith({
+      phases: [{ key: 'a', name: 'Early bird', price: '449', endsAt: '', quantity: '100' }],
+    });
+    expect(tierFingerprint(scheduled)).not.toBe(tierFingerprint(repriced));
+
+    // The React list key is NOT part of it — re-keying identical phases is not
+    // an edit worth a write.
+    const rekeyed = tierWith({
+      phases: [{ key: 'zzz', name: 'Early bird', price: '499', endsAt: '', quantity: '100' }],
+    });
+    expect(tierFingerprint(scheduled)).toBe(tierFingerprint(rekeyed));
   });
 });
 
@@ -380,10 +446,75 @@ describe('toPatchInput', () => {
   });
 });
 
+/**
+ * The venue's place and pin.
+ *
+ * Two ways to get these wrong, both expensive. Omitting them from the PATCH
+ * leaves a removed pin on the public event page forever; sending HALF a pair is
+ * a 400 on EVERY autosave of that draft, with the organizer's only escape being
+ * to clear their browser storage.
+ */
+describe('the venue pin', () => {
+  const PINNED = { placeId: 'ChIJ-abc', latitude: 19.076, longitude: 72.8777 };
+
+  it('sends the place and both coordinates on create', () => {
+    const input = toCreateInput(draftWith(PINNED));
+    expect(input.place_id).toBe('ChIJ-abc');
+    expect(input.latitude).toBe(19.076);
+    expect(input.longitude).toBe(72.8777);
+  });
+
+  it('CLEARS all three together, rather than omitting them', () => {
+    // Removing a pin has to be a value the serializer can act on. A missing key
+    // means "leave it alone", so the map on the public page would keep pointing
+    // at the place the organizer just deleted.
+    const patch = toPatchInput(draftWith({ placeId: '', latitude: null, longitude: null }));
+    expect(patch).toHaveProperty('place_id', '');
+    expect(patch).toHaveProperty('latitude', null);
+    expect(patch).toHaveProperty('longitude', null);
+  });
+
+  it('normalises HALF a pair to neither, because the serializer 400s a lone value', () => {
+    // Unreachable through the pickers, which only ever write the pair — but a
+    // hand-edited `localStorage`, or a draft from a build that stored one of
+    // them, can hold half. `_validate_coordinate_pair` refuses it.
+    for (const half of [{ latitude: 19.076 }, { longitude: 72.8777 }]) {
+      const patch = toPatchInput(draftWith(half));
+      expect(patch.latitude).toBeNull();
+      expect(patch.longitude).toBeNull();
+    }
+  });
+
+  it('rounds to the 7 decimal places the column holds', () => {
+    // `DecimalField(decimal_places=7)` refuses more digits than that, and a
+    // rejected PATCH is every subsequent autosave failing too.
+    const patch = toPatchInput(draftWith({ latitude: 19.07609876543, longitude: -72.87771234567 }));
+    expect(patch.latitude).toBe(19.0760988);
+    expect(patch.longitude).toBe(-72.8777123);
+  });
+});
+
 describe('patchFingerprint', () => {
   it('changes when a content field changes, so autosave actually fires', () => {
     const before = draftWith();
     expect(patchFingerprint({ ...before, ageRestriction: '18+' })).not.toBe(
+      patchFingerprint(before),
+    );
+  });
+
+  it('includes the pin, or dragging the marker would never save', () => {
+    // The save engine fires a PATCH only when this string moves. With the pin
+    // left out, a dropped or dragged marker changed nothing it could see: the
+    // draft held coordinates the server was never told about, and the event page
+    // showed no map with no error anywhere.
+    const before = draftWith();
+    expect(patchFingerprint({ ...before, latitude: 19.076, longitude: 72.8777 })).not.toBe(
+      patchFingerprint(before),
+    );
+    expect(patchFingerprint({ ...before, placeId: 'ChIJ-abc' })).not.toBe(patchFingerprint(before));
+    // And clearing one moves it back, so removing a pin saves too.
+    const pinned = draftWith({ placeId: 'ChIJ-abc', latitude: 19.076, longitude: 72.8777 });
+    expect(patchFingerprint({ ...pinned, placeId: '', latitude: null, longitude: null })).toBe(
       patchFingerprint(before),
     );
   });

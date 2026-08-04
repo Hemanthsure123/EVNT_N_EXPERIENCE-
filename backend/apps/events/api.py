@@ -43,14 +43,19 @@ from .schemas import (
     EventContentSerializer,
     EventDetailSerializer,
     EventFaqSerializer,
+    EventMediaListSerializer,
     EventMediaSerializer,
     EventSearchQuerySerializer,
     EventTimelineSerializer,
     OrganizerEventSummarySerializer,
+    ReorderEventMediaSerializer,
     SavedEventSerializer,
     SavedIdsSerializer,
     SaveEventsRequestSerializer,
+    UpdateEventFaqSerializer,
+    UpdateEventMediaSerializer,
     UpdateEventRequestSerializer,
+    UpdateEventTimelineSerializer,
     WriteEventFaqSerializer,
     WriteEventMediaSerializer,
     WriteEventTimelineSerializer,
@@ -311,6 +316,16 @@ class EventMediaView(_OwnerWriteView):
         )
         return _no_store(Response(EventMediaSerializer(media).data, status=status.HTTP_201_CREATED))
 
+    @extend_schema(request=ReorderEventMediaSerializer, responses={200: EventMediaListSerializer})
+    def patch(self, request: Request, event_id: str) -> Response:
+        """Reorder the gallery in one request — a drag-and-drop is one intent."""
+        payload = ReorderEventMediaSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        media = self._service.reorder_media(
+            event_id=event_id, actor_id=self._actor, items=payload.validated_data["items"]
+        )
+        return _no_store(Response({"media": EventMediaSerializer(media, many=True).data}))
+
 
 class EventMediaUploadView(_OwnerWriteView):
     """Upload a file and attach it, in one multipart request.
@@ -343,6 +358,18 @@ class EventMediaUploadView(_OwnerWriteView):
 
 
 class EventMediaDetailView(_OwnerWriteView):
+    @extend_schema(request=UpdateEventMediaSerializer, responses={200: EventMediaSerializer})
+    def patch(self, request: Request, event_id: str, media_id: str) -> Response:
+        payload = UpdateEventMediaSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        media = self._service.update_media(
+            event_id=event_id,
+            actor_id=self._actor,
+            media_id=media_id,
+            changes=dict(payload.validated_data),
+        )
+        return _no_store(Response(EventMediaSerializer(media).data))
+
     @extend_schema(responses={204: None})
     def delete(self, request: Request, event_id: str, media_id: str) -> Response:
         self._service.remove_media(event_id=event_id, actor_id=self._actor, media_id=media_id)
@@ -361,6 +388,18 @@ class EventFaqView(_OwnerWriteView):
 
 
 class EventFaqDetailView(_OwnerWriteView):
+    @extend_schema(request=UpdateEventFaqSerializer, responses={200: EventFaqSerializer})
+    def patch(self, request: Request, event_id: str, faq_id: str) -> Response:
+        payload = UpdateEventFaqSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        faq = self._service.update_faq(
+            event_id=event_id,
+            actor_id=self._actor,
+            faq_id=faq_id,
+            changes=dict(payload.validated_data),
+        )
+        return _no_store(Response(EventFaqSerializer(faq).data))
+
     @extend_schema(responses={204: None})
     def delete(self, request: Request, event_id: str, faq_id: str) -> Response:
         self._service.remove_faq(event_id=event_id, actor_id=self._actor, faq_id=faq_id)
@@ -381,6 +420,18 @@ class EventTimelineView(_OwnerWriteView):
 
 
 class EventTimelineDetailView(_OwnerWriteView):
+    @extend_schema(request=UpdateEventTimelineSerializer, responses={200: EventTimelineSerializer})
+    def patch(self, request: Request, event_id: str, entry_id: str) -> Response:
+        payload = UpdateEventTimelineSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        entry = self._service.update_timeline_entry(
+            event_id=event_id,
+            actor_id=self._actor,
+            entry_id=entry_id,
+            changes=dict(payload.validated_data),
+        )
+        return _no_store(Response(EventTimelineSerializer(entry).data))
+
     @extend_schema(responses={204: None})
     def delete(self, request: Request, event_id: str, entry_id: str) -> Response:
         self._service.remove_timeline_entry(

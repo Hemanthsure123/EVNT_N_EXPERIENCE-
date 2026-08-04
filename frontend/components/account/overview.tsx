@@ -5,10 +5,12 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Bookmark, Building2, Mail, Ticket as TicketIcon } from 'lucide-react';
 import { api } from '@/lib/api/client';
+import { avatarUrlOf } from '@/lib/api/profile';
 import type { Paginated } from '@/lib/api/types';
 import { useAuth } from '@/lib/auth/auth-provider';
-import { initialsOf, useScope } from '@/lib/identity/scope';
+import { useScope } from '@/lib/identity/scope';
 import { useSavedEventIds } from '@/lib/discovery/use-favourites';
+import { IdentityAvatar } from '@/components/ui';
 import { Panel, Skeleton } from '@/components/organizer/primitives';
 
 /**
@@ -16,16 +18,22 @@ import { Panel, Skeleton } from '@/components/organizer/primitives';
  *
  * ── EVERY FIELD HERE IS ONE THE SERVER MAINTAINS ──────────────────────────
  *
- * `UserSerializer` returns id, email, full_name, is_organizer, is_staff and
- * date_joined. That is the whole identity record.
+ * `UserSerializer` returns id, email, full_name, avatar_url, is_organizer,
+ * is_staff, email_verified and date_joined. That is the whole identity record.
  *
- * The brief also asked for a profile picture, phone, verification status, city
- * and preferred categories. None exist: no avatar column, no verification
- * flow, no city on `User`, and no category column anywhere yet (BACKLOG item
- * 2). Rendering "Unverified" would be a claim about a check nobody runs, and a
- * city field that discards what was typed would be worse. So this shows what is
- * true and names the gaps once, at the bottom, rather than faking them six
- * times. Design system §13.6.
+ * A PROFILE PICTURE is now one of them — `User.avatar_url` is a real column with
+ * `POST`/`DELETE /auth/me/avatar` behind it — so the medallion here shows it. The
+ * CONTROL that changes it lives in Settings → Profile (`AvatarUpload`), not on
+ * this page: nothing on this page writes, and an upload panel is the one thing
+ * that should not have two homes — two copies is how one of them keeps a stale
+ * picture. What this page owes the feature is the picture itself, from the same
+ * cached profile the header reads.
+ *
+ * The rest of what the brief asked for still does not exist: no city on `User`,
+ * and no category column anywhere yet (BACKLOG item 2). A city field that
+ * discarded what was typed would be worse than its absence, so this shows what
+ * is true and names the remaining gaps once, at the bottom, rather than faking
+ * them. Design system §13.6.
  *
  * ── HIERARCHY: NAME, THEN NUMBERS, THEN DOORS, THEN THE CAVEAT ────────────
  *
@@ -60,12 +68,15 @@ export function AccountOverview() {
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
       <header className="flex items-center gap-4">
-        <span
-          aria-hidden
-          className="inline-flex size-14 shrink-0 items-center justify-center rounded-full bg-nav-active text-h4 font-semibold text-nav-active-foreground"
-        >
-          {initialsOf(user?.full_name || user?.email || '?')}
-        </span>
+        {/* The same `IdentityAvatar` the header trigger and the account menu
+            render, reading the same cached profile — so a picture uploaded in
+            Settings appears on all three on one render, and there is nowhere for
+            a stale copy to live. */}
+        <IdentityAvatar
+          name={user?.full_name || user?.email || '?'}
+          imageUrl={avatarUrlOf(user)}
+          size="lg"
+        />
         <div className="min-w-0">
           <h1 className="truncate text-h3 md:text-h2">{user?.full_name || 'Your account'}</h1>
           <p className="flex items-center gap-1.5 truncate text-body-sm text-muted-foreground">
@@ -158,10 +169,10 @@ export function AccountOverview() {
           model does NOT hold, and drawing it as another lifted card would give
           it the same weight as the things that are true. */}
       <p className="rounded-xl border border-border bg-sunken p-card text-caption text-muted-foreground">
-        A profile photo, phone number, city and preferred categories are not shown because the
-        account record does not store them — <code>User</code> holds an email, a name and two role
-        flags. Email and phone verification, connected accounts, active sessions and account
-        deletion each need endpoints that do not exist yet; BACKLOG items 37–39 name them.
+        A phone number, city and preferred categories are not shown because the account record
+        does not expose them — <code>User</code> holds an email, a name, a picture and role flags.
+        Phone verification, connected accounts, active sessions and account deletion each need
+        endpoints that do not exist yet; BACKLOG items 37–39 name them.
         {isAdmin ? ' Your operator access is real, and enforced on every admin endpoint.' : ''}
       </p>
     </div>

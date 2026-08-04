@@ -55,6 +55,15 @@ type Props = {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * The form's own error line for this field, so a validation message near the
+   * input is actually announced. The Studio's fields all wire `aria-describedby`
+   * + `aria-invalid` rather than just printing a `<p>` nearby (see
+   * `components/organizer/wizard/fields.tsx`), and this control has to be able
+   * to do the same or it would be the one field a screen reader skips.
+   */
+  describedBy?: string;
+  invalid?: boolean;
 };
 
 /** A UUID for Google's session token. `crypto.randomUUID` where available. */
@@ -72,6 +81,8 @@ export function VenueAutocomplete({
   placeholder = 'Search for a venue, or type your own',
   disabled,
   className,
+  describedBy,
+  invalid,
 }: Props) {
   const [query, setQuery] = React.useState(value);
   const [open, setOpen] = React.useState(false);
@@ -197,7 +208,11 @@ export function VenueAutocomplete({
           aria-expanded={open && rows.length > 0}
           aria-autocomplete="list"
           aria-controls={`${id}-suggestions`}
-          className="h-11 w-full rounded-lg border border-border bg-background pl-9 pr-9 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+          // The same `aria-[invalid=true]` selector the shared `Input` uses, so
+          // marking the field invalid and colouring its border are one act.
+          className="h-11 w-full rounded-lg border border-border bg-background pl-9 pr-9 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 aria-[invalid=true]:border-destructive aria-[invalid=true]:focus-visible:ring-destructive"
         />
         {query ? (
           <button
