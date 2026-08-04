@@ -8,7 +8,14 @@ import {
   SceneNothingYet,
   SceneOffline,
 } from './scenes';
-import { SpotCity, SpotHireABand, SpotMood, SpotSubscribe, SpotTicket } from './spots';
+import {
+  SpotCity,
+  SpotHireABand,
+  SpotMood,
+  SpotSubscribe,
+  SpotTicket,
+  SpotTicketIssued,
+} from './spots';
 
 /**
  * The four obligations of a drawn illustration set, none of which is visible in
@@ -41,7 +48,7 @@ const SCENES = {
   SceneNotFound,
 };
 
-const SPOTS = { SpotHireABand, SpotCity, SpotSubscribe, SpotTicket, SpotMood };
+const SPOTS = { SpotHireABand, SpotCity, SpotSubscribe, SpotTicket, SpotMood, SpotTicketIssued };
 
 const ALL = { ...SCENES, ...SPOTS };
 
@@ -141,5 +148,29 @@ describe('the set as a whole', () => {
       ).toHaveLength(0);
       unmount();
     });
+  });
+});
+
+describe('SpotTicketIssued', () => {
+  it('does not sway', () => {
+    // A confirmation is a settled fact. `SpotTicket` swings, which is right for
+    // a decorative stub in a marketing row and wrong on a screen telling
+    // somebody their payment went through — motion there reads as still
+    // processing.
+    const { container } = render(<SpotTicketIssued />);
+    expect(container.querySelector('.illo-sway')).toBeNull();
+  });
+
+  it('carries the seal in a semantic success token, not a decorative ramp', () => {
+    const { container } = render(<SpotTicketIssued />);
+    const html = container.innerHTML;
+    expect(html).toContain('--success-strong');
+  });
+
+  it('is hidden from assistive tech like every other spot', () => {
+    // The heading beside it already says "You're going". A screen reader
+    // announcing the picture too would say it twice.
+    const { container } = render(<SpotTicketIssued />);
+    expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 });

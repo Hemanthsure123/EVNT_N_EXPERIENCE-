@@ -1,7 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Loader2, WifiOff } from 'lucide-react';
+import { Loader2, WifiOff } from 'lucide-react';
+import { SceneError } from '@/components/illustrations/scenes';
 import { Container } from '@/components/shell/container';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -312,7 +313,11 @@ export function ResultsView({
 
           {!loading && failed ? (
             <EmptyState
-              icon={<AlertTriangle className="size-8" aria-hidden />}
+              // The same picture `row-states.tsx` draws for this exact
+              // situation. Both can appear on THIS page, and a 32px warning
+              // triangle beside a drawn scene for the same failure reads as
+              // two different problems.
+              icon={<SceneError className="h-28 w-auto sm:h-32" />}
               title="We couldn't load these events"
               description={
                 query.error ? errorMessage(query.error) : (initialError ?? 'Something went wrong.')

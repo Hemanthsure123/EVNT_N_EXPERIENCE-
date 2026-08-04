@@ -68,6 +68,9 @@ type SpotIds = {
   cool: string;
   gloss: string;
   ground: string;
+  /** The whole form's drop shadow. Applied by the shell to every spot, so the
+   *  object reads as sitting above the page rather than printed on it. */
+  cast: string;
 };
 
 function Spot({
@@ -89,6 +92,7 @@ function Spot({
     cool: `${id}-${gradientId}-cool`,
     gloss: `${id}-${gradientId}-gloss`,
     ground: `${id}-${gradientId}-ground`,
+    cast: `${id}-${gradientId}-cast`,
   };
 
   return (
@@ -112,24 +116,48 @@ function Spot({
           <stop offset="0%" stopColor="rgb(var(--violet-500))" />
           <stop offset="100%" stopColor="rgb(var(--violet-700))" />
         </linearGradient>
-        {/* The specular highlight: light at the top, gone by the middle. This
-            is the move that sells "matte solid" over "coloured shape". */}
-        <linearGradient id={ids.gloss} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--on-gradient))" stopOpacity="0.38" />
-          <stop offset="55%" stopColor="rgb(var(--on-gradient))" stopOpacity="0" />
-        </linearGradient>
+        {/* THE SPECULAR. A radial on the upper-left face, not a full-width wash
+            down the whole form — a wash is what made this set read as two flat
+            tones. Bounding-box units, so one declaration serves a highlight of
+            any size. */}
+        <radialGradient id={ids.gloss} cx="0.32" cy="0.26" r="0.5">
+          <stop offset="0%" stopColor="rgb(var(--on-gradient))" stopOpacity="0.52" />
+          <stop offset="70%" stopColor="rgb(var(--on-gradient))" stopOpacity="0.08" />
+          <stop offset="100%" stopColor="rgb(var(--on-gradient))" stopOpacity="0" />
+        </radialGradient>
+        {/* The contact pool, at depth.tsx's weight rather than the 0.2 this
+            used to carry — a shadow that faint is a shadow nobody reads as one,
+            and it was the reason these sat ON the page instead of on a
+            surface. */}
         <radialGradient id={ids.ground}>
-          <stop offset="0%" stopColor="rgb(var(--overlay))" stopOpacity="0.2" />
+          <stop offset="0%" stopColor="rgb(var(--overlay))" stopOpacity="0.34" />
+          <stop offset="65%" stopColor="rgb(var(--overlay))" stopOpacity="0.12" />
           <stop offset="100%" stopColor="rgb(var(--overlay))" stopOpacity="0" />
         </radialGradient>
+        {/* THE CAST SHADOW, and the reason it lives on the SHELL rather than
+            inside each spot: it is applied to the whole form as one group, so
+            every spot gets an object that sits ABOVE the page instead of being
+            printed on it — the single strongest 3D cue available — without any
+            of the five having to redraw a path. Offset down and right, because
+            the light in this set comes from the upper left, and matched to
+            depth.tsx's own numbers at this box's scale (96 units ≈ scale 2). */}
+        <filter id={ids.cast} x="-25%" y="-25%" width="160%" height="160%">
+          <feDropShadow
+            dx="1.4"
+            dy="2.2"
+            stdDeviation="1.8"
+            floodColor="rgb(var(--overlay))"
+            floodOpacity="0.32"
+          />
+        </filter>
       </defs>
 
-      {/* Ambient occlusion — tight, low, and UNDER the form. Not a drop shadow
-          offset into the distance, which reads as a sticker rather than as an
-          object sitting on something. */}
-      <ellipse cx="48" cy="84" rx="32" ry="6" fill={`url(#${ids.ground})`} />
+      {/* The contact shadow sits BELOW the form and escapes its footprint —
+          `cy` past the bottom of the object, not tucked inside it where the
+          body would paint over it (the mistake the clay set had). */}
+      <ellipse cx="48" cy="85" rx="30" ry="5.5" fill={`url(#${ids.ground})`} />
 
-      {children(ids)}
+      <g filter={`url(#${ids.cast})`}>{children(ids)}</g>
     </svg>
   );
 }
@@ -442,6 +470,76 @@ export function SpotTicket({ className }: { className?: string }) {
             <path d="M66 40 V56 M72 40 V56 M78 40 V56" strokeWidth="2.5" opacity="0.8" />
             <path d="M22 42 H46 M22 50 H40 M22 58 H44" strokeWidth="3" opacity="0.7" />
           </g>
+        </g>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * THE TICKET, ISSUED — for the confirmation screen.
+ *
+ * The best moment on the platform had the smallest mark on it: a 24px lucide
+ * check in a circle, the same affordance a form uses to say a field validated.
+ * Somebody has just spent money and is being told they are going; that deserves
+ * a picture of the thing they now own.
+ *
+ * It is `SpotTicket`'s own stub — the same geometry, so the object they saw
+ * while choosing is the object they are handed — with a seal struck across the
+ * corner. The seal is drawn in `--success-strong` because this is the one place
+ * in the set where the colour carries meaning rather than decoration: the page
+ * around it already uses the success tokens for exactly this state.
+ *
+ * NO SWAY. `SpotTicket` swings, which is right for a decorative stub in a
+ * marketing row and wrong here — a confirmation is a settled fact, and motion
+ * on it reads as still-processing, which is the one thing this screen must not
+ * suggest while it is telling somebody their payment went through.
+ */
+export function SpotTicketIssued({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="ticket-issued">
+      {(ids) => (
+        <g>
+          <path d={TICKET_STUB} fill={`url(#${ids.warm})`} />
+          <path d={TICKET_STUB} fill={`url(#${ids.gloss})`} />
+
+          {/* The perforation and the printed lines, as on the stub they chose. */}
+          <path
+            d="M56 36 V60"
+            stroke="rgb(var(--on-gradient))"
+            strokeWidth="2.5"
+            strokeDasharray="3 5"
+            strokeLinecap="round"
+            opacity="0.75"
+          />
+          <g stroke="rgb(var(--on-gradient))" strokeLinecap="round">
+            <path d="M66 40 V56 M72 40 V56 M78 40 V56" strokeWidth="2.5" opacity="0.8" />
+            <path d="M22 42 H46 M22 50 H40" strokeWidth="3" opacity="0.7" />
+          </g>
+
+          {/* THE SEAL. Its own contact shadow rather than the shell's, because
+              it sits ON the ticket rather than on the page — a disc lifted a
+              little off the card it is stamped onto. */}
+          <circle cx="30" cy="62" r="15" fill="rgb(var(--overlay))" opacity="0.18" />
+          <circle cx="29" cy="60" r="14" fill="rgb(var(--success-strong))" />
+          {/* The lit rim, upper-left, matching the light everywhere else. */}
+          <circle
+            cx="29"
+            cy="60"
+            r="14"
+            fill="none"
+            stroke="rgb(var(--on-gradient))"
+            strokeWidth="1.4"
+            strokeOpacity="0.34"
+          />
+          <path
+            d="M22.5 60.5 l4.5 4.5 l8.5 -9"
+            fill="none"
+            stroke="rgb(var(--on-gradient))"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </g>
       )}
     </Spot>

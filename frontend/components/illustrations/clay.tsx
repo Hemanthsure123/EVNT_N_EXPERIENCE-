@@ -228,10 +228,7 @@ export function ClayConcerts({ className, title }: ClayProps) {
           that nobody looked at one. */}
       <ellipse cx="17.5" cy="30.6" rx="5" ry="4" transform="rotate(-20 17.5 30.6)" />
       <ellipse cx="29.5" cy="27.6" rx="5" ry="4" transform="rotate(-20 29.5 27.6)" />
-      <path
-        d="M20.6 30.6 V16.6 L34 13.2 V27.6 H31 V17 L23.6 18.8 V30.6 Z"
-        stroke="none"
-      />
+      <path d="M20.6 30.6 V16.6 L34 13.2 V27.6 H31 V17 L23.6 18.8 V30.6 Z" stroke="none" />
     </ClayTile>
   );
 }
@@ -294,11 +291,7 @@ export function ClayFestivals({ className, title }: ClayProps) {
           The doorway is now a real HOLE (`fillRule="evenodd"`), so the tile's
           own colour shows through it, which is both what an opening looks like
           and the only version that survives being drawn on any surface. */}
-      <path
-        d="M24 13 L37 34 H11 Z M24 23.6 L28.8 34 H19.2 Z"
-        fillRule="evenodd"
-        stroke="none"
-      />
+      <path d="M24 13 L37 34 H11 Z M24 23.6 L28.8 34 H19.2 Z" fillRule="evenodd" stroke="none" />
       <rect x="23.2" y="7.6" width="1.8" height="6" rx="0.9" stroke="none" />
       <path d="M25 8.2 L30.4 10.4 25 12.6 Z" stroke="none" />
     </ClayTile>

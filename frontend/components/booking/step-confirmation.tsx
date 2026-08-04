@@ -4,7 +4,8 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Clock3, Loader2, Mail, Ticket } from 'lucide-react';
+import { Clock3, Loader2, Mail, Ticket } from 'lucide-react';
+import { SpotTicketIssued } from '@/components/illustrations/spots';
 import { Button } from '@/components/ui/button';
 import { fetchBooking } from '@/lib/api/bookings';
 import { verifyPayment } from '@/lib/api/payments';
@@ -153,20 +154,25 @@ export function ConfirmationStep() {
     <StepTransition stepKey="confirmation" className="flex flex-col gap-block-lg">
       <Rise>
         <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-border bg-surface p-card-lg shadow-md md:p-8">
-          <span
-            className={
-              paid
-                ? 'inline-flex size-12 items-center justify-center rounded-full bg-success-subtle text-success-subtle-foreground'
-                : 'inline-flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground'
-            }
-            aria-hidden
-          >
-            {paid ? (
-              <CheckCircle2 className="size-6" />
-            ) : (
+          {/* THE ISSUED TICKET, not a 12px status badge.
+              This is the best moment on the platform — somebody has paid and is
+              being told they are going — and it had the same mark a form uses
+              to say a field validated. The picture is `SpotTicket`'s own stub
+              with a seal struck across it, so the object they are handed is the
+              object they were choosing.
+              While CONFIRMING it stays the spinner: an issued ticket drawn over
+              a payment that has not been confirmed yet would be the one lie
+              this screen cannot tell. */}
+          {paid ? (
+            <SpotTicketIssued className="size-28 sm:size-32" />
+          ) : (
+            <span
+              className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground"
+              aria-hidden
+            >
               <Loader2 className="size-6 animate-spin" />
-            )}
-          </span>
+            </span>
+          )}
 
           <div className="flex flex-col gap-stack">
             <h1 className="text-h2 md:text-h1">
