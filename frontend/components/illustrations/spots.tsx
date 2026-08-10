@@ -622,3 +622,337 @@ export function SpotMood({ className }: { className?: string }) {
     </Spot>
   );
 }
+
+/**
+ * TWO SPEECH BUBBLES — for the help centre and the contact page.
+ *
+ * A question and an answer, not a headset. A headset draws a CALL CENTRE, and
+ * this platform does not have one: support today is a written set of answers
+ * and an inbox, and a person in a headset would be the illustrated twin of a
+ * five-star rating with no reviews behind it. Two bubbles say "somebody writes
+ * back", which is exactly what is on offer.
+ *
+ * The asking bubble is warm, smaller and BEHIND; the answering one is cool,
+ * larger, in front, and carries the tail. Reading order is the conversation.
+ */
+export function SpotSupport({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="support">
+      {(ids) => (
+        <>
+          {/* The question, behind and up-left. */}
+          <rect x="14" y="18" width="38" height="28" rx="10" fill={`url(#${ids.warm})`} />
+          <rect x="14" y="18" width="38" height="28" rx="10" fill={`url(#${ids.gloss})`} />
+          {/* Two short rules, not a question mark. A glyph at this size is four
+              pixels of ambiguity; two lines read as "text" immediately. */}
+          <g fill="rgb(var(--on-gradient))" opacity="0.62">
+            <rect x="22" y="26" width="22" height="3.6" rx="1.8" />
+            <rect x="22" y="34" width="14" height="3.6" rx="1.8" />
+          </g>
+
+          {/* The answer: larger, in front, with the tail — so the eye finishes
+              on the reply rather than on the question. */}
+          <path
+            d="M44 40h30a10 10 0 0 1 10 10v14a10 10 0 0 1-10 10H60l-9 8v-8h-7a10 10 0 0 1-10-10V50a10 10 0 0 1 10-10Z"
+            fill={`url(#${ids.cool})`}
+          />
+          <path
+            d="M44 40h30a10 10 0 0 1 10 10v14a10 10 0 0 1-10 10H60l-9 8v-8h-7a10 10 0 0 1-10-10V50a10 10 0 0 1 10-10Z"
+            fill={`url(#${ids.gloss})`}
+          />
+          <g fill="rgb(var(--on-gradient))" opacity="0.7">
+            <rect x="44" y="50" width="30" height="3.8" rx="1.9" />
+            <rect x="44" y="59" width="20" height="3.8" rx="1.9" />
+          </g>
+
+          {/* The one animated element: the typing dot. Opacity only. */}
+          <circle
+            className="illo-pulse motion-reduce:animate-none"
+            cx="70"
+            cy="61"
+            r="3"
+            fill="rgb(var(--on-gradient))"
+          />
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A SHIELD WITH A DOCUMENT IN IT — for the four policy pages.
+ *
+ * A padlock was the obvious first draft and is wrong here: a padlock is about
+ * SECRECY, and a terms page, a refund policy and a cookie notice are its
+ * opposite — they are the documents a platform publishes so the reader does not
+ * have to take its word for anything. A shield around a written page says "this
+ * is set down, and it protects you", which is what those four pages are for.
+ *
+ * The seal is `--on-gradient` on a warm disc rather than the success green.
+ * This is not a status, and a green tick on a Terms page reads as "you have
+ * accepted" — a claim about the reader that no illustration is entitled to
+ * make.
+ */
+export function SpotPolicy({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="policy">
+      {(ids) => (
+        <>
+          {/* A flat top with rounded shoulders and a soft point. A heraldic
+              notch would read as a badge, which is a claim of accreditation
+              nobody granted. */}
+          <path
+            d="M48 12 78 22v24c0 16-12 27-30 34-18-7-30-18-30-34V22Z"
+            fill={`url(#${ids.cool})`}
+          />
+          <path
+            d="M48 12 78 22v24c0 16-12 27-30 34-18-7-30-18-30-34V22Z"
+            fill={`url(#${ids.gloss})`}
+          />
+
+          {/* The document inside. Surface-coloured, so it reads as paper
+              against the shield in both themes. */}
+          <rect x="35" y="29" width="26" height="32" rx="4" fill="rgb(var(--surface))" />
+          <g fill="rgb(var(--border-strong))">
+            <rect x="40" y="36" width="16" height="2.8" rx="1.4" />
+            <rect x="40" y="43" width="16" height="2.8" rx="1.4" />
+            <rect x="40" y="50" width="10" height="2.8" rx="1.4" />
+          </g>
+
+          {/* The seal, on the corner of the page — the one animated mark. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <circle cx="63" cy="57" r="9" fill={`url(#${ids.warm})`} />
+            <path
+              d="M59 57 l3 3 6 -6.5"
+              fill="none"
+              stroke="rgb(var(--on-gradient))"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A POSTER ON A STAND — for "list your event".
+ *
+ * The supply side's picture is the LISTING, not the crowd. A drawing of an
+ * audience is a picture of the outcome an organizer is hoping for, and opening
+ * the page that asks them to sign up with it is the illustrated version of a
+ * fabricated statistic. A poster on a stand is the artefact they actually make
+ * here.
+ *
+ * `SpotHireABand` already owns the stage-with-performers composition, so this
+ * is deliberately a different object — the two supply pages should not open
+ * with the same picture.
+ */
+export function SpotListing({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="listing">
+      {(ids) => (
+        <>
+          {/* The A-frame legs, behind the board. */}
+          <path
+            d="M34 76 L40 46 M62 76 L56 46"
+            stroke="rgb(var(--border-strong))"
+            strokeWidth="3.4"
+            strokeLinecap="round"
+          />
+
+          <rect x="20" y="16" width="56" height="44" rx="8" fill={`url(#${ids.cool})`} />
+          <rect x="20" y="16" width="56" height="44" rx="8" fill={`url(#${ids.gloss})`} />
+
+          {/* A headline block and a date pill. Enough to read as a listing, not
+              so much that it reads as lorem text. */}
+          <g fill="rgb(var(--on-gradient))">
+            <rect x="28" y="25" width="30" height="5" rx="2.5" opacity="0.85" />
+            <rect x="28" y="34" width="20" height="4" rx="2" opacity="0.55" />
+          </g>
+          <rect x="28" y="45" width="22" height="9" rx="4.5" fill={`url(#${ids.warm})`} />
+
+          <rect x="16" y="74" width="64" height="7" rx="3.5" fill="rgb(var(--muted))" />
+
+          {/* The one animated element: a "live" spark leaving the board. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <path
+              d="M74 16 l2.2 5.6 5.6 2.2 -5.6 2.2 -2.2 5.6 -2.2 -5.6 -5.6 -2.2 5.6 -2.2 Z"
+              fill={`url(#${ids.warm})`}
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * COINS, WITH ONE LEAVING THE STACK — for the pricing page.
+ *
+ * The subject of that page is not "money"; it is which SLICE of the money moves
+ * and when. So this is a stack with a single coin lifting off it — a picture of
+ * a fee coming OUT of a total, rather than a pile of cash or a price tag.
+ *
+ * The direction is the whole point and is why this is not a wallet: this
+ * platform takes its fee out of what the customer pays and never adds it on
+ * top, and that sentence is the pricing page's entire argument.
+ */
+export function SpotPayout({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="payout">
+      {(ids) => (
+        <>
+          {/* Bottom-up, so each disc overlaps the one below it. */}
+          {[70, 60, 50].map((y, index) => (
+            <React.Fragment key={y}>
+              <ellipse cx="44" cy={y} rx="26" ry="9" fill={`url(#${ids.cool})`} />
+              {index === 2 ? (
+                <ellipse cx="44" cy={y} rx="26" ry="9" fill={`url(#${ids.gloss})`} />
+              ) : null}
+            </React.Fragment>
+          ))}
+
+          {/* A rupee on the top face. The one glyph in this set worth drawing:
+              every amount on this platform is in rupees, and an unmarked coin
+              reads as a foreign currency. */}
+          <g
+            fill="none"
+            stroke="rgb(var(--on-gradient))"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity="0.82"
+          >
+            <path d="M38 45 h12 M38 49 h12 M40 45 c7 0 7 8 0 8 h-2 l10 7" />
+          </g>
+
+          {/* The coin that leaves. Warm, so it reads as the slice that moves,
+              and the only animated element. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <ellipse cx="72" cy="26" rx="13" ry="5" fill={`url(#${ids.warm})`} />
+            <path
+              d="M72 34 V40 M68 36 l4 5 4 -5"
+              fill="none"
+              stroke={`url(#${ids.warm})`}
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * A MAGNIFIER OVER A DOCUMENT — for the support desk's lookup.
+ *
+ * The operator surface's empty state is "search for a booking", and the object
+ * that says that is a document being READ, not a magnifier alone. A bare
+ * magnifier is the icon on the input directly above it, and repeating a
+ * control as decoration teaches somebody it is a second control.
+ *
+ * The document carries a small warm chip — the row an operator is hunting for —
+ * so the drawing is of finding a specific record rather than of searching in
+ * general.
+ */
+export function SpotLookup({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="lookup">
+      {(ids) => (
+        <>
+          {/* The record. Two sheets, the back one offset, so it reads as a set
+              of records rather than a single page. */}
+          <rect x="20" y="16" width="42" height="54" rx="6" fill="rgb(var(--muted))" />
+          <rect x="26" y="22" width="42" height="54" rx="6" fill={`url(#${ids.cool})`} />
+          <rect x="26" y="22" width="42" height="54" rx="6" fill={`url(#${ids.gloss})`} />
+
+          <g fill="rgb(var(--on-gradient))" opacity="0.6">
+            <rect x="33" y="31" width="26" height="3.6" rx="1.8" />
+            <rect x="33" y="40" width="18" height="3.6" rx="1.8" />
+            <rect x="33" y="58" width="22" height="3.6" rx="1.8" />
+          </g>
+          {/* THE row being looked for. */}
+          <rect x="33" y="47" width="28" height="6" rx="3" fill={`url(#${ids.warm})`} />
+
+          {/* The magnifier, over the highlighted row. The one animated element
+              — a slow drift, so it reads as searching rather than as found. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <circle
+              cx="62"
+              cy="50"
+              r="15"
+              fill="rgb(var(--surface))"
+              fillOpacity="0.55"
+              stroke={`url(#${ids.warm})`}
+              strokeWidth="4"
+            />
+            <path
+              d="M73 61 L83 71"
+              stroke={`url(#${ids.warm})`}
+              strokeWidth="5"
+              strokeLinecap="round"
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}
+
+/**
+ * AN OPEN HAND RETURNING A COIN — for the refund-request queues.
+ *
+ * Not the same drawing as `SpotPayout`, and the difference is the whole point.
+ * A payout is money LEAVING the platform to an organizer; a refund is money
+ * GOING BACK to the person who paid it. Drawn as a coin descending into an open
+ * palm, so the direction is legible without a label — a queue of these appears
+ * on the organizer's screen next to their payouts, and the two must not read as
+ * the same thing.
+ *
+ * The palm is cool and still; the coin is warm and is the one animated element,
+ * because the coin is what moves.
+ */
+export function SpotRefund({ className }: { className?: string }) {
+  return (
+    <Spot className={className} gradientId="refund">
+      {(ids) => (
+        <>
+          {/* The palm: a shallow bowl with a thumb, open upward. */}
+          <path d="M22 56 a26 16 0 0 0 52 0 v4 a26 22 0 0 1 -52 0 Z" fill={`url(#${ids.cool})`} />
+          <path d="M22 56 a26 16 0 0 0 52 0 v4 a26 22 0 0 1 -52 0 Z" fill={`url(#${ids.gloss})`} />
+          {/* The thumb, and the wrist it sits on. */}
+          <rect x="16" y="50" width="12" height="9" rx="4.5" fill={`url(#${ids.cool})`} />
+          <rect x="38" y="72" width="20" height="8" rx="4" fill="rgb(var(--muted))" />
+
+          {/* The coin, coming DOWN into the palm — the opposite direction to
+              SpotPayout's, which lifts away from the stack. */}
+          <g className="illo-float motion-reduce:animate-none">
+            <circle cx="48" cy="26" r="13" fill={`url(#${ids.warm})`} />
+            <path
+              d="M43 21 h10 M43 25 h10 M45 21 c6 0 6 7 0 7 h-2 l9 6"
+              fill="none"
+              stroke="rgb(var(--on-gradient))"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.85"
+            />
+            <path
+              d="M48 42 V47 M44 44 l4 4 4 -4"
+              fill="none"
+              stroke={`url(#${ids.warm})`}
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        </>
+      )}
+    </Spot>
+  );
+}

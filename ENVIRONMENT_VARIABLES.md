@@ -90,7 +90,7 @@ Two Supabase specifics that cost an afternoon each if missed:
 
 | Variable | Required | Default | Used By | Description |
 | --- | --- | --- | --- | --- |
-| `REDIS_URL` | **Dev + Prod** | `redis://localhost:6379/0` | `di.cache_port()`, `CACHES["default"]` | Cache, distributed locks, and rate-limit counters. Drop `?ssl_cert_reqs=none` outside local dev — it exists only for the self-signed dev certificate. |
+| `REDIS_URL` | **Dev + Prod** | `redis://localhost:6379/0` | `di.cache_port()`, `CACHES["default"]` | Cache, distributed locks, and rate-limit counters. **Upstash in every environment including development** — the cache is where "works locally" diverges most from production. Include `?ssl_cert_reqs=none` ONLY for the local `--profile local-redis` container, whose certificate is self-signed; a real Upstash certificate is CA-signed and the parameter would disable verification where it matters. The adapter fails OPEN, so an unreachable cache degrades to a database read. |
 | `CACHE_BACKEND` | Optional | `redis` | `di.cache_port()`, `settings/base.py` | `redis` \| `locmem`. `locmem` is used only by the test settings; it is per-process, so a rate limit on it is per-replica. |
 
 ### Authentication
@@ -345,6 +345,15 @@ visitor — no backend secret ever belongs here.
 | `NEXT_PUBLIC_PHONE_AUTH_ENABLED` | Future | unset | `lib/api/auth.ts` | Turns on phone + OTP sign-in. Same caveat. |
 | `NEXT_PUBLIC_MEDIA_BASE_URL` | Optional | unset | `next.config.mjs` | The host uploads are served from, added to `next/image`'s `remotePatterns` allow-list. Needed only when `STORAGE_BACKEND=s3\|gcs` — with `local`, uploads come through the API and `NEXT_PUBLIC_API_BASE_URL` already covers them. **`next/image` refuses any host not on that list**, so a wrong value here is every poster silently failing. |
 | `NEXT_PUBLIC_SENTRY_DSN` | Future | `""` | *nothing yet* | **Frontend DSN** — a different Sentry project from the backend's; one DSN for both merges server and browser errors into one stream. Nothing reads it until `@sentry/nextjs` is wired. Public by design: an ingest endpoint that can send events and read nothing. |
+| `NEXT_PUBLIC_SOCIAL_INSTAGRAM` | Optional | `""` | `lib/brand.ts` | Full profile URL. **Unset renders no icon at all**, and with all five unset the social row is absent entirely. These were hard-coded to `https://instagram.com` and friends — the platforms' login walls, not accounts — which is the one thing in the footer a visitor could catch us at. |
+| `NEXT_PUBLIC_SOCIAL_X` | Optional | `""` | `lib/brand.ts` | As above. |
+| `NEXT_PUBLIC_SOCIAL_FACEBOOK` | Optional | `""` | `lib/brand.ts` | As above. |
+| `NEXT_PUBLIC_SOCIAL_YOUTUBE` | Optional | `""` | `lib/brand.ts` | As above. |
+| `NEXT_PUBLIC_SOCIAL_LINKEDIN` | Optional | `""` | `lib/brand.ts` | As above. |
+| `NEXT_PUBLIC_SUPPORT_EMAIL` | Recommended | `""` | `lib/brand.ts`, `/contact`, `/careers` | The address every support channel on `/contact` routes to, with a per-channel `mailto:` subject. Unset renders "Not open yet" rather than an address that bounces; with this AND the phone unset, `/contact` shows an explicit "support channels are being set up" notice. **Effectively required for go-live** — `/contact` is one of the four pages an Indian payment gateway checks during merchant onboarding. |
+| `NEXT_PUBLIC_SUPPORT_PHONE` | Optional | `""` | `lib/brand.ts`, `/contact` | Rendered as a `tel:` link, for day-of-event urgency only. Same absent-rather-than-fake rule. |
+| `NEXT_PUBLIC_REGISTERED_ADDRESS` | Optional | `""` | `lib/brand.ts`, `/terms` | The registered office, printed in the governing-law clause. Unset, `/terms` states plainly that the entity is being registered and points at `/contact` — there is deliberately **no placeholder**, because an invented address on a Terms page is the detail that voids the document it appears on. |
+| `NEXT_PUBLIC_GSTIN` | Future | `""` | `lib/brand.ts` | Declared, not yet rendered anywhere. The GST tax invoice is the next thing that needs it, and a GST-registered platform must show it on one. |
 
 **Web Push needs nothing here.** The frontend asks the backend
 (`GET /api/v1/push/config`) whether push is available and receives the VAPID

@@ -121,6 +121,20 @@ def get_event_detail_payload(
 
         event = events.get_published_by_id(event_id)
         if event is None:
+            # A CANCELLED event still has a page. Hundreds of people hold a
+            # link in an email and they will open it — a 404 there reads as
+            # "the platform lost my booking", where the page saying it was
+            # cancelled and the refund is on its way is the difference between
+            # a support queue and none.
+            #
+            # It is a second query only on a path that would otherwise have
+            # returned nothing, so the hot read is unchanged; and it is a
+            # separate repository method rather than a widened
+            # `get_published_by_id`, because every other caller of that one
+            # means "sellable" and quietly handing them a cancelled event is
+            # how a ticket gets sold for a show that is not happening.
+            event = events.get_cancelled_by_id(event_id)
+        if event is None:
             return None
 
         payload = dict(EventDetailSerializer(event).data)

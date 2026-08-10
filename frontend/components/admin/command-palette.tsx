@@ -335,7 +335,6 @@ export function AdminCommandPalette({
               stops retyping a booking reference into it. */}
           <p className="min-w-0">
             Sections, organizations, users, payments, refunds, payouts and events in review.
-            Bookings and tickets have no admin lookup endpoint yet.
           </p>
           <p className="flex shrink-0 items-center gap-1.5">
             <Key>↑↓</Key>

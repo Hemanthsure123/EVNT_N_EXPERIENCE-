@@ -9,6 +9,7 @@
     "dev": "next dev",
     "mock:api": "node scripts/mock-api.mjs",
     "build": "next build",
+    "build:verify": "node scripts/build-verify.mjs",
     "start": "next start",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "typecheck": "tsc --noEmit",

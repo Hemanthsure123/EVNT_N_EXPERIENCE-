@@ -4,7 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ExternalLink, Save, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, BarChart3, ExternalLink, Save, Trash2, TriangleAlert } from 'lucide-react';
 import { deleteAdminEvent, fetchAdminEventAnalytics, updateAdminEvent } from '@/lib/api/admin';
 import { fetchEventDetail } from '@/lib/api/events';
 import { ApiError } from '@/lib/api/errors';
@@ -166,7 +166,22 @@ export function AdminEventDetail({ eventId }: { eventId: string }) {
       </div>
 
       {/* ── The organizer's own numbers ─────────────────────────────────── */}
-      <Panel title="Performance" subtitle="The organizer's own figures, not a second calculation">
+      <Panel
+        title="Performance"
+        subtitle="The organizer's own figures, not a second calculation"
+        // The drawer has room for four numbers. The same endpoint also returns
+        // a sales curve, a tier breakdown and the scan results — this is the
+        // way to the page that renders them, rather than computing figures,
+        // sending them over the wire and throwing most of them away.
+        actions={
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/admin/events/${eventId}/analytics`}>
+              <BarChart3 className="size-3.5" aria-hidden />
+              Full analytics
+            </Link>
+          </Button>
+        }
+      >
         {analytics.isPending ? (
           <div className="grid gap-3 p-card sm:grid-cols-4">
             {Array.from({ length: 4 }, (_, i) => (

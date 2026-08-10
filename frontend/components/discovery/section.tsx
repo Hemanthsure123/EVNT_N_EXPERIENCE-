@@ -2,6 +2,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { Container } from '@/components/shell/container';
+import { Reveal } from './reveal';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -97,7 +98,15 @@ export function SectionHeader({
 export function Section({ children, className, ...props }: React.HTMLAttributes<HTMLElement>) {
   return (
     <section className={cn('py-section lg:py-section-lg', className)} {...props}>
-      <Container className="flex flex-col gap-5 sm:gap-8">{children}</Container>
+      {/* Every home section fades up once, the first time it is scrolled to.
+          Applied HERE rather than at each call site so the page has one
+          reveal behaviour instead of six, and so a section added later gets
+          it without anybody remembering to. `Reveal` degrades to plain
+          visible content with no JS, under reduced motion, and for anything
+          already on screen at mount — see the note on the component. */}
+      <Container>
+        <Reveal className="flex flex-col gap-5 sm:gap-8">{children}</Reveal>
+      </Container>
     </section>
   );
 }

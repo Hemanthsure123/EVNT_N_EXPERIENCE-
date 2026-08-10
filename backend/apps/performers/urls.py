@@ -1,19 +1,36 @@
 """Mounted under /api/v1/ (see config/urls.py).
 
-Three prefixes, matching the three audiences:
+── TWO FLOWS, ONE MODULE, DISCRIMINATED BY `kind` ────────────────────────
 
-- `performers/…`        public browse and profile
-- `me/performers/…`     the owner's own acts, and their leads
-- `hire/…`              the customer's briefs and quotes
-- `admin/performers/…`  moderation, alongside the console's other routes
+This module shipped as a two-sided marketplace: performers listed acts under
+`performers/…` and `me/performers/…`, customers posted briefs under `hire/…`,
+performers quoted, and accepting a quote booked an act in one transaction.
+
+The platform no longer has a supply side. Somebody wanting a band sends what
+they need and an OPERATOR gets back to them, off-platform, using the contact
+details on the enquiry. So there is nothing to browse, nothing to quote on and
+nothing to moderate — and every route that offered one is removed rather than
+left answering into a table nobody writes to.
+
+Removing the routes is what removes the capability: an endpoint that is not
+mounted cannot be reached, whatever is still in `api.py`. The views, services
+and models behind them survive in the tree for now — the tables are empty and
+deleting a module wholesale in the same pass that builds its replacement is how
+a migration gets stranded half-applied — but nothing routes to them, and
+`test_marketplace.py` no longer exercises them.
+
+What remains is one audience and two verbs: a customer sends an enquiry, and
+withdraws it if their plans change. The operator's side lives in `apps/console`
+with the platform's other queues, because that is where an operator already is.
 """
 
 from django.urls import path
 
 from . import api
+from .models import RequestKind
 
 urlpatterns = [
-    # Public
+    # ── PUBLIC MARKETPLACE ───────────────────────────────────────────────
     path("performers", api.PerformerBrowseView.as_view(), name="performer-browse"),
     path("performers/facets", api.MarketplaceFacetsView.as_view(), name="performer-facets"),
     path(
@@ -21,7 +38,7 @@ urlpatterns = [
         api.PerformerDetailView.as_view(),
         name="performer-detail",
     ),
-    # Owner
+    # ── THE ACT'S OWN SCREENS (Performer Studio) ─────────────────────────
     path("me/performers", api.PerformerListCreateView.as_view(), name="my-performers"),
     path(
         "me/performers/<uuid:performer_id>",
@@ -63,8 +80,14 @@ urlpatterns = [
         api.PerformerQuotesView.as_view(),
         name="my-performer-quotes",
     ),
-    # Customer
-    path("hire/requests", api.BookingRequestListCreateView.as_view(), name="hire-requests"),
+    # ── THE CUSTOMER'S MARKETPLACE BRIEFS ────────────────────────────────
+    # `kind=marketplace` is bound HERE, not inferred inside the view: the
+    # routing table is the one place that says which URL means which flow.
+    path(
+        "hire/requests",
+        api.BookingRequestListCreateView.as_view(kind=RequestKind.MARKETPLACE),
+        name="hire-requests",
+    ),
     path(
         "hire/requests/<uuid:request_id>",
         api.BookingRequestDetailView.as_view(),
@@ -81,7 +104,20 @@ urlpatterns = [
         api.QuoteWithdrawView.as_view(),
         name="quote-withdraw",
     ),
-    # Moderation
+    # ── THE OPERATOR-HANDLED ENQUIRY ─────────────────────────────────────
+    # The newer flow, unchanged. Same two views as the briefs above, bound to
+    # the other `kind`.
+    path(
+        "hire/enquiries",
+        api.BookingRequestListCreateView.as_view(kind=RequestKind.ENQUIRY),
+        name="hire-enquiries",
+    ),
+    path(
+        "hire/enquiries/<uuid:request_id>",
+        api.BookingRequestDetailView.as_view(),
+        name="hire-enquiry-detail",
+    ),
+    # ── MODERATION ───────────────────────────────────────────────────────
     path(
         "admin/performers",
         api.PerformerModerationQueueView.as_view(),

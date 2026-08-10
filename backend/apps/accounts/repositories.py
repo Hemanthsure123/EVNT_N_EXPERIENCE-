@@ -57,6 +57,37 @@ class UserRepository(BaseRepository[User]):
         updated = self.get_queryset().filter(pk=user_id).update(avatar_url=url)
         return updated == 1
 
+    def update_profile_fields(self, *, user_id: uuid.UUID | str, **fields) -> bool:
+        """Write ONLY the columns the caller supplied.
+
+        A targeted UPDATE for the same reason `set_avatar_url` is one: the
+        caller holds a `User` deserialized by the JWT auth backend, and a
+        `save()` on that object would write every field back — including any
+        another request changed in between, and including `email_verified`,
+        which a profile edit must never be able to flip.
+
+        `**fields` is closed by the service, which builds the dict from two
+        named parameters. It is not a passthrough of client input.
+        """
+        if not fields:
+            return True
+        updated = self.get_queryset().filter(pk=user_id).update(**fields)
+        return updated == 1
+
+    def revoke_verification(self, user_id: uuid.UUID | str) -> bool:
+        """Untrust the address AND take the account out of service, in ONE
+        statement.
+
+        One `UPDATE` rather than two, so there is no window in which the
+        address is untrusted but the account is still reachable — in that
+        window the verify endpoint would hand out a fresh code and undo the
+        operator's decision before they finished reading the confirmation.
+        """
+        updated = (
+            self.get_queryset().filter(pk=user_id).update(email_verified=False, is_active=False)
+        )
+        return updated == 1
+
     def mark_email_verified_by_google(self, user_id: uuid.UUID | str) -> bool:
         """Google proved the address, so our own code is moot.
 

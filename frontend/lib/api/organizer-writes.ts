@@ -54,6 +54,15 @@ export type EventContentFields = {
   language: string;
   age_restriction: string;
   accessibility_notes: string;
+  /**
+   * The organiser's own rules, replaced WHOLESALE — an empty array clears
+   * them, an absent key leaves them alone.
+   *
+   * Wholesale rather than per-row because these entries have no server
+   * identity to preserve: there is nothing to diff and no per-row patch to get
+   * wrong. Capped at 12 by the server.
+   */
+  policies: { title: string; body: string }[];
   seo_title: string;
   seo_description: string;
 };
@@ -111,6 +120,35 @@ export const publishEvent = (eventId: string) =>
 export const archiveEvent = (eventId: string) =>
   api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/archive`, {});
 
+/** What a cancellation actually did. A bare 200 would leave an organiser who
+ *  just spent money with no idea how much. */
+export type CancelEventResult = {
+  event_id: string;
+  title: string;
+  reason: string;
+  refunds_enqueued: number;
+  holds_released: number;
+  attendees_notified: number;
+};
+
+/**
+ * Call a LIVE event off, and make good on it.
+ *
+ * Neither archive nor delete. Archive retires an event nobody holds a ticket
+ * to — the server refuses it for `live`. Deletion is an operator's tool for a
+ * listing that should not exist. This is the ordinary, awful case: a live
+ * event with real bookings that is not going to happen.
+ *
+ * It refunds every paid booking, releases every hold and emails every ticket
+ * holder — so it is not undoable, and the UI asks rather than offering undo.
+ * `reason` is REQUIRED and everybody who booked is shown it verbatim.
+ *
+ * The event page keeps resolving afterwards, showing a cancelled state: people
+ * have the link in an email and will open it.
+ */
+export const cancelEvent = (eventId: string, reason: string) =>
+  api.post<CancelEventResult>(`/events/${encodeURIComponent(eventId)}/cancel`, { reason });
+
 /**
  * One step of the sale-phase schedule, as WRITTEN.
  *
@@ -137,9 +175,30 @@ export type SalePhaseInput = {
 
 export type CreateTicketTypeInput = {
   name: string;
+  /** What this tier IS — "Standing, front of the barrier". Blank is the norm. */
+  description?: string;
+  /**
+   * What is INCLUDED, as short strings, capped at 8 by the server. Blank and
+   * duplicate entries are dropped there rather than refused: an organiser who
+   * tabbed through an empty row should not have their tier save fail.
+   */
+  perks?: string[];
+  /** The organiser's own order for the panel; price is the tiebreak. */
+  position?: number;
   /** Minor units (paise). */
   price: number;
   quantity: number;
+  /**
+   * Which SESSION this tier sells, for an event that runs more than once.
+   * Omitted for the ordinary single-show event.
+   *
+   * CREATE ONLY, deliberately: `UpdateTicketTypeInput` is a Partial of this,
+   * but the server's editable set does not include it. Moving a tier that has
+   * sold between sessions would re-point issued tickets at a different show,
+   * and the honest fix for a mis-assigned tier is a new tier, not a silent
+   * reassignment of somebody's evening.
+   */
+  slot_id?: string | null;
   sale_start?: string | null;
   sale_end?: string | null;
   max_per_order?: number;

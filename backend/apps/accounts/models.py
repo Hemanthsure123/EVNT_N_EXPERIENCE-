@@ -39,6 +39,30 @@ class UserManager(BaseUserManager["User"]):
         return self._create_user(email, password, **extra_fields)
 
 
+class Gender(models.TextChoices):
+    """How somebody describes themselves, when they want to.
+
+    ── IT INCLUDES A WAY TO SAY NOTHING, AND A WAY TO SAY SOMETHING ELSE ──
+
+    Blank on the column is "never answered" — the state every account starts
+    in and a perfectly good one to stay in. `PREFER_NOT_TO_SAY` is different
+    and is stored deliberately: it means the question WAS asked and answered,
+    so onboarding does not ask again. Conflating the two would re-prompt
+    somebody who has already declined, which is the one response that clearly
+    means stop asking.
+
+    `SELF_DESCRIBED` pairs with `User.gender_self_described`. An option with
+    nowhere to type is worse than no option at all, so the two ship together
+    or not at all.
+    """
+
+    WOMAN = "woman", "Woman"
+    MAN = "man", "Man"
+    NON_BINARY = "non_binary", "Non-binary"
+    SELF_DESCRIBED = "self_described", "Prefer to self-describe"
+    PREFER_NOT_TO_SAY = "prefer_not_to_say", "Prefer not to say"
+
+
 class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
@@ -61,6 +85,41 @@ class User(AbstractBaseUser, PermissionsMixin):
     # serves. The performance checklist asks for the index the query actually
     # issues, not one added speculatively.
     avatar_url = models.CharField(max_length=500, blank=True, default="")
+
+    # --- who they are, when they choose to say -----------------------------
+
+    #: The DATE, never the age.
+    #:
+    #: An age is wrong the day after it is stored, and on THIS platform that is
+    #: a correctness problem rather than an untidiness: `Event.age_restriction`
+    #: carries "18+", so an age column would let somebody who was 17 when they
+    #: signed up walk an adult gate a year later. A date is a fact that stays
+    #: true, and the age is derived at the moment it is asked for.
+    #:
+    #: Null is the norm. Nobody is required to give it, and the platform does
+    #: not gate anything on it today — the age restriction is displayed and
+    #: enforced at the door, not by this column.
+    date_of_birth = models.DateField(null=True, blank=True)
+    #: Blank means never answered; `prefer_not_to_say` means answered. See
+    #: `Gender` for why those are different states.
+    gender = models.CharField(max_length=20, choices=Gender.choices, blank=True, default="")
+    #: Only meaningful when `gender == SELF_DESCRIBED`, and cleared by the
+    #: service when it is not — a stale self-description sitting behind a
+    #: changed answer is a value the owner believes they removed.
+    gender_self_described = models.CharField(max_length=60, blank=True, default="")
+
+    #: WHEN they finished the welcome flow, not whether.
+    #:
+    #: A timestamp is strictly more information than a boolean for the same
+    #: storage, and the extra information is the useful kind: "signed up in
+    #: March and finished onboarding in July" is a real pattern worth being
+    #: able to see, and a boolean throws it away.
+    #:
+    #: Null means the flow has not been finished — either never started, or
+    #: skipped. Skipping SETS it, because a person who declined has answered
+    #: the question and asking again on their next visit is nagging.
+    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
+
     is_active = models.BooleanField(default=True)
     # Whether the address has been PROVEN to belong to whoever registered it.
     #

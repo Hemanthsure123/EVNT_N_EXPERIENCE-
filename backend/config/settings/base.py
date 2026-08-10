@@ -57,6 +57,8 @@ INSTALLED_APPS = [
     "apps.organizer",
     "apps.cms",
     "apps.announcements",
+    "apps.support",
+    "apps.reviews",
     # The Hire a Band marketplace. Owned by organizations, moderated by the
     # same gate as events - see the module docstring.
     "apps.performers",

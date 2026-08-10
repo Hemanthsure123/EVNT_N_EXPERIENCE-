@@ -19,18 +19,21 @@ import uuid
 from datetime import datetime
 
 from django.core.files.uploadedfile import UploadedFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from apps.accounts.repositories import UserRepository
 from apps.organizations.exceptions import OrganizationNotFoundError
 from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
+from config.di import build_booking_service, task_queue_port
 from core.audit import record_audit
 from core.errors import InvalidInputError
 from core.events import (
     EVENT_APPROVED,
     EVENT_ARCHIVED,
+    EVENT_CANCELLED_BY_ORGANIZER,
     EVENT_CREATED,
+    EVENT_DELETED_BY_OPERATOR,
     EVENT_PUBLISHED,
     EVENT_REJECTED,
     EVENT_SUBMITTED_FOR_REVIEW,
@@ -41,6 +44,7 @@ from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    DuplicateSlotError,
     EventNotFoundError,
     EventNotLiveError,
     EventNotUnderReviewError,
@@ -48,11 +52,12 @@ from .exceptions import (
     NotEventOwnerError,
     NotPlatformOperatorError,
     OrganizationNotVerifiedError,
+    SlotInUseError,
     StaleEventVersionError,
 )
-from .models import Event, EventStatus, MediaKind
+from .models import Event, EventSlot, EventStatus, MediaKind
 from .publish_checks import run_publish_checks
-from .repositories import EventRepository
+from .repositories import EventRepository, EventSlotRepository
 from .selectors import invalidate_event_caches
 
 logger = logging.getLogger(__name__)
@@ -66,6 +71,9 @@ _EDITABLE_FIELDS = (
     "description",
     "venue",
     "city",
+    # A column the browse filters index MUST be reachable by a PATCH, or the
+    # taxonomy is decoration only a data migration can populate.
+    "category",
     # Where the venue resolves to. Editable for the same reason the content
     # fields are: a column the event page renders must be reachable by a
     # PATCH, or the map is decoration nobody can ever populate. Written by
@@ -86,7 +94,99 @@ _EDITABLE_FIELDS = (
     "accessibility_notes",
     "seo_title",
     "seo_description",
+    # A LIST column, unlike every other editable field here. It is written
+    # wholesale — an empty list clears it — so it needs no special handling
+    # beyond being reachable: a column the event page renders must be
+    # reachable by a PATCH, or the field is decoration.
+    "policies",
 )
+
+
+def make_good_on_an_event(
+    *,
+    event: Event,
+    reason: str,
+) -> tuple[dict, _Settlement]:
+    """Work out what calling an event off OWES, without doing any of it yet.
+
+    ── WHY THIS IS SHARED BETWEEN CANCEL AND DELETE ───────────────────────
+
+    An operator removing a fraudulent listing and an organiser calling off
+    their own show are different DECISIONS with different authorization and
+    different end states — but from a ticket holder's side they are one fact:
+    the event is not happening and their money comes back. Two implementations
+    of "return everybody's money" is how one of them ends up missing the hold
+    release, and it would be missing it on the money path.
+
+    So the decision stays in each service and the consequence lives here. This
+    function only READS — the caller opens its own `UnitOfWork`, records its
+    own outbox event, and calls `settle()` inside `transaction.on_commit`.
+    Nothing here spends money or touches an external system.
+    """
+    from apps.booking.models import BookingStatus
+    from apps.booking.repositories import BookingRepository
+    from apps.payments.repositories import PaymentRepository
+
+    bookings = list(BookingRepository().list_live_for_event(event.id))
+    paid = [b for b in bookings if b.status == BookingStatus.PAID]
+    reserved = [b for b in bookings if b.status == BookingStatus.RESERVED]
+
+    payments = PaymentRepository()
+    refundable = [
+        str(payment.id)
+        for payment in (payments.get_paid_for_booking(b.id) for b in paid)
+        if payment is not None
+    ]
+    attendee_emails = sorted({b.user.email for b in paid if b.user_id})
+    # (booking, owner) pairs: `cancel_booking` proves ownership, so a hold is
+    # released THROUGH the same path a customer's own cancel takes — one code
+    # path returns inventory, not two.
+    reserved_ids = [(b.id, b.user_id) for b in reserved]
+
+    summary = {
+        "event_id": str(event.id),
+        "title": event.title,
+        "reason": reason,
+        "refunds_enqueued": len(refundable),
+        "holds_released": len(reserved),
+        "attendees_notified": len(attendee_emails),
+        "attendee_emails": attendee_emails,
+    }
+    return summary, _Settlement(refundable=refundable, reserved=reserved_ids)
+
+
+class _Settlement:
+    """The spending half, deliberately separate and deliberately deferred.
+
+    Every call in here is external or slow — a refund goes to Razorpay through
+    the queue's retry + dead-letter path, and a hold release opens its own
+    transaction. Run it from `transaction.on_commit`, never inline: with the
+    synchronous dev queue an inline enqueue would refund INSIDE the caller's
+    transaction, so a rollback would leave money returned for an event that
+    still exists.
+    """
+
+    def __init__(self, *, refundable: list[str], reserved: list) -> None:
+        self._refundable = refundable
+        self._reserved = reserved
+
+    def settle(self) -> None:
+        queue = task_queue_port()
+        for payment_id in self._refundable:
+            queue.enqueue(
+                "payments.process_refund",
+                {"payment_id": payment_id, "reason": "event_cancelled"},
+            )
+        booking_service = build_booking_service()
+        for booking_id, owner_id in self._reserved:
+            try:
+                booking_service.cancel_booking(booking_id=booking_id, actor_id=owner_id)
+            except Exception:  # noqa: BLE001
+                # One stuck hold must not stop the others being freed.
+                logger.exception(
+                    "events.make_good.hold_release_failed",
+                    extra={"booking_id": str(booking_id)},
+                )
 
 
 class EventService:
@@ -108,8 +208,35 @@ class EventService:
     # --- helpers -----------------------------------------------------------
 
     def _upload_poster(self, event_id: uuid.UUID | str, poster: UploadedFile) -> str:
-        path = f"event-posters/{event_id}/{uuid.uuid4().hex}-{poster.name}"
-        content_type = poster.content_type or "application/octet-stream"
+        """The event's cover image — validated exactly like every other upload.
+
+        This method previously did NEITHER of the two things `core.uploads`
+        exists to do, and both were real:
+
+        1. **No validation.** It took `poster.content_type` from the browser and
+           handed it to storage unread, so an HTML file renamed `.jpg` was
+           served back from our own origin with a content type of its choosing.
+           That is the stored-XSS primitive the allow-list and the byte sniff
+           were written to close, and the poster — the one image on every event
+           page — was the path that skipped them.
+        2. **The attacker's filename in the storage key.** `-{poster.name}`
+           interpolates an unsanitised name straight into the object path.
+           `storage_path` exists because that name can carry `../`, a null byte
+           or 4 KB of Unicode.
+
+        It now runs the same gate as gallery media, `EVENT_IMAGE_SPEC` included:
+        the poster is what the hero frame draws, so if anything must be the
+        right shape it is this.
+        """
+        from core.uploads import EVENT_IMAGE_SPEC, storage_path, validate_image
+
+        content_type = validate_image(poster, spec=EVENT_IMAGE_SPEC)
+        # `name` is optional on an UploadedFile — a multipart part can arrive
+        # without a filename. `storage_path` only reads it for the extension,
+        # so an empty string means "no extension", not a broken key.
+        path = storage_path(
+            prefix="event-posters", owner_id=str(event_id), filename=poster.name or ""
+        )
         return self._storage.upload(path=path, content=poster.read(), content_type=content_type)
 
     def _load_owned_for_write(
@@ -339,6 +466,96 @@ class EventService:
         if refreshed is None:  # pragma: no cover — just deleted mid-request
             raise EventNotFoundError(str(event_id))
         return refreshed
+
+    def cancel_event(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, reason: str
+    ) -> dict:
+        """An organiser calls their own event off, and makes good on it.
+
+        ── WHY THIS IS NOT ARCHIVE, AND NOT DELETE ────────────────────────
+
+        `archive_event` retires an event nobody is holding a ticket to — it
+        refuses `live` for exactly that reason. Deletion is an OPERATOR's tool
+        for a listing that should not exist. Neither covers the ordinary,
+        awful case: a live event with real bookings that is not going to
+        happen, called off by the person running it.
+
+        ── THE PAGE MUST STILL RESOLVE ────────────────────────────────────
+
+        `cancelled` is a PUBLIC state, not a soft delete. Hundreds of people
+        have a link in an email and they WILL open it. A 404 reads as "the
+        platform lost my booking"; the page saying "this event was cancelled
+        and your refund is on its way" is the entire difference between a
+        support queue and none.
+
+        ── AND IT IS TERMINAL ─────────────────────────────────────────────
+
+        There is no un-cancel. Money has been returned and inventory released,
+        so "resuming" would mean re-charging people who were refunded and
+        re-issuing tickets nobody holds. The honest route back is a new event.
+
+        Returns the same summary shape the operator's delete does, because
+        this click also spends money and the organiser needs to see how much
+        it started rather than a bare 200.
+        """
+        if not reason.strip():
+            # Attendees are shown this verbatim. "Cancelled" with no reason is
+            # the message that generates every one of the support tickets this
+            # endpoint exists to prevent.
+            raise InvalidInputError(
+                "Say why this event is being cancelled — everyone who booked will see it."
+            )
+
+        event = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
+        if event.status not in (EventStatus.LIVE, EventStatus.PAUSED):
+            raise InvalidEventStateError(
+                f"A '{event.status}' event cannot be cancelled. "
+                "Only an event that is on sale, or paused, has anybody to tell."
+            )
+
+        summary, settlement = make_good_on_an_event(event=event, reason=reason.strip())
+
+        with UnitOfWork() as uow:
+            # Conditional on the version AND on the source state, so two
+            # organisers pressing Cancel at once cannot both succeed and send
+            # two rounds of cancellation emails.
+            if not self._events.cancel_if_cancellable(
+                event_id=event.id, expected_version=event.version
+            ):
+                raise StaleEventVersionError()
+
+            uow.publish(
+                EVENT_CANCELLED_BY_ORGANIZER,
+                {
+                    "event_id": str(event.id),
+                    "title": event.title,
+                    "reason": reason.strip(),
+                    "refunded_bookings": summary["refunds_enqueued"],
+                    "attendee_emails": summary["attendee_emails"],
+                },
+                aggregate_id=str(event.id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.cancelled",
+                target_type="event",
+                target_id=str(event.id),
+                metadata={
+                    "reason": reason.strip(),
+                    "refunds_enqueued": summary["refunds_enqueued"],
+                    "reserved_holds": summary["holds_released"],
+                },
+            )
+            transaction.on_commit(settlement.settle)
+            # It WAS live, so it is on listing pages and in the detail cache —
+            # both have to go, or the event goes on being sold from a cache.
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+        logger.info(
+            "event_cancelled",
+            extra={"event_id": str(event.id), "refunds": summary["refunds_enqueued"]},
+        )
+        return {key: value for key, value in summary.items() if key != "attendee_emails"}
 
     def archive_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         """Retire an event the organizer is finished with.
@@ -578,56 +795,84 @@ class EventModerationService:
         return event
 
     def delete_event(
-        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str, reason: str
-    ) -> None:
-        """Remove an event from the platform.
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        reason: str,
+    ) -> dict:
+        """Remove an event from the platform, in ANY state, and make good on it.
 
-        ── IT REFUSES WHEN ANYBODY HOLDS A TICKET ────────────────────────────
+        ── IT USED TO REFUSE WHEN ANYBODY HELD A TICKET ────────────────────
 
-        Deleting an event somebody bought a ticket to is not an operator
-        decision this endpoint can carry out honestly. The attendee would keep
-        a ticket whose event no longer resolves, the organizer would keep a
-        settlement referencing a row that reads as gone, and `Booking.event`
-        and `Settlement.event` are `PROTECT` precisely so the database refuses
-        to make that state reachable.
+        The previous implementation raised `InvalidEventStateError` for an
+        event with bookings and told the operator to unpublish and refund
+        separately. The reasoning was sound — an attendee must not keep a
+        ticket to an event that no longer resolves — but the conclusion was
+        backwards: it refused in exactly the cases an operator reaches for this
+        (a fraudulent listing that has already sold, an event that cannot
+        legally go ahead), and left the dangerous half — the refunds — as a
+        separate action somebody had to remember.
 
-        So an event with any booking that is not merely an expired hold is
-        refused, and the operator is told what to do instead: unpublish takes
-        it off sale immediately and leaves the money path intact, and refunding
-        is a separate deliberate decision in `payments`. Spam and mistakes —
-        the events this endpoint exists for — have no bookings and delete
-        cleanly.
+        So it no longer refuses. It does the whole job instead: remove the
+        event AND return everybody's money, in one operation, so the two can
+        never come apart.
 
-        The delete itself is SOFT (`deleted_at`), which is what every read path
-        on this platform already means by gone.
+        ── WHY IT IS STILL A SOFT DELETE ──────────────────────────────────
+
+        `Booking`, `ScanLog` and `TicketType` reference `Event` with `PROTECT`,
+        so a real `DELETE` raises `ProtectedError` for anything carrying a
+        ticket tier — i.e. every published event, because publishing requires
+        one. `deleted_at` is what every read on this platform already means by
+        gone, and it keeps the financial record intact, which a platform that
+        took money for those tickets is obliged to do.
+
+        ── AND WHY THE REFUNDS ARE ENQUEUED, AFTER COMMIT ─────────────────
+
+        The external call belongs on the queue's retry + dead-letter path, and
+        an operator pressing Delete must not wait on Razorpay. `on_commit`
+        because with the synchronous dev queue an inline enqueue would run the
+        refund INSIDE this transaction — so a rollback would leave money
+        returned for an event that still exists.
+
+        Returns a summary the console renders, because this click spends money:
+        the operator needs to see how many refunds it started, not a bare 204.
         """
         self._require_operator(actor_id)
-
         if not reason.strip():
-            raise InvalidInputError("Deleting an event needs a reason.")
+            # The organizer is shown this verbatim. A deletion with no reason
+            # becomes a support thread nobody can answer.
+            raise InvalidInputError("Say why this event is being removed — the organizer sees it.")
 
         event = self._events.get_active_by_id(event_id)
         if event is None:
             raise EventNotFoundError(str(event_id))
 
-        if self._events.has_committed_bookings(event.id):
-            raise InvalidEventStateError(
-                "This event has bookings, so it cannot be deleted. Take it off sale "
-                "instead, and refund the bookings if that is the intent.",
-                status=str(event.status),
-            )
+        owner = self._users.get_by_id(event.organization.owner_id)
+
+        # Shared with `EventService.cancel_event`: two implementations of
+        # "return everybody's money" is how one of them ends up missing the
+        # hold release, on the money path.
+        summary, settlement = make_good_on_an_event(event=event, reason=reason.strip())
+        attendee_emails = summary["attendee_emails"]
 
         with UnitOfWork() as uow:
-            if not self._events.soft_delete_event(event.id):
-                # Someone deleted it between the read and here.
+            # Conditional on being un-deleted, so two operators cannot both
+            # "succeed" and send two rounds of cancellation emails.
+            if not self._events.soft_delete(
+                event_id=event.id, actor_id=actor_id, reason=reason.strip()
+            ):
                 raise EventNotFoundError(str(event_id))
+
             uow.publish(
-                EVENT_ARCHIVED,
+                EVENT_DELETED_BY_OPERATOR,
                 {
                     "event_id": str(event.id),
-                    "organization_id": str(event.organization_id),
                     "title": event.title,
-                    "reason": reason,
+                    "owner_email": owner.email if owner else "",
+                    "reason": reason.strip(),
+                    "refunded_bookings": summary["refunds_enqueued"],
+                    "attendee_emails": attendee_emails,
                 },
                 aggregate_id=str(event.id),
             )
@@ -636,11 +881,28 @@ class EventModerationService:
                 action="event.deleted_by_operator",
                 target_type="event",
                 target_id=str(event.id),
-                metadata={"reason": reason, "status": str(event.status)},
+                metadata={
+                    "reason": reason.strip(),
+                    "reserved_holds": summary["holds_released"],
+                    "refunds_enqueued": summary["refunds_enqueued"],
+                },
             )
+
+            transaction.on_commit(settlement.settle)
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
 
-        logger.info("event_deleted_by_operator", extra={"event_id": str(event.id)})
+        logger.info(
+            "event_deleted_by_operator",
+            extra={
+                "event_id": str(event.id),
+                "refunds": summary["refunds_enqueued"],
+                "holds": summary["holds_released"],
+            },
+        )
+        # `attendee_emails` is dropped from the response: the console renders
+        # counts, and a list of every ticket holder's address is not something
+        # an endpoint should hand back when nothing displays it.
+        return {key: value for key, value in summary.items() if key != "attendee_emails"}
 
 
 # What an in-place edit of a content row may touch. Same shape as
@@ -651,6 +913,15 @@ class EventModerationService:
 _EDITABLE_MEDIA_FIELDS = ("kind", "alt_text", "caption", "position")
 _EDITABLE_FAQ_FIELDS = ("question", "answer", "position")
 _EDITABLE_TIMELINE_FIELDS = ("label", "description", "starts_at", "position")
+
+
+#: How many sessions one event may carry. A season with more than this is
+#: several events, not one — and the slot list is rendered in full on the
+#: ticket panel, un-paginated, because a chooser you have to page through is
+#: not a chooser.
+MAX_SLOTS_PER_EVENT = 60
+
+_EDITABLE_SLOT_FIELDS = ("label", "starts_at", "ends_at", "position", "is_active")
 
 
 def _applied(changes: dict, editable: tuple[str, ...]) -> dict:
@@ -679,10 +950,18 @@ class EventContentService:
     count, and a rule split across two layers is a rule that drifts.
     """
 
-    def __init__(self, *, events: EventRepository, content, storage: StoragePort) -> None:
+    def __init__(
+        self,
+        *,
+        events: EventRepository,
+        content,
+        storage: StoragePort,
+        slots: EventSlotRepository | None = None,
+    ) -> None:
         self._events = events
         self._content = content
         self._storage = storage
+        self._slots = slots or EventSlotRepository()
 
     def _owned(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         event = self._events.get_active_by_id(event_id)
@@ -745,6 +1024,14 @@ class EventContentService:
         event = self._owned(event_id=event_id, actor_id=actor_id)
 
         self._require_media_slot(event.id, kind)
+        if kind == MediaKind.VIDEO:
+            # NORMALISED, not merely validated. The URL stored is one we build
+            # from an extracted id, so a crafted `youtube.com/embed/...?x=` can
+            # never survive the round trip into an iframe on our own origin —
+            # the same class of problem SVG uploads are, handled the same way.
+            from core.video_embeds import parse_video_url
+
+            url = parse_video_url(url).embed_url
         if not alt_text.strip():
             # The most-viewed image on the platform must not be invisible to a
             # screen reader. The column allows blank so historical rows survive;
@@ -789,7 +1076,7 @@ class EventContentService:
         to hold. Ownership and the media caps are proven BEFORE anything is
         written to storage, so a refused upload leaves nothing behind.
         """
-        from core.uploads import storage_path, validate_image
+        from core.uploads import EVENT_IMAGE_SPEC, storage_path, validate_image
 
         event = self._owned(event_id=event_id, actor_id=actor_id)
 
@@ -797,10 +1084,24 @@ class EventContentService:
         # cap, then the file. Reading and storing bytes for an upload we were
         # always going to reject is wasted work and wasted storage.
         self._require_media_slot(event.id, kind)
+        if kind == MediaKind.VIDEO:
+            # This endpoint used to fail here with "upload a JPEG, PNG, WebP,
+            # AVIF or GIF" — technically true and useless, because the caller
+            # was not trying to upload an image. A trailer is 50-200 MB, needs
+            # transcoding and a CDN this platform has not configured; what
+            # organisers have is a YouTube or Vimeo link, so that is the route
+            # and this says so.
+            raise InvalidInputError(
+                "Videos are added as a link, not a file. Upload it to YouTube or Vimeo "
+                "and paste the link instead."
+            )
         if not alt_text.strip():
             raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
 
-        content_type = validate_image(upload)
+        # `EVENT_IMAGE_SPEC` because every one of these renders in the event
+        # page's single widescreen frame — the hero, the filmstrip and the
+        # lightbox all draw the same shape. See the note on `ImageSpec`.
+        content_type = validate_image(upload, spec=EVENT_IMAGE_SPEC)
         path = storage_path(prefix="event-media", owner_id=str(event.id), filename=upload.name)
 
         # OUTSIDE the transaction: storage is slow external I/O, and CLAUDE.md's
@@ -991,6 +1292,152 @@ class EventContentService:
             if not self._content.soft_delete_faq(faq_id):
                 raise EventNotFoundError(str(faq_id))
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+    # -------------------------------------------------------------- slots
+
+    def list_slots(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str):
+        """Every session including the ones taken off sale.
+
+        The owner's view. The public one (`EventContentView`) shows active
+        slots only — an organiser needs to see the session they switched off,
+        or the only way to notice it is that nobody buys a ticket for it.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        return self._slots.list_for_event(event.id, active_only=False)
+
+    def add_slot(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        starts_at,
+        label: str = "",
+        ends_at=None,
+        position: int = 0,
+    ) -> EventSlot:
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        if self._slots.list_for_event(event.id, active_only=False).count() >= MAX_SLOTS_PER_EVENT:
+            raise InvalidInputError(
+                f"An event can have at most {MAX_SLOTS_PER_EVENT} sessions. "
+                "Run a longer season as separate events."
+            )
+
+        with UnitOfWork():
+            try:
+                # Its own savepoint: a unique-constraint violation aborts the
+                # transaction it happens in, so catching it without one would
+                # leave the surrounding UnitOfWork unusable.
+                with transaction.atomic():
+                    slot = self._slots.create(
+                        event_id=event.id,
+                        label=label.strip(),
+                        starts_at=starts_at,
+                        ends_at=ends_at,
+                        position=position,
+                    )
+            except IntegrityError as exc:
+                raise DuplicateSlotError() from exc
+            self._sync_event_window(event)
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return slot
+
+    def update_slot(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        slot_id: uuid.UUID | str,
+        changes: dict,
+    ) -> EventSlot:
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        slot = self._slots.get_for_event(event.id, slot_id)
+        if slot is None:
+            raise EventNotFoundError(str(slot_id))
+        applied = _applied(changes, _EDITABLE_SLOT_FIELDS)
+        if not applied:
+            raise InvalidInputError("Provide at least one field to update.")
+
+        # Checked against the MERGED row, not the payload: moving only the start
+        # of a slot that already has an end can invert the pair just as surely
+        # as sending both.
+        merged_start = applied.get("starts_at", slot.starts_at)
+        # `.get` with the current value as the default, so an explicit null
+        # (clearing the end) survives as a null rather than falling back.
+        merged_end = applied.get("ends_at", slot.ends_at)
+        if merged_end and merged_end <= merged_start:
+            raise InvalidInputError("This slot ends before it starts — check the times.")
+
+        with UnitOfWork():
+            try:
+                with transaction.atomic():
+                    self._slots.update_fields(slot, **applied)
+            except IntegrityError as exc:
+                raise DuplicateSlotError() from exc
+            self._sync_event_window(event)
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+        return slot
+
+    def remove_slot(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        slot_id: uuid.UUID | str,
+    ) -> None:
+        """Delete a session outright — only while nothing sells it.
+
+        A slot with tiers attached is refused rather than cascaded. `TicketType
+        .slot` is PROTECT precisely because those tiers hold the inventory
+        counters and, once anything is sold, the issued tickets: deleting the
+        session out from under them would leave real tickets admitting to a
+        show that no longer exists. Turning the slot OFF is the operation that
+        always works, and is what a cancelled session actually is.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        slot = self._slots.get_for_event(event.id, slot_id)
+        if slot is None:
+            raise EventNotFoundError(str(slot_id))
+        if self._slots.count_ticket_types(slot.id):
+            raise SlotInUseError()
+
+        with UnitOfWork():
+            self._slots.delete_slot(slot)
+            self._sync_event_window(event)
+            transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+    def _sync_event_window(self, event: Event) -> None:
+        """Keep the event's own window equal to the span of its sessions.
+
+        Three separate systems read `Event.starts_at` as the truth: browse
+        sorts and cursor-pages on it, the check-in window opens against it, and
+        settlements decide an event has finished from it. So an event whose
+        sessions are at 18:00 and 21:00 while the row still says 14:00 is
+        wrong in three places at once — and the one people SEE is the listing.
+
+        Only ACTIVE slots count. A session taken off sale must not go on
+        holding the event's start time at its hour.
+
+        The organiser can still edit `starts_at` directly; the next slot write
+        simply re-derives it. Once an event has sessions, the sessions ARE the
+        schedule, and there is no second place to keep it.
+        """
+        active = list(self._slots.list_for_event(event.id, active_only=True))
+        if not active:
+            return
+        window: dict = {}
+        earliest = min(slot.starts_at for slot in active)
+        if event.starts_at != earliest:
+            window["starts_at"] = earliest
+        # `ends_at` is optional on a slot, so the latest end is only knowable
+        # from the slots that carry one. With none, the event's own end is left
+        # exactly as the organiser set it rather than invented from a start.
+        ends = [slot.ends_at for slot in active if slot.ends_at]
+        if ends and event.ends_at != max(ends):
+            window["ends_at"] = max(ends)
+        if window:
+            self._events.set_window(event.id, **window)
+            for field, value in window.items():
+                setattr(event, field, value)
 
     # ----------------------------------------------------------- timeline
 

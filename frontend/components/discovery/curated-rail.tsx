@@ -35,6 +35,12 @@ import type { EventCard as EventCardModel } from '@/lib/api/types';
 function toEventCard(card: HomepageCard): EventCardModel {
   return {
     id: card.id,
+    // `EventCard` gained a REQUIRED `category` when the browse taxonomy became
+    // a real column. The CMS payload does not carry one, and an empty string
+    // is its documented meaning of "not categorised" — the card then renders
+    // no chip, which is correct here: guessing a category from curated copy
+    // would put a wrong label on somebody's event.
+    category: '',
     title: card.title,
     venue: card.venue,
     city: card.city,

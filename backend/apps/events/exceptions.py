@@ -119,3 +119,33 @@ class EventNotLiveError(ConflictError):
 
     def __init__(self) -> None:
         super().__init__("Only a published event can be taken down.")
+
+
+class DuplicateSlotError(ConflictError):
+    """Two sessions at the same time with the same label.
+
+    The unique constraint is `(event, starts_at, label)` rather than
+    `(event, starts_at)`: two genuinely different sessions CAN start together
+    — a main stage and a side stage — and telling them apart is exactly what
+    the label is for.
+    """
+
+    code = "duplicate_slot"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This event already has a session starting then with that name. "
+            "Give it a different name, or change the time."
+        )
+
+
+class SlotInUseError(ConflictError):
+    """A session with ticket tiers cannot be deleted, only switched off."""
+
+    code = "slot_in_use"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This session still has ticket tiers attached. Remove them first, "
+            "or turn the session off to stop selling it."
+        )

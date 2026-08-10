@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from apps.booking.models import Booking, BookingStatus
+from apps.booking.models import Booking, BookingStatus, Ticket
 from apps.booking.repositories import BookingRepository, TicketRepository
 
 
@@ -88,3 +88,48 @@ def test_list_for_attendee_assignment_is_one_query_with_the_tier_name(
         tickets = TicketRepository().list_for_attendee_assignment(result.booking.id)
         assert [t.ticket_type.name for t in tickets] == ["Gold", "Gold", "Gold"]
         assert all(t.attendee_email == "" for t in tickets)
+
+
+@pytest.mark.django_db
+def test_a_bookings_tickets_come_back_in_a_STABLE_order(booking_service, buyer, event, make_tier):
+    """`ORDER BY created_at` alone is a TIE, and this is the test that proves it.
+
+    A booking's tickets are written by ONE `bulk_create`. `auto_now_add` stamps
+    every row in that batch with the same `timezone.now()` — identical to the
+    microsecond — so ordering by it leaves Postgres free to return the rows in
+    whichever order it happens to find them. The delivery email renders that
+    list, and the attendee-naming form submits against it POSITIONALLY, which
+    is how a name gets written onto the wrong ticket.
+
+    The tie is FORCED here rather than hoped for. `auto_now_add` calls
+    `timezone.now()` once per row inside the batch, so on a fast, idle machine
+    the four stamps are identical and on a loaded one they are microseconds
+    apart — which made asserting "they tie" a test that failed in a full suite
+    run and passed on its own. That flake was the test's fault, not the code's:
+    whether the clock ticks mid-batch is not the guarantee anybody needs.
+
+    So the rows are stamped identically by hand, which is the WORST case rather
+    than a likely one, and the assertions below are then about the fix alone.
+    """
+    tier = make_tier(name="Gold", quantity=100)
+    result = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=[{"ticket_type_id": tier.id, "quantity": 4}]
+    )
+    booking_service.confirm_booking(booking_id=result.booking.id, payment_ref="pay_stable")
+
+    # `update()` bypasses `auto_now_add`, so this is the exact tie the ordering
+    # has to survive: four rows Postgres may return in any order it likes.
+    Ticket.objects.filter(booking_id=result.booking.id).update(
+        created_at=timezone.now().replace(microsecond=0)
+    )
+
+    repo = TicketRepository()
+    first = [str(t.id) for t in repo.list_for_booking(result.booking.id)]
+
+    assert len({t.created_at for t in repo.list_for_booking(result.booking.id)}) == 1
+    assert len(first) == 4
+    for _ in range(4):
+        assert [str(t.id) for t in repo.list_for_booking(result.booking.id)] == first
+    # The naming form reads the other query; it must agree, or a positional
+    # submission lands on a different ticket than the one displayed.
+    assert [str(t.id) for t in repo.list_for_attendee_assignment(result.booking.id)] == first

@@ -312,21 +312,33 @@
    * visible from the start — the observer never needs to run.
    */
   .reveal {
-    opacity: 0;
-    transform: translateY(20px);
     transition:
       opacity var(--duration-reveal) var(--ease-spring),
       transform var(--duration-reveal) var(--ease-spring);
     transition-delay: var(--reveal-delay, 0ms);
   }
 
-  .reveal[data-revealed='true'] {
-    opacity: 1;
-    transform: none;
+  /*
+   * THE HIDDEN STATE IS OPT-IN, AND ONLY JAVASCRIPT OPTS IN.
+   *
+   * This block used to be on `.reveal` itself, so the markup arrived at
+   * `opacity: 0` and depended on an observer to clear it. Every way that
+   * observer can fail to run — a blocked bundle, an error before hydration, a
+   * browser without IntersectionObserver — left the content PERMANENTLY
+   * invisible, with nothing erroring. On the event grid, which is what uses
+   * this, that is the entire catalogue gone from a page that returned 200.
+   *
+   * The attribute is written by the effect, so no-JS renders visible content
+   * and the animation is a progressive enhancement rather than a dependency.
+   */
+  .reveal[data-revealed='false'] {
+    opacity: 0;
+    transform: translateY(20px);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .reveal {
+    .reveal,
+    .reveal[data-revealed='false'] {
       opacity: 1;
       transform: none;
       transition: none;

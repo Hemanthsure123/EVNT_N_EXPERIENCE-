@@ -115,7 +115,7 @@ export function Payouts() {
           <Step
             n={1}
             title="A ticket is paid for"
-            body="Your share is transferred to your linked account immediately, but held there by the payment provider. The platform never holds your money."
+            body="Your share is transferred to your linked account and held by the payment provider until release."
           />
           <Step
             n={2}
@@ -130,7 +130,7 @@ export function Payouts() {
           <Step
             n={4}
             title="The transfer is released"
-            body="A scheduled job recomputes your net from the actual paid and refunded payments, then releases it — exactly once. A failure retries with backoff and stays owed; it is never lost."
+            body="Your net is recomputed from actual paid and refunded payments, then released once. A failed release is retried and stays owed."
           />
         </ol>
       </Panel>
@@ -148,7 +148,7 @@ export function Payouts() {
           <EmptyState
             icon={Wallet}
             title="No payouts yet"
-            body="A settlement is created for an event once it starts selling. It releases after the event ends and its refund window closes."
+            body="Created once an event starts selling. Releases after the event ends and its refund window closes."
             action={
               <Button variant="outline" asChild>
                 <Link href="/dashboard/events">See your events</Link>
@@ -264,11 +264,9 @@ export function Payouts() {
         ) : null}
       </Panel>
 
-      <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-        A downloadable statement and an exact next-payout date are not available: there is no
-        statement endpoint, and <code>releasable_at</code> is on the admin settlement payload only,
-        not the organizer one. BACKLOG item 31.
-      </p>
+      {/* No note naming a missing statement endpoint and an admin-only
+          field. An organiser reading their payouts needs the figures and the
+          dates, not an inventory of what our API does not expose here. */}
     </div>
   );
 }

@@ -22,7 +22,7 @@ import { api } from './client';
 import { API_BASE_URL } from './config';
 import { ApiError } from './errors';
 import { tokenStore } from './token-store';
-import type { User } from './types';
+import type { Gender, User } from './types';
 
 const AVATAR_PATH = '/auth/me/avatar';
 
@@ -221,3 +221,61 @@ export function uploadAvatar(
  * empty, which is what makes the picture visibly return to initials everywhere.
  */
 export const removeAvatar = () => api.delete<ProfileUser>(AVATAR_PATH);
+
+/* ------------------------------------------------------------------ writing */
+
+/**
+ * Everything a person can change about themselves.
+ *
+ * PARTIAL BY OMISSION. A key that is absent leaves the column alone; a key
+ * that is present with an empty value CLEARS it. Those cannot be conflated —
+ * removing a phone number is how somebody opts out of SMS, and clearing a
+ * gender answer back to "never said" is a different act from declining.
+ *
+ * `date_of_birth` is the one field where `null` is the real empty value rather
+ * than `''`, because it is a date. The server uses a sentinel internally for
+ * exactly that reason.
+ *
+ * There is deliberately NO `email`. The address is the sign-in identity and
+ * the destination every ticket is delivered to, so changing it is a
+ * re-verification flow, not a profile field — allowing it here would let an
+ * account be moved to an address its holder does not control.
+ */
+export type ProfileUpdate = {
+  full_name?: string;
+  phone?: string;
+  date_of_birth?: string | null;
+  gender?: Gender | '';
+  gender_self_described?: string;
+};
+
+export const updateProfile = (changes: ProfileUpdate) =>
+  api.patch<ProfileUser>('/auth/me', changes);
+
+/**
+ * Mark the welcome flow answered — filled in, or skipped.
+ *
+ * A separate call from the profile PATCH because the two say different things:
+ * a PATCH says "this is my name", this says "stop asking me". Folding the mark
+ * into the PATCH would mean the only way to record a skip is to send an empty
+ * edit, so a skip would look identical to a request that never arrived.
+ *
+ * It carries no body: everything the flow collects goes through `updateProfile`,
+ * which already validates every field. A second write path for the same columns
+ * would be a second place for the date-of-birth rules to live.
+ */
+export const completeOnboarding = () => api.post<ProfileUser>('/auth/me/onboarding', {});
+
+/**
+ * Whether to open the welcome flow for this person.
+ *
+ * THREE conditions, and each rules out a case where showing it would be wrong:
+ * there has to BE somebody, they have to have proven their address (the flow
+ * sits after verification, not beside it), and they must not have answered it
+ * already — where "answered" includes having skipped.
+ */
+export function needsOnboarding(user: ProfileUser | null | undefined): boolean {
+  if (!user) return false;
+  if (!user.email_verified) return false;
+  return user.onboarding_completed_at === null;
+}

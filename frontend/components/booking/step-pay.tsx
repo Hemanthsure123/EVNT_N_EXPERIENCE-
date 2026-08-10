@@ -148,7 +148,9 @@ export function PayStep() {
             </p>
           </div>
           <Button asChild size="lg" className={CTA_PILL_LG}>
-            <Link href={`/booking/${event.id}`}>Choose tickets</Link>
+            {/* The event page, not the old picker step — that route is now a
+                redirect and would bounce through review. */}
+            <Link href={`/events/${event.id}`}>Choose tickets</Link>
           </Button>
         </div>
       </StepTransition>
@@ -344,18 +346,22 @@ export function PayStep() {
               <Info className="size-4 shrink-0 text-muted-foreground" aria-hidden />
               Payment provider not configured
             </p>
+            {/* The env vars that fix this (RAZORPAY_KEY_ID on the backend,
+                NEXT_PUBLIC_RAZORPAY_KEY_ID here) are named in this comment and
+                not on the screen. A customer cannot act on a variable name,
+                and a checkout page reading like a stack trace is the single
+                loudest "this is unfinished" signal a product can send. */}
             <p className="text-body-sm text-muted-foreground">
-              Your tickets are reserved and the order was created — order{' '}
+              Your tickets are held and the order was created — reference{' '}
               <span className="font-mono text-caption text-foreground">
                 {active.payment_order_id}
               </span>
-              . Razorpay Checkout opens once a live key is set (
-              <span className="font-mono text-caption">RAZORPAY_KEY_ID</span> on the backend, or{' '}
-              <span className="font-mono text-caption">NEXT_PUBLIC_RAZORPAY_KEY_ID</span> here).
+              . Payments are temporarily unavailable, so this booking cannot be completed right
+              now.
             </p>
             <p className="text-caption text-muted-foreground">
-              Nothing is charged and no payment is simulated — a confirmation screen for money that
-              never moved is the one thing a checkout must never show.
+              Nothing has been charged. Your hold stays until it expires — try again shortly, or
+              contact support with the reference above.
             </p>
           </div>
         </Rise>

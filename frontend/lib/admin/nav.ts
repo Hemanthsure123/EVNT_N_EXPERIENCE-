@@ -1,14 +1,17 @@
 import {
   Activity,
   Building2,
-  Music4,
   CreditCard,
   History,
+  LayoutDashboard,
   LayoutTemplate,
   Megaphone,
-  LayoutDashboard,
+  MessageSquare,
+  Music4,
+  Receipt,
   ShieldCheck,
   Stamp,
+  Undo2,
   Users,
   Wallet,
   type LucideIcon,
@@ -25,7 +28,13 @@ import {
  * for things the platform cannot answer — an admin nav item leading to a
  * permanently empty screen teaches an operator to distrust the whole console.
  *
- * **Support is deliberately absent**, and it is the most tempting one to add.
+ * **Bookings** is the support desk, added because the single most common
+ * question support gets — "I paid but have no ticket" — could not be answered
+ * from the product at all: `GET /bookings/{id}` is scoped to the booking's own
+ * owner, so an operator could not open one even holding the id.
+ *
+ * **Support (a ticketing/conversation system) is still deliberately absent**,
+ * and it is the most tempting one to add.
  * There is no ticket model, no conversation, no assignment and no priority —
  * a Support section could only ever show an empty list and a "New ticket"
  * button that writes nowhere, while implying to every operator that customer
@@ -62,15 +71,26 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   },
   {
     href: '/admin/moderation',
-    label: 'Moderation',
+    // "Moderation" named the ACTION, not the contents. The screen already
+    // carries every event on the platform across its status tabs — pending,
+    // approved, sent back, archived — so an operator looking for a specific
+    // event had no reason to think it lived under a word that means "review
+    // queue". Approving is one of the things you do here; it is not what this
+    // is.
+    label: 'All events',
     icon: Stamp,
-    hint: 'Approve or send back events awaiting review',
+    hint: 'Every event on the platform — review, approve, send back or remove',
   },
   {
-    href: '/admin/performers',
-    label: 'Performers',
+    // The hire desk. This REPLACED a performer-moderation queue, and the
+    // difference is the whole product change: there is no marketplace to
+    // moderate any more. Somebody wanting a band sends what they need and an
+    // operator gets back to them — this is where that lands, and it is the
+    // only place it lands, because nothing is matched automatically.
+    href: '/admin/enquiries',
+    label: 'Hire enquiries',
     icon: Music4,
-    hint: 'Approve, send back and feature marketplace acts',
+    hint: 'People asking to hire an act — read it, call them, close it',
   },
   {
     href: '/admin/verifications',
@@ -91,10 +111,28 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     hint: 'Accounts, roles, and suspension',
   },
   {
+    href: '/admin/bookings',
+    label: 'Bookings',
+    icon: Receipt,
+    hint: 'Find a booking by email, reference or event — the support desk',
+  },
+  {
     href: '/admin/payments',
     label: 'Payments',
     icon: CreditCard,
     hint: 'Every transaction and refund on the platform',
+  },
+  {
+    href: '/admin/refund-requests',
+    label: 'Refund requests',
+    icon: Undo2,
+    hint: 'Customers asking for their money back — approve or decline',
+  },
+  {
+    href: '/admin/support',
+    label: 'Support',
+    icon: MessageSquare,
+    hint: 'Customer queries addressed to the platform',
   },
   {
     href: '/admin/settlements',

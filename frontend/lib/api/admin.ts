@@ -53,7 +53,19 @@ export type ActivityEntry = {
  */
 export type HealthStatus = 'ok' | 'degraded' | 'unknown';
 export type HealthCheck = { name: string; status: HealthStatus; detail: string };
-export type AdminHealth = { status: 'ok' | 'degraded'; checks: HealthCheck[] };
+export type AdminHealth = {
+  status: 'ok' | 'degraded';
+  checks: HealthCheck[];
+  /**
+   * Whether vendors were actually CONTACTED for this response.
+   *
+   * The UI renders `unknown` differently depending on it: shallow means
+   * "we did not check", deep means "this adapter cannot be probed without
+   * a side effect". Collapsing the two is how a grey tile stops meaning
+   * anything.
+   */
+  deep: boolean;
+};
 
 export type AdminOrganization = {
   id: string;
@@ -77,6 +89,27 @@ export type AdminUser = {
    * suspended user cannot sign in at all.
    */
   is_active: boolean;
+  /**
+   * Whether the address has been PROVEN.
+   *
+   * A separate fact from `is_active`, and the console needs both: an account
+   * can be blocked because an operator suspended it, or because nobody ever
+   * clicked the code — two different situations with two different fixes, and
+   * one flag could not tell them apart.
+   */
+  email_verified: boolean;
+  /**
+   * The platform's PRIMARY account.
+   *
+   * Its operator role cannot be removed by anybody, including itself. The
+   * self-demotion guard stops you locking yourself out; this stops the case
+   * that loses a whole platform — a newly promoted operator demoting the
+   * founding account, after which restoring access needs a database shell.
+   *
+   * The console reads it to leave that row's role control out entirely. A
+   * disabled button would be a control whose only outcome is a 409.
+   */
+  is_superuser: boolean;
   date_joined: string;
 };
 
@@ -122,11 +155,26 @@ export const fetchActivity = (limit = 20) =>
 
 export const fetchHealth = () => api.get<AdminHealth>('/admin/health');
 
+/**
+ * A date window on a console list.
+ *
+ * SERVER-SIDE, always. Every list here is cursor-paginated, so filtering a
+ * window in the browser means paging through the whole platform to find the
+ * rows inside it — and is simply wrong wherever a page boundary falls in the
+ * middle of the range.
+ *
+ * Send `toISOString()` (a `Z` suffix). An unencoded `+05:30` arrives as a
+ * space and the server repairs it, but only because that slip is so common.
+ */
+export type DateWindow = { created_after?: string; created_before?: string };
+
 export const fetchAdminOrganizations = (
-  params: { verified_level?: string; cursor?: string } = {},
+  params: { verified_level?: string; q?: string; cursor?: string } & DateWindow = {},
 ) => api.get<Paginated<AdminOrganization>>(`/admin/organizations${query(params)}`);
 
-export const fetchAdminUsers = (params: { q?: string; role?: string; cursor?: string } = {}) =>
+export const fetchAdminUsers = (
+  params: { q?: string; role?: string; cursor?: string } & DateWindow = {},
+) =>
   api.get<Paginated<AdminUser>>(`/admin/users${query(params)}`);
 
 export const fetchAdminSettlements = (params: { status?: string; cursor?: string } = {}) =>
@@ -201,7 +249,26 @@ export type ModerationEntry = {
  */
 export type ModerationStatus = 'pending_review' | 'live' | 'rejected' | 'archived';
 
-export const fetchModerationQueue = (params: { status?: ModerationStatus; cursor?: string } = {}) =>
+/**
+ * The All-events queue.
+ *
+ * `q` is a SUBSTRING match on title, venue, city and organiser name — not the
+ * full-text index the public browse uses. An operator has been handed a name
+ * and is looking for that row, usually a fragment of it; a stemmed tsquery
+ * misses "Winter Com" and matches things nobody asked about.
+ *
+ * The window is on `starts_at`, because the question is "what runs that
+ * weekend", not "what was typed that week".
+ */
+export const fetchModerationQueue = (
+  params: {
+    status?: ModerationStatus;
+    q?: string;
+    starts_after?: string;
+    starts_before?: string;
+    cursor?: string;
+  } = {},
+) =>
   api.get<Paginated<ModerationEntry>>(`/admin/events/pending${query(params)}`);
 
 /** Approve, or reject with a reason the organizer can act on (required). */
@@ -261,6 +328,29 @@ export const setUserSuspended = (userId: string, suspended: boolean, reason = ''
     reason,
   });
 
+/**
+ * Withdraw the platform's trust in a PROVEN address.
+ *
+ * A different decision from suspension, which is why it is a different
+ * endpoint: suspension says "this person is out of service", revocation says
+ * "the address they proved is no longer trusted". The second implies the first
+ * — the server clears `email_verified` AND `is_active` in one statement,
+ * because clearing the flag alone would let them request a fresh code and be
+ * back inside a minute, having re-proven exactly what was just rejected.
+ *
+ * NOT UNDOABLE from here, and deliberately so. The console offers undo for
+ * reversible writes; the way back from this one is reinstating the account and
+ * having the person verify their address again, which is the whole point of
+ * having withdrawn the trust. It gets a confirmation, not an undo toast.
+ *
+ * Refused with `409 cannot_suspend` for your own account and for another
+ * operator's, for the same reasons suspension is.
+ */
+export const revokeUserVerification = (userId: string, reason = '') =>
+  api.delete<AdminUser>(`/admin/users/${encodeURIComponent(userId)}/verification`, {
+    body: { reason },
+  });
+
 /* ---------------------------------------------------------------- payments */
 
 export type AdminPayment = {
@@ -279,7 +369,9 @@ export type AdminPayment = {
   event_title: string;
 };
 
-export const fetchAdminPayments = (params: { status?: string; q?: string; cursor?: string } = {}) =>
+export const fetchAdminPayments = (
+  params: { status?: string; q?: string; cursor?: string } & DateWindow = {},
+) =>
   api.get<Paginated<AdminPayment>>(`/admin/payments${query(params)}`);
 
 /**
@@ -306,7 +398,7 @@ export type AdminRefund = {
   event_title: string;
 };
 
-export const fetchAdminRefunds = (params: { q?: string; cursor?: string } = {}) =>
+export const fetchAdminRefunds = (params: { q?: string; cursor?: string } & DateWindow = {}) =>
   api.get<Paginated<AdminRefund>>(`/admin/refunds${query(params)}`);
 
 /* ─────────────────────── one event, as an operator ─────────────────────── */
@@ -350,11 +442,211 @@ export const updateAdminEvent = (
   );
 
 /**
- * Remove an event. SOFT, and the server refuses when anybody holds a place —
- * `Booking.event` is `PROTECT`, so an event somebody bought a ticket to cannot
- * be made to vanish without stranding that ticket. The reason is audited.
+ * Remove an event — in ANY state — and make good on it.
+ *
+ * ── IT NO LONGER REFUSES WHEN SOMEBODY HOLDS A TICKET ────────────────────
+ *
+ * It used to, and this comment used to say so. The refusal was well-reasoned
+ * and backwards: it blocked in exactly the cases an operator reaches for it (a
+ * fraudulent listing that has already sold), and left the dangerous half — the
+ * refunds — as a separate action somebody had to remember.
+ *
+ * The server now does the whole job in one operation: soft-delete, refund every
+ * paid booking, release every live hold, email the attendees and the organiser.
+ * So the two can never come apart.
+ *
+ * It answers with a SUMMARY rather than 204, because the click spends money —
+ * show the operator what it actually did. The reason is required and is shown
+ * to the organiser verbatim.
  */
+export type DeleteEventResult = {
+  event_id: string;
+  title: string;
+  refunds_enqueued: number;
+  holds_released: number;
+  attendees_notified: number;
+};
+
 export const deleteAdminEvent = (eventId: string, reason: string) =>
-  api.delete<void>(
+  api.delete<DeleteEventResult>(
     `/admin/events/${encodeURIComponent(eventId)}?reason=${encodeURIComponent(reason)}`,
   );
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ── THE SUPPORT DESK ──────────────────────────────────────────────────────
+ *
+ * "The customer says they paid but has no ticket" is the single most common
+ * support question a ticketing platform gets, and until `GET /admin/bookings`
+ * it could not be answered from the product at all: `GET /bookings/{id}` is
+ * scoped to the booking's own owner, so an operator could not open one even
+ * holding the id.
+ *
+ * The payment search partly covered it and structurally could not cover it
+ * fully — a booking that never reached payment has no `Payment` row to be
+ * found by, and that abandoned checkout is exactly what people phone about.
+ */
+
+export type AdminBooking = {
+  id: string;
+  status: 'reserved' | 'paid' | 'cancelled' | 'expired';
+  quantity: number;
+  /** The answer to "did my tickets get issued?", on the row rather than behind a click. */
+  tickets_issued: number;
+  total_amount_minor: number;
+  platform_fee_minor: number;
+  payment_ref: string;
+  payment_order_id: string;
+  hold_expires_at: string | null;
+  /**
+   * COMPUTED server-side from the pair, never stored. `reserved` alone does not
+   * tell an operator whether to wait or act — a hold past its expiry simply has
+   * not been swept yet.
+   */
+  is_expired_hold: boolean;
+  created_at: string;
+  customer_id: string;
+  customer_email: string;
+  customer_name: string;
+  event_id: string;
+  event_title: string;
+  event_starts_at: string;
+};
+
+export type AdminBookingTicket = {
+  id: string;
+  ticket_type_name: string;
+  status: 'active' | 'used' | 'void';
+  used_at: string | null;
+  gate: string | null;
+  attendee_name: string | null;
+  /**
+   * There is deliberately NO `qr_token` here, and the backend does not send
+   * one. The token is the credential that admits somebody; an operator needs
+   * to know tickets exist and whether they have been used, never the code
+   * itself. `POST /checkin/lookup` verifies a token the holder presents rather
+   * than handing one out.
+   */
+};
+
+export type AdminBookingDetail = AdminBooking & {
+  items: {
+    ticket_type_id: string;
+    ticket_type_name: string;
+    quantity: number;
+    unit_price_minor: number;
+  }[];
+  tickets: AdminBookingTicket[];
+  /** So "hold expired 4 minutes ago" is measured against the SERVER's clock. */
+  server_time: string;
+};
+
+/** One `q` across email, booking id (prefix), payment reference and event title. */
+export const fetchAdminBookings = (
+  params: { q?: string; status?: string; event_id?: string; cursor?: string } & DateWindow = {},
+) =>
+  api.get<Paginated<AdminBooking>>(`/admin/bookings${query(params)}`);
+
+export const fetchAdminBooking = (bookingId: string) =>
+  api.get<AdminBookingDetail>(`/admin/bookings/${encodeURIComponent(bookingId)}`);
+
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ── DEEP HEALTH ───────────────────────────────────────────────────────────
+ *
+ * Six of the eight tiles were permanently grey: the endpoint named WHICH
+ * adapter was configured and contacted none of them. `?deep=1` actually
+ * reaches the payment provider and the storage bucket and inspects the outbox.
+ *
+ * Opt-in and cached 60s server-side, so a console left open on a wall never
+ * becomes traffic against Razorpay. `deep` comes back on the response so the
+ * UI can say which kind of answer it is showing — without it, a shallow
+ * `unknown` tile and a deep one look identical.
+ */
+export const fetchHealthDeep = () => api.get<AdminHealth>('/admin/health?deep=1');
+
+/* ------------------------------------------------------------- hire desk */
+
+/**
+ * A hire enquiry, as the desk sees it.
+ *
+ * ── IT CARRIES THE CONTACT DETAILS, WHICH THE OLD PAYLOAD DID NOT ─────────
+ *
+ * This used to be a marketplace brief shown to performers, and a performer
+ * seeing a lead was deliberately shown the job and NOT the person — a
+ * customer's identity was not theirs to have until they were hired. The only
+ * reader now is an operator whose entire job is to get back to them, so
+ * withholding them would make the queue unworkable.
+ *
+ * `customer_email` is not a duplicate of `contact_email`. The account's
+ * address and the address they asked to be reached on are often different
+ * people: the bride's account, the planner's inbox.
+ */
+export type AdminEnquiry = {
+  id: string;
+  performer_type: string;
+  performer_type_display: string;
+  occasion: string;
+  occasion_display: string;
+  city: string;
+  event_date: string;
+  budget_min_minor: number;
+  budget_max_minor: number;
+  guests: number | null;
+  notes: string;
+  contact_name: string;
+  contact_phone: string;
+  contact_email: string;
+  customer_email: string;
+  status: EnquiryStatus;
+  status_display: string;
+  /** Written for the NEXT operator, never shown to the customer. */
+  admin_note: string;
+  handled_by_email: string;
+  created_at: string;
+};
+
+/** The four an operator can move between. `cancelled` is absent because it is
+ *  the CUSTOMER's word for their own request — an operator marking somebody's
+ *  enquiry withdrawn on their behalf is a different act from closing it. */
+export type EnquiryStatus =
+  | 'new'
+  | 'in_progress'
+  | 'closed_won'
+  | 'closed_lost'
+  | 'cancelled';
+
+export const fetchAdminEnquiries = (
+  params: { status?: string; q?: string; cursor?: string } = {},
+) => api.get<Paginated<AdminEnquiry>>(`/admin/enquiries${query(params)}`);
+
+export const decideEnquiry = (
+  enquiryId: string,
+  input: { status: EnquiryStatus; admin_note?: string },
+) => api.patch<AdminEnquiry>(`/admin/enquiries/${encodeURIComponent(enquiryId)}`, input);
+
+/**
+ * Grant or remove the operator role.
+ *
+ * ── ONE REFUSAL, AND IT IS THE IMPORTANT ONE ──────────────────────────────
+ *
+ * An operator cannot remove their OWN role: the console is the only place this
+ * lives, so somebody who demoted themselves would lose the screen that could
+ * put it back. Demoting somebody ELSE is allowed, and is the action
+ * `setUserSuspended` already points at when it refuses to suspend a staff
+ * member and says "remove their operator role first" — until this existed,
+ * that instruction named an endpoint that was not there.
+ *
+ * Granting requires a VERIFIED, active address. An operator can suspend
+ * accounts, release payouts and delete events, and handing that to an address
+ * nobody proved belongs to its holder is what verification exists to prevent.
+ * Both refusals come back as `409 cannot_suspend` with a message written to be
+ * shown.
+ */
+export const setUserOperator = (userId: string, isStaff: boolean, reason = '') =>
+  api.post<AdminUser>(`/admin/users/${encodeURIComponent(userId)}/role`, {
+    is_staff: isStaff,
+    reason,
+  });

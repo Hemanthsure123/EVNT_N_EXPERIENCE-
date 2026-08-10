@@ -23,8 +23,30 @@ urlpatterns = [
         api.UserSuspensionView.as_view(),
         name="console-user-suspension",
     ),
+    path("admin/users/<uuid:user_id>/role", api.UserRoleView.as_view(), name="console-user-role"),
+    path("admin/enquiries", api.EnquiryListView.as_view(), name="console-enquiries"),
+    path(
+        "admin/enquiries/<uuid:enquiry_id>",
+        api.EnquiryDecisionView.as_view(),
+        name="console-enquiry-decision",
+    ),
+    path(
+        # DELETE on the verification, not POST on a "revoke" — the operator is
+        # removing something that exists, and the method says so.
+        "admin/users/<uuid:user_id>/verification",
+        api.UserVerificationView.as_view(),
+        name="console-user-verification",
+    ),
     path("admin/payments", api.PaymentListView.as_view(), name="console-payments"),
     path("admin/refunds", api.RefundListView.as_view(), name="console-refunds"),
+    # The support desk. `admin/bookings` before `admin/bookings/<uuid>` for
+    # readability only — the converter would not match the bare path anyway.
+    path("admin/bookings", api.BookingListView.as_view(), name="console-bookings"),
+    path(
+        "admin/bookings/<uuid:booking_id>",
+        api.BookingDetailView.as_view(),
+        name="console-booking-detail",
+    ),
     path("admin/settlements", api.SettlementListView.as_view(), name="console-settlements"),
     path(
         "admin/verifications",

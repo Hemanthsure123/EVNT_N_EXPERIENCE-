@@ -44,7 +44,24 @@ class ConsoleModerationHistoryPagination(CursorPagination):
     ordering = "-created_at"
 
 
+class ConsoleEnquiryPagination(CursorPagination):
+    """FIFO, matching `list_for_operator`'s ordering exactly.
+
+    Cursor pagination does NOT validate that its `ordering` matches the
+    queryset's — given a mismatch it silently returns wrong pages rather than
+    failing, which is the trap the moderation queue's second paginator class
+    exists for. Oldest first because this is a QUEUE: an operator working
+    top-down should be clearing the longest wait.
+    """
+
+    ordering = "created_at"
+
+
 class ConsolePaymentPagination(CursorPagination):
+    ordering = "-created_at"
+
+
+class ConsoleBookingPagination(CursorPagination):
     ordering = "-created_at"
 
 

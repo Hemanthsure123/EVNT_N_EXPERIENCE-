@@ -69,7 +69,16 @@ services:
       # No HTTP surface, so liveness is "the process is still there". A
       # crashed loop exits, `restart: unless-stopped` brings it back, and this
       # catches the wedged-but-alive case for an operator reading `ps`.
-      test: ["CMD-SHELL", "pgrep -f run_scheduled_jobs > /dev/null || exit 1"]
+      #
+      # READS /proc/1 RATHER THAN CALLING pgrep. `pgrep` lives in procps, which
+      # the python slim image does not ship — so this check exited 127 on every
+      # run and BOTH background processes reported `unhealthy` forever while
+      # doing their jobs perfectly. A health signal that is red because the
+      # checker is missing is worse than no health signal: it trains an
+      # operator to ignore the column that tells them inventory stopped being
+      # released. PID 1 is the command itself in a container, so this is also
+      # stricter than pgrep, which would match any process on the box.
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q run_scheduled_jobs"]
       interval: 60s
       timeout: 5s
       start_period: 15s
@@ -89,7 +98,9 @@ services:
     deploy:
       replicas: 1
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f config.worker > /dev/null || exit 1"]
+      # See the scheduler's healthcheck above for why this reads /proc/1
+      # instead of calling pgrep.
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q config.worker"]
       interval: 60s
       timeout: 5s
       start_period: 15s

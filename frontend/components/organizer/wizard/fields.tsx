@@ -323,22 +323,19 @@ export function StepHeader({ title, blurb }: { title: string; blurb: string }) {
   );
 }
 
-/**
- * What a step deliberately does not collect, and why.
+/*
+ * `NotStored` lived here: a dashed panel each wizard step rendered at its
+ * foot, listing the columns the backend did not have and citing backlog items.
  *
- * Rendered as a quiet recessed note rather than as disabled inputs: a greyed-out
- * "Category" field reads as "coming soon, keep checking", whereas a sentence
- * naming the missing column reads as a decision somebody made. `bg-sunken` is
- * the one value step DOWN from the canvas in light and the darkest rung in
- * dark, so in both themes it reads as an aside rather than as content.
+ * It was built on a principle this codebase still holds — never draw a control
+ * that discards what somebody types — but it applied that principle to the
+ * wrong audience. The place to record why a field is absent is the code, not a
+ * panel on the screen of somebody trying to publish an event. A tool that
+ * narrates its own gaps reads as unfinished, and the notes rot: three of the
+ * six were describing columns that had since been built.
+ *
+ * Absent is absent. If a field is missing, it is missing quietly.
  */
-export function NotStored({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded-xl border border-dashed border-border bg-sunken p-card text-caption text-muted-foreground">
-      {children}
-    </p>
-  );
-}
 
 /** The save engine's health, as a server-backed step needs to know it. */
 export type DraftSave = { state: SaveState; error: string | null };

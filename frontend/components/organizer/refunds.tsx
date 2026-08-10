@@ -125,7 +125,7 @@ export function Refunds() {
         <EmptyState
           icon={Undo2}
           title={values.event_id ? 'No refunds on this event' : 'No refunds'}
-          body="Refunds appear here once the money has actually gone back — the record is written after the provider confirms, so nothing on this page is in flight."
+          body="Refunds appear here once the provider confirms the money has gone back."
         />
       ) : (
         <DataGrid
@@ -150,9 +150,7 @@ export function Refunds() {
       ) : null}
 
       <p className="border-t border-border px-card py-stack text-caption text-muted-foreground">
-        A refund also voids the tickets it covers, in the same transaction — so a refunded ticket
-        can never be admitted at the gate, even one scanned a moment earlier stays used rather than
-        being reverted.
+        A refund voids the tickets it covers, so they can no longer be admitted at the gate.
       </p>
     </TableCard>
   );

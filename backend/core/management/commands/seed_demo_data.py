@@ -228,6 +228,12 @@ class Command(BaseCommand):
                 defaults={"full_name": "Curatix Live", "email_verified": True},
             )
             organizer.email_verified = True
+            # `is_organizer` is a stored column, not a property derived from
+            # owning an Organization — so seeding the org without it left an
+            # account that owns twelve events while the header offered no way
+            # to reach them. The seeder has to set every flag the real
+            # onboarding flow would.
+            organizer.is_organizer = True
             organizer.set_password("SeedOrganizer2026!")
             organizer.save()
 

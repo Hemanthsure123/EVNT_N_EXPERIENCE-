@@ -223,3 +223,5 @@ frontend/            placeholder, see frontend/README.md
 ```
 #   E V N T _ N _ E X P E R I E N C E -  
  
+#   C U R A T I X  
+ 

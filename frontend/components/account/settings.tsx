@@ -19,11 +19,11 @@ import { useTheme, type Theme } from '@/lib/theme/theme-provider';
 import { usePush } from '@/lib/push/use-push';
 import { useCookieConsent, type ConsentPreference } from '@/lib/consent/use-cookie-consent';
 import { GoogleCalendarCard } from '@/components/calendar/google-calendar-card';
-import { AvatarUpload } from '@/components/account/avatar-upload';
+import { ProfileEditor } from '@/components/account/profile-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
-import { SettingsCard, SettingsNote, SettingsRow, SettingsValue } from './settings-primitives';
+import { SettingsCard, SettingsRow, SettingsValue } from './settings-primitives';
 import {
   SETTINGS_PATH,
   SETTINGS_SECTIONS,
@@ -291,70 +291,17 @@ function Segmented<T extends string>({
 
 /* --------------------------------------------------------------- 1 · profile */
 
+/**
+ * The profile.
+ *
+ * Delegated wholesale to `ProfileEditor`, which is the same component the
+ * account overview and the welcome flow's fields are built from. This section
+ * used to render name and email as plain text with a note explaining that
+ * `apps/accounts` had no `PATCH /auth/me` to write them — the right call at the
+ * time, and the endpoint exists now, so the control does.
+ */
 function ProfileSection() {
-  const section = findSection('profile');
-  const { user } = useAuth();
-
-  // `email_verified` is a real column, and it is the ONLY verification claim
-  // this page makes. Registration issues no session until the address is
-  // proven, so a signed-in account is normally verified — printing the column
-  // rather than assuming it is what keeps that true if it ever is not.
-  const verified = Boolean(user?.email_verified);
-
-  return (
-    <>
-      <SettingsCard id="profile" title={section.label} description={section.description}>
-        <SettingsRow label="Name" hint="Shown on your bookings and beside your picture.">
-          <SettingsValue>{user?.full_name || 'Not set'}</SettingsValue>
-        </SettingsRow>
-
-        <SettingsRow
-          label="Email address"
-          hint={
-            verified
-              ? 'Confirmed with a code when you signed up. Tickets go here.'
-              : 'Not confirmed yet. Tickets are still sent here.'
-          }
-        >
-          <SettingsValue>{user?.email}</SettingsValue>
-          <Badge variant={verified ? 'success' : 'warning'}>
-            {verified ? (
-              <>
-                <Check className="size-3.5" aria-hidden />
-                Verified
-              </>
-            ) : (
-              'Not verified'
-            )}
-          </Badge>
-        </SettingsRow>
-
-        <SettingsRow label="Member since" hint="The day this account was created.">
-          <SettingsValue className="tabular-nums">
-            {user?.date_joined
-              ? new Date(user.date_joined).toLocaleDateString('en-IN', {
-                  month: 'long',
-                  year: 'numeric',
-                })
-              : '—'}
-          </SettingsValue>
-        </SettingsRow>
-
-        <SettingsNote>
-          Your name and email are shown, not edited: <code>apps/accounts</code> exposes register,
-          login, refresh, logout and me — there is no <code>PATCH /auth/me</code> to write either
-          one, and no phone or city column to fill in. A disabled input holding your real address
-          would read as &ldquo;editing is temporarily broken&rdquo;; plain text reads as what it is.
-          BACKLOG item 18 names the endpoint.
-        </SettingsNote>
-      </SettingsCard>
-
-      {/* Below the facts, because it is the one thing in this section that
-          writes: both avatar endpoints answer with the whole profile, so the
-          picture changing here is proof it changed on the account. */}
-      <AvatarUpload />
-    </>
-  );
+  return <ProfileEditor />;
 }
 
 /* ------------------------------------------------------------ 2 · appearance */
@@ -371,23 +318,9 @@ function AppearanceSection() {
 
   return (
     <SettingsCard id="appearance" title={section.label} description={section.description}>
-      <SettingsRow label="Theme" hint="Writes as you press it — there is nothing to save." stacked>
+      <SettingsRow label="Theme" stacked>
         <Segmented<Theme> label="Colour theme" options={THEMES} value={theme} onChange={setTheme} />
-      </SettingsRow>
-
-      <SettingsRow
-        label="Reduced motion"
-        hint="Transitions and animations follow your device's accessibility setting. There is no switch here because overriding your own system preference from one website is not ours to do."
-      >
-        <SettingsValue className="text-muted-foreground">Follows your device</SettingsValue>
-      </SettingsRow>
-
-      <SettingsNote>
-        The theme is stored in THIS browser, not on your account — there is no column for it, so a
-        new device starts on System and follows whatever it prefers. Both themes are fully
-        supported; neither is an afterthought.
-      </SettingsNote>
-    </SettingsCard>
+      </SettingsRow>    </SettingsCard>
   );
 }
 
@@ -402,18 +335,18 @@ function NotificationsSection() {
 
       <SettingsRow
         label="Ticket emails and SMS"
-        hint="A booking confirmation with your QR code, a refund confirmation, and one reminder before an event you hold tickets for. Nothing else — there is no marketing list."
+        hint="Booking confirmations, refunds, and a reminder before an event you hold tickets for."
       >
         <SettingsValue className="text-muted-foreground">Always sent</SettingsValue>
       </SettingsRow>
 
-      <SettingsNote>
-        There is deliberately no switch beside that row. The account record holds no notification
-        preference, so a toggle here would move, look saved, and change nothing that gets sent — and
-        somebody who trusted it would stop expecting the email that carries their ticket.
-        Per-message opt-out needs a preference model on the account (BACKLOG); until it exists this
-        page says what happens instead of pretending to control it.
-      </SettingsNote>
+      {/* No switch, and no note explaining why there is no switch.
+          There is nowhere to store a preference, so a toggle would move, look
+          saved, and change nothing that gets sent — and somebody who trusted
+          it would stop expecting the email carrying their ticket. That is a
+          real reason to omit the control. It is not a reason to write three
+          sentences about our data model on a settings page: the row above
+          already says exactly what is sent, which is what a reader came for. */}
     </SettingsCard>
   );
 }
@@ -431,16 +364,16 @@ function PushRow() {
   const { state, busy, error, enable, disable } = usePush();
 
   const hint: Record<typeof state, string> = {
-    loading: 'Checking what this browser and this deployment can do.',
+    loading: 'Checking what is available here.',
     unavailable:
       'This deployment has no push keys configured, so nothing can be delivered to a browser. There is nothing to switch on rather than a control that would fail.',
-    unsupported: 'This browser has no push support, so there is nothing to switch on.',
+    unsupported: 'Reminders are not available here.',
     insecure: 'Push notifications need a secure (https) connection, and this page is not on one.',
     'signed-out': 'A subscription belongs to an account, so this needs you signed in.',
     blocked:
-      'Notifications are blocked for this site in your browser settings. A site cannot ask twice — allowing them there is the only way back.',
-    off: 'One notification the day before an event you hold tickets for. No marketing, and it applies to this browser only.',
-    on: 'This browser is subscribed. You will get one notification the day before an event you hold tickets for.',
+      'Notifications are blocked for this site. Allow them in your browser settings to switch them back on.',
+    off: 'One notification the day before an event you hold tickets for.',
+    on: 'Reminders are on for this account.',
   };
 
   return (
@@ -473,7 +406,7 @@ function PushRow() {
           {state === 'loading'
             ? 'Checking…'
             : state === 'blocked'
-              ? 'Blocked in this browser'
+              ? 'Blocked'
               : 'Not available here'}
         </SettingsValue>
       )}
@@ -494,19 +427,15 @@ const CONSENT_OPTIONS: readonly { value: ConsentPreference; label: string }[] = 
   { value: 'all', label: 'Accept all' },
 ];
 
-/**
- * What this browser keeps. Enumerated rather than summarised, because "we store
- * some preferences locally" is the sentence a privacy page uses when it does not
- * want to be checked.
+/*
+ * A `DEVICE_STORAGE` list was rendered here — six bullets enumerating what this
+ * browser keeps, under a heading in the middle of the settings screen.
+ *
+ * It is a privacy DISCLOSURE, and it already exists in full on /privacy and
+ * /cookies where somebody goes looking for it. On a settings page it is an
+ * inventory beside controls, and there is nothing to do with it: every row
+ * around it is a switch, and this one was a paragraph.
  */
-const DEVICE_STORAGE = [
-  'Your theme choice',
-  'The city you picked',
-  'Events you saved while browsing',
-  'Whether results show as a grid or a list',
-  'Your answer to the cookie banner',
-  'Your sign-in tokens, until you sign out',
-];
 
 function PrivacySection() {
   const section = findSection('privacy');
@@ -516,7 +445,6 @@ function PrivacySection() {
     <SettingsCard id="privacy" title={section.label} description={section.description}>
       <SettingsRow
         label="Analytics and marketing storage"
-        hint="Your answer to the cookie banner, changeable here. It is honoured by being obeyed in advance: this app stores nothing for analytics or marketing today, and the flag is what an analytics module would have to read on the day there is one."
         stacked
       >
         <Segmented<ConsentPreference>
@@ -532,7 +460,6 @@ function PrivacySection() {
 
       <SettingsRow
         label="Saved events"
-        hint="Kept in this browser as you browse, and mirrored onto your account while you are signed in, so they follow you to another device."
       >
         <Link
           href="/account/saved"
@@ -543,44 +470,35 @@ function PrivacySection() {
         </Link>
       </SettingsRow>
 
-      <SettingsRow
-        label="Kept in this browser"
-        hint="All first-party, all in this browser's own storage, and all removed by clearing this site's data in your browser settings."
-        stacked
-      >
-        <ul className="flex list-disc flex-col gap-1 pl-4 text-caption text-muted-foreground">
-          {DEVICE_STORAGE.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </SettingsRow>
-
-      <SettingsNote>
-        Downloading a copy of your data, and deleting the account, are not offered here because
-        neither exists: an export needs a job that assembles bookings, tickets and payments, and a
-        deletion needs a retention policy first — a booking, a ticket and a settlement are financial
-        records that other rows point at, so &ldquo;delete everything&rdquo; is a policy decision
-        before it is a button.
-      </SettingsNote>
+      {/* No note about data export or account deletion.
+          It said, to a customer, that an export "needs a job that assembles
+          bookings, tickets and payments" and that deletion "needs a retention
+          policy first". Both sentences are true and both are OURS — a reader
+          came here to find out what is kept about them, and got an account of
+          our backlog instead.
+          The rule this establishes for every screen: a feature that does not
+          exist is not mentioned. It is not a disabled button, not a "coming
+          soon", and not an explanation of the work it would take. The
+          reasoning belongs in the code, where it is, at length. */}
     </SettingsCard>
   );
 }
 
 /* -------------------------------------------------------------- 5 · account */
 
-/**
- * The security items are the ones worth building first, and they are ordered
- * that way: somebody who cannot change their password after a breach has no
- * recourse at all.
+/*
+ * There was a `NOT_BUILT` list here, rendered on the page: six rows naming an
+ * unbuilt feature and the endpoint it would need — "Change password — needs
+ * POST /auth/password".
+ *
+ * It was written as honesty and it read as a defect report. Nobody arrives at
+ * their account settings wanting our issue tracker, and a customer cannot act
+ * on "needs a TOTP enrolment flow". What they take from it is that the product
+ * is unfinished, which is a conclusion the page volunteered.
+ *
+ * The list itself was useful — to us. It lives in `frontend/BACKLOG.md`, which
+ * is where a backlog goes.
  */
-const NOT_BUILT: { label: string; needs: string }[] = [
-  { label: 'Change password', needs: 'POST /auth/password' },
-  { label: 'Update email or phone', needs: 'PATCH /auth/me (BACKLOG 18)' },
-  { label: 'Active sessions, and sign out everywhere', needs: 'a session registry' },
-  { label: 'Two-factor authentication', needs: 'a TOTP enrolment flow' },
-  { label: 'Delete account', needs: 'a deletion flow with a retention policy' },
-  { label: 'Google and Apple sign-in', needs: 'the OAuth endpoints in BACKLOG 19' },
-];
 
 function AccountSection() {
   const section = findSection('account');
@@ -592,7 +510,7 @@ function AccountSection() {
       <SettingsCard id="account" title={section.label} description={section.description}>
         <SettingsRow
           label="Sign out"
-          hint="Signs out this browser. Signing out everywhere needs a session registry, which does not exist yet."
+          hint="Signs you out on this device."
         >
           {/* Deliberately the QUIET pill. Leaving is not this page's primary
               action, and a near-black "Sign out" would be the loudest thing on
@@ -607,23 +525,6 @@ function AccountSection() {
           </Button>
         </SettingsRow>
 
-        <SettingsRow
-          label="Not available yet"
-          hint="Named with what each one needs, rather than shown as disabled buttons — a greyed-out control reads as “coming soon”, and none of these is one deploy away."
-          stacked
-        >
-          <ul className="flex flex-col gap-1.5">
-            {NOT_BUILT.map((item) => (
-              <li
-                key={item.label}
-                className="flex flex-wrap items-baseline gap-x-2 text-caption text-muted-foreground"
-              >
-                <span className="text-body-sm font-medium text-foreground">{item.label}</span>
-                <span>— needs {item.needs}</span>
-              </li>
-            ))}
-          </ul>
-        </SettingsRow>
       </SettingsCard>
 
       {/* AFTER the card, for two reasons. Its heading is an `h3`, so putting it

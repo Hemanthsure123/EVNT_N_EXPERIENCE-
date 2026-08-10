@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import dynamic from 'next/dynamic';
+import { POPULAR_SEARCHES, type PopularSearch } from '@/lib/search/popular-searches';
 
 /**
  * One search overlay for the whole app — the header trigger, the hero trigger
@@ -43,21 +44,56 @@ type SearchContextValue = {
    * in step.
    */
   anchor: HTMLElement | null;
+  /**
+   * The operator's suggested searches (`cms.PopularSearch`), read ONCE in the
+   * site layout and shared.
+   *
+   * They used to be fetched by the hero for its own bar, while the panel fell
+   * back to a bundled constant — one list rendered in two places that agreed
+   * only when both happened to be the default. The bar and the panel are now
+   * the same list by construction, which is what makes the panel able to open
+   * on whichever term the bar was showing.
+   */
+  terms: PopularSearch[];
   openSearch: (initialQuery?: string, anchor?: HTMLElement | null) => void;
   closeSearch: () => void;
+  /**
+   * Handlers a trigger spreads onto itself. Use this, never a bare `onClick`.
+   *
+   * See `useSearchTrigger` for why the decision has to happen in the CAPTURE
+   * phase.
+   */
+  triggerProps: (anchor: () => HTMLElement | null) => {
+    onPointerDownCapture: (event: React.PointerEvent) => void;
+    onClick: (event: React.MouseEvent) => void;
+  };
   /** Warm the overlay chunk before it's needed (pointer/focus on a trigger). */
   preload: () => void;
 };
 
 const SearchContext = React.createContext<SearchContextValue | null>(null);
 
-export function SearchProvider({ children }: { children: React.ReactNode }) {
+export function SearchProvider({
+  children,
+  terms,
+}: {
+  children: React.ReactNode;
+  /** Server-fetched in the site layout. Falls back to the bundled list. */
+  terms?: PopularSearch[];
+}) {
   const [open, setOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
   const [initialQuery, setInitialQuery] = React.useState('');
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
 
   const preload = React.useCallback(() => setMounted(true), []);
+
+  // Read by `toggleSearch`, which must see the CURRENT values without taking
+  // them as dependencies — see the note there.
+  const openRef = React.useRef(open);
+  const anchorRef = React.useRef(anchor);
+  openRef.current = open;
+  anchorRef.current = anchor;
 
   const openSearch = React.useCallback((query = '', anchorElement: HTMLElement | null = null) => {
     setInitialQuery(query);
@@ -68,46 +104,81 @@ export function SearchProvider({ children }: { children: React.ReactNode }) {
 
   const closeSearch = React.useCallback(() => setOpen(false), []);
 
-  // Warm the overlay once the main thread is free.
-  React.useEffect(() => {
-    const idle = window.requestIdleCallback;
-    if (idle) {
-      const handle = idle(() => setMounted(true), { timeout: 3000 });
-      return () => window.cancelIdleCallback?.(handle);
-    }
-    const timer = window.setTimeout(() => setMounted(true), 1500);
-    return () => window.clearTimeout(timer);
-  }, []);
+  /**
+   * Set when a trigger press has ALREADY closed the panel, so the `click` that
+   * follows the same press must do nothing.
+   */
+  const handledByPointerDown = React.useRef(false);
 
-  React.useEffect(() => {
-    // `/` is the discoverable shortcut (it's the one shown in the header);
-    // ⌘K/Ctrl+K stays because it's what people reach for reflexively. `/` must
-    // never fire while the user is typing into something.
-    const isTyping = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return (
-        target.isContentEditable ||
-        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
-        target.getAttribute('role') === 'combobox'
-      );
-    };
+  /**
+   * ── WHY THE DECISION HAPPENS ON POINTERDOWN, IN THE CAPTURE PHASE ────────
+   *
+   * Measured ordering for one press on an open panel's own trigger:
+   *
+   *     pointerdown (capture)  ->  pointerdown (bubble)  ->  click
+   *                                 ^ Radix dismisses here
+   *                                                          ^ trigger ran here
+   *
+   * So a trigger that toggles on `click` always reads state Radix has already
+   * changed: it sees "closed" and opens again. The panel blinks shut and back,
+   * which is precisely the reported bug.
+   *
+   * An earlier attempt suppressed the dismissal instead, via
+   * `onPointerDownOutside` + `preventDefault`. It did not hold — Dialog has
+   * more than one path to dismissal and only one of them was guarded — and
+   * more importantly it was the wrong SHAPE: it made correctness depend on
+   * winning a race inside a library's internals, where a version bump can
+   * change the order without changing our code.
+   *
+   * Capture runs BEFORE any of it, on the way down. Deciding there means the
+   * trigger reads the true state, acts once, and marks the press handled. The
+   * dismissal that follows closes an already-closed panel, which is a no-op —
+   * so the two agree no matter which order they run in. That is the property
+   * worth having, not the guard.
+   */
+  const triggerProps = React.useCallback(
+    (anchor: () => HTMLElement | null) => ({
+      onPointerDownCapture: () => {
+        const element = anchor();
+        if (openRef.current && anchorRef.current === element) {
+          setOpen(false);
+          handledByPointerDown.current = true;
+        }
+      },
+      onClick: () => {
+        if (handledByPointerDown.current) {
+          handledByPointerDown.current = false;
+          return;
+        }
+        openSearch('', anchor());
+      },
+    }),
+    [openSearch],
+  );
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isPaletteShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
-      const isSlash = event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey;
-      if (!isPaletteShortcut && !isSlash) return;
-      if (isSlash && isTyping(event.target)) return;
-      event.preventDefault();
-      // No anchor: a keyboard invocation opens the centred palette.
-      openSearch();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [openSearch]);
+  const resolvedTerms = terms?.length ? terms : POPULAR_SEARCHES;
 
   const value = React.useMemo<SearchContextValue>(
-    () => ({ open, initialQuery, anchor, openSearch, closeSearch, preload }),
-    [open, initialQuery, anchor, openSearch, closeSearch, preload],
+    () => ({
+      open,
+      initialQuery,
+      anchor,
+      terms: resolvedTerms,
+      openSearch,
+      triggerProps,
+      closeSearch,
+      preload,
+    }),
+    [
+      open,
+      initialQuery,
+      anchor,
+      resolvedTerms,
+      openSearch,
+      triggerProps,
+      closeSearch,
+      preload,
+    ],
   );
 
   return (

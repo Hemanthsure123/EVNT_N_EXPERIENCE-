@@ -10,7 +10,7 @@ import {
 } from '@/lib/organizer/wizard/model';
 import { formatEventDateLong } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
-import { NotStored, StepHeader, TextArea, TextField } from './fields';
+import { StepHeader, TextArea, TextField } from './fields';
 
 /**
  * How the event appears in search results and in a shared link.
@@ -121,13 +121,6 @@ export function SeoStep({ draft, update, issues }: Props) {
         </div>
       )}
 
-      <NotStored>
-        There is no slug field: the public route is <code>/events/{'{uuid}'}</code>, so a custom URL
-        would be a picture of a page that does not exist. No keywords field either — search engines
-        stopped reading that tag over a decade ago — and no “SEO score”, which would be a number
-        with no method behind it. The counters above are the real limits: they are where the columns
-        stop and where Google truncates.
-      </NotStored>
     </div>
   );
 }

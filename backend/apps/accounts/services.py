@@ -38,6 +38,7 @@ from core.unit_of_work import UnitOfWork
 from core.uploads import storage_path, validate_image
 
 from .exceptions import (
+    AccountSuspendedError,
     AlreadyVerifiedError,
     CannotSuspendError,
     EmailAlreadyRegisteredError,
@@ -52,7 +53,7 @@ from .exceptions import (
     VerificationCodeInvalidError,
     VerificationCooldownError,
 )
-from .models import EmailVerification, User
+from .models import EmailVerification, Gender, User
 from .repositories import EmailVerificationRepository, UserRepository
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,21 @@ class AuthService:
         self._verification = verification
 
     def register(self, *, email: str, password: str, full_name: str = "") -> User:
-        if self._users.email_exists(email):
+        existing = self._users.get_by_email(email)
+        if existing is not None:
+            if not existing.is_active:
+                # A suspended person's most likely next move is to sign up
+                # again with the same address, and "that email is already
+                # registered" sends them round the loop once more — to a
+                # sign-in that will not work either. This is the one place the
+                # dead end has to be named.
+                #
+                # It reveals that a taken address is suspended, which
+                # `EmailAlreadyRegisteredError` did not. That is a real, small
+                # disclosure and it is the right trade: the address being taken
+                # is already public from this endpoint, and the alternative is
+                # a person with no route to the only thing that can help them.
+                raise AccountSuspendedError()
             raise EmailAlreadyRegisteredError(email)
 
         with UnitOfWork() as uow:
@@ -122,12 +137,20 @@ class AuthService:
 
     def authenticate(self, *, email: str, password: str) -> User:
         user = self._users.get_by_email(email)
-        if user is None or not user.is_active or not user.check_password(password):
+        if user is None or not user.check_password(password):
             raise InvalidCredentialsError()
-        # Checked AFTER the password, on purpose. Answering "verify your email"
-        # to a wrong password would confirm that an account exists for that
-        # address — a free enumeration oracle. Reaching this line requires
-        # already knowing the password.
+        # BOTH of the checks below are AFTER the password, on purpose.
+        # Answering "verify your email" or "you are suspended" to a WRONG
+        # password would confirm that an account exists for that address — a
+        # free enumeration oracle. Reaching this line requires already knowing
+        # the password, so naming the real state leaks nothing.
+        #
+        # Suspension used to be folded into `InvalidCredentialsError` above,
+        # which sent a suspended user to reset a password that was never
+        # wrong — repeatedly, because there is no self-service way out of a
+        # suspension and nothing on screen said so.
+        if not user.is_active:
+            raise AccountSuspendedError()
         if not user.email_verified:
             raise EmailNotVerifiedError()
         record_audit(
@@ -161,6 +184,15 @@ class AuthService:
         )
 
 
+#: "Not supplied" for a field whose empty value is `None`.
+#:
+#: `update_profile` is partial BY OMISSION, and `date_of_birth` is the one
+#: field where null is a real answer ("remove it") rather than an absence — so
+#: it needs a sentinel that no caller could send. Every other field there uses
+#: `None` for absent because their empty value is `""`.
+_UNSET: object = object()
+
+
 class ProfileService:
     """What an account holder can change about their own profile.
 
@@ -182,6 +214,43 @@ class ProfileService:
     def __init__(self, *, users: UserRepository, storage: StoragePort) -> None:
         self._users = users
         self._storage = storage
+
+    def complete_onboarding(self, *, user_id: uuid.UUID | str) -> User:
+        """Mark the welcome flow answered, whether it was filled in or skipped.
+
+        ── SKIPPING SETS IT, AND THAT IS THE POINT ────────────────────────
+
+        A person who declined has ANSWERED the question. Re-prompting them on
+        the next visit is nagging, and nagging on the way to a ticket is how a
+        product loses the people who only ever wanted a ticket. So the flow is
+        never a wall: it can be walked past, and walking past it counts.
+
+        Idempotent, and it keeps the FIRST timestamp. A second call is a
+        double-submit or a redelivery, and rewriting the mark would make
+        "finished onboarding in July" quietly become today — losing the one
+        piece of information a timestamp has over a boolean.
+        """
+        user = self._users.get_by_id(user_id)
+        if user is None:
+            raise NotFoundError("No account with that id.")
+        if user.onboarding_completed_at is not None:
+            return user
+
+        with UnitOfWork():
+            self._users.update_profile_fields(
+                user_id=user_id, onboarding_completed_at=timezone.now()
+            )
+            record_audit(
+                actor_id=str(user_id),
+                action="user.onboarding_completed",
+                target_type="user",
+                target_id=str(user_id),
+            )
+
+        refreshed = self._users.get_by_id(user_id)
+        if refreshed is None:  # pragma: no cover — just deleted mid-request
+            raise NotFoundError("No account with that id.")
+        return refreshed
 
     def set_avatar(self, *, user_id: uuid.UUID | str, upload: UploadedFile) -> User:
         """Validate the file, store it, then point the row at it — in that order.
@@ -226,6 +295,95 @@ class ProfileService:
         knows the key format, not in five call sites that infer it.
         """
         return self._apply_avatar(user_id=user_id, url="", action="user.avatar_cleared")
+
+    def update_profile(
+        self,
+        *,
+        user_id: uuid.UUID | str,
+        full_name: str | None = None,
+        phone: str | None = None,
+        date_of_birth=_UNSET,
+        gender: str | None = None,
+        gender_self_described: str | None = None,
+    ) -> User:
+        """Change the display name and/or the phone number.
+
+        ── WHY THIS EXISTS, AND WHY PHONE IS THE POINT ─────────────────────
+
+        `/auth/me` was GET-only and `phone` was on no serializer at all, which
+        left two real holes. A ticket is issued in the name on the account and
+        there was no way to fix a typo in it before issuance. And
+        `notifications` has sent SMS — the booking confirmation, the refund
+        confirmation — since that module shipped, routed through India DLT
+        templates, to a column **nothing could ever populate**. The delivery
+        half was built and the destination was unreachable.
+
+        ── PARTIAL BY OMISSION, NOT BY BLANK ──────────────────────────────
+
+        `None` means "not supplied, leave it alone"; an empty string is a real
+        value meaning "remove it". They cannot be conflated: clearing a phone
+        number is a legitimate thing to want (it is how you opt out of SMS),
+        and treating blank as absent would make that impossible. The serializer
+        marks both fields `required=False` and the view passes through only
+        what was actually sent.
+
+        ── NO EMAIL HERE ──────────────────────────────────────────────────
+
+        Deliberately. The email address is the sign-in identity AND the address
+        every ticket is delivered to, so changing it is a re-verification flow
+        (prove the new one before it takes effect), not a profile field. Adding
+        it to this method would let somebody move an account to an address they
+        do not control — the exact thing `EmailVerification` exists to prevent.
+        """
+        fields: dict = {}
+        if full_name is not None:
+            fields["full_name"] = full_name.strip()
+        if date_of_birth is not _UNSET:
+            # A SENTINEL rather than `None`, because null is a real value here:
+            # it means "remove my date of birth", which somebody is entitled to
+            # do. Every other field on this method uses `None` for absent
+            # because their empty value is the empty STRING; this one cannot.
+            fields["date_of_birth"] = date_of_birth
+        if gender is not None:
+            fields["gender"] = gender
+            # A stale self-description sitting behind a changed answer is a
+            # value the owner believes they removed. So the pair moves
+            # together: choosing anything but "self-describe" clears the text,
+            # whether or not the client remembered to send it.
+            if gender != Gender.SELF_DESCRIBED:
+                fields["gender_self_described"] = ""
+            elif gender_self_described is not None:
+                fields["gender_self_described"] = gender_self_described.strip()
+        elif gender_self_described is not None:
+            fields["gender_self_described"] = gender_self_described.strip()
+        if phone is not None:
+            # Stored as given, minus surrounding space. No normalisation to
+            # E.164 here: the SMS adapter is what knows the provider's expected
+            # format, and rewriting a number at the boundary would mean the
+            # value a user reads back is not the value they typed.
+            fields["phone"] = phone.strip()
+        if not fields:
+            # Nothing to do — return the current profile rather than writing an
+            # audit row for a request that changed nothing.
+            user = self._users.get_by_id(user_id)
+            if user is None:
+                raise NotFoundError("No account with that id.")
+            return user
+
+        with UnitOfWork():
+            if not self._users.update_profile_fields(user_id=user_id, **fields):
+                raise NotFoundError("No account with that id.")
+            record_audit(
+                actor_id=str(user_id),
+                action="user.profile_updated",
+                target_type="user",
+                target_id=str(user_id),
+                metadata={"fields": sorted(fields)},
+            )
+        user = self._users.get_by_id(user_id)
+        if user is None:  # pragma: no cover — written above, must exist
+            raise NotFoundError("No account with that id.")
+        return user
 
     def _apply_avatar(self, *, user_id: uuid.UUID | str, url: str, action: str) -> User:
         with UnitOfWork():
@@ -325,6 +483,164 @@ class AccountAdminService:
             "account_suspension_changed",
             extra={"user_id": str(user.id), "suspended": suspended},
         )
+
+        refreshed = self._users.get_by_id(user.id)
+        if refreshed is None:  # pragma: no cover - just deleted mid-request
+            raise NotFoundError("No account with that id.")
+        return refreshed
+
+    def set_operator(
+        self,
+        *,
+        user_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        is_operator: bool,
+        reason: str = "",
+    ) -> User:
+        """Grant or remove the operator role.
+
+        ── ONE REFUSAL, AND IT IS THE IMPORTANT ONE ───────────────────────
+
+        **An operator cannot remove their OWN role.** The console is the only
+        place this endpoint exists, so somebody who demoted themselves would
+        lose the screen that could put it back — and if they were the last
+        operator, nobody could restore it without a database shell.
+
+        Demoting somebody ELSE is allowed, and deliberately: it is the action
+        `set_suspended` already points at when it refuses to suspend a staff
+        member and says "remove their operator role first". Until this method
+        existed, that instruction named an endpoint that was not there.
+
+        There is no "last operator" guard beyond the self-check. Counting
+        operators to refuse the second-to-last demotion sounds prudent and is
+        not: it is a race (two operators demoting each other concurrently both
+        pass the count), and the self-check already prevents the only version
+        of this that cannot be undone from the product.
+
+        Granting requires a VERIFIED address. An operator can suspend accounts,
+        release payouts and delete events, and handing that to an address
+        nobody proved belongs to its holder is the one thing this platform's
+        verification flow exists to prevent.
+        """
+        user = self._users.get_by_id(user_id)
+        if user is None:
+            raise NotFoundError("No account with that id.")
+
+        if not is_operator and user.is_superuser:
+            # THE PRIMARY ACCOUNT IS NOT DEMOTABLE, BY ANYBODY.
+            #
+            # The self-check below stops you locking yourself out. It does not
+            # stop the case that actually loses a platform: a newly promoted
+            # operator demoting the founding account, either by mistake or on
+            # purpose. There is no console path back from that — `is_superuser`
+            # is set by `manage.py ensure_admin` or a shell, and if the last
+            # superuser has been stripped of `is_staff`, restoring it needs
+            # exactly the shell access the console exists to avoid.
+            #
+            # So the rule is a property of the ACCOUNT rather than of who is
+            # asking: a superuser's operator role is fixed. Making somebody an
+            # operator is still ordinary; taking it from the one account that
+            # can always put it back is not.
+            raise CannotSuspendError(
+                "This is the platform's primary account. Its operator role cannot be "
+                "removed from the console — that is what guarantees somebody can always "
+                "get back in."
+            )
+        if not is_operator and str(user.id) == str(actor_id):
+            raise CannotSuspendError(
+                "You cannot remove your own operator role — you would lose the console "
+                "that could put it back."
+            )
+        if is_operator and not user.email_verified:
+            raise CannotSuspendError(
+                "That address has not been verified. An operator can suspend accounts and "
+                "release payouts, so the account has to prove its address first."
+            )
+        if is_operator and not user.is_active:
+            raise CannotSuspendError(
+                "That account is suspended. Reinstate it before making it an operator."
+            )
+        if user.is_staff == is_operator:
+            # Reported rather than silently succeeding, so a double-click does
+            # not write a second audit row claiming a second grant.
+            raise CannotSuspendError(
+                f"That account is already {'an operator' if is_operator else 'not an operator'}."
+            )
+
+        with UnitOfWork():
+            self._users.update_profile_fields(user_id=user.id, is_staff=is_operator)
+            record_audit(
+                actor_id=str(actor_id),
+                action="user.operator_granted" if is_operator else "user.operator_revoked",
+                target_type="user",
+                target_id=str(user.id),
+                metadata={"reason": reason} if reason else {},
+            )
+        logger.info(
+            "account_operator_changed",
+            extra={"user_id": str(user.id), "is_operator": is_operator},
+        )
+
+        refreshed = self._users.get_by_id(user.id)
+        if refreshed is None:  # pragma: no cover — just deleted mid-request
+            raise NotFoundError("No account with that id.")
+        return refreshed
+
+    def revoke_verification(
+        self,
+        *,
+        user_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        reason: str = "",
+    ) -> User:
+        """Withdraw an operator's trust in a PROVEN address.
+
+        ── WHY THIS ALSO SUSPENDS, RATHER THAN ONLY CLEARING THE FLAG ─────
+
+        `email_verified = False` on its own is not a decision — it is an
+        invitation. The verify endpoint would happily issue a fresh code to
+        the same inbox and the account would be back inside a minute, having
+        proven exactly what the operator just decided was not good enough.
+
+        So the two writes go together and are one action: the address is no
+        longer trusted AND the account is out of service until a human says
+        otherwise. That is what an operator means when they revoke a
+        verification, and modelling it as two independent switches would leave
+        the useless half reachable on its own.
+
+        The flags stay SEPARATE columns, though. `is_active` is "an operator
+        stopped this account" and `email_verified` is "this address was
+        proven" — conflating them would show every unverified sign-up as
+        suspended and make reinstating somebody silently re-assert an address
+        nobody re-checked.
+
+        The same two refusals as suspension, for the same reasons: an operator
+        cannot do this to themselves, or to another operator.
+        """
+        user = self._users.get_by_id(user_id)
+        if user is None:
+            raise NotFoundError("No account with that id.")
+        if str(user.id) == str(actor_id):
+            raise CannotSuspendError(
+                "You cannot revoke your own verification — you would be locked out immediately."
+            )
+        if user.is_staff:
+            raise CannotSuspendError(
+                "Operator accounts cannot be revoked from here. Remove their operator role first."
+            )
+        if not user.email_verified and not user.is_active:
+            raise CannotSuspendError("That account is already revoked.")
+
+        self._users.revoke_verification(user_id=user.id)
+
+        record_audit(
+            actor_id=str(actor_id),
+            action="user.verification_revoked",
+            target_type="user",
+            target_id=str(user.id),
+            metadata={"reason": reason} if reason else {},
+        )
+        logger.info("account_verification_revoked", extra={"user_id": str(user.id)})
 
         refreshed = self._users.get_by_id(user.id)
         if refreshed is None:  # pragma: no cover - just deleted mid-request
@@ -673,8 +989,11 @@ class GoogleSignInService:
                 raise GoogleAccountUnverifiedError()
             if not existing.is_active:
                 # Suspension is an access decision and it applies to every
-                # route in, not just the password one.
-                raise InvalidCredentialsError()
+                # route in, not just the password one. Named rather than
+                # disguised for the same reason as the password route: Google
+                # has just proven this person owns the address, so there is
+                # nothing left to conceal from them.
+                raise AccountSuspendedError()
             if not existing.email_verified:
                 # Google has proven the address, so our own pending
                 # verification is satisfied — there is nothing left to prove

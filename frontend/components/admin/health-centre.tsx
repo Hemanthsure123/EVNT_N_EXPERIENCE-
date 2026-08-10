@@ -17,7 +17,7 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { fetchHealth, type HealthCheck, type HealthStatus } from '@/lib/api/admin';
+import { fetchHealth, fetchHealthDeep, type HealthCheck, type HealthStatus } from '@/lib/api/admin';
 import { errorMessage } from '@/lib/api/errors';
 import { ErrorState, Skeleton, StatusPill, type Tone } from '@/components/organizer/primitives';
 import { Button } from '@/components/ui/button';
@@ -97,19 +97,51 @@ const LABELS: Record<string, string> = {
 };
 
 /** Which checks the backend actually contacts. Everything else is configured. */
-const PROBED = new Set(['database', 'cache']);
+/**
+ * Which checks were actually CONTACTED — derived from the answer, never from a
+ * hard-coded name list.
+ *
+ * This used to be `new Set(['database', 'cache'])`, which was correct while
+ * those were the only two things ever probed. The moment `?deep=1` existed it
+ * became a lie in the most damaging direction available on this screen:
+ * payments and storage WERE contacted, and would have been filed under
+ * "configured" and captioned "not contacted" — an operator told that nothing
+ * checked the payment provider when something just had.
+ *
+ * `unknown` is precisely the backend's word for "configured but not
+ * contacted", so the status IS the answer. Deriving it means a new probe
+ * appears on the right side of this screen without anyone remembering to
+ * update a list.
+ */
+const wasProbed = (check: HealthCheck) => check.status !== 'unknown';
 
 export function HealthCentre() {
+  /**
+   * ── DEEP IS OPT-IN, AND STAYS ON ONCE ASKED FOR ─────────────────────────
+   *
+   * Shallow is the default because a console left open on a wall must not
+   * become traffic against Razorpay. Once an operator asks — typically before
+   * an on-sale — the poll switches to the deep endpoint, which the backend
+   * caches for 60s, so the auto-refresh below costs one vendor round trip a
+   * minute rather than one every thirty seconds.
+   *
+   * The query KEY includes `deep`, so the two answers are separate cache
+   * entries. Sharing one would let a cached shallow response render under a
+   * "probed" heading — reporting `unknown` for a vendor that was in fact
+   * contacted, or worse, the reverse.
+   */
+  const [deep, setDeep] = React.useState(false);
+
   const query = useQuery({
-    queryKey: ['admin', 'health'],
-    queryFn: fetchHealth,
+    queryKey: ['admin', 'health', { deep }],
+    queryFn: deep ? fetchHealthDeep : fetchHealth,
     refetchInterval: REFRESH_MS,
     refetchIntervalInBackground: false,
   });
 
   const checks = query.data?.checks ?? [];
-  const probed = checks.filter((check) => PROBED.has(check.name));
-  const configured = checks.filter((check) => !PROBED.has(check.name));
+  const probed = checks.filter(wasProbed);
+  const configured = checks.filter((check) => !wasProbed(check));
   const degraded = checks.filter((check) => check.status === 'degraded');
   const fakes = configured.filter((check) => check.detail.includes('local/fake'));
 
@@ -119,24 +151,41 @@ export function HealthCentre() {
         <div className="min-w-0">
           <h1 className="text-h3">System health</h1>
           <p className="max-w-prose text-body-sm text-muted-foreground">
-            Refreshed every 30 seconds. Probed checks are contacted on each request; configured
-            ones report which adapter is wired up.
+            {query.data?.deep
+              ? 'Deep checks on. The payment provider and storage were actually contacted, and the outbox was inspected. Vendor results are cached for a minute.'
+              : 'Refreshed every 30 seconds. Probed checks are contacted on each request; configured ones only report which adapter is wired up.'}
           </p>
         </div>
         {/* The one control on a read-only screen, and auto-refresh already
             covers the common case — so it is a quiet outline button, not the
             near-black pill. Nothing here should out-rank the tiles. */}
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => void query.refetch()}
-          disabled={query.isFetching}
-          leftIcon={
-            <RefreshCw className={cn('size-4', query.isFetching && 'animate-spin')} aria-hidden />
-          }
-        >
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The deep toggle. An outline pill like Refresh rather than a
+              switch, because it is an ACTION with a cost (it contacts third
+              parties) rather than a preference — and because it changes what
+              the tiles beside it MEAN, which a switch buried in a settings row
+              would not communicate. */}
+          <Button
+            type="button"
+            variant={deep ? 'secondary' : 'outline'}
+            onClick={() => setDeep((on) => !on)}
+            aria-pressed={deep}
+            leftIcon={<Zap className="size-4" aria-hidden />}
+          >
+            {deep ? 'Deep checks on' : 'Run deep checks'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void query.refetch()}
+            disabled={query.isFetching}
+            leftIcon={
+              <RefreshCw className={cn('size-4', query.isFetching && 'animate-spin')} aria-hidden />
+            }
+          >
+            Refresh
+          </Button>
+        </div>
       </header>
 
       {query.isError ? (
@@ -172,7 +221,7 @@ export function HealthCentre() {
           <section className="flex flex-col gap-stack">
             <SectionHead
               title="Configured"
-              blurb="Which adapter is selected. NOT contacted — probing a vendor on every poll would put real traffic on them to colour a tile."
+              blurb="Which adapter is configured. These are not probed."
             />
             <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
               {configured.map((check) => (
@@ -183,7 +232,6 @@ export function HealthCentre() {
             </ul>
           </section>
 
-          <NotMeasured />
         </>
       )}
     </div>
@@ -301,7 +349,10 @@ function HealthTile({ check, probed }: { check: HealthCheck; probed: boolean }) 
 
   return (
     <div
-      className={cn('flex h-full flex-col gap-stack rounded-xl border bg-surface p-card', tone.wrap)}
+      className={cn(
+        'flex h-full flex-col gap-stack rounded-xl border bg-surface p-card',
+        tone.wrap,
+      )}
     >
       {/* Name left, state right — so a column of tiles scans as a column of
           states rather than as eight paragraphs to read in full. */}
@@ -333,57 +384,19 @@ function HealthTile({ check, probed }: { check: HealthCheck; probed: boolean }) 
   );
 }
 
-/**
- * Named rather than drawn.
+/*
+ * A `NotMeasured` section lived here — five dashed cards naming what this
+ * console does not monitor (latency, error rates, health history, queue depth,
+ * traces) with a sentence each on why.
  *
- * The brief asked for latency, error rates, response times, health history,
- * background jobs, logs and traces. Listing what is missing — and why — is
- * more useful to an operator than a chart of numbers nothing produced, and it
- * is the difference between a console they trust and one they learn to
- * second-guess.
+ * The instinct was sound and this codebase keeps it elsewhere: never draw a
+ * chart from numbers nothing produced. But the tiles above ALREADY carry that
+ * honesty in the only place it changes a decision — an unprobed dependency
+ * reports `unknown` and says which adapter is configured, rather than showing
+ * green because nobody looked. A second section restating the gaps added no
+ * information and turned an operations screen into a list of what we have not
+ * built.
+ *
+ * If any of these gets a collector, it becomes a tile. Until then it is
+ * absent, not announced.
  */
-function NotMeasured() {
-  const gaps = [
-    {
-      title: 'Latency and response times',
-      why: 'No request-timing middleware runs in production — the performance logger is DEBUG-only, because query logging has real overhead.',
-    },
-    {
-      title: 'Error rates',
-      why: 'Errors are logged, not counted. There is no metrics store to count them into.',
-    },
-    {
-      title: 'Health history',
-      why: 'Each probe answers for right now and is not written down, so there is nothing to plot.',
-    },
-    {
-      title: 'Background job depth',
-      why: 'The queue adapter runs tasks synchronously in this environment, so a pending count would structurally always be zero.',
-    },
-    { title: 'Logs and traces', why: 'No aggregator or tracer is wired up.' },
-  ];
-
-  return (
-    <section className="flex flex-col gap-stack">
-      <SectionHead
-        title="Not measured"
-        blurb="Named rather than drawn. A chart of numbers nothing produces is worse than an absent one — this is the screen an operator trusts to decide whether to page somebody."
-      />
-      <ul className="grid gap-stack sm:grid-cols-2">
-        {gaps.map((gap) => (
-          <li
-            key={gap.title}
-            className="rounded-xl border border-dashed border-border p-card text-caption"
-          >
-            <p className="font-medium text-foreground">{gap.title}</p>
-            <p className="text-muted-foreground">{gap.why}</p>
-          </li>
-        ))}
-      </ul>
-      <p className="text-caption text-muted-foreground">
-        <code>frontend/BACKLOG.md</code> item 50 specifies the collector, the store and the
-        retention each of these would need.
-      </p>
-    </section>
-  );
-}

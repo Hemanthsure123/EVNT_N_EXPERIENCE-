@@ -19,8 +19,20 @@ class NotificationsConfig(AppConfig):
         # One message per named guest, so a party of ten is ten tickets in ten
         # inboxes rather than one mail carrying all ten tokens.
         bus.subscribe(events.TICKET_ASSIGNED, handlers.handle_ticket_assigned)
+        bus.subscribe(events.BOOKING_RECEIPT_SHARED, handlers.handle_booking_receipt_shared)
         bus.subscribe(events.PAYMENT_REFUNDED, handlers.handle_payment_refunded)
+        # The refund REQUEST lifecycle. Three subscriptions because three
+        # different people need telling three different things, and none of
+        # them is the PAYMENT_REFUNDED message above — that one fires only once
+        # money has actually moved.
+        bus.subscribe(events.REFUND_REQUESTED, handlers.handle_refund_requested)
+        bus.subscribe(events.REFUND_REQUEST_APPROVED, handlers.handle_refund_request_approved)
+        bus.subscribe(events.REFUND_REQUEST_REJECTED, handlers.handle_refund_request_rejected)
         bus.subscribe(events.EVENT_PUBLISHED, handlers.handle_event_published)
+        bus.subscribe(events.EVENT_DELETED_BY_OPERATOR, handlers.handle_event_deleted_by_operator)
+        bus.subscribe(
+            events.EVENT_CANCELLED_BY_ORGANIZER, handlers.handle_event_cancelled_by_organizer
+        )
         # settlements' seam: the organizer's payout confirmation.
         bus.subscribe(events.PAYOUT_RELEASED, handlers.handle_payout_released)
 
@@ -33,6 +45,9 @@ class NotificationsConfig(AppConfig):
         bus.subscribe(
             events.PERFORMER_SUBMITTED_FOR_REVIEW, handlers.handle_performer_submitted_for_review
         )
+        # The hire desk. This subscription IS the delivery mechanism: with
+        # no performer supply side, an enquiry reaches a human only here.
+        bus.subscribe(events.PERFORMER_REQUEST_CREATED, handlers.handle_hire_enquiry_created)
         bus.subscribe(
             events.ORGANIZATION_VERIFICATION_SUBMITTED,
             handlers.handle_organization_verification_submitted,

@@ -45,6 +45,13 @@ export type Organization = {
   name: string;
   logo_url: string;
   verified_level: 'unverified' | 'pending' | 'verified';
+  /**
+   * The provider's linked-account id, or '' when payouts are not set up.
+   *
+   * Already on the list payload — it was simply not declared here, so the one
+   * screen that needs to ask "can this organization be paid?" could not.
+   */
+  payout_account_id: string;
   created_at: string;
 };
 

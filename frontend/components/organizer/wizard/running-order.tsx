@@ -130,7 +130,7 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
         <EmptyState
           icon={Clock}
           title="No running order yet"
-          body="Doors, support, headline, curfew. It is the second thing people look for after the price, and the thing they ask about most on the day."
+          body="Doors, support, headline, curfew."
         />
       ) : (
         <ol className="flex flex-col">
@@ -232,8 +232,8 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
             </button>
           ) : null}
           <p className="text-caption text-muted-foreground">
-            Leave it blank if the order is set but the clock times are not — those entries sit at
-            the end rather than jumping to the top.
+            Leave blank if you know the order but not the times — those entries sit at the
+            end.
           </p>
         </div>
 

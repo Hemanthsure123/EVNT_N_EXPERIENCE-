@@ -28,11 +28,11 @@ import uuid
 from collections.abc import Iterable
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q, Sum
-from django.db.models.functions import TruncDate
+from django.db.models import CharField, Count, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import Cast, Coalesce, TruncDate
 from django.db.models.query import QuerySet
 
-from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
+from apps.booking.models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
 from apps.checkin.models import ScanLog, ScanResult
 from apps.events.models import Event, EventStatus
 from apps.organizations.models import Organization, VerificationRecord, VerificationStatus
@@ -200,7 +200,30 @@ class ConsoleRepository:
 
     # ----------------------------------------------------------------- lists
 
-    def list_organizations(self, *, verified_level: str | None) -> QuerySet[Organization]:
+    @staticmethod
+    def _within(queryset, field: str, after, before):
+        """Narrow a list to a date window, on whichever column it orders by.
+
+        SERVER-SIDE, always. Every list here is cursor-paginated, so filtering
+        a window in the browser means paging through the whole platform to
+        find the rows inside it — and is simply WRONG wherever a page boundary
+        falls in the middle of the range. The same reasoning the organizer
+        lists' date filters were built on.
+        """
+        if after is not None:
+            queryset = queryset.filter(**{f"{field}__gte": after})
+        if before is not None:
+            queryset = queryset.filter(**{f"{field}__lte": before})
+        return queryset
+
+    def list_organizations(
+        self,
+        *,
+        verified_level: str | None,
+        search: str | None = None,
+        created_after=None,
+        created_before=None,
+    ) -> QuerySet[Organization]:
         queryset = (
             Organization.objects.filter(deleted_at__isnull=True)
             .only("id", "name", "verified_level", "payout_account_id", "logo_url", "created_at")
@@ -208,11 +231,31 @@ class ConsoleRepository:
         )
         if verified_level:
             queryset = queryset.filter(verified_level=verified_level)
-        return queryset
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        return self._within(queryset, "created_at", created_after, created_before)
 
-    def list_users(self, *, search: str | None, role: str | None = None):
+    def list_users(
+        self,
+        *,
+        search: str | None,
+        role: str | None = None,
+        created_after=None,
+        created_before=None,
+    ):
         queryset = User.objects.only(
-            "id", "email", "full_name", "is_organizer", "is_staff", "is_active", "date_joined"
+            "id",
+            "email",
+            "full_name",
+            "is_organizer",
+            "is_staff",
+            "is_superuser",
+            "is_active",
+            # In the lean set because `AdminUserSerializer` returns it — a
+            # field the serializer touches but `.only()` omits is a DEFERRED
+            # load, one extra query per row.
+            "email_verified",
+            "date_joined",
         ).order_by("-date_joined")
         if search:
             queryset = queryset.filter(Q(email__icontains=search) | Q(full_name__icontains=search))
@@ -228,11 +271,21 @@ class ConsoleRepository:
             queryset = queryset.filter(is_active=False)
         elif role == "attendee":
             queryset = queryset.filter(is_organizer=False, is_staff=False)
-        return queryset
+        # `date_joined`, not `created_at` — this is Django's own user model and
+        # the window has to be on the column the list ORDERS by, or the filter
+        # and the cursor disagree about which rows a page holds.
+        return self._within(queryset, "date_joined", created_after, created_before)
 
     # ------------------------------------------------------------- payments
 
-    def list_payments(self, *, status: str | None, search: str | None) -> QuerySet[Payment]:
+    def list_payments(
+        self,
+        *,
+        status: str | None,
+        search: str | None,
+        created_after=None,
+        created_before=None,
+    ) -> QuerySet[Payment]:
         """Every captured payment on the platform.
 
         `select_related` down to the event because the transactions table shows
@@ -267,9 +320,149 @@ class ConsoleRepository:
                 | Q(rzp_order_id__icontains=search)
                 | Q(booking__user__email__icontains=search)
             )
-        return queryset
+        return self._within(queryset, "created_at", created_after, created_before)
 
-    def list_refunds(self, *, search: str | None) -> QuerySet[Refund]:
+    @staticmethod
+    def _booking_base() -> QuerySet[Booking]:
+        """Bookings with the two counts the support desk reads, as CORRELATED
+        SUBQUERIES rather than aggregate joins.
+
+        Quantity lives on `BookingItem` and tickets on `Ticket`, so the obvious
+        `.annotate(Sum("items__quantity"), Count("tickets"))` is wrong in a way
+        that is easy to ship and hard to notice: two joins in one query produce
+        a cartesian product, so a booking with 2 items and 3 tickets reports a
+        quantity of 6 and a ticket count of 6. `distinct=True` rescues the
+        Count and cannot rescue the Sum — there is no such thing as a distinct
+        sum of a repeated row.
+
+        Two scalar subqueries have neither problem, stay a single round trip,
+        and keep the numbers independent of each other.
+
+        `Coalesce(..., 0)` because a subquery over no rows returns NULL, and an
+        abandoned checkout with no tickets should read 0 rather than null on
+        the exact screen that exists to answer "were any issued?".
+        """
+        items_quantity = (
+            BookingItem.objects.filter(booking=OuterRef("pk"))
+            .values("booking")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+        tickets_issued = (
+            Ticket.objects.filter(booking=OuterRef("pk"))
+            .values("booking")
+            .annotate(total=Count("id"))
+            .values("total")[:1]
+        )
+        return Booking.objects.select_related("user", "event").annotate(
+            quantity_total=Coalesce(Subquery(items_quantity, output_field=IntegerField()), 0),
+            tickets_issued_total=Coalesce(Subquery(tickets_issued, output_field=IntegerField()), 0),
+        )
+
+    def list_bookings(
+        self,
+        *,
+        status: str | None,
+        search: str | None,
+        created_after=None,
+        created_before=None,
+        event_id=None,
+    ) -> QuerySet[Booking]:
+        """Every booking on the platform, searchable — the support desk's tool.
+
+        ── WHY THIS EXISTS ────────────────────────────────────────────────
+
+        "The customer says they paid but has no ticket" is the single most
+        common support question a ticketing platform gets, and until this
+        method there was **no way to answer it from the product**.
+        `GET /bookings/{id}` is scoped to the booking's own owner, so an
+        operator could not open one even holding the id; the only route was the
+        Django admin.
+
+        The payment search partly covered it and structurally could not cover
+        it fully: a booking that never reached payment — the abandoned
+        checkout, which is exactly the case somebody phones about — has no
+        `Payment` row to find it by.
+
+        ── WHAT IT SEARCHES, AND WHY EACH ─────────────────────────────────
+
+        An operator on a call has ONE of these, read out loud, and does not
+        know which kind of thing it is:
+
+        - the customer's **email** (most common);
+        - a **booking id**, from the confirmation email;
+        - a **payment reference**, from their bank statement — the string a
+          customer is most likely to have when they believe they paid;
+        - the **event title**, when they have nothing else ("the Arijit gig").
+
+        A single `q` across all four rather than four parameters, because the
+        operator does not know which they are holding, and asking them to
+        classify it before searching is a worse tool.
+
+        ── UUID SEARCH IS PREFIX-MATCHED ON THE TEXT FORM ─────────────────
+
+        `id__icontains` cannot be used on a Postgres `uuid` column — it is not
+        a text type, and the ORM raises rather than coercing. So the id is cast
+        to text first. This also makes a PARTIAL id work, which matters:
+        people read out the first block of a uuid, not all thirty-six
+        characters.
+        """
+        queryset = (
+            self._booking_base()
+            .only(
+                "id",
+                "status",
+                "total_amount_minor",
+                "platform_fee_minor",
+                "payment_ref",
+                "payment_order_id",
+                "hold_expires_at",
+                "created_at",
+                "user__id",
+                "user__email",
+                "user__full_name",
+                "event__id",
+                "event__title",
+                "event__starts_at",
+            )
+            .order_by("-created_at")
+        )
+        if status:
+            queryset = queryset.filter(status=status)
+        if event_id:
+            # An EXACT id, not a title match. The console's picker resolves a
+            # name to an id before asking, because two events genuinely share
+            # a title — a Saturday and a Sunday night of the same show — and a
+            # revenue figure that silently summed both is worse than no filter.
+            queryset = queryset.filter(event_id=event_id)
+        if search:
+            queryset = queryset.annotate(_id_text=Cast("id", CharField())).filter(
+                Q(user__email__icontains=search)
+                | Q(_id_text__istartswith=search)
+                | Q(payment_ref__icontains=search)
+                | Q(payment_order_id__icontains=search)
+                | Q(event__title__icontains=search)
+            )
+        return self._within(queryset, "created_at", created_after, created_before)
+
+    def booking_detail(self, booking_id: uuid.UUID | str) -> Booking | None:
+        """One booking, with everything an operator needs to answer the call.
+
+        Prefetches items and tickets because the whole point of opening a
+        booking here is to see whether tickets were ISSUED — which is the
+        answer to "I paid but got nothing". Without the prefetch a booking with
+        six tickets is six extra queries on the screen an operator opens most.
+        """
+        return (
+            self._booking_base()
+            .prefetch_related("items", "items__ticket_type", "tickets", "tickets__ticket_type")
+            .filter(pk=booking_id)
+            .first()
+        )
+
+    def list_refunds(
+        self, *, search: str | None, created_after=None, created_before=None
+    ) -> QuerySet[Refund]:
         """Every refund on the platform.
 
         There is no `status` filter because there is no status: a `Refund` row
@@ -303,7 +496,7 @@ class ConsoleRepository:
                 | Q(payment__rzp_payment_id__icontains=search)
                 | Q(payment__booking__user__email__icontains=search)
             )
-        return queryset
+        return self._within(queryset, "created_at", created_after, created_before)
 
     def count_payments_by_status(self) -> dict[str, int]:
         """One GROUP BY for the four status tiles, rather than four COUNTs."""

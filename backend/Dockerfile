@@ -28,7 +28,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
 
-ARG INSTALL_EXTRAS="razorpay,push,observability,s3,tickets"
+ARG INSTALL_EXTRAS="razorpay,push,observability,s3"
 
 COPY pyproject.toml ./
 # Build deps only for the pip resolve step, then dropped from the final layer.

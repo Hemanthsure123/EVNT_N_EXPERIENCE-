@@ -38,8 +38,16 @@ import { Reveal } from './reveal';
  * therefore cannot close. That bug shipped once and was caught by counting
  * cells: 21 for 20 events.
  */
+/**
+ * Kept in step with the grid's column count above, or every card downloads a
+ * poster sized for a layout it is not in. The narrower columns mean smaller
+ * files, which is most of the reason the denser grid is not also heavier.
+ *
+ * `96px` at the smallest rung is unchanged: below `sm` the card is still a
+ * compact row with a thumbnail, not a portrait tile.
+ */
 export const GRID_SIZES =
-  '(min-width: 1280px) 400px, (min-width: 1024px) 31vw, (min-width: 640px) 46vw, 96px';
+  '(min-width: 1536px) 19vw, (min-width: 1024px) 24vw, (min-width: 640px) 31vw, 96px';
 
 /** Reveal is a one-shot fade+rise; staggering by position reads as one motion
  * rather than ten. Capped, or the last card of page 5 would wait a second. */
@@ -82,7 +90,22 @@ export function EventGrid({
   return (
     <ul
       className={cn(
-        'grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 lg:gap-8',
+        // ── DENSITY IS WHAT CONTROLS CARD HEIGHT ──────────────────────────
+        // The card was reported as far too tall, and the poster's 3:4 crop was
+        // not the cause — the COLUMN COUNT was. Three columns on a 1440px
+        // screen give each card ~400px of width, and 3:4 of 400 is a 533px
+        // poster before a word of text. BookMyShow and District fit five or six
+        // across at that width, which is why their cards read as compact: the
+        // ratio is similar, the card is simply narrower.
+        //
+        // So the grid gets denser instead of the picture getting a second crop
+        // — one event, one shape, at every breakpoint — and a screenful now
+        // shows twelve events instead of six.
+        // Below `sm` the card is a COMPACT ROW (a 96px thumbnail beside the
+        // facts — see event-card.tsx), so one column there is already five
+        // events per screen. Two columns of that row would be unreadable. The
+        // density change starts where the card becomes a portrait tile.
+        'grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-5 lg:grid-cols-4 lg:gap-6 2xl:grid-cols-5',
         className,
       )}
     >
@@ -136,7 +159,7 @@ export function EventGridSkeleton({
   }
   return (
     <div
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 lg:gap-8"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-5 lg:grid-cols-4 lg:gap-6 2xl:grid-cols-5"
       aria-hidden
     >
       {Array.from({ length: count }, (_, i) => (

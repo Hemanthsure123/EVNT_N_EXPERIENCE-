@@ -168,12 +168,13 @@ export function Analytics() {
 
       <TopEvents />
 
-      <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-        Traffic source, device, payment method and a conversion funnel are not shown because the
-        platform records none of them — there is no telemetry pipeline, and Razorpay&apos;s payment
-        method is not stored on the payment row. Charts drawn from nothing would read as “you had no
-        traffic” rather than “nobody measured it”. BACKLOG item 29.
-      </p>
+      {/* A paragraph here listed the charts this page does NOT draw and why,
+          citing a backlog item. The reasoning is right — a traffic chart drawn
+          from nothing reads as "you had no visitors" rather than "nobody
+          measured it", which is why those charts are absent. But an organiser
+          opening their analytics wants the numbers that exist, and a footnote
+          about a missing telemetry pipeline tells them the tool is
+          incomplete. What is on this page is real; that is the whole claim. */}
     </div>
   );
 }

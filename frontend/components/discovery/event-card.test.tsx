@@ -10,6 +10,7 @@ const build = (over: Partial<EventCardData> = {}): EventCardData => ({
   title: 'Zakir Khan: Papa Yaar',
   venue: 'Canvas Laugh Club',
   city: 'Mumbai',
+  category: '',
   starts_at: '2026-08-01T14:30:00.000Z',
   poster_url: 'http://localhost:8000/media/posters/1.png',
   from_price: 49900,

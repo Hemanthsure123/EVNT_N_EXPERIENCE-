@@ -72,3 +72,19 @@ export async function fetchVerification(organizationId: string): Promise<Verific
     throw thrown;
   }
 }
+
+/**
+ * Link — or refresh — the account settlements pay into.
+ *
+ * The provider call is keyed on the organization id, so a second press
+ * resolves to the SAME linked account and refreshes it against the current
+ * name and owner email. That is what makes an "Edit" affordance honest here;
+ * without it this would have to be a link-once control, because a button that
+ * quietly creates a second payout account is how money goes to the wrong
+ * place.
+ */
+export const linkPayoutAccount = (organizationId: string) =>
+  api.post<Organization>(
+    `/organizations/${encodeURIComponent(organizationId)}/payout-account`,
+    {},
+  );

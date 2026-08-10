@@ -23,6 +23,15 @@ export type EventCard = {
   title: string;
   venue: string;
   city: string;
+  /**
+   * The browse taxonomy, as a real column on `Event`.
+   *
+   * Empty string means NOT CATEGORISED — a fact, and deliberately distinct
+   * from `"other"`, which is an organiser choosing none of the eight. The card
+   * renders a chip only when this is a known slug, so an uncategorised event
+   * shows none rather than a guess.
+   */
+  category: string;
   /** Google place id. Empty when the organizer typed the venue freehand. */
   place_id?: string;
   /** Null unless the organizer pinned a real place — never render a marker
@@ -58,9 +67,22 @@ export type EventDetail = EventCard & {
   language: string;
   age_restriction: string;
   accessibility_notes: string;
+  /**
+   * The ORGANISER's own rules — entry conditions, prohibited items, their
+   * refund terms. Always an array (empty for an event that set none), never
+   * null.
+   *
+   * Distinct from the platform policies the event page also renders (every
+   * ticket is a signed QR code, no card data is stored). Those are true of
+   * every event and are not an organiser's to edit, so they are hard-coded
+   * and these are not.
+   */
+  policies: EventPolicy[];
   seo_title: string;
   seo_description: string;
 };
+
+export type EventPolicy = { title: string; body: string };
 
 /**
  * One step of a tier's sale-phase schedule (backend SalePhaseSerializer).
@@ -113,7 +135,31 @@ export type CurrentPhase = {
 export type TicketTier = {
   id: string;
   event_id: string;
+  /**
+   * Which SESSION this tier sells, for an event that runs more than once —
+   * null for the ordinary single-show event, which is the common case.
+   *
+   * Inventory lives on this row, not on the session: `quantity`/`sold`/
+   * `available` are per TIER, so selling out the 18:00 show leaves the 21:00
+   * one untouched with no special handling anywhere. That is the whole reason
+   * sessions could be added without touching the money path.
+   */
+  slot_id: string | null;
   name: string;
+  /**
+   * What this tier IS, in the organiser's words — "Standing, front of the
+   * barrier". Blank is the norm: most tiers are self-describing and the panel
+   * omits the line rather than rendering an empty paragraph.
+   */
+  description: string;
+  /**
+   * What is INCLUDED, as short strings. A list rather than prose because a
+   * buyer comparing two tiers wants the difference, not two paragraphs to diff
+   * by eye. Always an array; empty for a tier that lists none.
+   */
+  perks: string[];
+  /** The organiser's own order for the panel, with price as the tiebreak. */
+  position: number;
   /** Minor units (paise) — the FACE price, i.e. what a phase is a discount off. */
   price: number;
   /**
@@ -156,8 +202,55 @@ export type User = {
    * session.
    */
   email_verified: boolean;
+  /**
+   * The SMS destination. Blank means "no number, skip SMS", which is a real and
+   * supported state rather than an empty field: `notifications` skips a send
+   * cleanly rather than failing when there is nowhere to send it.
+   */
+  phone: string;
+  /**
+   * Who they are, when they chose to say. Every one is optional and the UI
+   * omits the row rather than guessing — an invented age or a defaulted
+   * "Male" is exactly the kind of claim nobody made that this platform
+   * refuses to render.
+   */
+  date_of_birth: string | null;
+  /**
+   * DERIVED on the server from `date_of_birth`, never stored.
+   *
+   * An age column is wrong the day after it is written, and this platform
+   * displays age restrictions ("18+"), so a stale one would be a correctness
+   * problem rather than an untidiness. Null when no date was given.
+   */
+  age: number | null;
+  /**
+   * `''` means NEVER ANSWERED. `'prefer_not_to_say'` means asked, and
+   * declined — a different state, and the reason onboarding does not
+   * re-prompt somebody whose answer clearly meant stop asking.
+   */
+  gender: Gender | '';
+  /** Only meaningful with `gender === 'self_described'`. */
+  gender_self_described: string;
+  /**
+   * What to SHOW, resolved once on the server. A client that has to know the
+   * `self_described` pairing is a client that will get it wrong on one of the
+   * four screens a profile appears on.
+   */
+  gender_display: string;
+  /**
+   * When the welcome flow was ANSWERED — filled in or skipped. Null means it
+   * has not been, which is what opens onboarding.
+   */
+  onboarding_completed_at: string | null;
   date_joined: string;
 };
+
+export type Gender =
+  | 'woman'
+  | 'man'
+  | 'non_binary'
+  | 'self_described'
+  | 'prefer_not_to_say';
 
 export type AuthResponse = {
   user: User;

@@ -40,6 +40,8 @@ urlpatterns = [
     # cms's public /homepage plus the admin content routes.
     path("api/v1/", include("apps.cms.urls")),
     path("api/v1/", include("apps.announcements.urls")),
+    path("api/v1/", include("apps.support.urls")),
+    path("api/v1/", include("apps.reviews.urls")),
     # notifications is otherwise internal; these are only the push-subscription
     # routes, which exist because a subscription can only be minted by the
     # browser that owns it. See apps/notifications/api.py.

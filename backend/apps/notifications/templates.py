@@ -31,7 +31,6 @@ from core.ports.email_port import EmailAttachment
 from . import email_layout as ui
 from .exceptions import TemplateMissingError, UnknownNotificationTypeError
 from .models import NotificationChannel, NotificationType
-from .ticket_pdf import PdfBooking, PdfPayment, PdfTicket, build_ticket_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +102,16 @@ CHANNEL_BY_TYPE: dict[str, str] = {
     NotificationType.ATTENDEE_TICKET: NotificationChannel.EMAIL,
     NotificationType.BOOKING_CONFIRMATION_SMS: NotificationChannel.SMS,
     NotificationType.REFUND_CONFIRMATION: NotificationChannel.EMAIL,
+    NotificationType.BOOKING_RECEIPT_SHARED: NotificationChannel.EMAIL,
+    NotificationType.EVENT_CANCELLED_ATTENDEE: NotificationChannel.EMAIL,
+    NotificationType.EVENT_DELETED_ORGANIZER: NotificationChannel.EMAIL,
+    # All three refund-REQUEST messages are EMAIL, deliberately not SMS. Each
+    # carries a reason somebody wrote in prose, and a DLT-approved 160-character
+    # template cannot hold one. "Your refund request was rejected" with no
+    # reason attached is worse than sending nothing.
+    NotificationType.REFUND_REQUEST_RECEIVED: NotificationChannel.EMAIL,
+    NotificationType.REFUND_REQUEST_APPROVED: NotificationChannel.EMAIL,
+    NotificationType.REFUND_REQUEST_REJECTED: NotificationChannel.EMAIL,
     NotificationType.REFUND_CONFIRMATION_SMS: NotificationChannel.SMS,
     NotificationType.OTP: NotificationChannel.SMS,
     NotificationType.EMAIL_VERIFICATION: NotificationChannel.EMAIL,
@@ -117,6 +126,8 @@ CHANNEL_BY_TYPE: dict[str, str] = {
     NotificationType.ADMIN_EVENT_REVIEW: NotificationChannel.EMAIL,
     NotificationType.ADMIN_ORG_VERIFICATION: NotificationChannel.EMAIL,
     NotificationType.ADMIN_PERFORMER_REVIEW: NotificationChannel.EMAIL,
+    NotificationType.ADMIN_HIRE_ENQUIRY: NotificationChannel.EMAIL,
+    NotificationType.HIRE_ENQUIRY_RECEIVED: NotificationChannel.EMAIL,
 }
 
 
@@ -203,7 +214,38 @@ def _welcome(ctx: dict) -> RenderedMessage:
     )
 
 
-def _payment_block(ctx: dict) -> PdfPayment | None:
+@dataclass(frozen=True, slots=True)
+class _Payment:
+    """What was charged, as the handler gathered it.
+
+    This used to be `PdfPayment`, imported from the PDF generator, which made a
+    receipt renderer the owner of a shape the EMAIL needed. The PDF is gone
+    (see the note on `_ticket_delivery`) and the shape stayed, because the
+    facts are the same either way — they just have one renderer now instead of
+    two.
+    """
+
+    amount_display: str = ""
+    platform_fee_display: str = ""
+    reference: str = ""
+    method: str = ""
+    paid_at: str = ""
+    status_label: str = ""
+
+    def has_content(self) -> bool:
+        return any(
+            (
+                self.amount_display,
+                self.platform_fee_display,
+                self.reference,
+                self.method,
+                self.paid_at,
+                self.status_label,
+            )
+        )
+
+
+def _payment_block(ctx: dict) -> _Payment | None:
     """The payment facts, if the caller carried any.
 
     OPTIONAL by design. `handlers.handle_booking_confirmed` loads the booking
@@ -215,7 +257,7 @@ def _payment_block(ctx: dict) -> PdfPayment | None:
     raw = ctx.get("payment")
     if not isinstance(raw, dict):
         return None
-    block = PdfPayment(
+    block = _Payment(
         amount_display=str(raw.get("amount_display") or ""),
         platform_fee_display=str(raw.get("platform_fee_display") or ""),
         reference=str(raw.get("reference") or ""),
@@ -230,8 +272,8 @@ def _tier_label(ticket: dict) -> str:
     """ "Gold — Early bird — ₹300.00 each": the tier, the sale phase that priced
     it, and what that line was actually billed.
 
-    ONE function for both renderers — the email lists these with a count in
-    front and the PDF puts the same string in each page's "Ticket type" cell.
+    The email lists these with a count in front. It was shared with the PDF
+    generator, which no longer exists.
     Two builders would be two answers to "what is this seat called", on the two
     artifacts a buyer compares when a charge looks wrong.
 
@@ -266,6 +308,41 @@ def _tier_lines(tickets: list[dict]) -> list[str]:
 
 
 def _ticket_delivery(ctx: dict) -> RenderedMessage:
+    """The booking confirmation — one screen, no attachment.
+
+    ── WHY THERE IS NO PDF ANY MORE ──────────────────────────────────────
+
+    This message used to carry a generated PDF with ONE PAGE PER ADMISSION:
+    four tickets meant a four-page attachment. Removed by product decision,
+    and the decision matches what the category actually does — BookMyShow and
+    District both put the booking in the message body and send you to the app
+    for the code. Neither attaches a per-ticket document.
+
+    Three things were wrong with the attachment beyond its length:
+
+    1. **Nobody could be admitted with it.** The QR was deliberately not drawn
+       (a forwarded attachment must not be a working entry pass), so the PDF
+       was a receipt that looked like a ticket — the most confusing possible
+       artifact to hand somebody walking to a gate.
+    2. **It made the email a covering note.** The facts that matter were in
+       the attachment, so the message itself had nothing to say and said it in
+       two lines.
+    3. **Attachments cost deliverability.** A ~40 KB binary on every booking is
+       a spam signal on the one transactional message that must never land in
+       a spam folder.
+
+    So the EMAIL is the confirmation now. Everything a buyer needs to file,
+    forward or act on is in the body, and one button goes to the place the
+    scannable code lives. The plain-text part still carries the signed tokens,
+    which is the offline copy the PDF never was.
+
+    ── THE ORDER OF THE SCREEN ───────────────────────────────────────────
+
+    Event, then when, then where, then what was bought, then what was paid,
+    then the button. That is descending order of "what would I open this to
+    find out", and it means the whole thing reads without scrolling on a
+    phone — which is where a booking confirmation is opened.
+    """
     name = ctx.get("name") or "there"
     tickets: list[dict] = list(ctx["tickets"])
     count = len(tickets)
@@ -273,29 +350,30 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
     reference = str(ctx["booking_reference"])
     site = _site_url()
     payment = _payment_block(ctx)
+    organizer = str(ctx.get("organizer_name") or "")
+    maps_url = str(ctx.get("maps_url") or "")
 
     # ── the plain-text part ─────────────────────────────────────────────
     #
-    # It carries the signed tokens, and that matters MORE than it used to.
-    # The PDF no longer draws a QR (see ticket_pdf.py), so this text part is
-    # now the only copy of the credential that survives without the app.
+    # It carries the signed tokens, and that matters MORE than it used to:
+    # with the PDF gone this is the only copy of the credential that survives
+    # without the app.
     lines = [
-        f"Hi {name}, your ticket{plural} for {ctx['event_title']} {'are' if count != 1 else 'is'}"
-        " confirmed.",
+        f"Hi {name}, your ticket{plural} for {ctx['event_title']} "
+        f"{'are' if count != 1 else 'is'} confirmed.",
         "",
-        f"Event:   {ctx['event_title']}",
-        f"When:    {ctx['event_when']}",
-        f"Where:   {ctx['event_where']}",
-        f"Booking: {reference}",
+        f"Event:    {ctx['event_title']}",
+        f"When:     {ctx['event_when']}",
+        f"Where:    {ctx['event_where']}",
     ]
+    if organizer:
+        lines.append(f"Hosted by: {organizer}")
+    lines.append(f"Booking:  {reference}")
     if payment is not None and payment.amount_display:
-        lines.append(f"Paid:    {payment.amount_display}")
-    lines += [
-        "",
-        f"Your ticket{plural}:",
-    ]
+        lines.append(f"Paid:     {payment.amount_display}")
+    lines += ["", f"Your ticket{plural}:"]
     for i, ticket in enumerate(tickets, start=1):
-        lines.append(f"  {i}. {ticket['ticket_type']} — QR: {ticket['qr_token']}")
+        lines.append(f"  {i}. {ticket['ticket_type']} - QR: {ticket['qr_token']}")
     lines += [
         "",
         "One scan admits one person. Show the code from your account at the gate;",
@@ -303,34 +381,49 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
     ]
     if site:
         lines += ["", f"Your tickets: {site}/account/tickets"]
+    if maps_url:
+        lines += [f"Directions:   {maps_url}"]
 
     # ── the HTML part ───────────────────────────────────────────────────
-    facts_rows = [
-        ("Where", str(ctx["event_where"])),
-        ("Booking reference", reference),
-    ]
+    facts_rows = [("Where", str(ctx["event_where"]))]
+    if organizer:
+        # Who to chase if something is wrong on the day, and the name a card
+        # dispute would be opened against. It was in the PDF and nowhere else.
+        facts_rows.append(("Hosted by", organizer))
+    facts_rows.append(("Booking reference", reference))
     if payment is not None and payment.amount_display:
         facts_rows.append(("Amount paid", payment.amount_display))
+    if payment is not None and payment.platform_fee_display:
+        # Shown as INCLUDED, never added. The backend takes the fee out of the
+        # total, so presenting it as a surcharge would be a number the buyer
+        # was never charged.
+        facts_rows.append(("Includes platform fee", payment.platform_fee_display))
+    if payment is not None and payment.method:
+        facts_rows.append(("Paid by", payment.method))
 
     blocks = [
         ui.heading(str(ctx["event_title"])),
         ui.paragraph(
-            f"Hi {name}, you're going. {count} ticket{plural} confirmed — here is "
-            f"everything you need."
+            f"Hi {name}, you're going. {count} ticket{plural} confirmed — everything "
+            f"you need is below."
         ),
         # ONE hero: the start time. It is the fact somebody has to act on, and
-        # the only one on this page that has a deadline attached to it.
+        # the only one here with a deadline attached to it.
         ui.hero(label="Starts", value=str(ctx["event_when"])),
         ui.facts(facts_rows),
         ui.items(_tier_lines(tickets), title=f"{count} ticket{plural}"),
     ]
     if site:
-        # The QR codes themselves are NOT in the HTML part, and are no longer
-        # in the PDF either. An emailed QR is forwardable and screenshot-able,
-        # and this inbox is not necessarily still the ticket holder's — the
-        # account page is the copy that stops working when a booking is
-        # refunded, which is the whole point of sending people to it.
+        # The QR codes are NOT in the HTML part. An emailed QR is forwardable
+        # and screenshot-able, and this inbox is not necessarily still the
+        # ticket holder's — the account page is the copy that stops working
+        # when a booking is refunded, which is the whole point of sending
+        # people to it.
         blocks.append(ui.button(f"View my ticket{plural}", f"{site}/account/tickets"))
+    if maps_url:
+        # A second, quiet link. Not a button: two buttons is two primary
+        # actions, and the one that matters is the ticket.
+        blocks.append(ui.link_line(prefix="Getting there:", label="open directions", url=maps_url))
     blocks.append(
         ui.callout(
             "One scan admits one person. Bring a photo ID that matches the booking "
@@ -338,70 +431,12 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
         )
     )
 
-    # The PDF is built HERE, at render time, for exactly the reason the HTML
-    # is: `dispatch` is a pure send of what was decided at claim time, so a
-    # template change can never alter a message already claimed.
-    #
-    # A failure to build must NOT lose the email. The QR tokens are in `body`
-    # and the account link is in the HTML, so a missing attachment degrades
-    # this message; raising here would dead-letter the single most important
-    # notification in the system over a layout bug.
-    attachments: tuple[EmailAttachment, ...] = ()
-    try:
-        pdf = build_ticket_pdf(
-            event_title=str(ctx["event_title"]),
-            event_when=str(ctx["event_when"]),
-            event_where=str(ctx["event_where"]),
-            booking_reference=reference,
-            tickets=[
-                PdfTicket(
-                    ticket_type=_tier_label(t),
-                    qr_token=str(t.get("qr_token") or ""),
-                    attendee=str(t.get("attendee") or ""),
-                )
-                for t in tickets
-            ],
-            booking=PdfBooking(
-                reference=reference,
-                issued_at=str(ctx.get("issued_at") or ""),
-                attendee=str(ctx.get("attendee") or ""),
-            ),
-            payment=payment,
-            site_url=site,
-            # Both blank unless the handler carried them, and blank draws
-            # nothing — the PDF omits a row rather than printing an empty one.
-            organizer=str(ctx.get("organizer_name") or ""),
-            maps_url=str(ctx.get("maps_url") or ""),
-        )
-    except Exception:  # noqa: BLE001 — deliberate: see the note above
-        logger.exception(
-            "notifications.ticket_pdf.failed",
-            extra={"booking_reference": ctx.get("booking_reference")},
-        )
-    else:
-        attachments = (
-            EmailAttachment(
-                filename=f"curatix-booking-{reference}.pdf",
-                content=pdf,
-                content_type="application/pdf",
-            ),
-        )
-        blocks.append(
-            ui.paragraph(
-                "A PDF copy of this booking — event, reference and payment details — "
-                "is attached. It is a receipt, not an entry pass: the scannable code "
-                f"is in your {BRAND_NAME} account.",
-                muted=True,
-            )
-        )
-
     return RenderedMessage(
-        subject=f"Your ticket{plural} for {ctx['event_title']}",
+        subject=f"Booking confirmed: {ctx['event_title']}",
         body="\n".join(lines),
-        attachments=attachments,
         html=ui.render_email(
             title=f"Your ticket{plural}",
-            preheader=f"{ctx['event_title']} — {ctx['event_when']}",
+            preheader=f"{ctx['event_title']} — {ctx['event_when']} — {reference}",
             masthead_label="E-ticket",
             blocks=blocks,
         ),
@@ -501,6 +536,82 @@ def _booking_confirmation_sms(ctx: dict) -> RenderedMessage:
             f"Your booking {ctx['booking_reference']} for {ctx['event_title']} is confirmed "
             f"({ctx['ticket_count']} ticket(s)). Check your email for tickets."
         ),
+    )
+
+
+def _booking_receipt_shared(ctx: dict) -> RenderedMessage:
+    """The covering note for a receipt somebody forwarded to a friend.
+
+    ── WHAT THIS EMAIL MUST NOT CONTAIN ──────────────────────────────────────
+
+    No QR code, no ticket token, and no link into the buyer's account. The
+    reader is a friend or a relative who did not pay and is not the ticket
+    holder; a code in this mail is a bearer credential handed to whoever the
+    message is forwarded to next. Ticketmaster emails a claim link and reissues
+    the code on acceptance; DICE will not leave the app at all. We send a
+    receipt, which is the part of the transaction that is theirs to have.
+
+    The buyer's name is in it because a mail from an unknown platform about a
+    booking somebody did not make reads as a phishing attempt without it.
+    """
+    booker = str(ctx.get("booker_name") or "Someone")
+    event = str(ctx["event_title"])
+    blocks = [
+        ui.heading("Your booking receipt"),
+        ui.paragraph(
+            f"{booker} booked {event} and asked us to send you the receipt. "
+            f"It is attached as a PDF."
+        ),
+        ui.facts(
+            [
+                ("Event", event),
+                ("When", str(ctx["event_when"])),
+                ("Where", str(ctx["event_where"])),
+                ("Booking ID", str(ctx["booking_reference"])),
+                ("Total paid", str(ctx["total_display"])),
+            ]
+        ),
+        # Said in the email as well as on the PDF. Somebody who is forwarded a
+        # booking document reasonably assumes it gets them in, and finding out
+        # otherwise at a gate is the expensive place to find out.
+        ui.paragraph(
+            "This is a receipt, not a ticket — it will not admit anyone. "
+            f"{booker} holds the entry codes and will show them at the gate."
+        ),
+    ]
+    if ctx.get("note"):
+        blocks.insert(2, ui.paragraph(f"“{ctx['note']}”"))
+
+    attachments: tuple[EmailAttachment, ...] = ()
+    pdf = ctx.get("receipt_pdf_b64")
+    if pdf:
+        import base64
+
+        attachments = (
+            EmailAttachment(
+                filename=f"receipt-{ctx['booking_reference']}.pdf",
+                content=base64.b64decode(str(pdf)),
+                content_type="application/pdf",
+            ),
+        )
+
+    return RenderedMessage(
+        subject=f"Receipt for {event}",
+        body=(
+            f"{booker} booked {event} and asked us to send you the receipt.\n\n"
+            f"When: {ctx['event_when']}\n"
+            f"Where: {ctx['event_where']}\n"
+            f"Booking ID: {ctx['booking_reference']}\n"
+            f"Total paid: {ctx['total_display']}\n\n"
+            "The receipt is attached as a PDF. This is a receipt, not a ticket — "
+            f"it will not admit anyone; {booker} holds the entry codes."
+        ),
+        html=ui.render_email(
+            title=f"Receipt for {event}",
+            preheader=f"{booker} sent you the receipt for {event}.",
+            blocks=blocks,
+        ),
+        attachments=attachments,
     )
 
 
@@ -893,22 +1004,391 @@ def _admin_performer_review(ctx: dict) -> RenderedMessage:
     )
 
 
+def _admin_hire_enquiry(ctx: dict) -> RenderedMessage:
+    """To the OPERATOR: somebody wants to hire an act, and only you can answer.
+
+    This is the whole delivery mechanism, not a courtesy copy. There is no
+    marketplace behind it — no listing gets matched, no performer is notified,
+    nothing happens automatically. If this email is not sent or not read, the
+    customer hears nothing at all.
+
+    So it leads with the CONTACT DETAILS rather than the requirement. An
+    operator reading it on a phone needs the number before they need the
+    budget range, and everything else is in the queue.
+    """
+    rows = [
+        ("Contact", str(ctx.get("contact_name") or "—")),
+        ("Phone", str(ctx.get("contact_phone") or "—")),
+        ("Email", str(ctx.get("contact_email") or "—")),
+        ("Looking for", str(ctx["performer_type"])),
+        ("City", str(ctx["city"])),
+        ("Date", str(ctx["event_date"])),
+    ]
+    if ctx.get("budget"):
+        rows.append(("Budget", str(ctx["budget"])))
+    return _admin_alert(
+        subject=f"Hire enquiry: {ctx['performer_type']} in {ctx['city']}",
+        preheader="Somebody is waiting to hear back about hiring an act.",
+        heading_text="A hire enquiry is waiting",
+        lead=(
+            "Somebody has asked about hiring an act. Nothing is matched or quoted "
+            "automatically — they hear back when you get in touch."
+        ),
+        facts_rows=rows,
+        queue_label="Open the enquiry queue",
+        queue_path="/admin/enquiries",
+        note=(
+            "Mark it as being handled when you pick it up, so a colleague does not "
+            "call the same person."
+        ),
+    )
+
+
+def _hire_enquiry_received(ctx: dict) -> RenderedMessage:
+    """To the CUSTOMER: we have it, and a person will reply.
+
+    ── IT PROMISES NO TIMEFRAME ──────────────────────────────────────────
+
+    "Within 24 hours" was considered and rejected for the same reason the
+    refund copy refuses "within 48 hours": nothing here measures or enforces
+    one, so it would be a number with nothing behind it — and the first person
+    it disappoints is somebody who is already waiting.
+
+    What it does promise is checkable: a human reads it, and the reply comes
+    to the details they gave.
+    """
+    name = ctx.get("contact_name") or "there"
+    site = _site_url()
+    blocks = [
+        ui.heading("We have your enquiry"),
+        ui.paragraph(
+            f"Hi {name}, thanks — this is with our team now. Somebody will read it and "
+            f"get back to you on the details you gave us."
+        ),
+        ui.facts(
+            [
+                ("Looking for", str(ctx["performer_type"])),
+                ("City", str(ctx["city"])),
+                ("Date", str(ctx["event_date"])),
+            ]
+        ),
+        ui.paragraph(
+            "If anything changes, you can withdraw it from your account and we will "
+            "stop working on it."
+        ),
+    ]
+    if site:
+        blocks.append(ui.button("See your enquiries", f"{site}/account/enquiries"))
+    return RenderedMessage(
+        subject="We have your hire enquiry",
+        body=(
+            f"Hi {name},\n\n"
+            f"Thanks — your enquiry is with our team and somebody will get back to you "
+            f"on the details you gave us.\n\n"
+            f"Looking for: {ctx['performer_type']}\n"
+            f"City: {ctx['city']}\n"
+            f"Date: {ctx['event_date']}\n\n"
+            f"If anything changes you can withdraw it from your account.\n"
+            + (f"\n{site}/account/enquiries\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Enquiry received",
+            preheader="It is with our team, and somebody will get back to you.",
+            masthead_label="Enquiry",
+            blocks=blocks,
+        ),
+    )
+
+
+def _refund_request_received(ctx: dict) -> RenderedMessage:
+    """To the ORGANIZER: somebody is waiting on you.
+
+    Without this, a request lands in a queue nobody knows to open — which is
+    the exact failure the whole `RefundRequest` model was added to fix, simply
+    moved one step later.
+
+    The customer's own words are QUOTED rather than summarised. The organizer
+    is deciding, and a paraphrase would be this module inventing the reason.
+    """
+    site = _site_url()
+    who = ctx.get("customer_name") or ctx["customer_email"]
+    blocks = [
+        ui.eyebrow("Needs your decision"),
+        ui.heading("A customer has asked for a refund"),
+        ui.paragraph(
+            f"{who} has requested a refund for their booking. Nothing has been refunded "
+            f"— it is waiting on you."
+        ),
+        ui.hero(
+            label="Amount requested",
+            value=str(ctx["amount_display"]),
+            sub=str(ctx["event_title"]),
+        ),
+        ui.facts(
+            [
+                ("Event", str(ctx["event_title"])),
+                ("Booking", str(ctx["booking_reference"])),
+                ("Customer", str(ctx["customer_email"])),
+            ]
+        ),
+        ui.items([str(ctx["reason"])], title="Their reason"),
+    ]
+    if site:
+        blocks.append(ui.button("Review the request", f"{site}/dashboard/refunds"))
+    return RenderedMessage(
+        subject=f"Refund requested for {ctx['event_title']}",
+        body=(
+            f"A customer has requested a refund.\n\n"
+            f"Event:    {ctx['event_title']}\n"
+            f"Booking:  {ctx['booking_reference']}\n"
+            f"Customer: {ctx['customer_email']}\n"
+            f"Amount:   {ctx['amount_display']}\n\n"
+            f"Their reason:\n{ctx['reason']}\n\n"
+            f"Nothing has been refunded yet - this is waiting on your decision.\n"
+            + (f"\nReview it: {site}/dashboard/refunds\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Refund requested",
+            preheader="A customer is waiting on a refund decision.",
+            masthead_label="Needs a decision",
+            blocks=blocks,
+        ),
+    )
+
+
+def _refund_request_approved(ctx: dict) -> RenderedMessage:
+    """To the CUSTOMER: approved, and the money is on its way.
+
+    It is careful NOT to say the refund is complete. Approval ENQUEUES the
+    vendor call; the money arriving is a separate fact that gets its own
+    `REFUND_CONFIRMATION` message once it has actually moved. Saying "refunded"
+    before it is true is how a support queue fills with people asking where
+    their money is — and it is the same distinction the model itself draws
+    between a `RefundRequest` and a `Refund`.
+    """
+    name = ctx.get("name") or "there"
+    site = _site_url()
+    blocks = [
+        ui.heading("Your refund has been approved"),
+        ui.paragraph(
+            f"Hi {name}, your refund for {ctx['event_title']} has been approved and is "
+            f"being processed now. You will get a second email confirming it once the "
+            f"money has actually left us."
+        ),
+        ui.hero(
+            label="Amount",
+            value=str(ctx["amount_display"]),
+            sub="Back to your original payment method",
+        ),
+        ui.facts([("Event", str(ctx["event_title"])), ("Booking", str(ctx["booking_reference"]))]),
+    ]
+    if ctx.get("note"):
+        blocks.append(ui.items([str(ctx["note"])], title="A note from the organiser"))
+    blocks.append(
+        ui.paragraph(
+            "Banks take 5-7 working days for cards and 1-3 for UPI. That window is "
+            "theirs rather than ours.",
+            muted=True,
+        )
+    )
+    if site:
+        blocks.append(ui.button("View your requests", f"{site}/account/refunds"))
+    return RenderedMessage(
+        subject=f"Refund approved for {ctx['event_title']}",
+        body=(
+            f"Hi {name},\n\n"
+            f"Your refund request for {ctx['event_title']} has been approved and is "
+            f"being processed.\n\n"
+            f"Amount:  {ctx['amount_display']}\n"
+            f"Booking: {ctx['booking_reference']}\n\n"
+            + (f"Note from the organiser:\n{ctx['note']}\n\n" if ctx.get("note") else "")
+            + "You will get a second email once the money has actually left us. Banks "
+            "take 5-7 working days for cards and 1-3 for UPI.\n"
+            + (f"\nYour requests: {site}/account/refunds\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Refund approved",
+            preheader="Approved - the money is on its way.",
+            masthead_label="Refund approved",
+            blocks=blocks,
+        ),
+    )
+
+
+def _refund_request_rejected(ctx: dict) -> RenderedMessage:
+    """To the CUSTOMER: declined, and WHY.
+
+    The note is not optional. `RefundRequestService.decide` refuses a rejection
+    without one, because a refusal with no reason is what turns a declined
+    refund into a chargeback — and it is the only part of a refusal anybody
+    actually reads. It is rendered as the most prominent block for that reason.
+    """
+    name = ctx.get("name") or "there"
+    site = _site_url()
+    blocks = [
+        ui.heading("Your refund request was declined"),
+        ui.paragraph(
+            f"Hi {name}, the organiser has reviewed your request for "
+            f"{ctx['event_title']} and is not able to refund it."
+        ),
+        ui.items([str(ctx["note"])], title="Their reason"),
+        ui.facts([("Event", str(ctx["event_title"])), ("Booking", str(ctx["booking_reference"]))]),
+        ui.paragraph(
+            "Your ticket is still valid and will still admit you. If you think this was "
+            "decided in error, reply to this email and a person will look.",
+            muted=True,
+        ),
+    ]
+    if site:
+        blocks.append(ui.button("View your tickets", f"{site}/account/tickets"))
+    return RenderedMessage(
+        subject=f"About your refund request for {ctx['event_title']}",
+        body=(
+            f"Hi {name},\n\n"
+            f"The organiser has reviewed your refund request for {ctx['event_title']} "
+            f"and is not able to refund it.\n\n"
+            f"Their reason:\n{ctx['note']}\n\n"
+            f"Booking: {ctx['booking_reference']}\n\n"
+            f"Your ticket is still valid and will still admit you.\n"
+            + (f"\nYour tickets: {site}/account/tickets\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Refund request declined",
+            preheader="Declined - with the organiser's reason.",
+            masthead_label="Refund request",
+            blocks=blocks,
+        ),
+    )
+
+
+def _event_cancelled_attendee(ctx: dict) -> RenderedMessage:
+    """To the ATTENDEE: the event is off and the money is coming back.
+
+    The refund timing is the BANK's, not ours, and the copy says so. "Within 48
+    hours" was considered and rejected: the platform issues the refund in
+    seconds but card networks take 5-7 working days, so a 48-hour promise
+    guarantees a support queue on day three — from people who are already
+    annoyed that their event was cancelled.
+
+    THE REASON IS INCLUDED WHEN THERE IS ONE, and it is the second thing on the
+    page. "Cancelled" with no explanation is the single biggest generator of
+    support mail this template exists to prevent — and when an organiser calls
+    an event off the reason is required, so there almost always is one. It is
+    omitted rather than replaced by filler when absent: an operator removing a
+    fraudulent listing has a reason written for the ORGANISER, and forwarding
+    that to a customer would publish an internal judgement.
+    """
+    name = ctx.get("name") or "there"
+    site = _site_url()
+    reason = str(ctx.get("attendee_reason") or "").strip()
+    blocks = [
+        ui.heading(f"{ctx['event_title']} has been cancelled"),
+        ui.paragraph(
+            f"Hi {name}, this event is no longer going ahead and your booking has been "
+            f"cancelled. You do not need to do anything — your refund is already on its way."
+        ),
+        *([ui.paragraph(f"The organiser said: {reason}")] if reason else []),
+        ui.callout(
+            "Card refunds take 5-7 working days; UPI is usually 1-3. It goes back to the "
+            "account you paid from."
+        ),
+        ui.facts([("Event", str(ctx["event_title"])), ("Booking", str(ctx["booking_reference"]))]),
+    ]
+    if site:
+        blocks.append(ui.button("Find something else", f"{site}/events"))
+    return RenderedMessage(
+        subject=f"Cancelled: {ctx['event_title']}",
+        body=(
+            f"Hi {name},\n\n"
+            f"{ctx['event_title']} has been cancelled and your booking has been "
+            f"cancelled with it.\n\n"
+            + (f"The organiser said: {reason}\n\n" if reason else "")
+            + f"Booking: {ctx['booking_reference']}\n\n"
+            f"Your refund is on its way back to the account you paid from. Card refunds "
+            f"take 5-7 working days; UPI is usually 1-3.\n"
+            + (f"\nBrowse what else is on: {site}/events\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Event cancelled",
+            preheader="Your booking is cancelled and your refund is on its way.",
+            masthead_label="Cancelled",
+            blocks=blocks,
+        ),
+    )
+
+
+def _event_deleted_organizer(ctx: dict) -> RenderedMessage:
+    """To the ORGANIZER: your event was removed, and here is exactly why.
+
+    The reason is quoted verbatim and is required by the service. An organizer
+    whose event vanished with no explanation has nothing to act on and no way
+    to avoid a repeat.
+    """
+    site = _site_url()
+    blocks = [
+        ui.heading(f"{ctx['event_title']} has been removed"),
+        ui.paragraph(
+            "A platform operator has removed this event. It is no longer visible anywhere "
+            "on the site, and any tickets sold have been refunded."
+        ),
+        ui.items([str(ctx["reason"])], title="Reason given"),
+        ui.facts(
+            [
+                ("Event", str(ctx["event_title"])),
+                ("Refunds started", str(ctx["refunded_bookings"])),
+            ]
+        ),
+        ui.paragraph(
+            "If you think this was a mistake, reply to this email and an operator will "
+            "look at it.",
+            muted=True,
+        ),
+    ]
+    if site:
+        blocks.append(ui.button("Open your dashboard", f"{site}/dashboard/events"))
+    return RenderedMessage(
+        subject=f"Your event was removed: {ctx['event_title']}",
+        body=(
+            f"A platform operator has removed {ctx['event_title']}.\n\n"
+            f"Reason:\n{ctx['reason']}\n\n"
+            f"Refunds started: {ctx['refunded_bookings']}\n\n"
+            f"It is no longer visible anywhere on the site, and any tickets sold have been "
+            f"refunded. If you think this was a mistake, reply to this email.\n"
+            + (f"\nYour events: {site}/dashboard/events\n" if site else "")
+        ),
+        html=ui.render_email(
+            title="Event removed",
+            preheader="An operator removed your event.",
+            masthead_label="Event removed",
+            blocks=blocks,
+        ),
+    )
+
+
 _TEMPLATES: dict[str, Callable[[dict], RenderedMessage]] = {
     NotificationType.WELCOME: _welcome,
     NotificationType.TICKET_DELIVERY: _ticket_delivery,
     NotificationType.ATTENDEE_TICKET: _attendee_ticket,
     NotificationType.BOOKING_CONFIRMATION_SMS: _booking_confirmation_sms,
     NotificationType.REFUND_CONFIRMATION: _refund_confirmation,
+    NotificationType.BOOKING_RECEIPT_SHARED: _booking_receipt_shared,
     NotificationType.REFUND_CONFIRMATION_SMS: _refund_confirmation_sms,
     NotificationType.OTP: _otp,
     NotificationType.EMAIL_VERIFICATION: _email_verification,
     NotificationType.PAYOUT_RELEASED: _payout_released,
+    NotificationType.EVENT_CANCELLED_ATTENDEE: _event_cancelled_attendee,
+    NotificationType.EVENT_DELETED_ORGANIZER: _event_deleted_organizer,
+    NotificationType.REFUND_REQUEST_RECEIVED: _refund_request_received,
+    NotificationType.REFUND_REQUEST_APPROVED: _refund_request_approved,
+    NotificationType.REFUND_REQUEST_REJECTED: _refund_request_rejected,
     NotificationType.EVENT_REMINDER: _event_reminder,
     NotificationType.EVENT_REMINDER_PUSH: _event_reminder_push,
     NotificationType.BOOKING_CONFIRMED_PUSH: _booking_confirmed_push,
     NotificationType.ADMIN_EVENT_REVIEW: _admin_event_review,
     NotificationType.ADMIN_ORG_VERIFICATION: _admin_org_verification,
     NotificationType.ADMIN_PERFORMER_REVIEW: _admin_performer_review,
+    NotificationType.ADMIN_HIRE_ENQUIRY: _admin_hire_enquiry,
+    NotificationType.HIRE_ENQUIRY_RECEIVED: _hire_enquiry_received,
 }
 
 

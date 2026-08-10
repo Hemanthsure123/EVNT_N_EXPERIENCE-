@@ -35,6 +35,17 @@ urlpatterns += [
         api.EventMediaDetailView.as_view(),
         name="event-media-detail",
     ),
+    path(
+        "events/<uuid:event_id>/cancel",
+        api.EventCancelView.as_view(),
+        name="event-cancel",
+    ),
+    path("events/<uuid:event_id>/slots", api.EventSlotView.as_view(), name="event-slots"),
+    path(
+        "events/<uuid:event_id>/slots/<uuid:slot_id>",
+        api.EventSlotDetailView.as_view(),
+        name="event-slot-detail",
+    ),
     path("events/<uuid:event_id>/faqs", api.EventFaqView.as_view(), name="event-faqs"),
     path(
         "events/<uuid:event_id>/faqs/<uuid:faq_id>",

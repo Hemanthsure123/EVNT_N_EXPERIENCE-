@@ -11,8 +11,14 @@ import {
 import {
   SpotCity,
   SpotHireABand,
+  SpotListing,
+  SpotLookup,
   SpotMood,
+  SpotPayout,
+  SpotPolicy,
+  SpotRefund,
   SpotSubscribe,
+  SpotSupport,
   SpotTicket,
   SpotTicketIssued,
 } from './spots';
@@ -48,7 +54,25 @@ const SCENES = {
   SceneNotFound,
 };
 
-const SPOTS = { SpotHireABand, SpotCity, SpotSubscribe, SpotTicket, SpotMood, SpotTicketIssued };
+const SPOTS = {
+  SpotHireABand,
+  SpotCity,
+  SpotSubscribe,
+  SpotTicket,
+  SpotMood,
+  SpotTicketIssued,
+  // The static-page set: help/contact, the four policy pages, "list your
+  // event" and pricing. Registered here rather than left untested — the four
+  // obligations above are invisible in a screenshot, which is exactly why a new
+  // spot that skips this list is a spot whose gradient collides with its
+  // neighbour on the one page that renders two of them.
+  SpotSupport,
+  SpotPolicy,
+  SpotRefund,
+  SpotListing,
+  SpotLookup,
+  SpotPayout,
+};
 
 const ALL = { ...SCENES, ...SPOTS };
 

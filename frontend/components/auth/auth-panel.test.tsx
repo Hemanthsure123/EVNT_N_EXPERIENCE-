@@ -54,14 +54,12 @@ vi.mock('@/lib/auth/auth-provider', () => ({
 const SUBHEADING = 'Sign in to see your tickets and pick up where you left off.';
 
 const panel = () =>
-  render(
-    <AuthPanel onAuthenticated={vi.fn()} heading="Welcome back" subheading={SUBHEADING} />,
-  );
+  render(<AuthPanel onAuthenticated={vi.fn()} heading="Welcome back" subheading={SUBHEADING} />);
 
 describe('AuthPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.googleSignInAvailable.mockResolvedValue(false);
+    mocks.googleSignInAvailable.mockResolvedValue('unconfigured');
     mocks.requestPhoneOtp.mockRejectedValue(new ProviderNotConfiguredError('Phone'));
   });
 
@@ -81,22 +79,62 @@ describe('AuthPanel', () => {
 
     // The credentials live only on the server, so the button cannot be inferred
     // from a NEXT_PUBLIC flag — and one that 503s is worse than no button.
-    mocks.googleSignInAvailable.mockResolvedValue(true);
+    mocks.googleSignInAvailable.mockResolvedValue('available');
     panel();
     expect(await screen.findByRole('button', { name: /continue with google/i })).toBeVisible();
   });
 
-  it('renders the primary action AFTER the fields, so a late Google button cannot displace it', async () => {
-    mocks.googleSignInAvailable.mockResolvedValue(true);
+  it('SAYS SO when the backend cannot be reached, instead of silently dropping Google', async () => {
+    /**
+     * The regression test for a real report: "my existing feature google sign
+     * in is missing." Nothing was missing. The frontend was pointed at a
+     * backend that was down, `googleSignInAvailable()` returned `false` for
+     * both "not configured" and "could not ask", and the button vanished with
+     * no explanation — while the email form stayed on screen looking fine and
+     * would have failed only on submit.
+     *
+     * `unreachable` is information about the WHOLE panel, not one provider: if
+     * the config call cannot complete, a password cannot be checked either.
+     */
+    mocks.googleSignInAvailable.mockResolvedValue('unreachable');
+    panel();
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/can't reach the sign-in service/i);
+    // ...and the button still does not render, because it genuinely cannot work.
+    expect(screen.queryByRole('button', { name: /continue with google/i })).toBeNull();
+  });
+
+  it('stays SILENT when the backend simply has no Google credentials', async () => {
+    // The other half of the split. A deployment that does not offer Google is
+    // not broken, and an apology on every sign-in would be noise.
+    mocks.googleSignInAvailable.mockResolvedValue('unconfigured');
+    panel();
+
+    await waitFor(() => expect(mocks.googleSignInAvailable).toHaveBeenCalled());
+    expect(screen.queryByText(/can't reach the sign-in service/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /continue with google/i })).toBeNull();
+  });
+
+  it('leads with Google, above the email form', async () => {
+    // This asserted the OPPOSITE order until Google moved up, and the reason
+    // it gave was real: a button that arrives after a config round trip must
+    // not push the primary action out from under a reaching cursor.
+    //
+    // That reason is about the RACE, and the race is still handled — the block
+    // renders only once the backend answers `available`. What changed is WHAT
+    // it displaces. From above the form it moves the method switcher, not the
+    // field being reached for; and for most people one tap with no password is
+    // the fastest way in, so it is not a footnote to the form it replaces.
+    mocks.googleSignInAvailable.mockResolvedValue('available');
     panel();
 
     const google = await screen.findByRole('button', { name: /continue with google/i });
-    const submit = screen.getByRole('button', { name: 'Sign in' });
+    const email = screen.getByLabelText(/email/i);
 
     // `compareDocumentPosition` rather than a snapshot: the assertion is the
-    // ORDER, which is what stops the form jumping under a reaching cursor when
-    // the config round trip lands.
-    expect(submit.compareDocumentPosition(google) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // ORDER, and nothing else about the markup.
+    expect(google.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('fails phone sign-in instantly, with a sentence naming the provider', async () => {

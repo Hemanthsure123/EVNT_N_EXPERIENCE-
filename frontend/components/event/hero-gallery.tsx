@@ -21,10 +21,40 @@ import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
  * filmstrip appears only from the second image — a strip of one thumbnail is
  * chrome around nothing.
  *
- * NO LAYOUT SHIFT: the frame is a fixed `aspect-feature` box with the image as
- * `fill`, so its height is known before the bytes arrive. The box paints a
- * neutral token ramp underneath, which is the blur-up — the photo replaces it
- * as it decodes, without shipping a second encoded placeholder per page.
+ * ── ONE FRAME, AND WHY IT IS FIXED AT 16:9 ────────────────────────────────
+ *
+ * Three attempts came before this one and each fixed the last one's failure
+ * while introducing its own. They are worth naming, because the fourth answer
+ * is not obvious from the first three:
+ *
+ *   1. `object-cover` in a 4:3 box CROPPED a portrait poster's top and bottom.
+ *   2. `object-contain` in a 16:9 box did not crop and made the poster tiny —
+ *      a strip of picture between two wide blurred bars.
+ *   3. A frame that TOOK THE PICTURE'S OWN SHAPE fixed both, and broke the
+ *      page: sized by height with `w-auto`, a landscape image resolved to
+ *      917px wide inside a 352px column and ran straight over the event's
+ *      title. Measured, not guessed — the h1 sat at x=520 under an image
+ *      spanning x=105 to x=1022.
+ *
+ * The third attempt was wrong in principle, not just in its clamp. A page
+ * whose frame changes shape per event has no layout — every event page is a
+ * different page, the filmstrip below never lines up, and no column can be
+ * sized because nothing knows how tall the picture will be.
+ *
+ * So the frame is FIXED at 16:9 and the pictures are required to be that
+ * shape, which is what every serious platform does: Eventbrite pins
+ * 2160x1080 and tells designers to centre the artwork so it survives the
+ * crop, Luma pins square at 800 minimum, Skiddle pins square at 800-1024 and
+ * publishes that 95% of its rejections are text, crop and resolution. The
+ * door is `core.uploads.EVENT_IMAGE_SPEC`; this is the frame it exists for.
+ *
+ * `object-cover`, therefore, and not `contain`: inside the accepted band
+ * there is nothing to letterbox, and a conforming image fills the frame
+ * exactly. Images stored before the gate existed are cropped rather than
+ * shrunk — the lightbox is one press away and shows them whole.
+ *
+ * NO LAYOUT SHIFT falls out of it: the height is known from the width before
+ * a byte arrives, on every event, forever.
  *
  * NO PHOTO IS A DESIGN STATE, NOT A HOLE, and it is no longer a brand gradient.
  * Most events in this catalogue have no media, so on mobile this box is the
@@ -126,7 +156,9 @@ export function HeroGallery({
   return (
     <>
       <div className={cn('flex flex-col gap-2', className)}>
-        <div className="group/hero relative aspect-feature w-full overflow-hidden rounded-xl border border-border bg-muted">
+        {/* 16:9, always. See the note at the top of this file for the three
+            shapes that came before it and what each one broke. */}
+        <div className="group/hero relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-muted">
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {!current ? (
             <div
@@ -140,14 +172,32 @@ export function HeroGallery({
             </div>
           ) : null}
           {current ? (
+            /* No blurred backdrop any more. It existed to fill the bars a
+               contained picture left behind, and a conforming image leaves
+               none — so it was a second full-size decode of the same file,
+               on the LCP element, for nothing. */
             <Image
               src={current.url}
               alt={current.alt}
               fill
               priority={priority}
-              sizes="(min-width: 1024px) 800px, 100vw"
+              sizes="(min-width: 1024px) 832px, 100vw"
               className="object-cover"
             />
+          ) : null}
+
+          {/* Prev/next ON the image. The filmstrip below already changes the
+              picture, but a strip is a jump-to control — stepping through in
+              order is the gesture people arrive with, and on a phone there is
+              no filmstrip visible without scrolling the row. */}
+          {images.length > 1 ? (
+            <>
+              {/* The same control the lightbox uses. `glass-media` is the one
+                  treatment that stays dark in both themes, which is what it
+                  has to do when what is behind it is an arbitrary photograph. */}
+              <LightboxArrow side="left" onClick={() => step(-1)} />
+              <LightboxArrow side="right" onClick={() => step(1)} />
+            </>
           ) : null}
 
           {current ? (
@@ -183,7 +233,10 @@ export function HeroGallery({
                   aria-label={image.alt || `Photo ${position + 1}`}
                   aria-current={position === safeIndex}
                   className={cn(
-                    'relative block size-16 overflow-hidden rounded-lg border transition sm:size-20',
+                    // 16:9 like the frame it drives. Square thumbnails of
+                    // widescreen pictures crop each one differently, so the
+                    // strip stopped being a preview of what pressing it shows.
+                    'relative block aspect-video w-24 overflow-hidden rounded-lg border transition sm:w-28',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     // A selected hairline is one of the two sanctioned uses of
                     // the wayfinding violet, and the ring is what makes it
@@ -195,7 +248,7 @@ export function HeroGallery({
                 >
                   {/* Empty alt: the button already carries the description, and
                       repeating it here would announce every photo twice. */}
-                  <Image src={image.url} alt="" fill sizes="80px" className="object-cover" />
+                  <Image src={image.url} alt="" fill sizes="112px" className="object-cover" />
                 </button>
               </li>
             ))}
@@ -218,12 +271,18 @@ export function HeroGallery({
             onClick={(event) => event.stopPropagation()}
             className="relative flex max-h-full w-full max-w-4xl flex-col gap-3 outline-none"
           >
-            <div className="relative aspect-feature w-full overflow-hidden rounded-2xl bg-muted">
+            {/* `contain` HERE, and cover on the page — the two are doing
+                different jobs. The page frame is a layout that has to be one
+                shape on every event; the lightbox is somebody asking to see
+                the picture, so it shows all of it, including the parts a
+                pre-gate image loses to the frame's crop. */}
+            <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-overlay">
               <Image
                 src={current.url}
                 alt={current.alt}
                 fill
                 sizes="(min-width: 1024px) 900px, 100vw"
+                className="object-contain"
                 priority
               />
               {images.length > 1 ? (

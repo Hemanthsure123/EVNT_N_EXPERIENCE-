@@ -1,14 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowLeft, Eye, EyeOff, Info, Lock, Mail, Phone, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Info, Mail, Phone, TriangleAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, isApiError } from '@/lib/api/errors';
+import { AccountSuspended } from '@/components/auth/account-suspended';
 import {
   googleSignInAvailable,
+  type GoogleSignInAvailability,
   ProviderNotConfiguredError,
   requestPhoneOtp,
   resendVerification,
@@ -51,7 +53,7 @@ import { GoogleMark } from './provider-marks';
  *
  * It used to be: mode tabs, provider buttons, an "or" rule, method tabs, then
  * finally the form. Five groups of chrome before the first field, and — worse —
- * `googleReady` starts UNDEFINED and resolves after a network round trip, so
+ * `google` starts UNDEFINED and resolves after a network round trip, so
  * the entire form JUMPED DOWN a moment after paint, right as somebody was
  * reaching for the email box.
  *
@@ -109,9 +111,10 @@ export function AuthPanel({
   // not an optional interstitial — it is the only way forward, which is why it
   // REPLACES the form rather than appearing beside it.
   const [awaitingVerification, setAwaitingVerification] = React.useState<string | null>(null);
+  const [suspended, setSuspended] = React.useState<string | null>(null);
   // Asked of the BACKEND, because the Google credentials live only there.
   // Undefined while unknown, so the button is not flashed and then withdrawn.
-  const [googleReady, setGoogleReady] = React.useState<boolean | undefined>(undefined);
+  const [google, setGoogle] = React.useState<GoogleSignInAvailability | undefined>(undefined);
   const [method, setMethod] = React.useState<Method>('email');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -129,6 +132,10 @@ export function AuthPanel({
   const reset = () => {
     setError(null);
     setNotice(null);
+    // Cleared on every submit: switching between sign-in and sign-up, or
+    // trying a different address, must not leave the previous account's dead
+    // end on screen.
+    setSuspended(null);
   };
 
   const handleUnverified = (thrown: unknown): boolean => {
@@ -149,6 +156,15 @@ export function AuthPanel({
 
   const handle = (thrown: unknown) => {
     if (handleUnverified(thrown)) return;
+    // A distinct code, for the same reason `email_not_verified` is one: the
+    // credential was right and there is nothing on this form that can help.
+    // Rendering it as a red line under the password field would send them to
+    // reset a password that was never wrong — which is precisely the loop the
+    // backend stopped disguising.
+    if (isApiError(thrown) && thrown.code === 'account_suspended') {
+      setSuspended(email.trim().toLowerCase());
+      return;
+    }
     if (thrown instanceof ProviderNotConfiguredError) {
       // Not an error the user caused — say what's true and point at what works.
       // Email + password is the one method with a backend behind it today.
@@ -164,8 +180,8 @@ export function AuthPanel({
 
   React.useEffect(() => {
     let cancelled = false;
-    void googleSignInAvailable().then((available) => {
-      if (!cancelled) setGoogleReady(available);
+    void googleSignInAvailable().then((availability) => {
+      if (!cancelled) setGoogle(availability);
     });
     return () => {
       cancelled = true;
@@ -229,6 +245,21 @@ export function AuthPanel({
     }
   };
 
+  if (suspended) {
+    return (
+      <AccountSuspended
+        email={suspended}
+        onUseAnotherEmail={() => {
+          setSuspended(null);
+          setEmail('');
+          setPassword('');
+          reset();
+        }}
+        className={className}
+      />
+    );
+  }
+
   if (awaitingVerification) {
     return (
       <VerifyEmailStep
@@ -246,10 +277,19 @@ export function AuthPanel({
   const submitLabel = mode === 'signin' ? 'Sign in' : 'Create account';
 
   return (
-    <div className={cn('flex w-full flex-col gap-block', className)}>
+    // `gap-stack-lg` (16px) between the panel's own parts, NOT `gap-block`
+    // (24px). The page rhythm is for section-to-section on a long page; this
+    // is one compact card whose whole job is to be read and filled in without
+    // scrolling. At `gap-block` the header, the method tabs, the form, the
+    // divider and the provider buttons were five gaps of 24px — 120px of air
+    // in a card that fits on one screen only just.
+    <div className={cn('flex w-full flex-col gap-stack-lg', className)}>
       {heading ? (
-        <header className="flex flex-col gap-stack">
-          <h1 className="text-h3 sm:text-h2">
+        <header className="flex flex-col gap-1.5">
+          {/* One rung down: an auth card's title is a label for the form under
+              it, not the headline of a page. `text-h2` at the top of a 480px
+              column pushes the first input below the fold on a laptop. */}
+          <h1 className="text-h4 sm:text-h3">
             {mode === 'signin' ? heading : 'Create your account'}
           </h1>
           {subheading ? (
@@ -303,10 +343,36 @@ export function AuthPanel({
         ))}
       </div>
 
+      {/* ── GOOGLE FIRST ───────────────────────────────────────────────────
+          It used to sit BELOW the form, on the reasoning that a button which
+          arrives asynchronously must not push the primary action out from
+          under a cursor. That reasoning was about the RACE, and the race is
+          still handled: this only renders once `google === 'available'`, and
+          from up here what it displaces is the method switcher rather than the
+          field somebody is reaching for.
+
+          Above, because for most people it is the fastest way in — one tap and
+          no password, against typing an address and waiting for a code. An
+          option that replaces the whole form is not a footnote to it, and the
+          rule now reads "or" leading INTO the form rather than trailing off
+          the end of it. */}
+      {google === 'available' ? (
+        <div className="flex flex-col gap-stack">
+          <ProviderButton onClick={continueWithGoogle} label="Continue with Google">
+            <GoogleMark />
+          </ProviderButton>
+          <div className="flex items-center gap-3" aria-hidden>
+            <span className="h-px flex-1 bg-border" />
+            <span className="text-caption uppercase tracking-wide text-foreground-subtle">or</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+        </div>
+      ) : null}
+
       {/* Method + form are ONE group, bound by the tighter `stack-lg` rung, so
           the switch reads as belonging to the fields under it rather than as a
           second navigation bar under the first. */}
-      <div className="flex flex-col gap-stack-lg">
+      <div className="flex flex-col gap-stack">
         <div role="tablist" aria-label="Sign-in method" className="flex gap-2">
           {METHODS.map(({ value, label, icon: Icon }) => (
             <button
@@ -334,7 +400,7 @@ export function AuthPanel({
         </div>
 
         {method === 'email' ? (
-          <form onSubmit={submitEmail} className="flex flex-col gap-stack-lg" noValidate>
+          <form onSubmit={submitEmail} className="flex flex-col gap-stack" noValidate>
             {mode === 'signup' ? (
               <Field label="Full name" htmlFor="auth-name">
                 <Input
@@ -398,7 +464,7 @@ export function AuthPanel({
             </Button>
           </form>
         ) : codeSent ? (
-          <form onSubmit={submitCode} className="flex flex-col gap-stack-lg" noValidate>
+          <form onSubmit={submitCode} className="flex flex-col gap-stack" noValidate>
             <Field label="Verification code" htmlFor="auth-code" hint={`Sent to ${phone}.`}>
               <Input
                 id="auth-code"
@@ -430,7 +496,7 @@ export function AuthPanel({
             </button>
           </form>
         ) : (
-          <form onSubmit={sendCode} className="flex flex-col gap-stack-lg" noValidate>
+          <form onSubmit={sendCode} className="flex flex-col gap-stack" noValidate>
             <Field
               label="Phone number"
               htmlFor="auth-phone"
@@ -457,31 +523,27 @@ export function AuthPanel({
         )}
       </div>
 
-      {/* Google renders only once the backend confirms it is configured — a
-          button that 503s is worse than no button. It sits BELOW the primary
-          action, so the moment it arrives it cannot push the form out from
-          under a cursor, and the "or" rule appears with it rather than
-          dangling above nothing. */}
-      {googleReady ? (
-        <div className="flex flex-col gap-stack-lg">
-          <div className="flex items-center gap-3" aria-hidden>
-            <span className="h-px flex-1 bg-border" />
-            <span className="text-caption uppercase tracking-wide text-foreground-subtle">or</span>
-            <span className="h-px flex-1 bg-border" />
-          </div>
-          <ProviderButton onClick={continueWithGoogle} label="Continue with Google">
-            <GoogleMark />
-          </ProviderButton>
-        </div>
+      {/* ── UNREACHABLE IS NOT "NOT CONFIGURED" ────────────────────────────
+          A deployment that genuinely has no Google credentials hides the
+          button and says nothing — correct, and the case above.
+          But when the config call could not COMPLETE, the missing button is a
+          symptom of something that also breaks the form directly above it: if
+          we cannot reach the backend, a password cannot be checked either.
+          Saying so once beats letting somebody type their credentials into a
+          form that will fail on submit — and beats the conclusion the silence
+          invites, which is that a feature was removed. */}
+      {google === 'unreachable' ? (
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-lg border border-warning-subtle bg-warning-subtle p-3 text-body-sm text-warning-subtle-foreground"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            We can&apos;t reach the sign-in service right now, so other sign-in options are hidden
+            and the form above may not submit. This is on our side — please try again shortly.
+          </span>
+        </p>
       ) : null}
-
-      <p className="flex items-start gap-2 border-t border-border pt-stack-lg text-caption text-foreground-subtle">
-        <Lock className="mt-px size-3.5 shrink-0" aria-hidden />
-        <span>
-          We never store card details — payment happens on the provider&apos;s own encrypted
-          checkout.
-        </span>
-      </p>
     </div>
   );
 }

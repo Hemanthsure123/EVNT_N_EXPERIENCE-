@@ -67,22 +67,145 @@ class TestNoHiddenEnvironmentOverrides:
         for name, service in production["services"].items():
             assert ".env" in (service.get("env_file") or []), f"{name} does not read .env"
 
-    def test_the_overrides_still_exist_but_only_in_the_development_file(self, development):
-        # They are wanted — local dev must not write to production Supabase.
-        # The fix was moving them somewhere named, not deleting them.
-        web_env = development["services"]["web"]["environment"]
-        assert "pgbouncer" in web_env["DATABASE_URL"]
-        assert "redis" in web_env["REDIS_URL"]
+    def test_the_database_is_NOT_overridden_in_development(self, development):
+        """`DATABASE_URL` is now deliberately ABSENT from the dev overrides.
 
-    def test_development_redirects_the_direct_url_away_from_production(self, development):
-        """The path by which `pytest` would have reached production Supabase.
+        This test used to assert the opposite — that development pinned
+        `DATABASE_URL` to a local PgBouncer — on the reasoning that local work
+        must not write to Supabase. That reasoning was sound for a throwaway
+        local database and became wrong the moment Supabase WAS the intended
+        target: the override made the carefully configured URL in `.env` inert,
+        which is the precedence trap this whole file exists to police, sprung
+        in the file that documents it.
 
-        `DIRECT_DATABASE_URL` was NOT overridden, so it fell through to `.env`
-        — and `config/settings/test.py` uses it to CREATE and DROP a database.
+        The guard it was really providing is `pytest` never reaching a managed
+        database. That now lives where it cannot be undone by editing a compose
+        file: `config/settings/test.py` refuses a non-local host outright.
+
+        The local pair is still here behind the `localdb` profile, exactly as
+        the local Redis is behind `local-redis`, and for the same reason — a
+        running container nothing connects to reads, to the next person, as the
+        thing the app is using.
         """
         web_env = development["services"]["web"]["environment"]
-        assert "DIRECT_DATABASE_URL" in web_env
-        assert "supabase" not in web_env["DIRECT_DATABASE_URL"].lower()
+        for name in ("DATABASE_URL", "DIRECT_DATABASE_URL", "STORAGE_BACKEND"):
+            assert name not in web_env, (
+                f"docker-compose.override.yml sets {name}, which outranks .env "
+                f"and would silently disable the managed service configured there."
+            )
+
+    def test_development_runs_settings_that_tolerate_a_real_database(self, development):
+        """`config.settings.dev` REFUSES a non-local database, correctly.
+
+        DEBUG=True plus CORS_ALLOW_ALL_ORIGINS over real data means any 500
+        renders SECRET_KEY and the Razorpay secret to the caller. Now that the
+        stack points at Supabase, the settings module has to be one that does
+        not carry that pair — otherwise the container simply will not boot, and
+        the fix somebody reaches for under time pressure is disabling the gate.
+        """
+        module = development["services"]["web"]["environment"]["DJANGO_SETTINGS_MODULE"]
+        assert module != "config.settings.dev", (
+            "development points at a real database but uses config.settings.dev, "
+            "which refuses to boot against one."
+        )
+
+    def test_the_local_database_is_opt_in(self, development):
+        """Same rule as the local Redis, and it earns its own test.
+
+        A Postgres that starts on every `docker compose up` is a database
+        somebody will point something at by accident — which is precisely how
+        the Supabase URLs in `.env` came to be inert.
+        """
+        for name in ("postgres", "pgbouncer"):
+            profiles = development["services"][name].get("profiles") or []
+            assert "localdb" in profiles, (
+                f"{name} has no profile, so `docker compose up` starts a database "
+                f"nothing connects to."
+            )
+
+    def test_nothing_waits_on_the_profiled_database(self, development):
+        """A `depends_on` on a service that is not started hangs the stack."""
+        for name in ("web", "scheduler", "worker"):
+            depends = development["services"][name].get("depends_on") or {}
+            assert "pgbouncer" not in depends, f"{name} still waits on the profiled pgbouncer"
+            assert "postgres" not in depends, f"{name} still waits on the profiled postgres"
+
+    def test_development_does_not_migrate_on_boot(self, development):
+        """Migrations are a compose PROFILE, never a side effect of starting.
+
+        The dev `command:` ran `manage.py migrate` before `runserver`. Against
+        a throwaway container that was merely untidy; against Supabase it is
+        the auto-migrate hazard `DEPLOYMENT.md` rule 3 exists to prevent —
+        unreviewed schema changes applied on every start, racing across
+        replicas, with no plan printed and no confirmation.
+        """
+        command = development["services"]["web"].get("command") or ""
+        assert (
+            "migrate" not in command
+        ), "the development web service migrates on boot, against a managed database"
+
+    def test_the_cache_is_NOT_overridden_in_development(self, development):
+        """`REDIS_URL` is deliberately absent from the dev overrides.
+
+        The same precedence rule this whole file exists to police, applied in
+        the other direction: `environment:` outranks `env_file:`, so an entry
+        here would make the Upstash URL in `.env` inert — a managed cache
+        configured, paid for, and silently unused, with nothing anywhere
+        saying so.
+
+        Development points at the SAME managed instance the deployed app does,
+        because the cache is the layer where "works locally" diverges most
+        from production: TLS, an off-box round trip, dropped idle connections,
+        rate limits. None of that is exercised by a Redis in the next
+        container.
+
+        The local one still exists behind the `local-redis` compose profile
+        for offline work — a profile rather than a running service, because a
+        container nothing connects to reads, to the next person, as the thing
+        the app is using.
+        """
+        web_env = development["services"]["web"]["environment"]
+        assert "REDIS_URL" not in web_env, (
+            "docker-compose.override.yml sets REDIS_URL, which outranks .env "
+            "and would silently disable the managed cache."
+        )
+
+    def test_nothing_waits_on_the_profiled_redis(self, development):
+        """A `depends_on` pointing at a service that is not started hangs
+        `docker compose up` forever. The dependency had to go with the
+        override."""
+        for name in ("web", "scheduler", "worker"):
+            depends = development["services"][name].get("depends_on") or {}
+            assert "redis" not in depends, f"{name} still waits on the profiled redis"
+
+    def test_the_local_redis_is_opt_in(self, development):
+        redis = development["services"]["redis"]
+        assert "local-redis" in (redis.get("profiles") or []), (
+            "The local Redis has no profile, so `docker compose up` starts a "
+            "cache nothing connects to."
+        )
+
+    def test_the_test_settings_refuse_a_managed_database_themselves(self):
+        """The guard that replaced the compose override.
+
+        `DIRECT_DATABASE_URL` is no longer pinned to a local host in
+        `docker-compose.override.yml` — it points at Supabase, because
+        `migrate_safe` needs the session-mode connection there. So the thing
+        standing between `pytest` and a CREATE/DROP on a managed database is
+        `config/settings/test.py`, and it must not be possible to reach that
+        code path without tripping it.
+
+        Asserted against the SOURCE rather than by importing the module: this
+        suite is already running under those settings, so importing it proves
+        only that the current URL is acceptable, not that the check exists.
+        """
+        source = (
+            Path(__file__).resolve().parents[2] / "config" / "settings" / "test.py"
+        ).read_text(encoding="utf-8")
+        assert "ALLOW_REMOTE_TEST_DATABASE" in source, (
+            "config/settings/test.py no longer has its non-local-host refusal, "
+            "and nothing else stands between pytest and dropping a managed database."
+        )
 
     def test_development_does_not_move_real_money_by_default(self, development):
         """Same shape as the email switch below, and for the same reason.

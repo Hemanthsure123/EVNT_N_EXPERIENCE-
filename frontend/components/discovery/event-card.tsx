@@ -5,9 +5,9 @@ import { ArrowRight, Building2, CalendarDays, MapPin } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import type { EventCard as EventCardData } from '@/lib/api/types';
 import { availabilityBadge } from '@/lib/discovery/availability';
-import { inferCategory } from '@/lib/discovery/categories';
+import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
-import { ClayIcon } from '@/components/illustrations/clay';
+import { EventPosterArt } from '@/components/illustrations/poster';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
@@ -106,7 +106,15 @@ export type EventCardProps = {
 
 export function EventCard({ event, sizes, priority = false, className }: EventCardProps) {
   const badge = availabilityBadge(event);
-  const category = inferCategory(event);
+  // The COLUMN first; inference only where it is still blank.
+  //
+  // Inference was the only option before `Event.category` existed, and it was
+  // wrong in both directions: it matched a concert whose description mentioned
+  // a comedian, and missed a stand-up night whose copy never said "comedy".
+  // It stays as a fallback rather than being deleted, because a catalogue
+  // predating the column is mostly blank and a keyword guess is better than no
+  // chip at all — but a stored value always wins over a guess.
+  const category = categoryBySlug(event.category) ?? inferCategory(event);
   const price = formatFromPrice(event.from_price);
   const CategoryIcon = category?.icon;
   const tint = categoryTint(category?.slug);
@@ -163,12 +171,13 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             // modelled clay object on it — the same pairing the category tiles
             // wear — rather than a brand gradient, so a poster-less card reads
             // as a designed card instead of an advert for the brand.
-            <div
-              className={cn('absolute inset-0 flex items-center justify-center', tint.surface)}
-              aria-hidden
-            >
-              <ClayIcon slug={category?.slug ?? ''} className="size-10 sm:size-20" />
-            </div>
+            // Full-frame composed artwork rather than one centred icon.
+            // A single icon on a flat tint is fine as one card and wrong as a
+            // GRID — twenty poster-less events produced twenty identical
+            // tiles, which reads as a page that failed to load. The
+            // composition is seeded by the event id, so a screenful reads as a
+            // set of related covers. See `illustrations/poster.tsx`.
+            <EventPosterArt slug={category?.slug ?? ''} seed={event.id} className={tint.surface} />
           )}
         </div>
 

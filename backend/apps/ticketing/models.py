@@ -42,7 +42,58 @@ class TicketType(models.Model):
     # PROTECT mirrors the rest of the tree (events are soft-deleted, never
     # hard-deleted); related_name lets the event surface its tiers.
     event = models.ForeignKey("events.Event", on_delete=models.PROTECT, related_name="ticket_types")
+    #: Which SESSION of the event this tier sells, when the event has sessions.
+    #:
+    #: NULL for every simple event and for every tier that predates slots — the
+    #: platform's original behaviour, untouched.
+    #:
+    #: This FK is what gives a slot its own inventory. A slot-scoped tier is
+    #: just another row with its own `quantity`/`sold`/`reserved`, so the
+    #: per-row lock and the no-oversell CHECK constraint below already make an
+    #: evening session incapable of eating a night session's stock. No counting
+    #: logic changed to support slots, which is exactly what should happen when
+    #: a feature is modelled as rows rather than as a special case.
+    #:
+    #: `PROTECT`, like the event FK above and for the same reason: a slot whose
+    #: tiers have sold tickets must not be deletable.
+    slot = models.ForeignKey(
+        "events.EventSlot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="ticket_types",
+    )
     name = models.CharField(max_length=100)
+    #: What this tier actually IS, in the organiser's words. "Standing, front
+    #: of the barrier" — the sentence that stops somebody buying the wrong
+    #: ticket, which is the most expensive mistake a buyer can make on this
+    #: platform because a ticket is not exchangeable.
+    #:
+    #: Blank is the norm, not a gap to fill: most tiers are self-describing
+    #: ("General Admission"), and the panel omits the line rather than
+    #: rendering an empty paragraph.
+    description = models.CharField(max_length=280, blank=True, default="")
+    #: What is INCLUDED — a JSON list of short strings, rendered as ticks.
+    #:
+    #: A list rather than more prose because that is how a buyer reads it: they
+    #: are comparing two tiers and want the difference, not two paragraphs to
+    #: diff by eye. And a JSON column rather than a table for the same reason
+    #: `Event.policies` is one — written whole, read whole, never queried
+    #: across rows, and a join on the tier read would land on the availability
+    #: query, which is deliberately uncached.
+    #:
+    #: The default is the `list` CALLABLE. A mutable `[]` would be shared by
+    #: every instance that does not set it, so one tier appending a perk would
+    #: append it to the next.
+    perks = models.JSONField(default=list, blank=True)
+    #: The organiser's own order for the ticket panel.
+    #:
+    #: Tiers used to be listed by price alone, which is the right DEFAULT and
+    #: the wrong rule: an organiser running a festival wants their weekend pass
+    #: above the day tickets whatever it costs, and merchandising the list is
+    #: the one thing a price sort cannot express. Ties fall back to price, so
+    #: an organiser who never touches this sees exactly the old behaviour.
+    position = models.PositiveIntegerField(default=0)
     price_minor = models.PositiveIntegerField()
     quantity = models.PositiveIntegerField()
     sold = models.PositiveIntegerField(default=0)

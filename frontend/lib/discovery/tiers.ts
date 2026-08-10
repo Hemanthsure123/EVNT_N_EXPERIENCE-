@@ -64,6 +64,27 @@ export type TierSummary = {
   state: AvailabilityState;
 };
 
+/**
+ * The tiers a buyer should actually SEE.
+ *
+ * A tier whose sale has not opened is a row you cannot press, priced at a
+ * number you cannot pay — on the screen where somebody is deciding. Four of
+ * them on a long festival is most of the panel spent on things that are not
+ * for sale, which is what the ticket card looked like.
+ *
+ * So: while ANY tier is on sale, only the on-sale ones are shown. Sold-out
+ * tiers stay — "Gold: sold out" is a real answer to "can I buy Gold", and
+ * hiding it would make the tier look like it never existed.
+ *
+ * When NOTHING is on sale the full ladder comes back, because then the upcoming
+ * prices are the only information the panel has, and an empty card would read
+ * as "this event has no tickets" — a different and wrong fact.
+ */
+export function sellableTiers(tiers: TicketTier[]): TicketTier[] {
+  const onSale = tiers.filter((tier) => tier.is_on_sale);
+  return onSale.length ? onSale : tiers;
+}
+
 export function summariseTiers(tiers: TicketTier[] | null | undefined): TierSummary {
   if (!tiers) {
     return { tiers: [], available: 0, sold: 0, fromPrice: null, state: { kind: 'unknown' } };

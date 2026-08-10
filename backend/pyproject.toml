@@ -15,6 +15,22 @@ dependencies = [
   "gunicorn>=22.0,<23.0",
   "requests>=2.32,<3.0",
   "python-json-logger>=2.0,<3.0",
+  # The shared booking receipt (`apps/booking/receipt_pdf.py`).
+  #
+  # BASE, not an optional extra, and that is the whole point. A previous
+  # `tickets` extra held reportlab for the old per-ticket PDF; when the share
+  # endpoint was added the dependency was not restored, and because the import
+  # is lazy — inside `build_receipt_pdf` — nothing failed at boot and nothing
+  # failed in CI. The first sign of it was a customer pressing "Send receipt"
+  # and getting `ModuleNotFoundError` as a 500.
+  #
+  # An extra only makes sense for something a config value SELECTS
+  # (PAYMENTS_BACKEND=razorpay, STORAGE_BACKEND=s3). Sharing a receipt is not
+  # selectable: the endpoint is mounted on every deployment, so there is no
+  # configuration under which this package is not needed, and making it
+  # optional would simply reintroduce the same 500 the next time somebody
+  # trimmed INSTALL_EXTRAS.
+  "reportlab>=4.2,<5.0",
 ]
 
 [project.optional-dependencies]
@@ -66,14 +82,10 @@ observability = [
 s3 = [
   "boto3>=1.34,<2.0",
 ]
-# Ticket PDFs. reportlab ALONE covers both halves of this — the document and
-# the QR — via `reportlab.graphics.barcode.qr`, so there is no separate QR
-# encoder and no Pillow: the code is drawn as vector rectangles straight into
-# the PDF. That is smaller, sharper at any zoom, and one dependency instead of
-# three. Only needed where ticket emails are actually sent.
-tickets = [
-  "reportlab>=4.2,<5.0",
-]
+# A `tickets` extra held `reportlab` for the generated booking PDF. That
+# document is gone — the booking confirmation is the EMAIL now, and the
+# scannable code lives in the app (see `templates._ticket_delivery`) — so the
+# dependency went with it rather than being carried, unused, into every image.
 razorpay = [
   "razorpay>=1.4,<2.0",
   # razorpay 1.4.2 does `import pkg_resources` at module scope. That module

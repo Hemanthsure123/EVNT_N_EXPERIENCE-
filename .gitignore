@@ -70,3 +70,14 @@ desktop.ini
 .env.backup*
 .env.*.bak
 *.env.backup
+
+# Local backups of tracked config. `.env.*.bak` above covers the dangerous
+# case; this is the general one — a backup is a working-tree convenience and
+# never a repository file. `docker-compose.override.yml.bak` reached the index
+# through `git add -A` and would have shipped a second, stale override.
+*.bak
+*.orig
+
+# Throwaway browser probes written while debugging a page (Playwright one-offs).
+# Not application code, and not something a checkout should carry.
+_*probe*.mjs

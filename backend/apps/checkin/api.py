@@ -23,7 +23,13 @@ from apps.accounts.models import User
 from config.di import build_checkin_service
 from core.throttling import CheckinThrottle
 
-from .schemas import AttendanceSerializer, VerifyRequestSerializer, VerifyResultSerializer
+from .schemas import (
+    AttendanceSerializer,
+    LookupRequestSerializer,
+    LookupResultSerializer,
+    VerifyRequestSerializer,
+    VerifyResultSerializer,
+)
 
 
 def _no_store(response: Response) -> Response:
@@ -59,6 +65,42 @@ class CheckinVerifyView(APIView):
         )
         body = VerifyResultSerializer(asdict(result)).data
         return _no_store(Response(body, status=status.HTTP_200_OK))
+
+
+class CheckinLookupView(APIView):
+    """Resolve a QR token WITHOUT admitting it.
+
+    The read-only twin of `CheckinVerifyView`, and the reason it exists is that
+    verify was previously the only way to read a ticket at all — so answering
+    "has this person already gone in?" meant marking them as having gone in.
+
+    Same throttle scope as verify: it is the same token being presented by the
+    same kind of client, and a lookup is strictly cheaper than a scan (no lock,
+    no writes), so it cannot need a looser limit.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [CheckinThrottle]
+
+    @extend_schema(
+        request=LookupRequestSerializer,
+        responses={200: LookupResultSerializer},
+        operation_id="checkin_lookup",
+    )
+    def post(self, request: Request) -> Response:
+        payload = LookupRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        user = cast(User, request.user)
+        service = build_checkin_service()
+        result = service.lookup_ticket(
+            event_id=data["event_id"],
+            qr_token=data["qr_token"],
+            actor_id=user.id,
+            is_admin=user.is_staff,
+        )
+        return _no_store(Response(LookupResultSerializer(asdict(result)).data))
 
 
 class EventAttendanceView(APIView):

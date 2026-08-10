@@ -14,10 +14,10 @@ from __future__ import annotations
 import pytest
 
 from apps.accounts.exceptions import (
+    AccountSuspendedError,
     GoogleAccountUnverifiedError,
     GoogleSignInCancelledError,
     GoogleSignInUnavailableError,
-    InvalidCredentialsError,
     OAuthStateInvalidError,
 )
 from apps.accounts.models import User
@@ -210,7 +210,9 @@ class TestAccountLinking:
 
     def test_a_suspended_account_cannot_sign_in_through_google(self):
         """Suspension is an access decision and applies to every route in, not
-        just the password one."""
+        just the password one — and it is NAMED here for the same reason it is
+        on the password route: Google has just proven this person owns the
+        address, so there is nothing left to conceal from them."""
         suspended = User.objects.create_user(email="person@example.com", password="RealPass!23456")
         suspended.email_verified = True
         suspended.is_active = False
@@ -219,7 +221,7 @@ class TestAccountLinking:
         service, _ = build()
         state = _state_from(service.start())
 
-        with pytest.raises(InvalidCredentialsError):
+        with pytest.raises(AccountSuspendedError):
             service.complete(state=state, code="auth-code")
 
     def test_a_google_created_account_has_no_usable_password(self):

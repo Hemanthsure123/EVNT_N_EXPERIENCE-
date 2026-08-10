@@ -19,8 +19,10 @@ import type { Tone } from '@/components/organizer/primitives';
  *   `rejected` shows as "Changes requested" because that is what it means to
  *   an organizer — the note explains what to fix, and resubmitting is one
  *   button.
- * - **Cancelled** is not an `EventStatus`; the closest stored state is
- *   `archived`, which is what an organizer sees.
+ * - **Cancelled** IS a stored state now, and a different one from `archived`:
+ *   archiving hides an event nobody holds a ticket to, while cancelling calls
+ *   off a live one and refunds everybody. It keeps its own badge because the
+ *   two are not interchangeable — one costs money and the other does not.
  *
  * The threshold is a constant here rather than sprinkled through components,
  * so "selling fast" means the same thing on every screen.
@@ -37,6 +39,7 @@ const BY_STATUS: Record<EventStatus, EventBadge> = {
   live: { label: 'Published', tone: 'success' },
   paused: { label: 'Paused', tone: 'warning' },
   finished: { label: 'Completed', tone: 'info' },
+  cancelled: { label: 'Cancelled', tone: 'danger' },
   archived: { label: 'Archived', tone: 'neutral' },
 };
 
@@ -61,5 +64,6 @@ export const STATUS_FILTERS: { value: '' | EventStatus; label: string }[] = [
   { value: 'draft', label: 'Draft' },
   { value: 'paused', label: 'Paused' },
   { value: 'finished', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
   { value: 'archived', label: 'Archived' },
 ];

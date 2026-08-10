@@ -64,6 +64,9 @@ export function DataTable<Row extends { id: string }>({
   hasMore = false,
   onLoadMore,
   searchPlaceholder = 'Search these rows…',
+  search,
+  onSearchChange,
+  toolbarExtra,
   bulkActions = [],
   emptyTitle,
   emptyBody,
@@ -78,6 +81,23 @@ export function DataTable<Row extends { id: string }>({
   hasMore?: boolean;
   onLoadMore?: () => void;
   searchPlaceholder?: string;
+  /**
+   * Hand the search box to the SERVER.
+   *
+   * Supplied together, these make the input a controlled field whose value the
+   * caller sends as a query param, and the client-side filter step is skipped
+   * because the rows arriving are already the answer. Omitted, the table keeps
+   * its own box and filters the rows it holds.
+   *
+   * The distinction matters because these lists are cursor-paginated: a
+   * client-side search over page one looks exactly like a search over the
+   * whole platform and silently is not, which is how an operator concludes an
+   * organisation does not exist.
+   */
+  search?: string;
+  onSearchChange?: (value: string) => void;
+  /** Extra toolbar controls — a date window, a status select. */
+  toolbarExtra?: React.ReactNode;
   bulkActions?: BulkAction<Row>[];
   emptyTitle: string;
   emptyBody: string;
@@ -86,7 +106,10 @@ export function DataTable<Row extends { id: string }>({
   highlightId?: string | null;
   className?: string;
 }) {
-  const [query, setQuery] = React.useState('');
+  const serverSide = onSearchChange !== undefined;
+  const [localQuery, setLocalQuery] = React.useState('');
+  const query = serverSide ? (search ?? '') : localQuery;
+  const setQuery = serverSide ? onSearchChange : setLocalQuery;
   const [sort, setSort] = React.useState<{ id: string; dir: 'asc' | 'desc' } | null>(null);
   const [hidden, setHidden] = React.useState<Set<string>>(
     () => new Set(columns.filter((column) => column.defaultHidden).map((column) => column.id)),
@@ -97,12 +120,15 @@ export function DataTable<Row extends { id: string }>({
   const visible = columns.filter((column) => !hidden.has(column.id));
 
   const filtered = React.useMemo(() => {
+    // Server-filtered rows ARE the result; filtering them again would drop
+    // matches the server found on columns this table does not render.
+    if (serverSide) return rows;
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter((row) =>
       columns.some((column) => column.searchValue?.(row).toLowerCase().includes(needle)),
     );
-  }, [rows, columns, query]);
+  }, [rows, columns, query, serverSide]);
 
   const sorted = React.useMemo(() => {
     if (!sort) return filtered;
@@ -174,6 +200,8 @@ export function DataTable<Row extends { id: string }>({
             </button>
           ) : null}
         </div>
+
+        {toolbarExtra}
 
         <Popover>
           <PopoverTrigger

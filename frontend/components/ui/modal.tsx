@@ -37,7 +37,10 @@ export const ModalContent = React.forwardRef<
         ref={ref}
         className={cn(
           'fixed left-1/2 top-1/2 z-modal grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-elevated p-6 text-foreground shadow-xl',
-          'animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+          // A dialog scales from its own centre because it HAS no origin on the
+          // page — it was summoned. A panel anchored to a control does have
+          // one, and must not use this; `SearchOverlay` overrides both halves.
+          'duration-fast animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
           className,
         )}
         {...props}

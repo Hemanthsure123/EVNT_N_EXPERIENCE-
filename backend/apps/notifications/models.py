@@ -48,7 +48,33 @@ class NotificationType(models.TextChoices):
     # dedupe key, different recipient.
     ATTENDEE_TICKET = "attendee_ticket", "Attendee ticket email"
     BOOKING_CONFIRMATION_SMS = "booking_confirmation_sms", "Booking confirmation SMS"
+    # The buyer sending a RECEIPT to whoever they booked for. Its own type, and
+    # deliberately not a reuse of TICKET_DELIVERY or ATTENDEE_TICKET: those two
+    # carry a scannable code, and this reader must not get one. See
+    # `apps.booking.receipt_pdf` for why that is a security decision rather
+    # than a content preference.
+    BOOKING_RECEIPT_SHARED = "booking_receipt_shared", "Shared booking receipt"
     REFUND_CONFIRMATION = "refund_confirmation", "Refund confirmation email"
+    # An operator removed an event. Two audiences, two messages: the ATTENDEE
+    # is told their booking is cancelled and their money is coming back; the
+    # ORGANIZER is told their event was removed and why. Neither is the other's
+    # message with a word changed.
+    EVENT_CANCELLED_ATTENDEE = "event_cancelled_attendee", "Event cancelled (attendee)"
+    EVENT_DELETED_ORGANIZER = "event_deleted_organizer", "Event removed (organizer)"
+    # ── The refund REQUEST lifecycle ────────────────────────────────────
+    # Three types, because three different people need to be told three
+    # different things — and none of them is "your refund happened", which is
+    # what REFUND_CONFIRMATION above already says once money has actually
+    # moved. A request is a conversation; a refund is a fact.
+    #
+    # REFUND_REQUEST_RECEIVED goes to the ORGANIZER: somebody is waiting on
+    # them. Without it a request sits in a queue nobody knows to open, which is
+    # the exact failure the model was added to fix.
+    REFUND_REQUEST_RECEIVED = "refund_request_received", "Refund request received (organizer)"
+    # ...and these two to the CUSTOMER. The rejection carries the organizer's
+    # note, which is the only part of a refusal anybody reads.
+    REFUND_REQUEST_APPROVED = "refund_request_approved", "Refund request approved"
+    REFUND_REQUEST_REJECTED = "refund_request_rejected", "Refund request rejected"
     REFUND_CONFIRMATION_SMS = "refund_confirmation_sms", "Refund confirmation SMS"
     OTP = "otp", "OTP SMS"
     # Email address ownership proof at registration. SEPARATE from OTP
@@ -72,6 +98,8 @@ class NotificationType(models.TextChoices):
     ADMIN_EVENT_REVIEW = "admin_event_review", "Admin: event awaiting review"
     ADMIN_ORG_VERIFICATION = "admin_org_verification", "Admin: organization awaiting verification"
     ADMIN_PERFORMER_REVIEW = "admin_performer_review", "Admin: performer awaiting review"
+    ADMIN_HIRE_ENQUIRY = "admin_hire_enquiry", "Admin: hire enquiry received"
+    HIRE_ENQUIRY_RECEIVED = "hire_enquiry_received", "Hire enquiry received"
 
 
 class NotificationLog(models.Model):

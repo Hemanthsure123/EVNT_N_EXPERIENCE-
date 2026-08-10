@@ -10,10 +10,25 @@ import { Header } from '@/components/shell/header';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 
-export const metadata: Metadata = pageMetadata(
-  'Style guide',
-  'The living design system — every token and component, in light and dark.',
-);
+export const metadata: Metadata = {
+  ...pageMetadata(
+    'Style guide',
+    'The living design system — every token and component, in light and dark.',
+  ),
+  /**
+   * Internal documentation, on the public domain.
+   *
+   * It was not merely reachable — it was listed in `app/sitemap.ts`, so the
+   * design system was being SUBMITTED to Google alongside the event pages. A
+   * search result for the product that lands on a swatch grid is a worse first
+   * impression than no result, and the page competes with real content for
+   * crawl budget on a site whose event pages are not in the sitemap at all yet.
+   *
+   * Left routable on purpose (the axe sweep scans it, and it is genuinely
+   * useful in review), but out of the index and out of the sitemap.
+   */
+  robots: { index: false, follow: false },
+};
 
 const NAV = [
   { href: '#colours', label: 'Colour' },

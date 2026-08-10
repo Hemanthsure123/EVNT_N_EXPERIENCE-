@@ -10,6 +10,7 @@ import type { EventRow } from '@/lib/api/organizer';
 import { eventBadge } from '@/lib/organizer/event-status';
 import { useEventAnalytics, useInvalidateOrganizer } from '@/lib/organizer/queries';
 import { publishEvent } from '@/lib/api/organizer-writes';
+import { CancelEventButton } from './cancel-event';
 import { describePublishFailure } from '@/lib/organizer/publish-error';
 import { submitBlockers } from '@/lib/organizer/submit-gate';
 import { TOOLBAR_CONTROL, TOOLBAR_ICON } from './data-table';
@@ -104,6 +105,14 @@ export function EventPanel({ row, onClose }: { row: EventRow | null; onClose: ()
                   Public page
                 </PanelAction>
               ) : null}
+              {/* Last, and quiet. It renders only for `live`/`paused` — the
+                  states with somebody to tell — and it is the one control here
+                  that spends money, so it is a ghost button behind a typed
+                  confirmation rather than sitting flush with the navigation
+                  links beside it. */}
+              <span className="ml-auto">
+                <CancelEventButton row={shown} />
+              </span>
             </div>
 
             <div className="flex-1 overflow-y-auto p-card">

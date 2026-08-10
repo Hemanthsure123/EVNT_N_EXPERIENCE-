@@ -169,6 +169,28 @@ def paragraph(text: str, *, muted: bool = False) -> str:
     )
 
 
+def link_line(*, prefix: str, label: str, url: str) -> str:
+    """A quiet secondary link, on its own line.
+
+    `paragraph()` ESCAPES its text — correctly, since everything passed to it
+    is user-controlled — so an anchor cannot be smuggled through it as markup;
+    it would render as literal `<a href=...>` in the message. Rather than add
+    an "allow HTML" flag to `paragraph`, which is how an escaping helper stops
+    escaping, the one shape that legitimately needs an anchor gets its own
+    function with its own escaping.
+
+    NOT a `button()`. Two buttons is two primary actions, and on a booking
+    confirmation exactly one thing is primary: the ticket.
+    """
+    return (
+        f'<tr><td class="gutter subtle" style="padding:0 {GUTTER}px 18px;font-family:{FONT};'
+        f'font-size:13px;line-height:20px;color:{SUBTLE_TEXT};">'
+        f"{escape(prefix)} "
+        f'<a href="{escape(url)}" style="color:{BRAND_DARK};text-decoration:underline;">'
+        f"{escape(label)}</a></td></tr>"
+    )
+
+
 def hero(*, label: str, value: str, sub: str = "") -> str:
     """THE one fact the message exists to deliver.
 

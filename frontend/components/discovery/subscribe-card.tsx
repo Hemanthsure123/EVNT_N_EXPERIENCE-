@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BellOff, Check, Loader2 } from 'lucide-react';
+import {BellOff, Loader2 } from 'lucide-react';
 import { SpotSubscribe } from '@/components/illustrations/spots';
 import { Button } from '@/components/ui/button';
 import { usePush } from '@/lib/push/use-push';
@@ -73,13 +73,24 @@ export function SubscribeCard({
   /** True only where the parent is a real `<ul>` — the results grid. */
   asListItem?: boolean;
 }) {
-  const { state, busy, error, enable, disable } = usePush();
+  const { state, busy, error, enable } = usePush();
   const pathname = usePathname() ?? '/';
 
   // Nothing at all while resolving, and nothing where push could never work.
   // An unsupported browser gets silence rather than an explanation of a
   // feature it cannot have — that is a different card from "you blocked it".
   if (state === 'loading' || state === 'unavailable' || state === 'unsupported') return null;
+
+  // ── AND NOTHING ONCE THEY ARE ON ────────────────────────────────────────
+  //
+  // The card used to stay, switching to "Reminders are on" with a Turn off
+  // button. That makes a browse page carry a settings control forever: it is
+  // an offer, and once accepted an offer has nothing left to say. Somebody who
+  // wants to turn them off goes to Settings, which is where every other
+  // preference on this account lives and where this one is already listed.
+  //
+  // So the card is an ASK, shown only while there is something to ask for.
+  if (state === 'on') return null;
 
   // THE WRAPPER IS THE CALLER'S CHOICE, because this card lives in two places
   // with different parents. Inside the results grid it is one cell of a `<ul>`
@@ -109,13 +120,8 @@ export function SubscribeCard({
 
           <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-none sm:gap-2">
             <h3 className="text-body font-semibold leading-tight text-foreground sm:text-body-lg sm:leading-normal">
-              {state === 'on' ? 'Reminders are on' : 'Get a reminder before the doors open'}
+              Get a reminder before the doors open
             </h3>
-            <p className="text-caption text-muted-foreground sm:text-body-sm">
-              {state === 'on'
-                ? 'We will notify this device the day before an event you have tickets for. Nothing else.'
-                : 'A single notification the day before an event you have tickets for. No marketing.'}
-            </p>
           </div>
         </div>
 
@@ -135,28 +141,13 @@ export function SubscribeCard({
           </p>
         ) : state === 'blocked' ? (
           <p className="text-caption text-muted-foreground">
-            Notifications are blocked for this site in your browser settings. Allowing them there is
-            the only way to switch this back on — a site cannot ask twice.
+            Notifications are blocked for this site. Allow them in your browser settings to
+            switch this back on.
           </p>
-        ) : state === 'on' ? (
-          <div className="flex flex-col gap-2">
-            <p className="inline-flex items-center gap-2 text-body-sm text-success-subtle-foreground">
-              <Check className="size-4 shrink-0" aria-hidden />
-              This device is subscribed
-            </p>
-            {/* A text button is still a button: `min-h-control` gives it the
-                44px of vertical hit area a thumb needs, without turning an
-                8pt-grid card into a form. */}
-            <button
-              type="button"
-              onClick={() => void disable()}
-              disabled={busy}
-              className="inline-flex min-h-control w-fit items-center text-caption text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-            >
-              {busy ? 'Turning off…' : 'Turn off on this device'}
-            </button>
-          </div>
         ) : (
+          /* No `state === 'on'` branch: the card returns null in that state
+             now, so a "This device is subscribed / Turn off" block here would
+             be unreachable. Turning them off lives in Settings. */
           <Button variant="outline" className="w-fit" onClick={() => void enable()} loading={busy}>
             {busy ? (
               <>

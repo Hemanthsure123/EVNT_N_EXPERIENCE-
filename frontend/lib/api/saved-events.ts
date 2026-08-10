@@ -14,6 +14,8 @@ export type SavedEventCard = {
   title: string;
   venue: string;
   city: string;
+  /** Same column the browse card reads. Blank = not categorised. */
+  category: string;
   starts_at: string;
   poster_url: string;
   from_price: number | null;

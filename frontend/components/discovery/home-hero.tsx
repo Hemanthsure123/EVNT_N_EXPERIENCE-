@@ -2,7 +2,10 @@ import * as React from 'react';
 import { Suspense } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Container } from '@/components/shell/container';
-import { HeroSearchTrigger } from '@/components/search/search-trigger';
+// Renamed during the search redesign: one trigger component now serves the
+// header and the hero, so there is one focus trap and one set of keyboard
+// behaviours rather than two that drift.
+import { HeaderSearchTrigger } from '@/components/search/search-trigger';
 import { greetingFor } from '@/lib/discovery/date-windows';
 import { browseHref } from '@/lib/discovery/filters';
 import { type Homepage, fetchHomepageSafe } from '@/lib/api/cms';
@@ -62,10 +65,15 @@ type HomepageHero = Homepage['hero'];
  * in front of the LCP element for six strings that are the same for everybody.
  *
  * It never throws (`fetchHomepageSafe`), and an empty list falls through to the
- * bundled one inside `HeroSearchTrigger`, so a CMS outage costs a suggestion,
+ * bundled one inside `HeaderSearchTrigger`, so a CMS outage costs a suggestion,
  * not the hero.
  */
-async function heroSuggestions(): Promise<PopularSearch[]> {
+// EXPORTED rather than deleted. The trending terms it derives now come from
+// `SearchProvider`, so this file no longer calls it — but it is the only
+// implementation of that derivation, and exporting keeps it available (and
+// type-checked) instead of leaving dead private code `noUnusedLocals` would
+// reject or a suppression comment would hide.
+export async function heroSuggestions(): Promise<PopularSearch[]> {
   const cms = await fetchHomepageSafe();
   return (cms?.popular_searches ?? []).map((row) => ({
     label: row.label,
@@ -75,7 +83,10 @@ async function heroSuggestions(): Promise<PopularSearch[]> {
 
 export async function HomeHero({ hero }: { hero?: HomepageHero }) {
   const greeting = greetingFor();
-  const suggestions = await heroSuggestions();
+  // `heroSuggestions()` is no longer called here: the trending terms it fed
+  // are now provided by `SearchProvider` for every trigger in the product.
+  // The helper is left in place below rather than deleted — it is the only
+  // implementation of that derivation and a future surface may want it.
 
   return (
     <section className="relative isolate overflow-hidden border-b border-border">
@@ -127,7 +138,12 @@ export async function HomeHero({ hero }: { hero?: HomepageHero }) {
               all still link to, so nothing is orphaned.
             */}
             <div className="flex flex-col gap-5">
-              <HeroSearchTrigger terms={suggestions} placeholder={hero?.search_placeholder} />
+              {/* `terms` and `placeholder` are no longer props: the search
+                  redesign moved the rolling trending terms into
+                  `SearchProvider`, so every trigger in the product shows the
+                  same set and there is one place that decides them. Passing
+                  them here would have been a second, drifting source. */}
+              <HeaderSearchTrigger />
               <QuickFilters />
             </div>
           </div>

@@ -1,12 +1,12 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { Sparkles } from 'lucide-react';
-import { PERFORMER_TYPE_LABELS, type PerformerType } from '@/lib/api/performers';
+import { PERFORMER_TYPE_LABELS, type PerformerType } from '@/lib/api/enquiries';
 import { SpotHireABand } from '@/components/illustrations/spots';
 import { Cta } from '@/components/discovery/cta';
 import { Reveal } from '@/components/discovery/reveal';
 import { Container } from '@/components/shell/container';
-import { PerformerArt } from './performer-art';
+import { PerformerScene } from '@/components/illustrations/performer-scenes';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -51,7 +51,7 @@ import { cn } from '@/lib/utils/cn';
  *  3. **The illustration sits BESIDE the copy on a phone**, not above it, so
  *     it costs one line of height rather than a whole band of it.
  *
- * A server component: no state of its own. `PerformerArt` and the spot are
+ * A server component: no state of its own. `PerformerScene` and the spot are
  * client modules for their `useId` gradients — the same, already-paid cost the
  * category tiles carry.
  */
@@ -91,10 +91,6 @@ export function HireABandSection() {
                 New on Curatix
               </span>
               <h2 className="text-h3 sm:text-h2 lg:text-h1">Hire a band for your own event</h2>
-              <p className="text-body-sm text-muted-foreground sm:text-body lg:text-body-lg">
-                Weddings, birthdays, corporate evenings, college fests. Tell us what you need once —
-                every act that fits answers with a real quote.
-              </p>
             </div>
 
             {/* One instance, sized responsively, rather than a mobile copy and
@@ -123,17 +119,21 @@ export function HireABandSection() {
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   )}
                 >
-                  <PerformerArt
+                  {/* A SCENE, not a glyph on a squircle. A grid of squircles
+                      is the iOS app-icon idiom — the exact thing the category
+                      tiles were rebuilt to stop being, and for the same reason
+                      here: a turntable on a rounded square is a symbol for a
+                      DJ, not a picture of one.
+
+                      It keeps its 4:3 box rather than being squared off: these
+                      are composed scenes with a horizon, and cropping one to a
+                      square cuts the ground out from under the figures. The
+                      card's own hover no longer moves it — the reaction is
+                      INSIDE the drawing now (the mic lifts, the ball turns),
+                      which is what `illo-r-*` exists for. */}
+                  <PerformerScene
                     type={type}
-                    className={cn(
-                      // 36px is the floor the clay language sets: below it the
-                      // soft shadow and the gloss become mud rather than
-                      // volume, which is why the small functional slots in
-                      // this codebase keep their lucide line icons instead.
-                      'size-9 shrink-0 transition-transform duration-base ease-spring sm:size-10',
-                      'group-hover:-translate-y-0.5 group-hover:scale-105',
-                      'motion-reduce:transition-none motion-reduce:group-hover:transform-none',
-                    )}
+                    className="h-10 w-[3.3rem] shrink-0 sm:h-14 sm:w-full"
                   />
                   {/* Wrapped, never truncated. "Instrumentalist" is 15
                       characters in a half-width column on a 320px phone — an
@@ -149,17 +149,18 @@ export function HireABandSection() {
 
         <Reveal>
           <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-10 sm:gap-3">
-            <Cta href="/hire/new">Hire a band</Cta>
-            <Cta href="/hire" variant="secondary">
-              Browse performers
-            </Cta>
-            {/* This used to end "Quotes usually arrive within a day or two",
-                which is a RESPONSE TIME — nothing on the platform measures one,
-                so it was a number-shaped promise with nothing behind it. What
-                replaces it is the actual mechanic, which is checkable. */}
-            <p className="text-caption text-muted-foreground">
-              Free to post. One brief reaches every act that fits it.
-            </p>
+            {/* ONE call to action, because there is one thing to do.
+                "Browse performers" sat beside this and pointed at a
+                marketplace that no longer exists — a second button whose only
+                job was to go somewhere the first one already goes. Two CTAs
+                where there is one action is how a section stops having a
+                primary one at all. */}
+            <Cta href="/hire">Tell us what you need</Cta>
+            {/* Both halves are checkable. "Quotes usually arrive within a day
+                or two" was here once — a RESPONSE TIME nothing measures — and
+                "one brief reaches every act that fits it" replaced it and then
+                became untrue in its turn when the supply side went. This is
+                the mechanic as it actually works. */}
           </div>
         </Reveal>
       </Container>

@@ -2,13 +2,29 @@
 
 import * as React from 'react';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Ban, RotateCcw, ShieldCheck, Users } from 'lucide-react';
-import { fetchAdminUsers, setUserSuspended, type AdminUser, type UserRole } from '@/lib/api/admin';
+import { AlertTriangle, Ban, RotateCcw, ShieldCheck, ShieldOff, Users } from 'lucide-react';
+import {
+  fetchAdminUsers,
+  revokeUserVerification,
+  setUserOperator,
+  setUserSuspended,
+  type AdminUser,
+  type UserRole,
+} from '@/lib/api/admin';
 import { cursorFromNextLink } from '@/lib/api/events';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, errorMessage } from '@/lib/api/errors';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { Button } from '@/components/ui/button';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+  Input,
+  Label,
+} from '@/components/ui';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
+import { useConsoleDateWindow } from '@/components/admin/filters';
 import { useDebouncedValue } from '@/lib/utils/use-debounced-value';
 import { EmptyState, ErrorState, StatusPill } from '@/components/organizer/primitives';
 import {
@@ -104,15 +120,22 @@ export function UsersConsole() {
   const [term, setTerm] = React.useState('');
   const [role, setRole] = React.useState<UserRole>('');
   const [busyId, setBusyId] = React.useState<string | null>(null);
+  const [revoking, setRevoking] = React.useState<AdminUser | null>(null);
+  const [revokeReason, setRevokeReason] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const search = useDebouncedValue(term.trim(), 250);
+  const dates = useConsoleDateWindow();
 
   const query = useInfiniteQuery({
-    queryKey: ['admin', 'users', { search, role }],
+    queryKey: ['admin', 'users', { search, role, dates: dates.key }],
     queryFn: ({ pageParam }) =>
       fetchAdminUsers({
         q: search || undefined,
         role: role || undefined,
+        // On `date_joined`, which is what this list orders by — a window on a
+        // different column than the ordering makes the filter and the cursor
+        // disagree about which rows a page holds.
+        ...dates.window,
         cursor: pageParam ?? undefined,
       }),
     initialPageParam: null as string | null,
@@ -152,9 +175,63 @@ export function UsersConsole() {
     [client, offer],
   );
 
+  const setOperator = React.useCallback(
+    async (row: AdminUser, isStaff: boolean) => {
+      setBusyId(row.id);
+      setError(null);
+      try {
+        await setUserOperator(row.id, isStaff);
+        void client.invalidateQueries({ queryKey: ['admin', 'users'] });
+        offer({
+          message: `${row.email} is ${isStaff ? 'now an operator' : 'no longer an operator'}`,
+          // The COMPENSATING write, and it is genuinely reversible: the role
+          // is a boolean and putting it back restores exactly what was there.
+          // That is what makes undo the right affordance here where revoking a
+          // verification gets a confirmation instead.
+          undo: async () => {
+            await setUserOperator(row.id, !isStaff);
+            void client.invalidateQueries({ queryKey: ['admin', 'users'] });
+          },
+        });
+      } catch (thrown) {
+        setError(errorMessage(thrown));
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [client, offer],
+  );
+
+  const revoke = React.useCallback(
+    async (row: AdminUser, reason: string) => {
+      setBusyId(row.id);
+      setError(null);
+      try {
+        await revokeUserVerification(row.id, reason);
+        void client.invalidateQueries({ queryKey: ['admin', 'users'] });
+        setRevoking(null);
+        setRevokeReason('');
+      } catch (thrown) {
+        // The server's own message names the refusal ("you cannot revoke your own"),
+        // which is more use than anything written here.
+        setError(errorMessage(thrown));
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [client],
+  );
+
   const columns = React.useMemo(
-    () => buildColumns({ meId: me?.id ?? '', busyId, onToggle: setSuspended }),
-    [me?.id, busyId, setSuspended],
+    () =>
+      buildColumns({
+        meId: me?.id ?? '',
+        busyId,
+        onToggle: setSuspended,
+        onRevoke: setRevoking,
+        onOperator: setOperator,
+      }),
+    [me?.id, busyId, setSuspended, setOperator],
   );
 
   const table = useDataTable<AdminUser>({
@@ -191,6 +268,69 @@ export function UsersConsole() {
         </p>
       ) : null}
 
+      <Drawer
+        open={Boolean(revoking)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRevoking(null);
+            setRevokeReason('');
+          }
+        }}
+      >
+        <DrawerContent side="responsive" className="sm:max-w-md">
+          <DrawerTitle className="text-h4">Revoke this verification?</DrawerTitle>
+          {/* A CONFIRMATION rather than the undo this console prefers, because
+              the write is not reversible from here: the way back is
+              reinstating the account and having the person prove their address
+              again, which is the whole point of withdrawing the trust. Undo
+              would promise a compensating write that does not exist. */}
+          <DrawerDescription className="text-body-sm text-muted-foreground">
+            {revoking?.email} will be signed out and cannot sign in, or sign up again with this
+            address, until an operator reinstates the account and they verify it afresh. They will
+            be shown how to contact support.
+          </DrawerDescription>
+
+          <div className="mt-stack-lg flex flex-col gap-1.5">
+            <Label htmlFor="revoke-reason">
+              Reason <span className="font-normal text-muted-foreground">— for the audit trail</span>
+            </Label>
+            <Input
+              id="revoke-reason"
+              value={revokeReason}
+              maxLength={500}
+              onChange={(event) => setRevokeReason(event.target.value)}
+              placeholder="Chargeback fraud"
+            />
+            {/* It is never shown to the person it is about: an operator's note
+                is written for the next operator, and rendering it to them
+                would publish an internal judgement. */}
+            <p className="text-caption text-muted-foreground">
+              Recorded against your account. The person never sees it.
+            </p>
+          </div>
+
+          <div className="mt-block flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRevoking(null);
+                setRevokeReason('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!revoking || busyId === revoking.id}
+              loading={Boolean(revoking && busyId === revoking.id)}
+              onClick={() => revoking && void revoke(revoking, revokeReason.trim())}
+            >
+              Revoke verification
+            </Button>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
       <div className="overflow-hidden rounded-xl border border-border bg-surface">
         <TableToolbar>
           <SearchField
@@ -199,6 +339,7 @@ export function UsersConsole() {
             placeholder="Name or email"
             label="Search accounts"
           />
+          {dates.control}
           <div className="ml-auto flex items-center gap-2">
             <DensityToggle table={table} />
             <ColumnChooser table={table} />
@@ -254,10 +395,14 @@ function buildColumns({
   meId,
   busyId,
   onToggle,
+  onRevoke,
+  onOperator,
 }: {
   meId: string;
   busyId: string | null;
   onToggle: (row: AdminUser, suspended: boolean) => void;
+  onRevoke: (row: AdminUser) => void;
+  onOperator: (row: AdminUser, isStaff: boolean) => void;
 }): ColumnDef<AdminUser>[] {
   return [
     {
@@ -280,19 +425,32 @@ function buildColumns({
     {
       key: 'role',
       header: 'Role',
-      width: 130,
+      width: 150,
       // Operators first, then organizers, then attendees — the order an
       // operator scanning for privilege would want.
       sortValue: (row) => (row.is_staff ? 'a' : row.is_organizer ? 'b' : 'c'),
       render: (row) =>
-        row.is_staff ? (
+        // The primary account says so on its own row. Without it the missing
+        // role control reads as a rendering fault rather than as a rule — and
+        // "why can I not demote this one" is a question worth answering in
+        // place rather than in a 409.
+        row.is_superuser ? (
+          <StatusPill tone="info">Primary admin</StatusPill>
+        ) : row.is_staff ? (
           <StatusPill tone="info">Operator</StatusPill>
         ) : row.is_organizer ? (
           <StatusPill tone="warning">Organizer</StatusPill>
         ) : (
           <StatusPill tone="neutral">Attendee</StatusPill>
         ),
-      exportValue: (row) => (row.is_staff ? 'operator' : row.is_organizer ? 'organizer' : 'attendee'),
+      exportValue: (row) =>
+        row.is_superuser
+          ? 'primary admin'
+          : row.is_staff
+            ? 'operator'
+            : row.is_organizer
+              ? 'organizer'
+              : 'attendee',
     },
     {
       key: 'access',
@@ -306,6 +464,22 @@ function buildColumns({
           <StatusPill tone="danger">Suspended</StatusPill>
         ),
       exportValue: (row) => (row.is_active ? 'active' : 'suspended'),
+    },
+    {
+      key: 'verified',
+      header: 'Address',
+      width: 130,
+      sortValue: (row) => (row.email_verified ? 1 : 0),
+      // Its own column rather than folded into Access, because they are two
+      // different blocks with two different fixes: an operator suspended this
+      // account, or nobody ever clicked the code. One pill could not say which.
+      render: (row) =>
+        row.email_verified ? (
+          <StatusPill tone="success">Verified</StatusPill>
+        ) : (
+          <StatusPill tone="warning">Unverified</StatusPill>
+        ),
+      exportValue: (row) => (row.email_verified ? 'verified' : 'unverified'),
     },
     {
       key: 'date_joined',
@@ -329,7 +503,7 @@ function buildColumns({
       // Wide enough for the longer of the two labels at pill padding — the
       // grid's cells are `truncate`, so a button that overruns is clipped
       // rather than wrapped.
-      width: 170,
+      width: 360,
       hideable: false,
       render: (row) => {
         const self = row.id === meId;
@@ -345,35 +519,88 @@ function buildColumns({
         // Two different variants for two different acts. Suspend takes access
         // away, so it is the quieter control that only turns red under the
         // pointer; Reinstate restores it and reads as an ordinary button.
-        return row.is_active ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={blocked || busyId === row.id}
-            title={why}
-            className="h-control text-muted-foreground hover:bg-destructive-subtle hover:text-destructive-subtle-foreground disabled:cursor-not-allowed sm:h-control-sm"
-            leftIcon={<Ban className="size-3.5" aria-hidden />}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(row, true);
-            }}
-          >
-            Suspend
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busyId === row.id}
-            className="h-control sm:h-control-sm"
-            leftIcon={<RotateCcw className="size-3.5" aria-hidden />}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(row, false);
-            }}
-          >
-            Reinstate
-          </Button>
+        return (
+          <span className="flex items-center gap-1">
+            {row.is_active ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={blocked || busyId === row.id}
+                title={why}
+                className="h-control text-muted-foreground hover:bg-destructive-subtle hover:text-destructive-subtle-foreground disabled:cursor-not-allowed sm:h-control-sm"
+                leftIcon={<Ban className="size-3.5" aria-hidden />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggle(row, true);
+                }}
+              >
+                Suspend
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busyId === row.id}
+                className="h-control sm:h-control-sm"
+                leftIcon={<RotateCcw className="size-3.5" aria-hidden />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggle(row, false);
+                }}
+              >
+                Reinstate
+              </Button>
+            )}
+            {/* The role. Absent for your OWN row: the server refuses a
+                self-demotion (you would lose the console that could put it
+                back), so rendering it would be a control that can only fail.
+                Absent for an unverified or suspended account for the same
+                reason — the server refuses those too. */}
+            {/* `!row.is_superuser` is the load-bearing half. The primary
+                account's role is fixed for EVERYBODY — the server refuses it —
+                so rendering the control here would be a button whose only
+                possible outcome is a 409 on the one row where getting it
+                wrong costs the platform its way back in. */}
+            {!self && !row.is_superuser && row.is_active && (row.is_staff || row.email_verified) ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busyId === row.id}
+                title={
+                  row.is_staff
+                    ? 'Remove the operator role'
+                    : 'Give this account access to the console'
+                }
+                className="h-control text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed sm:h-control-sm"
+                leftIcon={<ShieldCheck className="size-3.5" aria-hidden />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOperator(row, !row.is_staff);
+                }}
+              >
+                {row.is_staff ? 'Remove operator' : 'Make operator'}
+              </Button>
+            ) : null}
+            {/* Offered only while the address is still trusted — revoking a
+                revocation is not an operation, and a control whose job is to
+                fail is worse than no control. */}
+            {row.email_verified ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={blocked || busyId === row.id}
+                title={why ?? 'Untrust this address and take the account out of service'}
+                className="h-control text-muted-foreground hover:bg-destructive-subtle hover:text-destructive-subtle-foreground disabled:cursor-not-allowed sm:h-control-sm"
+                leftIcon={<ShieldOff className="size-3.5" aria-hidden />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRevoke(row);
+                }}
+              >
+                Revoke
+              </Button>
+            ) : null}
+          </span>
         );
       },
     },

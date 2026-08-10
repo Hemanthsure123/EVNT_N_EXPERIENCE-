@@ -29,6 +29,7 @@ from .models import (
     PerformerStatus,
     Quote,
     QuoteStatus,
+    RequestKind,
     RequestStatus,
 )
 
@@ -386,12 +387,117 @@ class BookingRequestRepository:
     def get_by_id(self, request_id: uuid.UUID | str) -> BookingRequest | None:
         return BookingRequest.objects.filter(pk=request_id).first()
 
-    def list_for_customer(self, customer_id: uuid.UUID) -> QuerySet[BookingRequest]:
-        return (
-            BookingRequest.objects.filter(customer_id=customer_id)
-            .select_related("booked_performer")
-            .order_by("-created_at")
+    def list_for_customer(
+        self, customer_id: uuid.UUID, *, kind: str | None = None
+    ) -> QuerySet[BookingRequest]:
+        """This customer's own requests, of ONE flow at a time.
+
+        Unfiltered, the marketplace's "my briefs" screen and the enquiry list
+        would each show the other's rows — two products' data in one list,
+        carrying statuses the reading screen has no label for.
+        """
+        queryset = BookingRequest.objects.filter(customer_id=customer_id)
+        if kind is not None:
+            queryset = queryset.filter(kind=kind)
+        return queryset.select_related("booked_performer").order_by("-created_at")
+
+    #: The states an operator can move an enquiry between, as an allow-list.
+    #: `cancelled` is absent on purpose: it is the CUSTOMER's word for their
+    #: own request, and an operator marking somebody's enquiry withdrawn on
+    #: their behalf is a different act from closing it as lost.
+    OPERATOR_STATUSES = (
+        RequestStatus.NEW,
+        RequestStatus.IN_PROGRESS,
+        RequestStatus.CLOSED_WON,
+        RequestStatus.CLOSED_LOST,
+    )
+
+    def list_for_operator(self, *, status: str | None = None, search: str | None = None):
+        """The console's queue.
+
+        FIFO within a status, like the event moderation queue and for the same
+        reason: an operator working top-down should be clearing the longest
+        wait rather than the newest arrival. `select_related` on both people
+        because the table shows the customer on every row — without it a page
+        of 25 is 50 extra queries.
+        """
+        # ENQUIRIES ONLY. This queue filters on enquiry statuses; without the
+        # kind predicate a marketplace brief (status=open) would appear here as
+        # a row the console can neither label nor act on.
+        queryset = (
+            BookingRequest.objects.filter(kind=RequestKind.ENQUIRY)
+            .select_related("customer", "handled_by")
+            .only(
+                "id",
+                "performer_type",
+                "occasion",
+                "city",
+                "event_date",
+                "budget_min_minor",
+                "budget_max_minor",
+                "guests",
+                "notes",
+                "contact_name",
+                "contact_phone",
+                "contact_email",
+                "status",
+                "admin_note",
+                "created_at",
+                "customer__id",
+                "customer__email",
+                "customer__full_name",
+                "handled_by__id",
+                "handled_by__email",
+            )
         )
+        if status in set(self.OPERATOR_STATUSES):
+            queryset = queryset.filter(status=status)
+        if search:
+            queryset = queryset.filter(
+                Q(city__icontains=search)
+                | Q(contact_name__icontains=search)
+                | Q(contact_phone__icontains=search)
+                | Q(contact_email__icontains=search)
+                | Q(customer__email__icontains=search)
+                | Q(notes__icontains=search)
+            )
+        return queryset.order_by("created_at")
+
+    def count_new(self) -> int:
+        """The number on the console's attention bar. `new` is the only state
+        that means somebody is waiting on us."""
+        return BookingRequest.objects.filter(
+            kind=RequestKind.ENQUIRY, status=RequestStatus.NEW
+        ).count()
+
+    def decide(
+        self,
+        *,
+        request_id,
+        status: str,
+        handled_by_id,
+        admin_note: str,
+    ) -> bool:
+        """Move an enquiry, and record who moved it.
+
+        Conditional on it NOT already being withdrawn: a customer who
+        cancelled has taken their request back, and an operator closing it as
+        won afterwards would be recording a booking against a request that no
+        longer exists.
+        """
+        updated = (
+            # `kind` in the predicate, not only the id: an operator action must
+            # not be able to move a marketplace brief into an enquiry state.
+            BookingRequest.objects.filter(pk=request_id, kind=RequestKind.ENQUIRY)
+            .exclude(status=RequestStatus.CANCELLED)
+            .update(
+                status=status,
+                handled_by_id=handled_by_id,
+                admin_note=admin_note,
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
 
     def list_open_for_performer(self, performer: Performer) -> QuerySet[BookingRequest]:
         """The performer's feed: open briefs they can actually serve.
@@ -401,7 +507,12 @@ class BookingRequestRepository:
         deliberately NOT used here: matching a radius needs coordinates, and
         `city` is a plain string on both sides (BACKLOG "Geocoded cities").
         """
+        # MARKETPLACE ONLY, and `OPEN` rather than `NEW`: a performer's leads
+        # are briefs open for quotes. The enquiry rewrite re-pointed this at
+        # the enquiry state, which would have fed operator-handled enquiries —
+        # and their contact details — to every listed act.
         queryset = BookingRequest.objects.filter(
+            kind=RequestKind.MARKETPLACE,
             status=RequestStatus.OPEN,
             performer_type=performer.performer_type,
             city__iexact=performer.city,
@@ -420,7 +531,12 @@ class BookingRequestRepository:
         on one request, and a second accept matches zero rows rather than
         overwriting the first winner.
         """
-        updated = BookingRequest.objects.filter(pk=request_id, status=RequestStatus.OPEN).update(
+        # MARKETPLACE ONLY. `OPEN` is the race guard: two customers cannot
+        # accept two quotes on one brief, because a second accept matches zero
+        # rows rather than overwriting the first winner.
+        updated = BookingRequest.objects.filter(
+            pk=request_id, kind=RequestKind.MARKETPLACE, status=RequestStatus.OPEN
+        ).update(
             status=RequestStatus.BOOKED,
             booked_performer_id=performer_id,
             updated_at=timezone.now(),
@@ -428,9 +544,17 @@ class BookingRequestRepository:
         return updated == 1
 
     def cancel(self, *, request_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
-        updated = BookingRequest.objects.filter(
-            pk=request_id, customer_id=customer_id, status=RequestStatus.OPEN
-        ).update(status=RequestStatus.CANCELLED, updated_at=timezone.now())
+        # Withdrawable while nobody has closed it — including once an
+        # operator has picked it up, because a customer whose plans changed
+        # should not have to phone in to say so.
+        updated = (
+            # BOTH flows on purpose: a customer may withdraw either a brief or
+            # an enquiry, and `cancelled` is the shared terminal state. Already
+            # scoped to their own row by customer_id.
+            BookingRequest.objects.filter(pk=request_id, customer_id=customer_id)
+            .filter(status__in=(RequestStatus.NEW, RequestStatus.IN_PROGRESS))
+            .update(status=RequestStatus.CANCELLED, updated_at=timezone.now())
+        )
         return updated == 1
 
 

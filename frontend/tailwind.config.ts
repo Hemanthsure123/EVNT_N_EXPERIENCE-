@@ -180,6 +180,9 @@ const config: Config = {
       // (`rounded-xl`) are now 16px and panels/modals (`rounded-2xl`) 20px,
       // which lands every existing call site inside the target range without
       // editing one of them. Buttons, inputs and search are `rounded-full`.
+      minHeight: {
+        'ticket-scroll': 'var(--ticket-scroll-min)',
+      },
       borderRadius: {
         sm: 'var(--radius-sm)',
         md: 'var(--radius-md)',
@@ -303,6 +306,12 @@ const config: Config = {
         'bottom-nav': 'var(--bottom-nav-height)',
         'sticky-top': 'var(--sticky-top)',
         'sticky-top-lg': 'var(--sticky-top-lg)',
+        // How tall the event poster is allowed to get. Named because the
+        // number is a JUDGEMENT — enough of the viewport that the artwork
+        // reads, little enough that the title and the ticket panel stay above
+        // the fold — and a judgement belongs in one place, not inline on one
+        // component as an arbitrary value.
+        'hero-media': 'var(--hero-media-height)',
         // The organizer sidebar's two widths, named so neither is an
         // arbitrary value and both can be retuned in one place. 280 / 80px on
         // the 8pt grid.

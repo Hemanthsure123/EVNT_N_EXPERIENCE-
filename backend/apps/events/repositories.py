@@ -15,7 +15,8 @@ from __future__ import annotations
 import uuid
 
 from django.contrib.postgres.search import SearchQuery
-from django.db.models import F, QuerySet
+from django.db.models import F, Q, QuerySet, Value
+from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from core.base_repository import BaseRepository
@@ -24,6 +25,7 @@ from .models import (
     Event,
     EventFaq,
     EventMedia,
+    EventSlot,
     EventStatus,
     EventTimelineEntry,
     MediaKind,
@@ -43,6 +45,15 @@ _CARD_FIELDS = (
     "tickets_available",
     "organization_id",
     "organization__name",
+    # Read by the card and detail serializers. Absent from this set it would
+    # be a DEFERRED field, so every row would re-fetch it — one extra query
+    # per card, which is precisely the N+1 the query budgets guard.
+    "category",
+    # The rating denormals, in BOTH field sets for the reason stated above:
+    # absent, they are deferred and every card re-fetches them, which is one
+    # extra query per card. Two small integers on a row already being read.
+    "rating_sum",
+    "rating_count",
 )
 
 # Columns the fuller event *detail* needs.
@@ -86,8 +97,21 @@ _DETAIL_FIELDS = (
     "language",
     "age_restriction",
     "accessibility_notes",
+    # Read by `EventDetailSerializer`, so it has to be here — a field the
+    # serializer touches but `.only()` omits is a DEFERRED load, one extra
+    # query per row.
+    "policies",
     "seo_title",
     "seo_description",
+    # Read by the card and detail serializers. Absent from this set it would
+    # be a DEFERRED field, so every row would re-fetch it — one extra query
+    # per card, which is precisely the N+1 the query budgets guard.
+    "category",
+    # The rating denormals, in BOTH field sets for the reason stated above:
+    # absent, they are deferred and every card re-fetches them, which is one
+    # extra query per card. Two small integers on a row already being read.
+    "rating_sum",
+    "rating_count",
 )
 
 # Columns the organizer dashboard list needs (includes status, since drafts
@@ -102,6 +126,10 @@ _ORGANIZER_CARD_FIELDS = (
     "from_price_minor",
     "organization_id",
     "organization__name",
+    # Read by the card and detail serializers. Absent from this set it would
+    # be a DEFERRED field, so every row would re-fetch it — one extra query
+    # per card, which is precisely the N+1 the query budgets guard.
+    "category",
 )
 
 # Columns the publish/edit path loads: enough to run the publish checks, the
@@ -155,13 +183,15 @@ class EventRepository(BaseRepository[Event]):
         *,
         search: str | None = None,
         city: str | None = None,
+        category: str | None = None,
         starts_after=None,
         starts_before=None,
     ) -> QuerySet[Event]:
         """Upcoming, published events (soonest first) for the public browse /
         search surface. All filters are index-backed:
         - status + starts_at range -> event_status_starts_idx (or the
-          city-pinned event_status_city_starts_idx when `city` is given);
+          city-pinned event_status_city_starts_idx when `city` is given, or
+          event_status_category_idx when `category` is);
         - `search` -> the GIN index on search_vector via `@@`.
         Ordered by starts_at so results stay index-ordered and cursor-paginate
         cleanly (relevance ranking would defeat both — a deliberate tradeoff).
@@ -178,6 +208,14 @@ class EventRepository(BaseRepository[Event]):
         )
         if city:
             qs = qs.filter(city=city)
+        if category:
+            # An EXACT column match, not a keyword pushed through the tsquery.
+            # The old behaviour searched for the stem ("comedy"), so it matched
+            # an event whose description merely mentioned a comedian and missed
+            # a stand-up night that never used the word. This also leaves `q`
+            # free to mean what the user typed, instead of the two competing
+            # for the same tsquery.
+            qs = qs.filter(category=category)
         if starts_before:
             qs = qs.filter(starts_at__lte=starts_before)
         if search:
@@ -331,6 +369,84 @@ class EventRepository(BaseRepository[Event]):
         )
         return account or ""
 
+    def set_window(self, event_id: uuid.UUID | str, **window) -> bool:
+        """Move the event's own start/end to match its sessions.
+
+        Same class of write as `set_ticketing_fields` below and for the same
+        reason: a DERIVED column, recomputed from authoritative rows (here the
+        slots) rather than typed by a person. So it deliberately does not bump
+        `version`, touch `updated_at` or re-run the tsvector trigger — a
+        schedule sync must not invalidate the optimistic-lock token an
+        organiser is holding while they edit the description.
+        """
+        if not window:
+            return False
+        updated = self.get_queryset().filter(pk=event_id, deleted_at__isnull=True).update(**window)
+        return updated == 1
+
+    def cancel_if_cancellable(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
+        """live | paused -> cancelled, as ONE conditional UPDATE.
+
+        The source-state rule lives here rather than in a read-then-write, so
+        two organisers pressing Cancel at once cannot both believe they did it
+        and send two rounds of cancellation emails. `draft`/`rejected` are
+        excluded because there is nobody to tell; `finished` because an event
+        that already happened cannot be called off.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(
+                pk=event_id,
+                version=expected_version,
+                deleted_at__isnull=True,
+                status__in=(EventStatus.LIVE, EventStatus.PAUSED),
+            )
+            .update(status=EventStatus.CANCELLED, version=F("version") + 1)
+        )
+        return updated == 1
+
+    def get_cancelled_by_id(self, event_id: uuid.UUID | str) -> Event | None:
+        """A cancelled event, for the public page that still has to resolve.
+
+        Separate from `get_published_by_id` rather than widening it: every
+        other caller of that method means "sellable", and quietly returning a
+        cancelled event to them is how a ticket gets sold for an event that is
+        not happening.
+        """
+        return (
+            self.get_queryset()
+            .select_related("organization")
+            .filter(pk=event_id, status=EventStatus.CANCELLED, deleted_at__isnull=True)
+            .only(*_DETAIL_FIELDS)
+            .first()
+        )
+
+    def apply_rating_delta(
+        self, *, event_id: uuid.UUID | str, sum_delta: int, count_delta: int
+    ) -> None:
+        """The documented write-point for `apps.reviews`' denormals.
+
+        Atomic `F()` arithmetic, not read-modify-write: two reviews landing on
+        the same event in the same millisecond would otherwise both read the
+        old value and one increment would vanish. Same reasoning as
+        `settlements`' running totals, and it needs no row lock.
+
+        Deltas rather than absolutes so every lifecycle event is one call:
+        create `(+rating, +1)`, delete or hide `(-rating, -1)`, edit
+        `(new - old, 0)`.
+
+        `Greatest(..., 0)` is a floor, not a correctness mechanism. The
+        counters cannot legitimately go negative — the service only ever
+        subtracts what it previously added — but the columns are
+        `PositiveIntegerField`, so a bug that drove one below zero would raise
+        an IntegrityError on an unrelated write and be attributed to whatever
+        touched the row next. Clamping keeps the failure where it belongs.
+        """
+        self.get_queryset().filter(id=event_id).update(
+            rating_sum=Greatest(F("rating_sum") + sum_delta, Value(0)),
+            rating_count=Greatest(F("rating_count") + count_delta, Value(0)),
+        )
+
     def set_ticketing_fields(
         self,
         *,
@@ -418,6 +534,43 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def soft_delete(self, *, event_id, actor_id, reason: str) -> bool:
+        """Remove an event from every surface, whatever state it is in.
+
+        ── WHY SOFT AND NOT A REAL DELETE ─────────────────────────────────
+
+        `Booking`, `ScanLog` and `TicketType` all reference `Event` with
+        `on_delete=PROTECT`, so `Event.objects.delete()` raises `ProtectedError`
+        for any event that has a ticket tier — which is EVERY published event,
+        because publishing requires at least one. A literal delete would
+        therefore fail on precisely the events an operator wants to remove and
+        succeed only on empty drafts.
+
+        Setting `deleted_at` achieves what the operator actually asked for: the
+        event vanishes from browse, search, the city and category pages, the
+        organizer's list and the public detail — every read in this repository
+        already filters `deleted_at__isnull=True`. Issued tickets keep their
+        foreign key, so the financial record stays intact and auditable, which
+        is what a platform that took money for those tickets requires.
+
+        CONDITIONAL on being un-deleted, so two operators pressing Delete
+        cannot both "succeed" and send two rounds of cancellation emails to the
+        same attendees.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(pk=event_id, deleted_at__isnull=True)
+            .update(
+                deleted_at=timezone.now(),
+                status=EventStatus.ARCHIVED,
+                moderation_note=reason,
+                moderated_by_id=actor_id,
+                moderated_at=timezone.now(),
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
+
     def moderate_if_pending(
         self,
         *,
@@ -485,7 +638,14 @@ class EventRepository(BaseRepository[Event]):
         EventStatus.ARCHIVED,
     )
 
-    def list_for_moderation(self, *, status: str | None = None):
+    def list_for_moderation(
+        self,
+        *,
+        status: str | None = None,
+        search: str | None = None,
+        starts_after=None,
+        starts_before=None,
+    ):
         """The moderation queue, or the record of past decisions.
 
         Ordering differs by what is being asked, and that is the point:
@@ -495,6 +655,19 @@ class EventRepository(BaseRepository[Event]):
           the newest arrival.
         - **Everything else** is a RECORD, so it is newest-first — "what did
           we just do" is the question being asked of it.
+
+        ── WHY THE SEARCH IS `icontains` AND NOT THE FULL-TEXT INDEX ───────
+
+        `search_vector` is tuned for DISCOVERY: it is weighted, stemmed and
+        `websearch`-parsed, so "Arij" matches nothing and "shows" matches
+        "show". An operator is not discovering — they have been handed a name
+        and are looking for that row, usually a fragment of it. A substring
+        match is the right tool for that question even though it is the wrong
+        one for browse.
+
+        The window is on `starts_at`, not `created_at`: an operator filtering
+        this list is asking "what is running that weekend", which is a fact
+        about the event, not about when its draft was typed.
         """
         chosen = status if status in set(self.MODERATABLE_STATUSES) else None
         queryset = (
@@ -522,6 +695,21 @@ class EventRepository(BaseRepository[Event]):
                 "organization__owner_id",
             )
         )
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search)
+                | Q(venue__icontains=search)
+                | Q(city__icontains=search)
+                # The organiser's name, because half of what an operator is
+                # asked about arrives as "that promoter's show", not as a
+                # title they can quote.
+                | Q(organization__name__icontains=search)
+            )
+        if starts_after is not None:
+            queryset = queryset.filter(starts_at__gte=starts_after)
+        if starts_before is not None:
+            queryset = queryset.filter(starts_at__lte=starts_before)
+
         if chosen is None or chosen == EventStatus.PENDING_REVIEW:
             return queryset.order_by("submitted_at")
         # `-created_at` and NOT `-moderated_at`: the console cursor-paginates
@@ -813,3 +1001,55 @@ class SavedEventRepository:
             )
             .order_by("-created_at")
         )
+
+
+class EventSlotRepository(BaseRepository[EventSlot]):
+    """ORM access for an event's sessions."""
+
+    model = EventSlot
+
+    def list_for_event(self, event_id, *, active_only: bool = True):
+        """An event's slots, in the order the organiser arranged them.
+
+        `position` first and `starts_at` second, matching `event_slot_order_idx`
+        exactly — an organiser may want to lead with the session they are
+        pushing, and chronological is only the default rather than the rule.
+        """
+        qs = self.get_queryset().filter(event_id=event_id)
+        if active_only:
+            qs = qs.filter(is_active=True)
+        return qs.order_by("position", "starts_at")
+
+    def get_for_event(self, event_id, slot_id) -> EventSlot | None:
+        """Scoped by EVENT as well as id, so a slot id from another event
+        cannot be attached to this one's tiers."""
+        return self.get_queryset().filter(pk=slot_id, event_id=event_id).first()
+
+    def create(self, *, event_id, label: str, starts_at, ends_at=None, position: int = 0):
+        return EventSlot.objects.create(
+            event_id=event_id,
+            label=label,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            position=position,
+        )
+
+    def update_fields(self, slot: EventSlot, **fields) -> None:
+        for key, value in fields.items():
+            setattr(slot, key, value)
+        slot.save(update_fields=[*fields, "updated_at"])
+
+    def count_ticket_types(self, slot_id) -> int:
+        """How many live tiers sell this session.
+
+        Drives whether a slot may be DELETED at all. `TicketType.slot` is
+        PROTECT, so a delete with tiers attached raises `ProtectedError` from
+        deep inside the ORM — this turns that into a sentence an organiser can
+        act on, checked before the delete rather than caught after it.
+        """
+        from apps.ticketing.models import TicketType
+
+        return TicketType.objects.filter(slot_id=slot_id, deleted_at__isnull=True).count()
+
+    def delete_slot(self, slot: EventSlot) -> None:
+        slot.delete()

@@ -2,8 +2,8 @@ import * as React from 'react';
 import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import { CategoryTiles } from '@/components/discovery/category-tiles';
-import { CuratedRail } from '@/components/discovery/curated-rail';
-import { HomeHero } from '@/components/discovery/home-hero';
+import { LocationPrompt } from '@/components/discovery/location-prompt';
+import { Showcase } from '@/components/discovery/showcase';
 import { RailSectionSkeleton, TrendingSection } from '@/components/discovery/home-sections';
 import { Reveal } from '@/components/discovery/reveal';
 import { Section, SectionHeader } from '@/components/discovery/section';
@@ -20,13 +20,25 @@ import { SITE_NAME, SITE_URL, pageMetadata } from '@/lib/seo/metadata';
  *
  * ── ONE PURPOSE PER SECTION, IN ONE ORDER ─────────────────────────────────
  *
- *   hero            what this is, and a way in     (search + the live island)
- *   featured        fewer, larger, editorial       (an operator's picks)
+ *   showcase        an operator's picks, moving    (the first screen: events)
  *   categories      eight ways in, if search isn't (icon tiles, no imagery)
  *   HIRE A BAND     the second product             (tinted band, own rhythm)
  *   trending        what is actually selling       (derived, not curated)
  *   why Curatix    the trust argument, once
  *   newsletter      the one ask                    (last, before the footer)
+ *
+ * ── THE PAGE NOW OPENS ON INVENTORY, NOT ON A PITCH ───────────────────────
+ *
+ * It used to open with a split hero — headline, paragraph, trust badges, a
+ * search bar, six quick-filter chips and a featured panel. That is nine things
+ * on the screen that decides whether somebody stays, and eight of them are
+ * about us. The first screen is now the curated rail: real events, moving,
+ * with one way onward.
+ *
+ * Search did not disappear with it — it moved to the HEADER, where it was
+ * already present on every other page, and took the hero bar's rolling
+ * suggestions with it. One search affordance, on every route, instead of two
+ * that only agreed on the front page.
  *
  * ── WHAT CHANGED, AND WHY IT IS NOT A RESTYLE ─────────────────────────────
  *
@@ -45,11 +57,6 @@ import { SITE_NAME, SITE_URL, pageMetadata } from '@/lib/seo/metadata';
  *
  * The space that bought is spent on WHITESPACE and on the second product, not
  * on a fifth rail.
- *
- * ── THE DYNAMIC ISLAND IS UNTOUCHED ───────────────────────────────────────
- *
- * `HomeHero` and everything inside it is exactly as it was — the brief asked
- * for that explicitly, and it is also the most-tested component on this page.
  *
  * ── STILL STATIC + ISR ────────────────────────────────────────────────────
  *
@@ -89,27 +96,22 @@ export default async function HomePage() {
         })}
       />
 
-      <HomeHero hero={cms?.hero} />
+      {/* CURATED FIRST, and it says which it is. An operator's picks outrank
+          whatever the index returned; with nothing pinned the rail falls back
+          to the soonest live events and RELABELS itself, so a visitor is never
+          shown "Featured" that nobody featured. */}
+      <Showcase collections={cms?.collections} />
 
-      {/* CURATED FIRST. An operator's editorial choice outranks whatever the
-          index happened to return — and the rail says which it is, so a
-          visitor is never shown "Featured" that nobody featured. It renders
-          nothing at all when empty rather than back-filling. */}
-      <CuratedRail
-        collections={cms?.collections}
-        collection="featured"
-        title="Featured this week"
-        subtitle="Chosen by our team, not by an algorithm"
-      />
+      {/* Asks for a location once, after the page has shown its worth — never
+          on load. Renders nothing once a city is known or the ask was closed. */}
+      <LocationPrompt />
 
       <Section>
         <Reveal>
-          <SectionHeader
-            title="Browse by mood"
-            subtitle="Eight ways in, if search is not the way in"
-            href="/events"
-            linkLabel="All events"
-          />
+          {/* No subtitle. The eight tiles below say what they are, and a line
+              explaining that categories exist for people who did not search is
+              us narrating our own information architecture. */}
+          <SectionHeader title="Browse by mood" href="/events" linkLabel="All events" />
         </Reveal>
         <CategoryTiles categories={cms?.categories} />
       </Section>

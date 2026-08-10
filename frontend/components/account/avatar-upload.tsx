@@ -159,7 +159,6 @@ export function AvatarUpload() {
     >
       <h2 className="text-body-sm font-semibold">Profile picture</h2>
       <p className="mt-0.5 text-caption text-muted-foreground">
-        Shown on your account and next to your name. Drag one in, paste it, or choose a file.
       </p>
 
       <div className="mt-stack-lg flex items-start gap-4">
@@ -251,8 +250,7 @@ export function AvatarUpload() {
               refusal explained rather than asserted. Stated up front so nobody
               exports a 40 MB TIFF to find out. */}
           <p className="mt-2 text-caption text-foreground-subtle">
-            JPEG, PNG, WebP, AVIF or GIF, up to 10 MB. SVG is not accepted — it is a document that
-            can carry code, and your picture is shown on every page you appear on.
+            JPEG, PNG, WebP, AVIF or GIF, up to 10 MB.
           </p>
 
           {error ? (

@@ -172,7 +172,7 @@ export function AnnouncementsAdmin() {
           <EmptyState
             icon={Megaphone}
             title="Nothing published"
-            body="Announcements appear as a thin bar above the header. Use them for maintenance windows, launches and incidents — sparingly, or people stop reading them."
+            body="A thin bar above the header, for maintenance windows, launches and incidents."
           />
         ) : (
           <ul className="divide-y divide-border">
@@ -362,7 +362,7 @@ function Composer({
             onChange={setLinkPath}
             max={200}
             placeholder="/events?city=Mumbai"
-            hint="Paths only. An absolute URL is refused — a banner that can point anywhere is a phishing vector on our own front page."
+            hint="Paths only, like /events. Absolute URLs are refused."
           />
           <Field
             id="ann-link-label"
@@ -403,8 +403,8 @@ function Composer({
         {kind === 'emergency' ? (
           <p className="flex items-start gap-2 rounded-xl border border-warning-subtle bg-warning-subtle px-card py-2 text-caption text-warning-subtle-foreground">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            An emergency notice cannot be dismissed by the reader. Use it only when everybody needs
-            to see it — a banner nobody can close stops being read if it is overused.
+            An emergency notice cannot be dismissed by the reader. Use it only when
+            everybody needs to see it.
           </p>
         ) : null}
 

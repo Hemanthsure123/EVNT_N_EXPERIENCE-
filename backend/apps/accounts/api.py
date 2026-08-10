@@ -38,6 +38,7 @@ from .schemas import (
     RegistrationResponseSerializer,
     ResendVerificationRequestSerializer,
     TokenPairSerializer,
+    UpdateProfileSerializer,
     UserSerializer,
     VerifyEmailRequestSerializer,
 )
@@ -142,6 +143,55 @@ class MeView(APIView):
     def get(self, request: Request) -> Response:
         profile = get_profile(cast(User, request.user))
         return Response(UserSerializer(profile).data)
+
+    @extend_schema(request=UpdateProfileSerializer, responses={200: UserSerializer})
+    def patch(self, request: Request) -> Response:
+        """Change the display name and/or the phone number.
+
+        A real PATCH: only the keys actually present in the body are forwarded,
+        so omitting a field leaves it alone while sending `""` clears it.
+        `serializer.validated_data` already contains only what was sent —
+        `required=False` with no `default` means an absent key stays absent
+        rather than arriving as an empty string, which is what makes the two
+        cases distinguishable at all.
+
+        Answers with the FULL profile rather than 204 or just the changed
+        fields, matching `MeAvatarView` below and for the same reason: the
+        caller is a settings screen holding a cached user object, and the same
+        shape `/auth/me` returns lets it replace that object outright instead
+        of patching one field into it.
+        """
+        payload = UpdateProfileSerializer(data=request.data, partial=True)
+        payload.is_valid(raise_exception=True)
+
+        user = cast(User, request.user)
+        updated = build_profile_service().update_profile(user_id=user.id, **payload.validated_data)
+        return Response(UserSerializer(updated).data)
+
+
+class MeOnboardingView(APIView):
+    """POST /auth/me/onboarding — the welcome flow has been answered.
+
+    ── WHY IT IS A SEPARATE CALL FROM THE PROFILE PATCH ───────────────────
+
+    The two say different things. A PATCH says "this is my name"; this says
+    "stop asking me". Somebody who fills nothing in and presses Skip has
+    ANSWERED — and folding the mark into `update_profile` would mean the only
+    way to record that answer is to also send an empty edit, so a skip would
+    look identical to a request that never arrived.
+
+    It carries no body. Everything the flow collects goes through the ordinary
+    profile PATCH, which already validates every field; a second write path for
+    the same columns would be a second place for the date-of-birth rules to
+    live.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: UserSerializer})
+    def post(self, request: Request) -> Response:
+        updated = build_profile_service().complete_onboarding(user_id=cast(User, request.user).id)
+        return Response(UserSerializer(updated).data)
 
 
 class MeAvatarView(APIView):

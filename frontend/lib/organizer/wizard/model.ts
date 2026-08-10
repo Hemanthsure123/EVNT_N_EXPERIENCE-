@@ -82,6 +82,22 @@ export type DraftTier = {
   /** Optimistic-lock version, present only for server-backed tiers. */
   version?: number;
   name: string;
+  /**
+   * What this tier IS, in the organiser's words. Blank is the norm — most
+   * tiers are self-describing and the panel omits the line.
+   */
+  description: string;
+  /** What is INCLUDED. Blank entries are dropped at the boundary, not here:
+   *  an organiser mid-typing must not have a row vanish under them. */
+  perks: string[];
+  /**
+   * The session this tier sells, or `''` for an event that runs once.
+   *
+   * Only offered once the event HAS sessions, and only settable before the
+   * tier is created — see `CreateTicketTypeInput.slot_id` for why moving a
+   * live tier between showtimes is not an operation this platform performs.
+   */
+  slotId?: string;
   /** MAJOR units (rupees) while editing — converted at the boundary. Editing
    *  in paise means an organizer types 49900 and means ₹499. */
   price: string;
@@ -103,6 +119,17 @@ export type Draft = {
   description: string;
   venue: string;
   city: string;
+  /**
+   * Which browse tile this event appears under. `''` means uncategorised,
+   * which is a real state — an organiser who has not chosen yet, and an event
+   * that simply is not one of the eight.
+   *
+   * The column and the browse filter shipped before this control did, so
+   * every event created in between is uncategorised and appears under no tile.
+   * That is the half-finished version of "ship the column before the control",
+   * and this is the other half.
+   */
+  category: string;
   /**
    * Google's id for the venue, or `''` when it was typed freehand.
    *
@@ -128,10 +155,35 @@ export type Draft = {
   language: string;
   ageRestriction: string;
   accessibilityNotes: string;
+  /**
+   * The organiser's own rules — entry conditions, prohibited items, refund
+   * terms.
+   *
+   * Held on the LOCAL draft, unlike FAQs and the running order which are
+   * server-backed collections with their own endpoints. `policies` is a
+   * column on the event, written by the same PATCH as every other field
+   * here, so it saves before the draft exists on the server and needs no
+   * "unlocks once saved" panel.
+   */
+  policies: DraftPolicy[];
   seoTitle: string;
   seoDescription: string;
   tiers: DraftTier[];
 };
+
+export type DraftPolicy = {
+  /** Client-side only — these have no server identity, so the list is written
+   *  wholesale and this exists purely to key the React rows. */
+  key: string;
+  title: string;
+  body: string;
+};
+
+/** `MAX_POLICIES` in `apps/events/schemas.py`. Mirrored so the studio refuses
+ *  what the server would, rather than surfacing a 400 after a save. */
+export const MAX_POLICIES = 12;
+export const POLICY_TITLE_MAX = 80;
+export const POLICY_BODY_MAX = 600;
 
 export const STEPS = [
   { id: 'basics', label: 'Basics', hint: 'Title and description' },
@@ -159,6 +211,7 @@ export function emptyDraft(organizationId = ''): Draft {
     description: '',
     venue: '',
     city: '',
+    category: '',
     placeId: '',
     latitude: null,
     longitude: null,
@@ -170,6 +223,7 @@ export function emptyDraft(organizationId = ''): Draft {
     language: '',
     ageRestriction: '',
     accessibilityNotes: '',
+    policies: [],
     seoTitle: '',
     seoDescription: '',
     tiers: [],
@@ -292,6 +346,8 @@ export function newTier(index: number): DraftTier {
   return {
     key: `tier-${index}-${Math.random().toString(36).slice(2, 8)}`,
     name: '',
+    description: '',
+    perks: [],
     price: '',
     quantity: '',
     maxPerOrder: '10',
@@ -735,6 +791,11 @@ export function toCreateInput(draft: Draft): CreateEventInput {
     description: draft.description,
     venue: draft.venue.trim(),
     city: draft.city.trim(),
+    // OMITTED when blank rather than sent as `''`. The server's field is a
+    // ChoiceField — strict on write, because an unknown value stored here
+    // would be indexed by browse and never matched — and `''` is not one of
+    // the choices.
+    ...(draft.category ? { category: draft.category } : {}),
     starts_at: toIso(draft.startsAt),
     ends_at: draft.endsAt ? toIso(draft.endsAt) : null,
     place_id: draft.placeId,
@@ -771,6 +832,12 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     language: draft.language.trim(),
     age_restriction: draft.ageRestriction.trim(),
     accessibility_notes: draft.accessibilityNotes.trim(),
+    // Blank rows are DROPPED rather than sent: the server refuses a policy
+    // with an empty half, and an organiser who opened a row and did not fill
+    // it in should not have their save fail because of it.
+    policies: draft.policies
+      .map((policy) => ({ title: policy.title.trim(), body: policy.body.trim() }))
+      .filter((policy) => policy.title && policy.body),
     seo_title: draft.seoTitle.trim(),
     seo_description: draft.seoDescription.trim(),
   };
@@ -784,8 +851,16 @@ export function toTierInput(tier: DraftTier): CreateTicketTypeInput {
     price: Math.round(Number(tier.price) * 100),
     quantity: Number(tier.quantity),
     max_per_order: Number(tier.maxPerOrder) || 10,
+    description: tier.description.trim(),
+    // Dropped HERE rather than in the editor, so a half-typed perk does not
+    // disappear from under the organiser's cursor.
+    perks: tier.perks.map((perk) => perk.trim()).filter(Boolean),
     sale_start: tier.saleStart ? toIso(tier.saleStart) : null,
     sale_end: tier.saleEnd ? toIso(tier.saleEnd) : null,
+    // Omitted rather than sent as null when unset, for the same reason
+    // `phases` is: an absent key is "this event runs once", which is the
+    // common case and must not read as an instruction.
+    ...(tier.slotId ? { slot_id: tier.slotId } : {}),
     // ARRAY ORDER IS THE POSITION, and the whole schedule is replaced on every
     // write — a phase has no server identity to preserve (see `DraftPhase`), so
     // there is nothing to diff and no per-phase patch to get wrong.

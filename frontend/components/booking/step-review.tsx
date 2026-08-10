@@ -76,7 +76,18 @@ export function ReviewStep() {
   const attempted = React.useRef(false);
 
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
-  const pickerHref = `/booking/${event.id}${query}`;
+  /**
+   * Back to the EVENT PAGE, not to a funnel step.
+   *
+   * This pointed at `/booking/{id}` — the old step 1 — so "Change" sent
+   * somebody to a second copy of the picker rather than to the page they chose
+   * on. That step is gone; the event page is where session, tier and quantity
+   * are decided, beside the poster and the line-up that inform the choice.
+   *
+   * The selection rides along in the query string so the panel opens on what
+   * they already had rather than resetting it.
+   */
+  const pickerHref = `/events/${event.id}${query}`;
   const payHref = booking
     ? `/booking/${event.id}/pay?${new URLSearchParams({
         [SELECTION_PARAM]: serialiseSelection(selection),
@@ -89,9 +100,16 @@ export function ReviewStep() {
     if (status === 'anonymous') router.replace(`/booking/${event.id}/login${query}`);
   }, [status, router, event.id, query]);
 
-  // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker.
+  // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker,
+  // which is the EVENT PAGE.
+  //
+  // This pointed at `/booking/{id}`, which was the picker step and is now a
+  // redirect to this very screen — so an empty selection would have bounced
+  // review -> entry -> review forever. The picker moved; this had to move with
+  // it, and a redirect that lands on its own source is the specific way that
+  // refactor goes wrong.
   React.useEffect(() => {
-    if (status !== 'unknown' && !selection.length) router.replace(`/booking/${event.id}`);
+    if (status !== 'unknown' && !selection.length) router.replace(`/events/${event.id}`);
   }, [status, selection.length, router, event.id]);
 
   React.useEffect(() => {
@@ -206,9 +224,6 @@ export function ReviewStep() {
       <Rise>
         <header className="flex flex-col gap-stack">
           <h1 className="text-h2 md:text-h1">Review your booking</h1>
-          <p className="text-body text-muted-foreground">
-            These tickets are reserved for you. Nothing is charged until you pay.
-          </p>
         </header>
       </Rise>
 

@@ -28,6 +28,49 @@ from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 
 
+class EventCategory(models.TextChoices):
+    """The browse taxonomy, as a COLUMN rather than a guess.
+
+    ── WHY THIS EXISTS ────────────────────────────────────────────────────
+
+    Category filtering was a keyword search pushed through the full-text
+    index: the "Comedy" tile searched for the stem `comedy`, so it matched an
+    event whose *description* happened to mention a comedian and missed a
+    stand-up night whose copy never used the word. The frontend inferred a
+    card's chip from its title by keyword and rendered nothing when nothing
+    matched, because a wrong chip is worse than none.
+
+    A column makes it exact, indexable, and combinable with `q` without the two
+    competing for the same tsquery.
+
+    ── THE VALUES MATCH THE FRONTEND'S SLUGS EXACTLY ──────────────────────
+
+    `frontend/lib/discovery/categories.ts` already ships these eight slugs, and
+    the illustration set draws a scene per slug. Choosing different strings
+    here would mean a translation table nobody maintains — and the first thing
+    to break would be the artwork, silently, because an unknown slug falls back
+    to the generic ticket.
+
+    ── AND WHY THERE IS AN EXPLICIT "OTHER" ───────────────────────────────
+
+    Not blank. An organiser whose event is genuinely none of these has made a
+    real choice, and it is different from one who has not chosen yet — blank
+    means "not categorised", which is what an unmigrated row and a brand new
+    draft both are. Keeping them distinguishable is what lets a backfill be
+    reviewed rather than assumed.
+    """
+
+    CONCERTS = "concerts", "Concerts"
+    COMEDY = "comedy", "Comedy"
+    WORKSHOPS = "workshops", "Workshops"
+    SPORTS = "sports", "Sports"
+    FESTIVALS = "festivals", "Festivals"
+    NIGHTLIFE = "nightlife", "Nightlife"
+    FOOD_DRINK = "food-drink", "Food & Drink"
+    TECH = "tech", "Tech"
+    OTHER = "other", "Other"
+
+
 class EventStatus(models.TextChoices):
     DRAFT = "draft", "Draft"
     # Submitted by the organizer and awaiting a platform operator's decision.
@@ -41,6 +84,15 @@ class EventStatus(models.TextChoices):
     LIVE = "live", "Live"
     PAUSED = "paused", "Paused"
     FINISHED = "finished", "Finished"
+    # Called off. PUBLIC and terminal, and deliberately NOT the same as
+    # `archived` (which hides the listing) or a soft delete (which removes it):
+    # people are holding tickets to this and WILL open the link they were sent,
+    # so the page has to resolve and say what happened. A 404 there reads as
+    # "the platform lost my booking".
+    #
+    # It never appears in a browse listing — the public list filters on `live`
+    # — so this costs discovery nothing.
+    CANCELLED = "cancelled", "Cancelled"
     ARCHIVED = "archived", "Archived"
 
 
@@ -61,6 +113,19 @@ class Event(models.Model):
     # the UI omits the row rather than guessing.
 
     #: One line for cards and link previews. `description` is the long form.
+    #: The browse taxonomy. BLANK is a real state — "not categorised yet" — and
+    #: is deliberately distinct from `OTHER`, which is an organiser choosing
+    #: none of the eight. An unmigrated row and a fresh draft are both blank;
+    #: only one of them is a decision.
+    #:
+    #: Not a ForeignKey to `cms.Category`: that table is an operator's
+    #: MERCHANDISING list (what to promote on the front page), it archives
+    #: rather than deletes, and its rows can come and go. A browse taxonomy has
+    #: to be stable enough to index on and to draw artwork from, so it is a
+    #: closed set in code.
+    category = models.CharField(
+        max_length=20, choices=EventCategory.choices, blank=True, default=""
+    )
     short_description = models.CharField(max_length=200, blank=True, default="")
     #: Minutes. Nullable because "we do not know yet" is a real answer, and a
     #: zero would render as "0 minutes" on the event page.
@@ -71,6 +136,31 @@ class Event(models.Model):
     #: "18+", "All ages", "Under 16 with a guardian". Same reasoning.
     age_restriction = models.CharField(max_length=60, blank=True, default="")
     accessibility_notes = models.TextField(blank=True, default="")
+
+    #: The ORGANISER's own rules for this event — entry conditions, prohibited
+    #: items, their refund terms, what happens if it rains.
+    #:
+    #: A JSON list of `{"title": ..., "body": ...}`, not columns and not a
+    #: related table:
+    #:
+    #: - Not COLUMNS, because the set is genuinely open. "No outside food",
+    #:   "Carry a photo ID", "Umbrellas allowed, tripods are not" — every venue
+    #:   has a different list and any fixed schema would either force an
+    #:   organiser to leave a rule out or leave most events with empty fields.
+    #: - Not a TABLE, unlike `EventFaq` alongside it. An FAQ is edited one row
+    #:   at a time from a studio screen with its own endpoints; the policy list
+    #:   is written whole, read whole, and never queried across events. A table
+    #:   would buy per-row endpoints nobody would call and cost a join on the
+    #:   detail read, which is the hottest public query in the system.
+    #:
+    #: The DEFAULT IS A CALLABLE (`list`), not `[]`. A mutable default is
+    #: shared by every instance that does not set it, so one event appending a
+    #: policy would append it to the next.
+    #:
+    #: This is deliberately SEPARATE from the platform policies the event page
+    #: also renders (tickets are signed QR codes, no card data is stored).
+    #: Those are true of every event and are not an organiser's to edit.
+    policies = models.JSONField(default=list, blank=True)
 
     #: SEO. Blank means "derive from the title/description", which is what the
     #: frontend already does — these only exist to OVERRIDE that.
@@ -109,6 +199,19 @@ class Event(models.Model):
     # maintains them — see CLAUDE.md ("cross-module denormalization").
     from_price_minor = models.PositiveIntegerField(null=True, blank=True)
     tickets_available = models.PositiveIntegerField(null=True, blank=True)
+
+    # ── RATING DENORMALS, OWNED BY `apps.reviews` ──────────────────────────
+    #
+    # Sum and count rather than a stored average: an average cannot be
+    # maintained incrementally without also storing the count, and keeping the
+    # sum means create/update/delete/hide are each one atomic `F()` expression
+    # with no read-modify-write and no lock. The average is derived on read.
+    #
+    # Denormalised for the same reason `from_price_minor` is: an event CARD
+    # shows "4.6 (128)" and must not join or aggregate review rows to do it.
+    # `reviews` is the only writer — see `EventRepository.apply_rating_delta`.
+    rating_sum = models.PositiveIntegerField(default=0)
+    rating_count = models.PositiveIntegerField(default=0)
 
     # Optimistic-lock counter; bumped on every content edit. Clients send the
     # version they last read; a mismatch means someone else edited in between.
@@ -153,6 +256,16 @@ class Event(models.Model):
             models.Index(
                 fields=["status", "city", "starts_at"],
                 name="event_status_city_starts_idx",
+                condition=models.Q(deleted_at__isnull=True),
+            ),
+            # Public browse filtered by CATEGORY — the same shape as the city
+            # index above, with category pinned between the status and the
+            # date range. Added with the column rather than after it: the
+            # performance checklist's rule is that the index the query needs
+            # ships in the same migration as the query.
+            models.Index(
+                fields=["status", "category", "starts_at"],
+                name="event_status_category_idx",
                 condition=models.Q(deleted_at__isnull=True),
             ),
             # Organizer dashboard + the FK join from an owner's organizations
@@ -369,3 +482,79 @@ class SavedEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id} saved {self.event_id}"
+
+
+class EventSlot(models.Model):
+    """One session of an event — the "Evening slot, 4:30-9:30" a customer picks.
+
+    ── THE INVENTORY DECISION, WHICH IS THE WHOLE DESIGN ──────────────────
+
+    A slot must have its OWN inventory. Selling "100 tickets" across an evening
+    and a night session means 100 EACH, not 100 shared — get this wrong and the
+    night show oversells the moment the evening one is popular, which is the
+    single most expensive bug this feature could carry.
+
+    The way that is achieved here is deliberately boring: `TicketType` gains a
+    nullable `slot` FK, and a slot-scoped tier is simply another `TicketType`
+    row with its own `quantity`/`sold`/`reserved`. So the existing protection
+    applies UNCHANGED —
+
+      * `SELECT ... FOR UPDATE` already locks ONE tier row, and a per-slot tier
+        is one tier row;
+      * the `ticket_type_no_oversell` CHECK constraint is already per row;
+      * `reserve`/`release`/`confirm_sold` need no argument they did not have.
+
+    Nothing in the money path changes. That is the point: a feature that
+    touches inventory should add rows, not add a second way to count them.
+
+    ── AN EVENT WITHOUT SLOTS IS UNCHANGED ────────────────────────────────
+
+    Slots are OPTIONAL. `TicketType.slot` is null for every existing tier and
+    for every simple event, and the whole platform behaves exactly as before.
+    This is additive, not a migration of the booking model.
+
+    ── TIMES ARE ABSOLUTE, NOT TIMES-OF-DAY ───────────────────────────────
+
+    `starts_at`/`ends_at` are full datetimes rather than a date on the event
+    plus a time here. A run that crosses midnight, a festival spanning three
+    days, and a slot on a different date from `Event.starts_at` are all
+    ordinary; a time-of-day column would need a date resolved from somewhere,
+    and "somewhere" is where timezone bugs live.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="slots")
+    #: What the customer reads — "Evening slot", "Matinee", "Day 2". Optional:
+    #: an unlabelled slot renders as its time range, which is what a customer
+    #: is really choosing between.
+    label = models.CharField(max_length=80, blank=True, default="")
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    #: Display order. Chronological is the sane default, but an organiser may
+    #: want to lead with the session they are pushing.
+    position = models.PositiveIntegerField(default=0)
+    #: Taken off sale WITHOUT deleting it. A slot with tickets sold cannot be
+    #: removed — its tiers are referenced by issued tickets — so "cancel this
+    #: session" has to be a flag, exactly as `TicketType` needs an archive
+    #: rather than a delete.
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "events_event_slot"
+        indexes = [
+            # The only query this table serves: "this event's slots, in order".
+            models.Index(fields=["event", "position", "starts_at"], name="event_slot_order_idx"),
+        ]
+        constraints = [
+            # Two slots on one event cannot start at the same instant with the
+            # same label — that is a duplicate an organiser made by
+            # double-submitting, and it is indistinguishable to a customer.
+            models.UniqueConstraint(
+                fields=["event", "starts_at", "label"], name="event_slot_unique_start_label"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.label or 'Slot'} @ {self.starts_at:%Y-%m-%d %H:%M}"

@@ -112,7 +112,7 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
         <EmptyState
           icon={HelpCircle}
           title="No questions yet"
-          body="Every question you answer here is one fewer email on the day, and one fewer reason for someone to close the page instead of buying."
+          body="Answers shown on the event page, under the description."
         />
       ) : (
         <ol className="flex flex-col gap-2">

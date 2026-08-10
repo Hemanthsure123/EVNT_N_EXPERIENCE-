@@ -11,6 +11,11 @@ import {
   type ModerationEntry,
   type ModerationStatus,
 } from '@/lib/api/admin';
+import { useConsoleEventDateWindow } from '@/components/admin/filters';
+import { FilterChips, SearchField } from '@/components/organizer/filters';
+import { TableToolbar } from '@/components/organizer/data-table';
+import { useDebouncedValue } from '@/lib/utils/use-debounced-value';
+import { adminQueryKeys } from '@/lib/admin/query-keys';
 import { cursorFromNextLink } from '@/lib/api/events';
 import { ApiError } from '@/lib/api/errors';
 import { Button } from '@/components/ui/button';
@@ -135,10 +140,24 @@ export function ModerationQueue() {
   const [status, setStatus] = React.useState<ModerationStatus>('pending_review');
   const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = React.useState(false);
+  const [term, setTerm] = React.useState('');
+  // Debounced, so typing does not fire a request per keystroke against a list
+  // that also refetches on a 30-second interval.
+  const search = useDebouncedValue(term.trim(), 250);
+  const dates = useConsoleEventDateWindow();
 
   const query = useInfiniteQuery({
-    queryKey: ['admin', 'moderation', { status }],
-    queryFn: ({ pageParam }) => fetchModerationQueue({ status, cursor: pageParam ?? undefined }),
+    // NOT ['admin', 'moderation', { status }] — that is the attention bar's
+    // key, and a plain useQuery and a useInfiniteQuery sharing one key share
+    // one cache entry with two incompatible shapes. See lib/admin/query-keys.
+    queryKey: adminQueryKeys.moderationQueue(status, `${search}|${dates.key}`),
+    queryFn: ({ pageParam }) =>
+      fetchModerationQueue({
+        status,
+        q: search || undefined,
+        ...dates.window,
+        cursor: pageParam ?? undefined,
+      }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => cursorFromNextLink(last.meta.next),
     staleTime: 0,
@@ -230,7 +249,7 @@ export function ModerationQueue() {
         </p>
       ) : null}
 
-      <div role="tablist" aria-label="Moderation status" className="flex flex-wrap gap-1.5">
+      <div role="tablist" aria-label="Filter events by status" className="flex flex-wrap gap-1.5">
         {TABS.map((entry) => (
           <button
             key={entry.value}
@@ -247,6 +266,29 @@ export function ModerationQueue() {
           </button>
         ))}
       </div>
+
+      <TableToolbar>
+        <SearchField
+          value={term}
+          onChange={setTerm}
+          placeholder="Event, venue, city or organiser"
+          label="Search events"
+        />
+        {dates.control}
+      </TableToolbar>
+
+      {search || dates.label ? (
+        <FilterChips
+          chips={[
+            search ? { key: 'q', label: `“${search}”`, onClear: () => setTerm('') } : null,
+            dates.label ? { key: 'date', label: dates.label, onClear: dates.clear } : null,
+          ].filter(Boolean) as { key: string; label: string; onClear: () => void }[]}
+          onClearAll={() => {
+            setTerm('');
+            dates.clear();
+          }}
+        />
+      ) : null}
 
       <Panel title={`${tab.label} events`} subtitle={tab.blurb}>
         {query.isError ? (

@@ -14,6 +14,7 @@ import { fetchTicketsForBooking } from '@/lib/booking/tickets';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { CTA_PILL_LG, PILL } from './cta';
 import { useBooking } from './booking-context';
+import { Celebration } from './celebration';
 import { Rise, StepTransition } from './motion';
 import { TicketCarousel } from './ticket-carousel';
 
@@ -153,7 +154,12 @@ export function ConfirmationStep() {
   return (
     <StepTransition stepKey="confirmation" className="flex flex-col gap-block-lg">
       <Rise>
-        <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-border bg-surface p-card-lg shadow-md md:p-8">
+        <div className="relative isolate flex flex-col items-start gap-stack-lg overflow-hidden rounded-2xl border border-border bg-surface p-card-lg shadow-md md:p-8">
+          {/* Only once the money is actually confirmed. Playing it while the
+              webhook is still in flight would celebrate a payment that might
+              still fail — the one lie this screen cannot tell, and the same
+              reason the illustration above stays a spinner until `paid`. */}
+          {paid ? <Celebration /> : null}
           {/* THE ISSUED TICKET, not a 12px status badge.
               This is the best moment on the platform — somebody has paid and is
               being told they are going — and it had the same mark a form uses

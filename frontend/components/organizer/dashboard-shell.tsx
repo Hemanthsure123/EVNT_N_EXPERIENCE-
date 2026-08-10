@@ -20,6 +20,7 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { useScope } from '@/lib/identity/scope';
 import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib/organizer/nav';
 import { useSidebar } from '@/lib/organizer/use-sidebar';
+import { BrandMark } from '@/components/shell/brand-mark';
 import { cn } from '@/lib/utils/cn';
 import { useAttentionBadge } from './attention-panel';
 import { OrganizerPalette } from './command-palette';
@@ -181,9 +182,16 @@ function Sidebar({
             href="/dashboard"
             className="flex min-w-0 items-center gap-2 rounded-full px-1 py-1 font-display text-body-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {/* Violet as a leading MARK, which is the accent's job now — it is
-                never a fill on anything pressable in this portal. */}
-            <Ticket className="size-5 shrink-0 text-primary" aria-hidden />
+            {/* THE product mark, not a stand-in.
+
+                Both console shells drew a lucide `Ticket` glyph here while the
+                public site drew the CX monogram — so the same product had two
+                different logos depending on which half of it you were in, and
+                an organizer moving between the site and their dashboard saw the
+                brand change under them. `BrandMark` is the one definition
+                (`components/shell/brand-mark.tsx`); it inherits `currentColor`,
+                so it takes the sidebar's ink without a second asset. */}
+            <BrandMark className="size-5 shrink-0 text-foreground" title="" />
             <span className={cn('truncate', collapsed && 'lg:sr-only')}>Curatix</span>
           </Link>
           <Button

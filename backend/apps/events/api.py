@@ -38,7 +38,10 @@ from .models import MediaKind
 from .pagination import EventCursorPagination, OrganizerEventCursorPagination
 from .repositories import SavedEventRepository
 from .schemas import (
+    CancelEventRequestSerializer,
+    CancelEventResultSerializer,
     CreateEventRequestSerializer,
+    CreateEventSlotSerializer,
     EventCardSerializer,
     EventContentSerializer,
     EventDetailSerializer,
@@ -46,6 +49,7 @@ from .schemas import (
     EventMediaListSerializer,
     EventMediaSerializer,
     EventSearchQuerySerializer,
+    EventSlotSerializer,
     EventTimelineSerializer,
     OrganizerEventSummarySerializer,
     ReorderEventMediaSerializer,
@@ -55,6 +59,7 @@ from .schemas import (
     UpdateEventFaqSerializer,
     UpdateEventMediaSerializer,
     UpdateEventRequestSerializer,
+    UpdateEventSlotSerializer,
     UpdateEventTimelineSerializer,
     WriteEventFaqSerializer,
     WriteEventMediaSerializer,
@@ -107,6 +112,7 @@ class EventListCreateView(APIView):
         filters = {
             "search": validated.get("q") or None,
             "city": validated.get("city") or None,
+            "category": validated.get("category") or None,
             "starts_after": validated.get("starts_after"),
             "starts_before": validated.get("starts_before"),
         }
@@ -251,6 +257,33 @@ class OrganizerEventListView(APIView):
         return _no_store(paginator.get_paginated_response(data))
 
 
+class EventCancelView(APIView):
+    """POST /events/{id}/cancel — the organiser calls their own event off.
+
+    A lifecycle transition with source-state rules and real financial
+    consequences, so it is its own endpoint rather than a `status` a PATCH may
+    set — `status` is deliberately absent from the update serializer's
+    editable set, which is what keeps every route to a terminal state
+    auditable and gated.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=CancelEventRequestSerializer, responses={200: CancelEventResultSerializer}
+    )
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = CancelEventRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        result = build_event_service().cancel_event(
+            event_id=event_id,
+            actor_id=cast(User, request.user).id,
+            reason=payload.validated_data["reason"],
+        )
+        return _no_store(Response(CancelEventResultSerializer(result).data))
+
+
 class EventContentView(APIView):
     """Read every content collection for one event in a single request.
 
@@ -263,13 +296,19 @@ class EventContentView(APIView):
 
     @extend_schema(responses={200: EventContentSerializer})
     def get(self, request: Request, event_id: str) -> Response:
-        from .repositories import EventContentRepository
+        from .repositories import EventContentRepository, EventSlotRepository
 
         repository = EventContentRepository()
         body = {
             "media": EventMediaSerializer(repository.media_for(event_id), many=True).data,
             "faqs": EventFaqSerializer(repository.faqs_for(event_id), many=True).data,
             "timeline": EventTimelineSerializer(repository.timeline_for(event_id), many=True).data,
+            # Active only. A session an organiser switched off is still a row
+            # they can see in their own list; to the public it is simply not
+            # on sale, and rendering it greyed out invites the question.
+            "slots": EventSlotSerializer(
+                EventSlotRepository().list_for_event(event_id), many=True
+            ).data,
         }
         etag = make_etag(body)
         if is_not_modified(request, etag):
@@ -403,6 +442,48 @@ class EventFaqDetailView(_OwnerWriteView):
     @extend_schema(responses={204: None})
     def delete(self, request: Request, event_id: str, faq_id: str) -> Response:
         self._service.remove_faq(event_id=event_id, actor_id=self._actor, faq_id=faq_id)
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class EventSlotView(_OwnerWriteView):
+    """The organiser's session list, and adding one.
+
+    GET is owner-scoped and includes INACTIVE slots, unlike the public
+    content payload — the only way to bring a switched-off session back is to
+    be able to see it.
+    """
+
+    @extend_schema(responses={200: EventSlotSerializer(many=True)})
+    def get(self, request: Request, event_id: str) -> Response:
+        slots = self._service.list_slots(event_id=event_id, actor_id=self._actor)
+        return _no_store(Response(EventSlotSerializer(slots, many=True).data))
+
+    @extend_schema(request=CreateEventSlotSerializer, responses={201: EventSlotSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = CreateEventSlotSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        slot = self._service.add_slot(
+            event_id=event_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(Response(EventSlotSerializer(slot).data, status=status.HTTP_201_CREATED))
+
+
+class EventSlotDetailView(_OwnerWriteView):
+    @extend_schema(request=UpdateEventSlotSerializer, responses={200: EventSlotSerializer})
+    def patch(self, request: Request, event_id: str, slot_id: str) -> Response:
+        payload = UpdateEventSlotSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        slot = self._service.update_slot(
+            event_id=event_id,
+            actor_id=self._actor,
+            slot_id=slot_id,
+            changes=dict(payload.validated_data),
+        )
+        return _no_store(Response(EventSlotSerializer(slot).data))
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str, slot_id: str) -> Response:
+        self._service.remove_slot(event_id=event_id, actor_id=self._actor, slot_id=slot_id)
         return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
 
 

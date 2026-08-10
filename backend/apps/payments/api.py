@@ -10,25 +10,31 @@ from __future__ import annotations
 
 from typing import cast
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
-from config.di import build_payment_service
+from config.di import build_payment_service, build_refund_request_service
 from core.throttling import WebhookThrottle, WriteThrottle
 
 from .exceptions import NotAllowedToViewPaymentError, PaymentNotFoundError
+from .models import RefundRequestStatus
+from .pagination import PendingRefundRequestPagination, RefundRequestPagination
+from .repositories import RefundRequestRepository
 from .schemas import (
     PaymentSerializer,
+    RefundDecisionSerializer,
+    RefundRequestCreateSerializer,
+    RefundRequestSerializer,
     SimulatePaymentRequestSerializer,
     VerifyPaymentRequestSerializer,
     VerifyPaymentResponseSerializer,
 )
-from .selectors import get_payment_detail
+from .selectors import get_payment_detail, refund_request_payload, refund_request_payloads
 
 
 def _no_store(response: Response) -> Response:
@@ -172,3 +178,167 @@ class PaymentRefundView(APIView):
         # The external refund is offloaded to the queue — acknowledge and let
         # the client poll GET /payments/{id} for the final refunded state.
         return _no_store(Response({"status": "refund_initiated", "payment_id": str(payment.id)}))
+
+
+class _RefundRequestListMixin:
+    """Shared paging for the three refund-request queues.
+
+    The paginator MUST match the queryset's ordering, and the repository picks
+    its ordering from the same `status` value — so both are derived from one
+    input rather than kept in sync by hand. See `pagination.py`.
+    """
+
+    def _paginate(self, request: Request, queryset) -> Response:
+        status_filter = request.query_params.get("status")
+        paginator = (
+            PendingRefundRequestPagination()
+            if status_filter == RefundRequestStatus.PENDING
+            else RefundRequestPagination()
+        )
+        # `self` is always an APIView here — this mixin is only ever mixed
+        # into one, which the type system cannot see from the mixin alone.
+        page = paginator.paginate_queryset(queryset, request, view=cast(APIView, self))
+        rows = refund_request_payloads(list(page or []))
+        data = cast(list, RefundRequestSerializer(rows, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
+
+
+class BookingRefundRequestView(APIView):
+    """POST /bookings/{id}/refund-requests — the customer asks.
+
+    Mounted under the BOOKING rather than under /refund-requests, because that
+    is the only place a customer ever starts from: they are looking at an order
+    and want their money back for it. It also makes the booking id a path
+    segment the permission check can rely on rather than a body field.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
+
+    @extend_schema(
+        request=RefundRequestCreateSerializer,
+        responses={201: RefundRequestSerializer},
+        operation_id="booking_request_refund",
+    )
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = RefundRequestCreateSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        user = cast(User, request.user)
+        created = build_refund_request_service().request_refund(
+            booking_id=booking_id,
+            user_id=user.id,
+            reason=payload.validated_data["reason"],
+        )
+        # Re-read through the repository so the response carries the same
+        # joined shape every other surface renders — the created instance has
+        # no `select_related` behind it and would N+1 on the way out.
+        row = RefundRequestRepository().get_for_decision(created.id)
+        return _no_store(
+            Response(
+                RefundRequestSerializer(refund_request_payload(row)).data,
+                status=status.HTTP_201_CREATED,
+            )
+        )
+
+
+class MyRefundRequestListView(_RefundRequestListMixin, APIView):
+    """GET /me/refund-requests — what the customer asked for, and what happened.
+
+    The whole point of the model: before it, asking for a refund was an email
+    thread with no status anybody could look at. This is the status.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("status", str, description="pending | approved | rejected | failed")
+        ],
+        responses={200: RefundRequestSerializer(many=True)},
+        operation_id="my_refund_requests",
+    )
+    def get(self, request: Request) -> Response:
+        user = cast(User, request.user)
+        queryset = RefundRequestRepository().list_for_user(user.id)
+        if status_filter := request.query_params.get("status"):
+            queryset = queryset.filter(status=status_filter)
+        return self._paginate(request, queryset)
+
+
+class OrganizerRefundRequestListView(_RefundRequestListMixin, APIView):
+    """GET /organizer/refund-requests — the queue an organizer works through."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        parameters=[OpenApiParameter("status", str)],
+        responses={200: RefundRequestSerializer(many=True)},
+        operation_id="organizer_refund_requests",
+    )
+    def get(self, request: Request) -> Response:
+        user = cast(User, request.user)
+        queryset = RefundRequestRepository().list_for_organizer(
+            user.id, status=request.query_params.get("status")
+        )
+        return self._paginate(request, queryset)
+
+
+class RefundRequestDecisionView(APIView):
+    """POST /refund-requests/{id}/decide — approve or reject.
+
+    ONE endpoint for the organizer AND the operator, rather than an
+    `/organizer/...` and an `/admin/...` pair. The rule is identical (own the
+    event, or be staff), it lives in the service, and two endpoints would be two
+    places for it to drift — with the admin copy inevitably being the lenient
+    one. `is_admin` is passed through and the service decides.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
+
+    @extend_schema(
+        request=RefundDecisionSerializer,
+        responses={200: RefundRequestSerializer},
+        operation_id="refund_request_decide",
+    )
+    def post(self, request: Request, request_id: str) -> Response:
+        payload = RefundDecisionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        user = cast(User, request.user)
+        build_refund_request_service().decide(
+            request_id=request_id,
+            actor_id=user.id,
+            approve=payload.validated_data["approve"],
+            note=payload.validated_data.get("note", ""),
+            is_admin=user.is_staff,
+        )
+        row = RefundRequestRepository().get_for_decision(request_id)
+        return _no_store(Response(RefundRequestSerializer(refund_request_payload(row)).data))
+
+
+class AdminRefundRequestListView(_RefundRequestListMixin, APIView):
+    """GET /admin/refund-requests — platform-wide.
+
+    Staff-only. It lives in `payments` rather than in `console` because unlike
+    every other admin list, this one has a WRITE beside it that belongs to this
+    module's own service — and splitting the read into `console` while the
+    decision stays here would put one surface's two halves in two modules.
+    """
+
+    # DRF's own `is_staff` check, NOT `apps.console.permissions.IsPlatformAdmin`.
+    # That class is literally `IsAdminUser` renamed, and importing it here
+    # would make `payments` depend on `console` — the wrong direction. The
+    # console is allowed to reach down into every module precisely because
+    # nothing reaches back up into it.
+    permission_classes = [IsAdminUser]
+
+    @extend_schema(
+        parameters=[OpenApiParameter("status", str)],
+        responses={200: RefundRequestSerializer(many=True)},
+        operation_id="admin_refund_requests",
+    )
+    def get(self, request: Request) -> Response:
+        queryset = RefundRequestRepository().list_all(status=request.query_params.get("status"))
+        return self._paginate(request, queryset)

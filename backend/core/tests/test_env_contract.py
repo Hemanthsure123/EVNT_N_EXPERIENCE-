@@ -70,7 +70,33 @@ SDK_OWNED = {"GOOGLE_APPLICATION_CREDENTIALS"}
 # (PAYMENTS_BACKEND, EMAIL_PROVIDER), never by Django. They are development
 # switches, so no `env(...)` call will ever mention them — but they are not
 # dead config either, which is why they are named here rather than deleted.
-COMPOSE_OWNED = {"DEV_EMAIL_PROVIDER", "DEV_PAYMENTS_BACKEND"}
+COMPOSE_OWNED = {
+    # Backend-adjacent switches the compose files read.
+    "DEV_EMAIL_PROVIDER",
+    "DEV_PAYMENTS_BACKEND",
+    # DEPLOYMENT TOPOLOGY. Read by docker-compose and Caddy, never by Django —
+    # but they belong in the env contract all the same, because a deploy
+    # variable that lives only in somebody's private `.env` is one nobody else
+    # can reproduce the environment from. That is the same failure the
+    # `.env`/`.env.example` parity test exists to catch, one layer out.
+    "SITE_DOMAIN",
+    "ACME_EMAIL",
+    "FRONTEND_UPSTREAM",
+    "WEB_PORT",
+    # The bundled Postgres container's OWN credentials — distinct from
+    # DATABASE_URL, which is what the app connects with.
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+    # Frontend build args. The compose file passes them into the Next.js image
+    # build; the backend never reads them, and `frontend/.env.local.example`
+    # documents what each one does.
+    "NEXT_PUBLIC_API_BASE_URL",
+    "NEXT_PUBLIC_SITE_URL",
+    "NEXT_PUBLIC_MEDIA_BASE_URL",
+    "NEXT_PUBLIC_RAZORPAY_KEY_ID",
+    "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY",
+}
 
 # Frontend variables that exist for dev tooling (the fixture API server,
 # Playwright) rather than the application, and are documented rather than

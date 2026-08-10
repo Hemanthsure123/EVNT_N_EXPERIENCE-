@@ -17,6 +17,11 @@ import { cn } from '@/lib/utils/cn';
  *    page the user is trying to scroll.
  * 3. **Reduced motion opts out entirely** — the CSS makes the content visible,
  *    and this component then has nothing to do.
+ * 4. **It can never hide content it fails to reveal.** The `opacity: 0` is
+ *    applied by an attribute this component writes from an effect, not by the
+ *    markup. No JS, no IntersectionObserver, an error before hydration — the
+ *    content is simply there. See the note in `globals.css`; the previous
+ *    shape could blank the whole event grid without anything failing.
  *
  * The transform is on the wrapper only, so nothing inside can be laid out
  * differently before and after: reveal never causes layout shift.
@@ -32,19 +37,32 @@ export function Reveal({
   className?: string;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
+  /**
+   * `null` means "this component is not animating this element" — no attribute
+   * is written and the CSS leaves it visible. That is the state the server
+   * renders and the state every fallback below returns to.
+   */
+  const [revealed, setRevealed] = React.useState<boolean | null>(null);
 
   React.useEffect(() => {
     const node = ref.current;
     if (!node) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // No observer, no animation — and, critically, no hidden state either.
+    if (typeof IntersectionObserver === 'undefined') return;
 
-    // Already on screen at mount (a deep link, a short page): reveal without
-    // waiting for a scroll that may never come.
+    // Already on screen at mount (a deep link, a short page): hiding it now
+    // would be a flash on load, which is the one case this effect has nothing
+    // to gain and something to lose.
+    if (node.getBoundingClientRect().top < window.innerHeight) return;
+
+    setRevealed(false);
+
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-          entry.target.setAttribute('data-revealed', 'true');
+          setRevealed(true);
           observer.disconnect();
         }
       },
@@ -58,6 +76,7 @@ export function Reveal({
     <div
       ref={ref}
       className={cn('reveal', className)}
+      data-revealed={revealed === null ? undefined : String(revealed)}
       style={delayMs ? ({ '--reveal-delay': `${delayMs}ms` } as React.CSSProperties) : undefined}
     >
       {children}

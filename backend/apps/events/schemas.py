@@ -18,7 +18,7 @@ from rest_framework import serializers
 
 from apps.organizations.models import VerifiedLevel
 
-from .models import Event, EventStatus, MediaKind, TimelineKind
+from .models import Event, EventCategory, EventSlot, EventStatus, MediaKind, TimelineKind
 from .repositories import MEDIA_LIMITS
 
 
@@ -33,6 +33,67 @@ def _validate_coordinate_pair(attrs: dict) -> None:
     has_lng = attrs.get("longitude") is not None
     if has_lat != has_lng:
         raise serializers.ValidationError("latitude and longitude must be provided together.")
+
+
+#: How many rules one event may publish. A page of them is not a policy
+#: section, it is a document nobody reads — and the event page renders them
+#: all, un-paginated, because a policy behind a "show more" is a policy an
+#: attendee will say they were never told.
+MAX_POLICIES = 12
+
+
+class CancelEventRequestSerializer(serializers.Serializer):
+    """A reason is REQUIRED, unlike archive, which needs none.
+
+    Everybody who booked is shown this verbatim. "Cancelled" with no reason is
+    the message that generates every support ticket this endpoint exists to
+    prevent, so the field cannot be blank and cannot be whitespace.
+    """
+
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+
+    def validate_reason(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError(
+                "Say why this event is being cancelled — everyone who booked will see it."
+            )
+        return value.strip()
+
+
+class CancelEventResultSerializer(serializers.Serializer):
+    """What the click actually did. A bare 200 would leave an organiser who
+    just spent money with no idea how much."""
+
+    event_id = serializers.CharField()
+    title = serializers.CharField()
+    reason = serializers.CharField()
+    refunds_enqueued = serializers.IntegerField()
+    holds_released = serializers.IntegerField()
+    attendees_notified = serializers.IntegerField()
+
+
+class EventPolicySerializer(serializers.Serializer):
+    """One of an organiser's own rules for their event.
+
+    `title` and `body` are both REQUIRED and both non-blank. A rule with no
+    body is a heading an attendee cannot act on ("Entry policy" — and then
+    what?), and a body with no title is a paragraph with no place in a list.
+    Whitespace-only is refused for the same reason: it renders as an empty row
+    and reads as a rendering fault.
+    """
+
+    title = serializers.CharField(max_length=80, trim_whitespace=True)
+    body = serializers.CharField(max_length=600, trim_whitespace=True)
+
+    def validate_title(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("A policy needs a title.")
+        return value.strip()
+
+    def validate_body(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("A policy needs something under its title.")
+        return value.strip()
 
 
 class CreateEventRequestSerializer(serializers.Serializer):
@@ -91,6 +152,12 @@ class UpdateEventRequestSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     venue = serializers.CharField(max_length=255, required=False)
     city = serializers.CharField(max_length=120, required=False)
+    #: A CHOICE here, unlike the browse filter's free CharField — and the
+    #: asymmetry is deliberate. A reader following a hand-edited link should
+    #: get a wider list, not a 400; an organiser SAVING a category is writing
+    #: a column the browse index depends on, so an unknown value must be
+    #: refused at the boundary rather than silently stored and never matched.
+    category = serializers.ChoiceField(choices=EventCategory.choices, required=False)
     starts_at = serializers.DateTimeField(required=False)
     ends_at = serializers.DateTimeField(required=False, allow_null=True)
     poster = serializers.FileField(required=False)
@@ -134,12 +201,20 @@ class UpdateEventRequestSerializer(serializers.Serializer):
     accessibility_notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
     seo_title = serializers.CharField(max_length=70, required=False, allow_blank=True)
     seo_description = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    #: The whole list, replaced wholesale — an empty list CLEARS it.
+    #:
+    #: Wholesale rather than per-row for the same reason a sale-phase schedule
+    #: is: these entries have no server identity to preserve, so there is
+    #: nothing to diff and no per-row patch to get wrong. The editor holds the
+    #: list, the save writes the list.
+    policies = EventPolicySerializer(many=True, required=False)
 
     _EDITABLE = {
         "title",
         "description",
         "venue",
         "city",
+        "category",
         "starts_at",
         "ends_at",
         "poster",
@@ -153,6 +228,7 @@ class UpdateEventRequestSerializer(serializers.Serializer):
         "accessibility_notes",
         "seo_title",
         "seo_description",
+        "policies",
     }
 
     def validate_starts_at(self, value):
@@ -163,6 +239,11 @@ class UpdateEventRequestSerializer(serializers.Serializer):
     def validate(self, attrs: dict) -> dict:
         if not (self._EDITABLE & attrs.keys()):
             raise serializers.ValidationError("Provide at least one field to update.")
+        policies = attrs.get("policies")
+        if policies is not None and len(policies) > MAX_POLICIES:
+            raise serializers.ValidationError(
+                {"policies": f"An event can have at most {MAX_POLICIES} policies."}
+            )
         starts_at, ends_at = attrs.get("starts_at"), attrs.get("ends_at")
         if starts_at is not None and ends_at is not None and ends_at <= starts_at:
             raise serializers.ValidationError("ends_at must be after starts_at.")
@@ -175,6 +256,14 @@ class EventSearchQuerySerializer(serializers.Serializer):
 
     q = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     city = serializers.CharField(required=False, allow_blank=True)
+    #: An UNKNOWN category is treated as absent rather than as a 400.
+    #:
+    #: `ChoiceField` would reject it, and these params come from links people
+    #: share and hand-edit — the browse view is already scoped safely, so the
+    #: worst an unrecognised value can do is widen the list. A browse page that
+    #: 400s because a stale link carries a retired slug is worse than one
+    #: showing more results than asked for. Same reasoning as the date filters.
+    category = serializers.CharField(required=False, allow_blank=True)
     starts_after = serializers.DateTimeField(required=False)
     starts_before = serializers.DateTimeField(required=False)
 
@@ -184,6 +273,16 @@ class EventCardSerializer(serializers.ModelSerializer):
     from_price = serializers.IntegerField(
         source="from_price_minor", read_only=True, allow_null=True
     )
+    #: Owned by `apps.reviews` and denormalised onto the event row, so a card
+    #: shows "4.6 (128)" without joining or aggregating review rows. `None`
+    #: rather than 0.0 when nobody has reviewed — a zero average renders as a
+    #: real, terrible score, which is the one thing an unrated event must not
+    #: look like.
+    rating = serializers.SerializerMethodField()
+
+    def get_rating(self, obj) -> float | None:
+        count = obj.rating_count or 0
+        return round(obj.rating_sum / count, 1) if count else None
 
     class Meta:
         model = Event
@@ -192,12 +291,15 @@ class EventCardSerializer(serializers.ModelSerializer):
             "title",
             "venue",
             "city",
+            "category",
             "starts_at",
             "poster_url",
             "from_price",
             "tickets_available",
             "organization_id",
             "organization_name",
+            "rating",
+            "rating_count",
         ]
         read_only_fields = fields
 
@@ -234,6 +336,14 @@ class EventDetailSerializer(serializers.ModelSerializer):
     from_price = serializers.IntegerField(
         source="from_price_minor", read_only=True, allow_null=True
     )
+    #: See the note on `EventCardSerializer.rating` — same denormals, same
+    #: None-when-unrated rule.
+    rating = serializers.SerializerMethodField()
+
+    def get_rating(self, obj) -> float | None:
+        count = obj.rating_count or 0
+        return round(obj.rating_sum / count, 1) if count else None
+
     #: Has a platform operator verified this organizer?
     #:
     #: A BOOLEAN rather than the level, deliberately. `unverified` and `pending`
@@ -259,6 +369,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
             "description",
             "venue",
             "city",
+            "category",
             # Null unless the organizer picked a real place. The frontend
             # renders a map only when both are present — never a marker at
             # (0, 0), which is in the Gulf of Guinea.
@@ -271,6 +382,8 @@ class EventDetailSerializer(serializers.ModelSerializer):
             "poster_url",
             "from_price",
             "tickets_available",
+            "rating",
+            "rating_count",
             "version",
             "created_at",
             # Content fields. Every one is blank/null unless an organizer filled
@@ -280,6 +393,10 @@ class EventDetailSerializer(serializers.ModelSerializer):
             "language",
             "age_restriction",
             "accessibility_notes",
+            # The organiser's own rules. A list of {title, body}; empty for an
+            # event that set none, which the page renders as nothing rather
+            # than as a heading with no content under it.
+            "policies",
             "seo_title",
             "seo_description",
         ]
@@ -298,6 +415,7 @@ class OrganizerEventSummarySerializer(serializers.ModelSerializer):
             "id",
             "title",
             "city",
+            "category",
             "starts_at",
             "status",
             "poster_url",
@@ -456,6 +574,55 @@ class UpdateEventTimelineSerializer(_PartialUpdateSerializer):
     _EDITABLE = frozenset({"label", "description", "starts_at", "position"})
 
 
+class EventSlotSerializer(serializers.ModelSerializer):
+    """One session, as the ticket panel renders it."""
+
+    class Meta:
+        model = EventSlot
+        fields = ["id", "label", "starts_at", "ends_at", "position", "is_active"]
+        read_only_fields = fields
+
+
+class CreateEventSlotSerializer(serializers.Serializer):
+    """What an organiser supplies to add a session."""
+
+    # `label` shadows DRF `Field.label`, hence the ignore. Renaming the API
+    # field would be worse: this IS what an organiser calls the thing, and
+    # the shadowing is harmless on a Serializer used only as a request DTO.
+    label = serializers.CharField(  # type: ignore[assignment]
+        max_length=80, required=False, allow_blank=True, default=""
+    )
+    starts_at = serializers.DateTimeField()
+    ends_at = serializers.DateTimeField(required=False, allow_null=True)
+    position = serializers.IntegerField(required=False, min_value=0, default=0)
+
+    def validate(self, attrs: dict) -> dict:
+        """A slot that ends before it starts is a typo, not a schedule.
+
+        Checked HERE rather than as a DB constraint because `ends_at` is
+        nullable and the message an organiser needs ("the end is before the
+        start") is a boundary concern, not a storage one.
+        """
+        ends_at = attrs.get("ends_at")
+        if ends_at and ends_at <= attrs["starts_at"]:
+            raise serializers.ValidationError(
+                {"ends_at": "This slot ends before it starts — check the times."}
+            )
+        return attrs
+
+
+class UpdateEventSlotSerializer(serializers.Serializer):
+    label = serializers.CharField(  # type: ignore[assignment]
+        max_length=80, required=False, allow_blank=True
+    )
+    starts_at = serializers.DateTimeField(required=False)
+    ends_at = serializers.DateTimeField(required=False, allow_null=True)
+    position = serializers.IntegerField(required=False, min_value=0)
+    #: Taking a session off sale WITHOUT deleting it. A slot whose tiers have
+    #: sold cannot be removed at all, so this is the only honest "cancel".
+    is_active = serializers.BooleanField(required=False)
+
+
 class EventContentSerializer(serializers.Serializer):
     """Everything the event page renders below the fold, in one payload.
 
@@ -467,6 +634,13 @@ class EventContentSerializer(serializers.Serializer):
     media = EventMediaSerializer(many=True)
     faqs = EventFaqSerializer(many=True)
     timeline = EventTimelineSerializer(many=True)
+    #: The sessions a buyer picks between. On THIS payload rather than an
+    #: endpoint of its own because it is already edge-cached and already
+    #: invalidated on every content write — one cached document with one
+    #: invalidation, instead of a fourth round trip before the ticket panel
+    #: can draw. Availability is NOT here: that lives on the uncached
+    #: ticket-types read, where a number that must be current belongs.
+    slots = EventSlotSerializer(many=True)
 
 
 class SaveEventsRequestSerializer(serializers.Serializer):

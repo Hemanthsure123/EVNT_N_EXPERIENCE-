@@ -44,7 +44,11 @@ class TestReads:
         response = api_client.get(f"/api/v1/events/{event.id}/content")
 
         assert response.status_code == 200
-        assert response.json() == {"media": [], "faqs": [], "timeline": []}
+        # `slots` rides on this payload rather than getting an endpoint of its
+        # own: it is already edge-cached and already invalidated on every
+        # content write, so it is one cached document instead of a fourth
+        # round trip before the ticket panel can draw.
+        assert response.json() == {"media": [], "faqs": [], "timeline": [], "slots": []}
 
     def test_content_is_edge_cacheable(self, api_client, make_event):
         """Same for every visitor, so a CDN should absorb it — the same
@@ -520,9 +524,16 @@ class TestUpload:
 
     @staticmethod
     def _jpeg(name: str = "poster.jpg"):
-        from django.core.files.uploadedfile import SimpleUploadedFile
+        """A REAL 1920x1080 JPEG.
 
-        return SimpleUploadedFile(name, b"\xff\xd8\xff" + b"0" * 128, content_type="image/jpeg")
+        It used to be three magic bytes and some zeroes, which passed when the
+        only checks were size and signature. `EVENT_IMAGE_SPEC` parses the file
+        now, so a stub is no longer an image — and a test that uploads one is
+        testing the refusal path by accident.
+        """
+        from core.tests.images import event_image
+
+        return event_image(name)
 
     def test_uploading_attaches_the_media_in_one_request(self, authed_client, make_event):
         event = make_event(status=EventStatus.DRAFT)
@@ -558,6 +569,40 @@ class TestUpload:
             format="multipart",
         )
         assert response.status_code == 422
+
+    def test_an_off_shape_image_is_refused_with_the_size_to_export(self, authed_client, make_event):
+        """The gate, through the API a real organiser hits.
+
+        A portrait poster is the shape organisers actually have and the one the
+        event page cannot draw, so this is the refusal that matters — and the
+        response has to carry the fix, not just the rejection.
+        """
+        from core.tests.images import portrait_event_image
+
+        event = make_event(status=EventStatus.DRAFT)
+        response = authed_client.post(
+            f"/api/v1/events/{event.id}/media/upload",
+            {"file": portrait_event_image(), "alt_text": "The main stage"},
+            format="multipart",
+        )
+
+        assert response.status_code == 422
+        message = response.json()["error"]["message"]
+        assert "taller than it is wide" in message
+        assert "1920 x 1080" in message
+
+    def test_an_image_below_the_resolution_floor_is_refused(self, authed_client, make_event):
+        from core.tests.images import undersized_event_image
+
+        event = make_event(status=EventStatus.DRAFT)
+        response = authed_client.post(
+            f"/api/v1/events/{event.id}/media/upload",
+            {"file": undersized_event_image(), "alt_text": "The main stage"},
+            format="multipart",
+        )
+
+        assert response.status_code == 422
+        assert "at least 1280 x 720" in response.json()["error"]["message"]
 
     def test_a_disguised_file_is_refused(self, authed_client, make_event):
         from django.core.files.uploadedfile import SimpleUploadedFile

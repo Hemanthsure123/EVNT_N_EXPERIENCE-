@@ -68,19 +68,19 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   {
     id: 'notifications',
     label: 'Notifications',
-    description: 'Reminders on this device, and what we always send',
+    description: 'Reminders and messages',
     icon: Bell,
   },
   {
     id: 'privacy',
     label: 'Privacy & data',
-    description: 'What is kept on this device, and what is on your account',
+    description: 'Cookies and saved events',
     icon: ShieldCheck,
   },
   {
     id: 'account',
     label: 'Account',
-    description: 'Connected apps, signing out, and what is not built yet',
+    description: 'Connected apps and signing out',
     icon: KeyRound,
   },
 ] as const;

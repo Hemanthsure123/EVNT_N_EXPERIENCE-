@@ -47,6 +47,20 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   /**
+   * Where the build lands. `.next` unless `NEXT_DIST_DIR` says otherwise.
+   *
+   * This exists for one specific reason: on Windows, running `next build` while
+   * `next dev` is watching the same `.next` corrupts it — the dev server sees
+   * half-written chunks appear under it and starts serving 500s for routes that
+   * are fine, with no error naming the cause. Recovering means stopping
+   * everything and deleting the directory.
+   *
+   * So a verification build (CI's gate, or a check run while somebody has the
+   * dev server open) points somewhere else and leaves the running server
+   * alone. Deploys set nothing and get `.next`.
+   */
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+  /**
    * Emit `.next/standalone` — a self-contained server with only the modules it
    * actually imports.
    *

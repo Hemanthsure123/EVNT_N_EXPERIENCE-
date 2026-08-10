@@ -61,6 +61,27 @@ export function CitySwitcher({ className }: { className?: string }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
   const [activeIndex, setActiveIndex] = React.useState(-1);
+  /**
+   * What last moved the highlight — and therefore whether to scroll to it.
+   *
+   * ── THE BUG THIS FIXES ────────────────────────────────────────────────
+   *
+   * Every row set `activeIndex` on `mousemove`, and an effect scrolled the
+   * active row to the CENTRE of the list. So moving the pointer over a row
+   * scrolled that row to the middle, which slid a DIFFERENT row under the
+   * stationary cursor, which fired `mousemove` again, which scrolled again.
+   * The list ran away under a finger that was not scrolling anything.
+   *
+   * The rule that ends it: **scrolling to the highlight is for the keyboard
+   * only.** Somebody arrowing through a list cannot see past the viewport and
+   * needs the row brought to them. Somebody with a pointer is already looking
+   * at the row under their cursor — moving it is not help, it is the list
+   * fighting them.
+   *
+   * A ref rather than state on purpose: this must not itself cause a render,
+   * and it is read inside the effect that the index change already schedules.
+   */
+  const moveSource = React.useRef<'keyboard' | 'pointer' | 'open'>('open');
   /** True from pressing Detect until an answer lands — see the effect below. */
   const [awaitingFix, setAwaitingFix] = React.useState(false);
 
@@ -124,16 +145,24 @@ export function CitySwitcher({ className }: { className?: string }) {
       setActiveIndex(-1);
       return;
     }
+    moveSource.current = 'open';
     setActiveIndex(city ? ALL_CITIES.findIndex((entry) => entry.slug === city.slug) : -1);
   }, [open, searching, trimmed, city]);
 
-  // Keep the highlighted row in view while arrowing, and on open.
+  // Keep the highlighted row in view while arrowing, and on open — and NEVER
+  // while somebody is moving a pointer over the list. See `moveSource`.
   React.useEffect(() => {
-    if (activeIndex < 0) return;
+    if (activeIndex < 0 || moveSource.current === 'pointer') return;
+    // `center` only when the sheet opens, where centring the currently
+    // selected city is genuinely useful. `nearest` for the keyboard, because
+    // re-centring on every arrow press makes the whole list jump for a reader
+    // who moved one row — the same class of unrequested motion as the bug
+    // above, just slower.
+    const block = moveSource.current === 'open' ? 'center' : 'nearest';
     const frame = requestAnimationFrame(() => {
       scrollRef.current
         ?.querySelector<HTMLElement>('[data-active="true"]')
-        ?.scrollIntoView({ block: 'center' });
+        ?.scrollIntoView({ block });
     });
     return () => cancelAnimationFrame(frame);
   }, [activeIndex, open]);
@@ -163,20 +192,24 @@ export function CitySwitcher({ className }: { className?: string }) {
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault();
+        moveSource.current = 'keyboard';
         setActiveIndex((i) => (i + 1) % visible.length);
         break;
       case 'ArrowUp':
         event.preventDefault();
+        moveSource.current = 'keyboard';
         setActiveIndex((i) =>
           i < 0 ? visible.length - 1 : (i - 1 + visible.length) % visible.length,
         );
         break;
       case 'Home':
         event.preventDefault();
+        moveSource.current = 'keyboard';
         setActiveIndex(0);
         break;
       case 'End':
         event.preventDefault();
+        moveSource.current = 'keyboard';
         setActiveIndex(visible.length - 1);
         break;
       default:
@@ -187,7 +220,13 @@ export function CitySwitcher({ className }: { className?: string }) {
   const jumpToLetter = (letter: string) => {
     headingRefs.current.get(letter)?.scrollIntoView({ block: 'start' });
     const start = letterStart.get(letter);
-    if (start !== undefined) setActiveIndex(start);
+    if (start !== undefined) {
+      // The rail scrolls to the HEADING itself, deliberately — so the effect
+      // must not then scroll again to the first city under it and undo the
+      // alignment somebody just asked for.
+      moveSource.current = 'pointer';
+      setActiveIndex(start);
+    }
   };
 
   const activeCity = activeIndex >= 0 ? visible[activeIndex] : undefined;
@@ -381,7 +420,14 @@ export function CitySwitcher({ className }: { className?: string }) {
                           city={entry}
                           selected={city?.slug === entry.slug}
                           active={index === activeIndex}
-                          onHover={() => setActiveIndex(index)}
+                          onHover={() => {
+                            // Marks the source BEFORE the state change, so the
+                            // effect the change schedules already knows not to
+                            // scroll. Setting it after would be a render too
+                            // late — which is the whole bug.
+                            moveSource.current = 'pointer';
+                            setActiveIndex(index);
+                          }}
                           onSelect={() => choose(entry)}
                         />
                       ))}
@@ -415,7 +461,14 @@ export function CitySwitcher({ className }: { className?: string }) {
                             city={entry}
                             selected={city?.slug === entry.slug}
                             active={index === activeIndex}
-                            onHover={() => setActiveIndex(index)}
+                            onHover={() => {
+                            // Marks the source BEFORE the state change, so the
+                            // effect the change schedules already knows not to
+                            // scroll. Setting it after would be a render too
+                            // late — which is the whole bug.
+                            moveSource.current = 'pointer';
+                            setActiveIndex(index);
+                          }}
                             onSelect={() => choose(entry)}
                           />
                         );
@@ -477,6 +530,13 @@ export function CitySwitcher({ className }: { className?: string }) {
   );
 }
 
+/**
+ * One row.
+ *
+ * Highlighting on hover is correct; SCROLLING on hover is not, and the two got
+ * coupled through a shared `activeIndex`. The caller now records what moved
+ * the highlight and only scrolls for the keyboard — see `moveSource`.
+ */
 function CityOption({
   city,
   selected,
@@ -496,6 +556,10 @@ function CityOption({
       role="option"
       aria-selected={active}
       data-active={active}
+      // `mousemove`, not `mouseenter`: a list that scrolls for its own
+      // reasons can slide a new row under a stationary cursor, and
+      // `mouseenter` would fire for that — highlighting a row nobody pointed
+      // at. `mousemove` only fires when the pointer actually moved.
       onMouseMove={onHover}
       onClick={onSelect}
       className={cn(ROW_CLASS, active ? 'bg-muted' : 'bg-transparent')}

@@ -1,18 +1,13 @@
 import * as React from 'react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
-import { ArrowRight } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Container } from '@/components/shell/container';
-import { categoryTint } from '@/components/discovery/category-tint';
 import { EventGrid } from '@/components/discovery/event-grid';
 import { RowEmpty, RowError } from '@/components/discovery/row-states';
-import { ClayIcon } from '@/components/illustrations/clay';
+import { CategoryHero } from '@/components/discovery/category-hero';
 import { PUBLIC_LIST_REVALIDATE_SECONDS, fetchEventsSafe } from '@/lib/api/events';
 import { CATEGORIES, categoryBySlug } from '@/lib/discovery/categories';
 import { browseHref } from '@/lib/discovery/filters';
-import { cn } from '@/lib/utils/cn';
 import { eventToJsonLd } from '@/lib/discovery/seo';
 import { JsonLd, breadcrumbJsonLd, eventItemListJsonLd } from '@/lib/seo/json-ld';
 import { SITE_URL, pageMetadata } from '@/lib/seo/metadata';
@@ -65,34 +60,12 @@ export default async function CategoryPage({ params }: { params: { slug: string 
         <JsonLd data={eventItemListJsonLd(`${category.label} events`, events.map(eventToJsonLd))} />
       ) : null}
 
-      <header className="flex flex-col gap-4">
-        {/* ONE SOURCE OF TRUTH FOR WHAT A CATEGORY LOOKS LIKE. This was a 48px
-            square painted with the category's raw violet/pink gradient and a
-            thin lucide glyph on top — the only place in the product still
-            putting a line icon on a brand gradient, and it contradicted the
-            clay set used on the tiles the visitor just pressed to get here. It
-            is the same artwork on the same pastel plate now, resolved from the
-            same slug, so the tile and the page it opens agree. */}
-        <span
-          className={cn(
-            'inline-flex size-14 items-center justify-center rounded-2xl',
-            categoryTint(category.slug).surface,
-          )}
-          aria-hidden
-        >
-          <ClayIcon slug={category.slug} className="size-10" />
-        </span>
-        <h1 className="text-h1">{category.label} events</h1>
-        <p className="max-w-2xl text-body-lg text-muted-foreground">{category.blurb}.</p>
-        <div>
-          <Button asChild>
-            <Link href={browse}>
-              Filter by date, city and price
-              <ArrowRight className="size-4" aria-hidden />
-            </Link>
-          </Button>
-        </div>
-      </header>
+      <CategoryHero
+        slug={category.slug}
+        label={`${category.label} events`}
+        browseHref={browse}
+        count={events.length || undefined}
+      />
 
       {error ? (
         <RowError message={error} retryHref={browse} />

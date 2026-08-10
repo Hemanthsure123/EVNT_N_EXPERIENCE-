@@ -45,7 +45,7 @@ export function TrendingNearYou({
           title={city ? `Popular in ${city.name}` : 'Trending near you'}
           subtitle={
             city
-              ? 'What people are booking around you right now'
+              ? undefined
               : 'Across India — set your city from the top nav for closer picks'
           }
           href={city ? browseHref({ city: city.name }) : '/events'}

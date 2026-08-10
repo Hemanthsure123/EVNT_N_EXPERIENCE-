@@ -156,7 +156,7 @@ export function FeaturedManager() {
           <EmptyState
             icon={Star}
             title={`Nothing in ${COLLECTIONS.find((c) => c.value === collection)?.label}`}
-            body="Search above and add an event. Only approved, upcoming events can be featured — that is the moderation gate, not a bug."
+            body="Search above and add an event. Only approved, upcoming events can be featured."
           />
         ) : (
           <ol className="flex flex-col divide-y divide-border rounded-xl border border-border">

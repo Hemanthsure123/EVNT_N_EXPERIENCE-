@@ -2,11 +2,28 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useInfiniteQuery } from '@tanstack/react-query';
-import { CalendarDays, Loader2, QrCode, Ticket as TicketIcon, X } from 'lucide-react';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  QrCode,
+  Send,
+  Ticket as TicketIcon,
+  X,
+} from 'lucide-react';
 import { api } from '@/lib/api/client';
 import { cursorFromNextLink } from '@/lib/api/events';
 import type { Paginated } from '@/lib/api/types';
+import {
+  REFUND_REQUEST_LABELS,
+  fetchMyRefundRequests,
+  type RefundRequest,
+} from '@/lib/api/refund-requests';
+import { RefundRequestDialog, type RefundTarget } from './refund-request';
+import { ShareReceiptDialog } from './share-receipt';
+import { PendingReviewCard } from '@/components/reviews/review-prompt';
 import { Drawer, DrawerContent } from '@/components/ui/drawer';
 import { TicketQrCode } from '@/components/booking/qr-code';
 import {
@@ -30,9 +47,9 @@ import { cn } from '@/lib/utils/cn';
  * (there is no seat map).
  *
  * Rather than fabricate them or fire one event request per ticket, the card
- * shows what is real and links to the event page for the rest. `BACKLOG.md`
- * item 35 asks for the four fields that would make a richer card a single
- * cheap join.
+ * shows what is real and links to the event page for the rest. Widening the
+ * payload with venue, date and poster would make a richer card one cheap join
+ * — do that before adding a second request per row.
  *
  * ── THE QR IS THE PRODUCT ─────────────────────────────────────────────────
  *
@@ -60,6 +77,8 @@ import { cn } from '@/lib/utils/cn';
 
 type Ticket = {
   id: string;
+  /** Which booking issued it — the unit a refund actually acts on. */
+  booking_id: string;
   event_id: string;
   event_title: string;
   ticket_type_id: string;
@@ -118,9 +137,26 @@ const quietPillClass = cn(
   focusRing,
 );
 
+/**
+ * The refund tones, mapped onto the pills this screen already uses.
+ *
+ * `approved` is `info`, deliberately NOT `success` — a green tick beside
+ * "Approved" reads as money returned, and the money has not necessarily moved.
+ * `failed` is `danger` for the opposite reason: the approval stood but the
+ * transfer did not, and that must never look like a finished refund.
+ */
+const REFUND_TONES: Record<RefundRequest['status'], Tone> = {
+  pending: 'warning',
+  approved: 'info',
+  rejected: 'neutral',
+  failed: 'danger',
+};
+
 export function MyTickets() {
   const [filter, setFilter] = React.useState<FilterId>('all');
-  const [open, setOpen] = React.useState<Ticket | null>(null);
+  const [open, setOpen] = React.useState<BookingGroup | null>(null);
+  const [sharing, setSharing] = React.useState<BookingGroup | null>(null);
+  const [refunding, setRefunding] = React.useState<RefundTarget | null>(null);
 
   const query = useInfiniteQuery({
     queryKey: ['account', 'tickets'],
@@ -134,17 +170,99 @@ export function MyTickets() {
     refetchOnWindowFocus: true,
   });
 
-  const all = query.data?.pages.flatMap((page) => page.data) ?? [];
+  // One request per booking is a backend invariant (a partial unique index),
+  // so a flat map by booking id cannot lose one. Fetched ONCE for the screen
+  // rather than per card — the alternative is a request per ticket, which on a
+  // page that exists to load fast in a queue is the wrong trade.
+  const requests = useQuery({
+    queryKey: ['account', 'refund-requests'],
+    queryFn: () => fetchMyRefundRequests(),
+    staleTime: 30_000,
+  });
+
+  const requestByBooking = React.useMemo(() => {
+    const map = new Map<string, RefundRequest>();
+    for (const row of requests.data?.data ?? []) map.set(row.booking_id, row);
+    return map;
+  }, [requests.data]);
+
+  // Memoised because two derived maps below depend on it. A fresh array each
+  // render would rebuild both on every keystroke elsewhere in the tree.
+  const all = React.useMemo(
+    () => query.data?.pages.flatMap((page) => page.data) ?? [],
+    [query.data],
+  );
   const rows = filter === 'all' ? all : all.filter((ticket) => ticket.status === filter);
+
+  /**
+   * Every ticket that can actually admit somebody, in list order.
+   *
+   * A used or refunded ticket has no code to show (see the note at the top of
+   * this file), so the sheet filters to active ones — including the rest would
+   * put blank slides between the live codes.
+   */
+  /**
+   * ── ONE CARD PER BOOKING, NOT PER TICKET ────────────────────────────────
+   *
+   * Twelve tickets on one booking rendered twelve identical cards — same
+   * event, same tier, same date, same buttons — and the only thing that
+   * distinguished them was nothing. The screen became a wall of duplicates
+   * that pushed every OTHER booking below the fold, which is the opposite of
+   * what a ticket wallet is for.
+   *
+   * Google Wallet does exactly this for grouped event passes: one item, and
+   * the individual passes appear on a carousel inside it. The sheet was
+   * already a carousel; it just had no reason to exist while the list was
+   * doing its job twelve times over.
+   *
+   * Grouped by BOOKING rather than by event: a booking is what was paid for
+   * once, refunded as a unit, and carried by one party through one gate.
+   * Insertion order is preserved, so the list keeps the server's ordering.
+   */
+  const groups = React.useMemo(() => {
+    const map = new Map<string, BookingGroup>();
+    for (const ticket of rows) {
+      const existing = map.get(ticket.booking_id);
+      if (existing) {
+        existing.tickets.push(ticket);
+        if (existing.tierName !== ticket.ticket_type_name) existing.tierName = null;
+      } else {
+        map.set(ticket.booking_id, {
+          bookingId: ticket.booking_id,
+          eventId: ticket.event_id,
+          eventTitle: ticket.event_title,
+          tierName: ticket.ticket_type_name,
+          issuedAt: ticket.created_at,
+          tickets: [ticket],
+        });
+      }
+    }
+    return [...map.values()];
+  }, [rows]);
+
+  // How many of this account's tickets one booking covers. A refund voids all
+  // of them, and the dialog says so before the button.
+  const ticketsPerBooking = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const ticket of all) {
+      counts.set(ticket.booking_id, (counts.get(ticket.booking_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [all]);
 
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
       <header className="flex flex-col gap-stack">
         <h1 className="text-h3 md:text-h2">Tickets</h1>
         <p className="text-body text-muted-foreground">
-          Show the code at the gate. It works offline once this page has loaded.
+          Show the code at the gate.
         </p>
       </header>
+
+      {/* The non-interrupting half of the review prompt. Renders nothing at
+          all when there is nothing to rate, so it costs the page no space in
+          the common case. */}
+      <PendingReviewCard />
 
       <div role="tablist" aria-label="Filter tickets" className="flex flex-wrap gap-2">
         {FILTERS.map((entry) => {
@@ -196,7 +314,7 @@ export function MyTickets() {
             body={
               all.length
                 ? 'Try another filter — your other tickets are still here.'
-                : 'Tickets appear here the moment a booking is paid. Browsing is free and needs no account.'
+                : 'Tickets appear here as soon as a booking is paid.'
             }
             action={
               all.length ? undefined : (
@@ -209,9 +327,21 @@ export function MyTickets() {
         </div>
       ) : (
         <ul className="grid gap-stack-lg sm:grid-cols-2">
-          {rows.map((ticket) => (
-            <li key={ticket.id}>
-              <TicketCard ticket={ticket} onOpen={() => setOpen(ticket)} />
+          {groups.map((group) => (
+            <li key={group.bookingId}>
+              <BookingCard
+                group={group}
+                refundRequest={requestByBooking.get(group.bookingId)}
+                onOpen={() => setOpen(group)}
+                onShare={() => setSharing(group)}
+                onRequestRefund={() =>
+                  setRefunding({
+                    bookingId: group.bookingId,
+                    eventTitle: group.eventTitle,
+                    ticketCount: ticketsPerBooking.get(group.bookingId) ?? group.tickets.length,
+                  })
+                }
+              />
             </li>
           ))}
         </ul>
@@ -231,13 +361,88 @@ export function MyTickets() {
         </button>
       ) : null}
 
-      <TicketSheet ticket={open} onClose={() => setOpen(null)} />
+      {/* Scoped to the BOOKING that was pressed. It used to receive every
+          scannable ticket on the account, so at a gate you could swipe past
+          the end of your own party into somebody else's event.
+
+          `open` is an explicit boolean. It was derived as `startAt >= 0`,
+          with the parent passing `0` when nothing was selected — so closing
+          set the state that reopened it at index 0, and the dialog could not
+          be dismissed at all while the account held a scannable ticket. An
+          index is a position; it should never have been carrying "is this
+          thing open" as well. */}
+      <TicketSheet
+        open={open !== null}
+        tickets={open ? open.tickets.filter((t) => t.status === 'active') : []}
+        onClose={() => setOpen(null)}
+      />
+      <RefundRequestDialog target={refunding} onClose={() => setRefunding(null)} />
+      <ShareReceiptDialog
+        target={
+          sharing
+            ? {
+                bookingId: sharing.bookingId,
+                eventTitle: sharing.eventTitle,
+                ticketCount: sharing.tickets.length,
+              }
+            : null
+        }
+        onClose={() => setSharing(null)}
+      />
     </div>
   );
 }
 
-function TicketCard({ ticket, onOpen }: { ticket: Ticket; onOpen: () => void }) {
-  const scannable = ticket.status === 'active';
+/**
+ * A BOOKING — the thing that was paid for once and is carried by one party.
+ *
+ * See the grouping note in `MyTickets`: this used to be one card per TICKET,
+ * so a booking of twelve drew twelve identical cards and buried every other
+ * booking under them.
+ */
+type BookingGroup = {
+  bookingId: string;
+  eventId: string;
+  eventTitle: string;
+  /** `null` when the booking spans more than one tier — then the card counts
+   *  instead of naming, because "PREMIUM FOOD" over a mixed booking is wrong. */
+  tierName: string | null;
+  issuedAt: string;
+  tickets: Ticket[];
+};
+
+function BookingCard({
+  group,
+  refundRequest,
+  onOpen,
+  onShare,
+  onRequestRefund,
+}: {
+  group: BookingGroup;
+  refundRequest: RefundRequest | undefined;
+  onOpen: () => void;
+  onShare: () => void;
+  onRequestRefund: () => void;
+}) {
+  const live = group.tickets.filter((t) => t.status === 'active');
+  const total = group.tickets.length;
+  const scannable = live.length > 0;
+  // Only live tickets with no request outstanding can start one. A used ticket
+  // has been admitted, a void one is already refunded, and a second request on
+  // the same booking is a 409 — offering the control anyway would be a button
+  // whose only outcome is an error.
+  const refundable = scannable && !refundRequest;
+
+  /**
+   * What the pill says for a MIXED booking.
+   *
+   * Two of twelve used is not "Used" and not "Ready to use" — reporting either
+   * one is a false statement about ten tickets. So a mixed booking counts what
+   * is still live and the rest is legible from the number beside the title.
+   */
+  const uniform = group.tickets.every((t) => t.status === group.tickets[0].status);
+  const pillStatus = group.tickets[0].status;
+
   return (
     <article
       className={cn(
@@ -248,25 +453,63 @@ function TicketCard({ ticket, onOpen }: { ticket: Ticket; onOpen: () => void }) 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <Link
-            href={`/events/${ticket.event_id}`}
+            href={`/events/${group.eventId}`}
             className="block truncate text-body-lg font-semibold underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {ticket.event_title}
+            {group.eventTitle}
           </Link>
-          <p className="truncate text-body-sm text-muted-foreground">{ticket.ticket_type_name}</p>
+          <p className="truncate text-body-sm text-muted-foreground">
+            {group.tierName ?? `${total} tickets across tiers`}
+          </p>
         </div>
-        <StatusPill tone={TONES[ticket.status]}>{LABELS[ticket.status]}</StatusPill>
+        {uniform ? (
+          <StatusPill tone={TONES[pillStatus]}>{LABELS[pillStatus]}</StatusPill>
+        ) : (
+          <StatusPill tone="info">
+            {live.length} of {total} live
+          </StatusPill>
+        )}
       </div>
 
-      <p className="flex items-center gap-1.5 text-caption text-foreground-subtle">
-        <CalendarDays className="size-3.5 shrink-0" aria-hidden />
-        Issued{' '}
-        {new Date(ticket.created_at).toLocaleDateString('en-IN', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric',
-        })}
-      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-foreground-subtle">
+        <span className="flex items-center gap-1.5">
+          <TicketIcon className="size-3.5 shrink-0" aria-hidden />
+          {/* The count IS the card's reason to exist now — it is what twelve
+              duplicate cards were previously communicating by being twelve. */}
+          {total === 1 ? '1 ticket' : `${total} tickets`}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <CalendarDays className="size-3.5 shrink-0" aria-hidden />
+          Issued{' '}
+          {new Date(group.issuedAt).toLocaleDateString('en-IN', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+          })}
+        </span>
+      </div>
+
+      {refundRequest ? (
+        <div className="rounded-lg border border-border bg-sunken p-3">
+          <div className="flex items-center gap-2">
+            <StatusPill tone={REFUND_TONES[refundRequest.status]}>
+              {REFUND_REQUEST_LABELS[refundRequest.status].label}
+            </StatusPill>
+            <span className="text-caption text-muted-foreground">Refund request</span>
+          </div>
+          <p className="mt-1.5 text-caption text-foreground-subtle">
+            {REFUND_REQUEST_LABELS[refundRequest.status].customerHint}
+          </p>
+          {/* The organiser's note on a refusal. Shown verbatim and only when
+              there is one — a declined refund with no reason given is what
+              turns a customer into a chargeback. */}
+          {refundRequest.status === 'rejected' && refundRequest.decision_note ? (
+            <p className="mt-1.5 text-caption text-foreground">
+              “{refundRequest.decision_note}”
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-auto flex flex-wrap gap-2 pt-stack">
         <button
@@ -283,37 +526,109 @@ function TicketCard({ ticket, onOpen }: { ticket: Ticket; onOpen: () => void }) 
           )}
         >
           <QrCode className="size-4" aria-hidden />
-          {scannable ? 'Show code' : LABELS[ticket.status]}
+          {!scannable
+            ? LABELS[pillStatus]
+            : live.length === 1
+              ? 'Show code'
+              : `Show ${live.length} codes`}
         </button>
-        <Link href={`/events/${ticket.event_id}`} className={quietPillClass}>
+        {/* Sends a RECEIPT, never a ticket. See `ShareBookingDialog`. */}
+        <button type="button" onClick={onShare} className={quietPillClass}>
+          <Send className="size-4" aria-hidden />
+          Share receipt
+        </button>
+        <Link href={`/events/${group.eventId}`} className={quietPillClass}>
           Event details
         </Link>
+        {refundable ? (
+          <button
+            type="button"
+            onClick={onRequestRefund}
+            className={cn(
+              'inline-flex h-control items-center justify-center rounded-full px-4 text-label text-muted-foreground',
+              'transition-colors duration-fast hover:bg-muted hover:text-foreground',
+              focusRing,
+            )}
+          >
+            Request refund
+          </button>
+        ) : null}
       </div>
     </article>
   );
 }
 
 /**
- * The code, large enough to scan from a phone held out at a turnstile.
+ * The codes, large enough to scan from a phone held out at a turnstile.
  *
- * The token is rendered as text rather than a QR image: generating a real QR
- * needs an encoder library, and shipping a picture that only *looks* like a
- * scannable code would be the worst possible thing to fake on this screen —
- * it fails at the one moment it matters, in a queue, with no recourse.
- * BACKLOG item 36 covers the encoder; until then the gate's manual-entry field
- * accepts exactly this string, so the ticket genuinely works.
+ * ── IT IS A CAROUSEL, BECAUSE PARTIES ARRIVE TOGETHER ─────────────────────
+ *
+ * It used to show exactly the ticket whose card was pressed. Four people
+ * walking into a venue on one booking meant: show code, let one through, close
+ * the sheet, find the next card, press it, show code — five interactions per
+ * person, at a turnstile, with a queue behind. The set is what somebody holds,
+ * so the set is what the sheet shows, and the arrows step through it in place.
+ *
+ * Only ACTIVE tickets are in it. A used or refunded ticket has no code to
+ * present (see the note at the top of this file), so including them would put
+ * blank slides between the live ones.
+ *
+ * ── "CAN'T SCAN IT?" GOES TO SUPPORT, NOT TO A STRING ─────────────────────
+ *
+ * It used to disclose the 180-character signed token with a Copy button. That
+ * is the right artefact for a GATE — their scanner has a manual-entry field —
+ * and the wrong one for the person holding the phone: somebody whose code will
+ * not scan cannot do anything useful with the raw token, and copying it to
+ * paste somewhere is a step towards nothing.
+ *
+ * What they actually need is a human. The link opens a support query with this
+ * ticket already attached, which reaches the organiser and an operator.
+ *
+ * The token has NOT been deleted — it is on the ticket email, which is where
+ * gate staff read it from when a camera will not focus.
  */
-function TicketSheet({ ticket, onClose }: { ticket: Ticket | null; onClose: () => void }) {
-  const [copied, setCopied] = React.useState(false);
+function TicketSheet({
+  open,
+  tickets,
+  onClose,
+}: {
+  /** Explicit, and never derived from an index. See the note at the call
+   *  site: deriving it from `startAt >= 0` is what made this undismissable. */
+  open: boolean;
+  tickets: Ticket[];
+  onClose: () => void;
+}) {
+  const [index, setIndex] = React.useState(0);
 
+  // Back to the first code each time it opens, rather than resuming wherever
+  // it was left — a party arrives at the gate in order.
   React.useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+    if (open) setIndex(0);
+  }, [open]);
+
+  const safe = Math.min(index, Math.max(tickets.length - 1, 0));
+  const ticket = tickets[safe];
+  const many = tickets.length > 1;
+
+  const step = React.useCallback(
+    (delta: number) => setIndex((current) => (current + delta + tickets.length) % tickets.length),
+    [tickets.length],
+  );
+
+  // Left/right arrows step through, because this is a gallery and a keyboard
+  // user expects them to. Scoped to the sheet being open.
+  React.useEffect(() => {
+    if (!open || !many) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowRight') step(1);
+      if (event.key === 'ArrowLeft') step(-1);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, many, step]);
 
   return (
-    <Drawer open={Boolean(ticket)} onOpenChange={(open) => !open && onClose()}>
+    <Drawer open={open && tickets.length > 0} onOpenChange={(next) => !next && onClose()}>
       <DrawerContent side="responsive" hideClose className="flex flex-col gap-0 p-0 sm:max-w-md">
         {ticket ? (
           <>
@@ -322,6 +637,7 @@ function TicketSheet({ ticket, onClose }: { ticket: Ticket | null; onClose: () =
                 <h2 className="truncate text-h4">{ticket.event_title}</h2>
                 <p className="truncate text-body-sm text-muted-foreground">
                   {ticket.ticket_type_name}
+                  {many ? ` · Ticket ${safe + 1} of ${tickets.length}` : ''}
                 </p>
               </div>
               <button
@@ -338,56 +654,60 @@ function TicketSheet({ ticket, onClose }: { ticket: Ticket | null; onClose: () =
               </button>
             </header>
 
-            {/* THE CODE IS THE PICTURE, NOT THE STRING.
-                This sheet used to render the 180-character signed token as its
-                headline, in a well, with no QR anywhere — so the one thing the
-                gate actually scans was missing, and the thing nobody can use
-                was the largest element on the screen.
-
-                The token has not been deleted, because the gate has a
-                manual-entry field for a cracked screen or a camera that will
-                not focus. It has been demoted to a disclosure: reachable in one
-                press, invisible until then. */}
             <div className="flex flex-col items-center gap-stack-lg p-card-lg text-center">
               <p className="text-body-sm text-muted-foreground">
                 Show this at the gate. It admits one person, once.
               </p>
-              <TicketQrCode
-                token={ticket.qr_token}
-                label={`QR code for your ${ticket.ticket_type_name} ticket — ${ticket.event_title}`}
-                className="p-3"
-              />
+
+              <div className="flex w-full items-center justify-center gap-2">
+                {many ? (
+                  <SheetArrow side="left" onClick={() => step(-1)} />
+                ) : null}
+                <TicketQrCode
+                  token={ticket.qr_token}
+                  label={`QR code for your ${ticket.ticket_type_name} ticket — ${ticket.event_title}`}
+                  className="p-3"
+                />
+                {many ? <SheetArrow side="right" onClick={() => step(1)} /> : null}
+              </div>
+
               {ticket.attendee_name ? (
                 <p className="text-body-sm text-foreground">Admits {ticket.attendee_name}</p>
               ) : null}
 
-              <details className="w-full text-left">
-                <summary
-                  className={cn(
-                    'mx-auto w-fit cursor-pointer list-none text-caption text-muted-foreground underline underline-offset-2',
-                    '[&::-webkit-details-marker]:hidden',
-                    focusRing,
-                  )}
-                >
-                  Can&rsquo;t scan it?
-                </summary>
-                <div className="mt-stack flex flex-col items-center gap-stack">
-                  <p className="w-full break-all rounded-xl border border-border bg-sunken p-card font-mono text-caption text-foreground">
-                    {ticket.qr_token}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard
-                        ?.writeText(ticket.qr_token)
-                        .then(() => setCopied(true));
-                    }}
-                    className={quietPillClass}
-                  >
-                    {copied ? 'Copied' : 'Copy code'}
-                  </button>
-                </div>
-              </details>
+              {many ? (
+                /* Dots, because the count in the header is a fact and this is
+                   the position. Buttons rather than decoration: on a phone
+                   they are the fastest way to the third person's code. */
+                <ul className="flex items-center justify-center gap-2" aria-label="Your tickets">
+                  {tickets.map((entry, position) => (
+                    <li key={entry.id}>
+                      <button
+                        type="button"
+                        onClick={() => setIndex(position)}
+                        aria-label={`Show ticket ${position + 1}`}
+                        aria-current={position === safe}
+                        className={cn(
+                          'size-2.5 rounded-full transition-colors duration-fast',
+                          focusRing,
+                          position === safe ? 'bg-foreground' : 'bg-border hover:bg-border-strong',
+                        )}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <Link
+                href={`/support?ticket=${encodeURIComponent(ticket.id)}`}
+                className={cn(
+                  'text-caption text-muted-foreground underline underline-offset-2',
+                  'transition-colors hover:text-foreground',
+                  focusRing,
+                )}
+              >
+                Can&rsquo;t scan it?
+              </Link>
 
               <p className="text-caption text-foreground-subtle">
                 This code identifies your ticket and nothing else — it carries no personal
@@ -398,5 +718,23 @@ function TicketSheet({ ticket, onClose }: { ticket: Ticket | null; onClose: () =
         ) : null}
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function SheetArrow({ side, onClick }: { side: 'left' | 'right'; onClick: () => void }) {
+  const Icon = side === 'left' ? ChevronLeft : ChevronRight;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={side === 'left' ? 'Previous ticket' : 'Next ticket'}
+      className={cn(
+        'inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-foreground',
+        'transition-colors duration-fast hover:bg-muted',
+        focusRing,
+      )}
+    >
+      <Icon className="size-5" aria-hidden />
+    </button>
   );
 }

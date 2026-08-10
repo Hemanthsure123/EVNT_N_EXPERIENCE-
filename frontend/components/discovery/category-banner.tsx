@@ -81,8 +81,16 @@ export function CategoryBanner({
 }: {
   /** The scope, e.g. "Concerts · Mumbai" — small, above the headline. */
   eyebrow: string;
-  /** What this scope IS, in a sentence. Never a repeat of the page's h1. */
-  headline: string;
+  /**
+   * What this scope IS, in a sentence — optional.
+   *
+   * The all-events band used to carry "Every upcoming event, soonest first",
+   * which restates the ordering the page already applies and the heading
+   * already implies. With a real photograph behind it the band does not need a
+   * sentence to justify itself, so callers may pass nothing and get a
+   * photographic header with its scope named and no filler under it.
+   */
+  headline?: string;
   backdrop?: React.ReactNode;
   className?: string;
 }) {
@@ -100,8 +108,13 @@ export function CategoryBanner({
       {onPhoto ? (
         <>
           <div className="absolute inset-0 -z-10" aria-hidden>
-            {/* Scaled past the frame so the blur never reveals a soft edge. */}
-            <div className="absolute -inset-8 scale-105 blur-lg">{backdrop}</div>
+            {/* SHARP, not blurred. It was `blur-lg`, which turned a real
+                poster into a coloured smear — the band read as a placeholder
+                for an image rather than as an image. A photograph somebody
+                uploaded is the most interesting thing available to this
+                header; the scrim below is what makes text readable over it,
+                which is the job the blur was doing badly. */}
+            {backdrop}
           </div>
           {/* One scrim, left-weighted because the copy is left-aligned. It is
               what guarantees the text reads no matter which poster landed. */}
@@ -121,6 +134,7 @@ export function CategoryBanner({
         >
           {eyebrow}
         </p>
+        {headline ? (
         <h2
           className={cn(
             'max-w-2xl text-h4 md:text-h3',
@@ -129,6 +143,7 @@ export function CategoryBanner({
         >
           {headline}
         </h2>
+        ) : null}
       </div>
     </section>
   );

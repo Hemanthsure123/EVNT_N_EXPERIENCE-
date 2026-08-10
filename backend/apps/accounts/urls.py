@@ -18,6 +18,7 @@ urlpatterns = [
     # One path with two methods rather than `.../avatar` and `.../avatar/clear`:
     # it is one resource, and DELETE already means what the second path would.
     path("me/avatar", api.MeAvatarView.as_view(), name="auth-me-avatar"),
+    path("me/onboarding", api.MeOnboardingView.as_view(), name="auth-me-onboarding"),
     # Sign in with Google.
     #
     # NAMESPACED UNDER `.../google/signin/` because `apps.integrations` already

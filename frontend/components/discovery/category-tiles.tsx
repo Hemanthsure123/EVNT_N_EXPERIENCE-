@@ -3,7 +3,7 @@ import Link from 'next/link';
 import type { HomepageCategory } from '@/lib/api/cms';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { cn } from '@/lib/utils/cn';
-import { ClayIcon } from '@/components/illustrations/clay';
+import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { categoryTint } from './category-tint';
 import { Reveal } from './reveal';
 
@@ -87,9 +87,20 @@ export function CategoryTiles({
     ? categories.map((category) => ({
         slug: category.slug,
         label: category.label,
-        // No description column exists yet, so the tile shows the search term
-        // it resolves to rather than inventing copy. BACKLOG item 41.
-        blurb: category.search_term ? `Search “${category.search_term}”` : 'Browse events',
+        // ── NO SUBTITLE FROM THE CMS PATH ────────────────────────────────
+        // This used to render `Search “concert”`, on the reasoning that no
+        // description column exists so the tile should show what it resolves
+        // to rather than invent copy. Refusing to invent was right; showing
+        // the query string was the wrong alternative. It exposes an
+        // implementation detail as product copy, restates the label in worse
+        // words, and is the kind of line that makes a page read as scaffolding
+        // rather than as a product.
+        //
+        // The bundled fallback below has real, human blurbs. When the CMS
+        // gains a description column it maps to that. Until then a tile is its
+        // picture and its name, which is enough — nobody needs "Search
+        // 'comedy'" under a tile labelled Comedy.
+        blurb: '',
       }))
     : CATEGORIES.map((category) => ({
         slug: category.slug,
@@ -128,9 +139,15 @@ export function CategoryTiles({
                   <span className="text-body-sm font-semibold leading-tight text-foreground sm:text-body-lg">
                     {category.label}
                   </span>
-                  <span className="hidden text-caption text-muted-foreground sm:line-clamp-2">
-                    {category.blurb}
-                  </span>
+                  {/* Absent rather than empty when there is no blurb — an empty
+                      span still costs the parent's `gap-1` and would push the
+                      artwork band down on the CMS-backed tiles only, so a row
+                      would line up inconsistently for no visible reason. */}
+                  {category.blurb ? (
+                    <span className="hidden text-caption text-muted-foreground sm:line-clamp-2">
+                      {category.blurb}
+                    </span>
+                  ) : null}
                 </span>
 
                 {/* The pastel plate. A 48px square beside the label on a phone;
@@ -145,12 +162,14 @@ export function CategoryTiles({
                   )}
                   aria-hidden
                 >
-                  {/* 36px is the floor for the clay set (see clay.tsx) — below
-                      it the modelled shadow reads as mud, so the chip shrinks
-                      the plate rather than the object inside it. */}
-                  <ClayIcon
+                  {/* A SCENE, not a glyph on a plate. The clay icon that used
+                      to sit here was a rounded square with a symbol on it —
+                      which is the app-icon idiom, and a grid of eight read as
+                      emoji rather than as illustration. See
+                      `illustrations/category-scenes.tsx`. */}
+                  <CategoryScene
                     slug={category.slug}
-                    className="size-9 transition-transform duration-base ease-spring group-hover:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100 sm:size-16"
+                    className="h-12 w-full transition-transform duration-base ease-spring group-hover:scale-[1.03] motion-reduce:transition-none motion-reduce:group-hover:scale-100 sm:h-24"
                   />
                 </span>
               </Link>

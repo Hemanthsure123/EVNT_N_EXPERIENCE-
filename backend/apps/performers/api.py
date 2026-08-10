@@ -32,6 +32,7 @@ from core.http_caching import is_not_modified, make_etag, with_cache_headers
 from core.throttling import UploadThrottle
 
 from . import selectors
+from .models import RequestKind
 from .pagination import (
     BookingRequestPagination,
     OpenRequestPagination,
@@ -383,12 +384,27 @@ class PerformerPhotoDetailView(APIView):
 
 
 class BookingRequestListCreateView(APIView):
+    """Serves BOTH flows; the URL decides which.
+
+    `hire/requests`  -> kind=marketplace (a brief acts quote on)
+    `hire/enquiries` -> kind=enquiry     (an operator answers it)
+
+    Bound with `as_view(kind=...)` rather than sniffed from the path, so the
+    routing table is the single statement of which URL means what and a new
+    route cannot silently inherit the wrong flow. `kind` is declared here
+    because Django's `as_view` refuses initkwargs that are not class
+    attributes — the default is the safer of the two.
+    """
+
     permission_classes = [IsMarketplaceUser]
     pagination_class = BookingRequestPagination
+    kind = RequestKind.ENQUIRY
 
     @extend_schema(responses={200: BookingRequestSerializer(many=True)})
     def get(self, request: Request) -> Response:
-        queryset = BookingRequestRepository().list_for_customer(cast(User, request.user).id)
+        queryset = BookingRequestRepository().list_for_customer(
+            cast(User, request.user).id, kind=self.kind
+        )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
         rows = selectors.decorate_requests(list(page or []))
@@ -405,7 +421,7 @@ class BookingRequestListCreateView(APIView):
         payload.is_valid(raise_exception=True)
 
         booking_request = build_marketplace_service().create_request(
-            customer_id=cast(User, request.user).id, **payload.validated_data
+            kind=self.kind, customer_id=cast(User, request.user).id, **payload.validated_data
         )
         rows = selectors.decorate_requests([booking_request])
         return _no_store(

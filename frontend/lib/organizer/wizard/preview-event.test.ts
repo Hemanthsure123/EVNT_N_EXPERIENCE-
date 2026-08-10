@@ -14,6 +14,8 @@ const LATER = '2026-06-01T19:30';
 const tierWith = (over: Partial<DraftTier> = {}): DraftTier => ({
   key: 't1',
   name: 'Gold',
+  description: '',
+  perks: [],
   price: '999',
   quantity: '100',
   maxPerOrder: '10',
@@ -135,7 +137,7 @@ describe('draftToPreview', () => {
 
     // These live on the server against their own endpoints, so a draft holds
     // none. The page omits each section entirely, which is what a visitor sees.
-    expect(content).toEqual({ media: [], faqs: [], timeline: [] });
+    expect(content).toEqual({ media: [], faqs: [], timeline: [], slots: [] });
   });
 
   it('never previews an unsaved draft as live', () => {

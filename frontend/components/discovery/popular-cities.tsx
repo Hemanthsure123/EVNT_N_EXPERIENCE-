@@ -1,7 +1,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { ArrowUpRight } from 'lucide-react';
-import { SpotCity } from '@/components/illustrations/spots';
+import { CityScene } from '@/components/illustrations/city-scenes';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
 import { cn } from '@/lib/utils/cn';
 
@@ -25,9 +25,11 @@ import { cn } from '@/lib/utils/cn';
  * them to be read rather than stepped over. 10 chips are ~328px, down from
  * ~588px, and every one is still well past the 44px touch floor.
  *
- * The illustration is `SpotCity` rather than a lucide pin: at 32px a line icon
- * beside a city name reads as a form field's adornment, and the spot carries a
- * little texture at a size where a clay object would be mud.
+ * The illustration is a per-city LANDMARK rather than a shared pin. Ten
+ * identical pictures in a ten-tile grid is a bullet — the eye stops reading
+ * them after the second and the tiles become a list of words with decoration.
+ * A shape nobody has to be told is the Charminar identifies the city faster
+ * than the label under it.
  */
 export function PopularCities({ className }: { className?: string }) {
   return (
@@ -50,8 +52,16 @@ export function PopularCities({ className }: { className?: string }) {
             <span className="flex items-center gap-2.5">
               {/* Decorative: the city NAME is the accessible content, and a
                   second "city" announcement before it would be noise. */}
-              <span className="shrink-0" aria-hidden>
-                <SpotCity className="size-8 lg:size-9" />
+              <span className="h-9 w-12 shrink-0 overflow-hidden rounded-md lg:h-10 lg:w-14" aria-hidden>
+                {/* The city's own LANDMARK, not a shared pin. Ten identical
+                    pictures in a ten-tile grid is a bullet — the eye stops
+                    reading them after the second and the tiles become a list
+                    of words with decoration. A shape nobody has to be told is
+                    the Charminar does the work faster than the label under it.
+
+                    4:3, because these are scenes with a horizon; squaring one
+                    off cuts the ground out from under the building. */}
+                <CityScene slug={city.slug} />
               </span>
               <span className="min-w-0 flex-1 truncate text-body-sm font-semibold text-foreground sm:text-body">
                 {city.name}

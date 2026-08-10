@@ -473,6 +473,7 @@ function buildEvents() {
           starts_at: startsAt.toISOString(),
           ends_at: new Date(startsAt.getTime() + 3 * HOUR).toISOString(),
           description: `An unmissable ${seed.keyword} night presented by ${org}, live and in full. Doors open an hour before showtime; entry is a single QR scan at the gate.`,
+          category: seed.category ?? '',
           poster_url: `${ORIGIN}/media/posters/${seed.posterIndex}.png`,
           from_price: fromPrice,
           tickets_available: ticketsAvailable,
@@ -577,6 +578,15 @@ function buildTiers(event) {
     return {
       id,
       event_id: event.id,
+      // The fixture events all run once, so no tier belongs to a session. Sent
+      // rather than omitted because the real serializer always sends it, and a
+      // fixture whose shape differs from the API is a fixture that hides bugs.
+      slot_id: null,
+      // The real serializer always sends these three; a fixture whose shape
+      // differs from the API is a fixture that hides bugs.
+      description: '',
+      perks: [],
+      position: 0,
       name: tier.name,
       price,
       // The three phase fields the real serializer always sends, computed by the
@@ -745,6 +755,7 @@ const CARD_FIELDS = [
   'venue',
   'city',
   'starts_at',
+  'category',
   'poster_url',
   'from_price',
   'tickets_available',
@@ -762,6 +773,7 @@ const DETAIL_FIELDS = [
   'city',
   'starts_at',
   'ends_at',
+  'category',
   'poster_url',
   'from_price',
   'tickets_available',

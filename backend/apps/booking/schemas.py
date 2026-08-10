@@ -148,3 +148,33 @@ class TicketSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class ShareReceiptRequestSerializer(serializers.Serializer):
+    """Who to send the receipt to, and an optional line from the sender.
+
+    `EmailField` per entry rather than one comma-separated string: the browser
+    collects them as chips, and splitting a string server-side means guessing
+    at a delimiter somebody typed.
+
+    The list is bounded HERE as well as in the service. The service bound is
+    the real one — it is what a non-HTTP caller would hit — and this one exists
+    so an oversized request is refused before it is parsed into a thousand
+    validated addresses.
+    """
+
+    emails = serializers.ListField(
+        child=serializers.EmailField(),
+        allow_empty=False,
+        max_length=10,
+    )
+    #: A short line the sender can add. Capped, and it goes into an email body,
+    #: so the renderer escapes it — see `email_layout.paragraph`.
+    note = serializers.CharField(required=False, allow_blank=True, max_length=280)
+
+
+class ShareReceiptResponseSerializer(serializers.Serializer):
+    #: How many messages were QUEUED, not delivered. The send is async by
+    #: design, so claiming delivery here would be a claim this endpoint cannot
+    #: make.
+    queued = serializers.IntegerField()

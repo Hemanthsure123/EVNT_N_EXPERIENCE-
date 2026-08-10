@@ -351,8 +351,8 @@ export function CheckIn() {
                   </Button>
                 </div>
                 <p className="text-caption text-muted-foreground">
-                  A USB or Bluetooth reader types the code and presses Enter — this field handles
-                  that natively and re-focuses itself after every scan, so a queue keeps moving.
+                  Works with a USB or Bluetooth reader. The field re-focuses itself after
+                  every scan.
                 </p>
               </form>
             </div>
@@ -460,11 +460,13 @@ function CameraPanel({
 }) {
   if (!camera.supported) {
     return (
+      // A browser-capability note is one of the few "this is missing"
+      // messages worth showing: the reader can act on it — switch browser, or
+      // use the field below. What it must NOT do is explain our plans, which
+      // is what the sentence about a bundled decoder library was doing.
       <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-        This browser cannot decode QR codes from a camera — that is a Chrome and Edge capability (
-        <code>BarcodeDetector</code>), and Safari and Firefox do not have it yet. Use a handheld
-        reader or the field below. Shipping a decoder library for those browsers is BACKLOG
-        &ldquo;Bundled QR decoder&rdquo;.
+        Camera scanning works in Chrome and Edge. On this browser, use a handheld reader or type
+        the code into the field below.
       </p>
     );
   }

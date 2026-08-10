@@ -62,11 +62,6 @@ import { FeaturedManager } from './featured-manager';
  */
 
 const LIMITS = {
-  hero_headline: 80,
-  hero_description: 180,
-  hero_primary_cta: 40,
-  hero_secondary_cta: 40,
-  search_placeholder: 80,
   ribbon_text: 120,
   footer_note: 120,
 } as const;
@@ -106,7 +101,6 @@ export function HomepageCms({
 
   const [draft, setDraft] = React.useState<Record<string, string>>({});
   const [ribbonOn, setRibbonOn] = React.useState(false);
-  const [badges, setBadges] = React.useState<string[]>([]);
   const [stale, setStale] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -118,30 +112,28 @@ export function HomepageCms({
     if (!query.data || loaded.current) return;
     loaded.current = true;
     setDraft({
-      hero_headline: query.data.hero_headline,
-      hero_description: query.data.hero_description,
-      hero_primary_cta: query.data.hero_primary_cta,
-      hero_secondary_cta: query.data.hero_secondary_cta,
-      search_placeholder: query.data.search_placeholder,
       ribbon_text: query.data.ribbon_text,
       footer_note: query.data.footer_note,
     });
     setRibbonOn(query.data.ribbon_enabled);
-    setBadges(query.data.trust_badges);
   }, [query.data]);
 
   const save = useMutation({
     mutationFn: (version: number) =>
       updateHomepage({
         version,
-        hero_headline: draft.hero_headline ?? '',
-        hero_description: draft.hero_description ?? '',
-        hero_primary_cta: draft.hero_primary_cta ?? '',
-        hero_secondary_cta: draft.hero_secondary_cta ?? '',
-        search_placeholder: draft.search_placeholder ?? '',
+        // Sent back UNCHANGED from what the server last returned. The
+        // endpoint takes the whole record, so omitting these would blank five
+        // columns on every ribbon edit — a destructive side effect of removing
+        // a form. They are no longer editable here; they are not deleted.
+        hero_headline: query.data?.hero_headline ?? '',
+        hero_description: query.data?.hero_description ?? '',
+        hero_primary_cta: query.data?.hero_primary_cta ?? '',
+        hero_secondary_cta: query.data?.hero_secondary_cta ?? '',
+        search_placeholder: query.data?.search_placeholder ?? '',
         ribbon_text: draft.ribbon_text ?? '',
         ribbon_enabled: ribbonOn,
-        trust_badges: badges.filter(Boolean),
+        trust_badges: query.data?.trust_badges ?? [],
         footer_note: draft.footer_note ?? '',
       }),
     onSuccess: () => {
@@ -220,55 +212,18 @@ export function HomepageCms({
           </p>
         ) : null}
 
-        <Panel
-          id="cms-hero"
-          title="Hero"
-          subtitle="The first thing every visitor reads"
-          className="scroll-mt-24"
-        >
-          <div className="flex flex-col gap-block p-card">
-            <Field
-              id="headline"
-              label="Headline"
-              value={draft.hero_headline ?? ''}
-              onChange={(value) => set('hero_headline', value)}
-              max={LIMITS.hero_headline}
-            />
-            <Field
-              id="description"
-              label="Supporting text"
-              value={draft.hero_description ?? ''}
-              onChange={(value) => set('hero_description', value)}
-              max={LIMITS.hero_description}
-              multiline
-            />
-            <div className="grid gap-block sm:grid-cols-2">
-              <Field
-                id="primary-cta"
-                label="Primary button"
-                value={draft.hero_primary_cta ?? ''}
-                onChange={(value) => set('hero_primary_cta', value)}
-                max={LIMITS.hero_primary_cta}
-              />
-              <Field
-                id="secondary-cta"
-                label="Secondary button"
-                value={draft.hero_secondary_cta ?? ''}
-                onChange={(value) => set('hero_secondary_cta', value)}
-                max={LIMITS.hero_secondary_cta}
-              />
-            </div>
-            <Field
-              id="search-placeholder"
-              label="Search placeholder"
-              value={draft.search_placeholder ?? ''}
-              onChange={(value) => set('search_placeholder', value)}
-              max={LIMITS.search_placeholder}
-            />
-            <TrustBadges badges={badges} onChange={setBadges} />
-          </div>
-        </Panel>
+        {/* A "Hero" panel stood here: headline, supporting text, two button
+            labels, the search placeholder and the trust badges.
 
+            The front page has no hero any more — it opens on the curated
+            showcase rail — search moved to the header, and the badges went
+            with the copy they sat beneath. Every one of those fields still
+            SAVES; none of them is read. So the form is gone rather than left
+            in place, because an operator whose edit succeeds and never appears
+            learns that this tool does not work.
+
+            What replaced the editorial control: `Featured events`, which
+            chooses the actual events on that first screen. */}
         <Panel
           id="cms-ribbon"
           title="Announcement ribbon"
@@ -337,12 +292,7 @@ export function HomepageCms({
       </div>
 
       <aside className="xl:sticky xl:top-sticky-top xl:self-start">
-        <Preview
-          headline={draft.hero_headline ?? ''}
-          description={draft.hero_description ?? ''}
-          badges={badges}
-          ribbon={ribbonOn ? (draft.ribbon_text ?? '') : ''}
-        />
+        <Preview ribbon={ribbonOn ? (draft.ribbon_text ?? '') : ''} />
       </aside>
     </div>
   );
@@ -412,74 +362,37 @@ function Field({
   );
 }
 
-function TrustBadges({
-  badges,
-  onChange,
-}: {
-  badges: string[];
-  onChange: (next: string[]) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-stack">
-      <p className="text-label text-foreground">Trust badges</p>
-      <p className="text-caption text-muted-foreground">
-        Up to four. Say something checkable — the server rejects a fifth.
-      </p>
-      <div className="flex flex-col gap-2">
-        {[0, 1, 2, 3].map((index) => (
-          <Input
-            key={index}
-            value={badges[index] ?? ''}
-            maxLength={40}
-            aria-label={`Trust badge ${index + 1}`}
-            placeholder={index === 0 ? 'Instant QR tickets' : ''}
-            onChange={(event) => {
-              const next = [...badges];
-              next[index] = event.target.value;
-              onChange(next.filter((_, position) => position <= 3));
-            }}
-            className="text-body-sm"
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
+/*
+ * A `TrustBadges` editor lived here — an add/remove list writing
+ * `homepage.trust_badges`, the short claims that sat under the old hero
+ * headline. The hero is gone and nothing renders them.
+ */
 
-/** Mirrors the real hero's hierarchy, not its pixels — enough to catch a
- *  headline that wraps badly, without a second copy of the page to maintain. */
-function Preview({
-  headline,
-  description,
-  badges,
-  ribbon,
-}: {
-  headline: string;
-  description: string;
-  badges: string[];
-  ribbon: string;
-}) {
+/**
+ * The live preview, now of the one thing on this screen that still appears on
+ * the site: the ribbon.
+ *
+ * It used to render a mock hero — headline, supporting text and trust badges —
+ * which is a preview of a section that no longer exists. A preview whose
+ * subject was deleted does not become a smaller preview; it becomes a picture
+ * of the past, and an operator would reasonably read it as the front page.
+ */
+function Preview({ ribbon }: { ribbon: string }) {
   return (
-    <Panel title="Preview" subtitle="Updates as you type">
+    <Panel title="Ribbon preview" subtitle="Updates as you type">
       <div className="flex flex-col gap-stack p-card">
         {ribbon ? (
           <p className="rounded-full bg-secondary px-3 py-1.5 text-center text-caption text-secondary-foreground">
             {ribbon}
           </p>
-        ) : null}
-        <p className="text-h4 leading-tight text-foreground">{headline || 'Your headline'}</p>
-        <p className="text-body-sm text-muted-foreground">
-          {description || 'Your supporting text.'}
+        ) : (
+          <p className="rounded-full border border-dashed border-border px-3 py-1.5 text-center text-caption text-muted-foreground">
+            The ribbon is hidden
+          </p>
+        )}
+        <p className="text-caption text-muted-foreground">
+          Shown as a thin bar above the header on every page.
         </p>
-        {badges.filter(Boolean).length ? (
-          <ul className="flex flex-wrap gap-x-3 gap-y-1">
-            {badges.filter(Boolean).map((badge) => (
-              <li key={badge} className="text-caption text-muted-foreground">
-                ✓ {badge}
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </div>
     </Panel>
   );

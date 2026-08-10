@@ -35,8 +35,23 @@ EVENT_UPDATED = "events.event_updated"
 EVENT_SUBMITTED_FOR_REVIEW = "events.event_submitted_for_review"
 EVENT_APPROVED = "events.event_approved"
 EVENT_REJECTED = "events.event_rejected"
+
+#: An operator REMOVED an event, in any state, for any reason. Distinct from a
+#: rejection (which is a review decision on something not yet live) and from an
+#: archive (which the organizer does to their own finished event).
+#:
+#: Payload: {event_id, title, owner_email, reason, refunded_bookings,
+#: attendee_emails} — the attendee list rides on the payload because by the
+#: time a consumer reads it the event is already soft-deleted and its bookings
+#: are harder to reach.
+EVENT_DELETED_BY_OPERATOR = "events.event_deleted_by_operator"
 EVENT_PUBLISHED = "events.event_published"
 EVENT_ARCHIVED = "events.event_archived"
+#: An organiser called their own event off. The attendee notification is
+#: the SAME one an operator deletion sends — from a ticket holder's side
+#: the two are one fact, and two differently-worded cancellation emails
+#: for the same outcome is how one of them ends up out of date.
+EVENT_CANCELLED_BY_ORGANIZER = "events.event_cancelled_by_organizer"
 
 # apps.ticketing
 TICKET_TYPE_ADDED = "ticketing.ticket_type_added"
@@ -46,6 +61,11 @@ TICKET_TYPE_SOLD_OUT = "ticketing.ticket_type_sold_out"
 # apps.booking
 BOOKING_CREATED = "booking.booking_created"
 BOOKING_CONFIRMED = "booking.booking_confirmed"
+#: The BUYER chose to send their receipt to somebody. Not a lifecycle event —
+#: nothing about the booking changed — but it goes through the outbox like
+#: everything else so the send survives a crash between the click and the mail,
+#: and so `notifications` stays the only module that talks to a mail provider.
+BOOKING_RECEIPT_SHARED = "booking.receipt_shared"
 BOOKING_CANCELLED = "booking.booking_cancelled"
 TICKET_ISSUED = "booking.ticket_issued"
 #: Published once per ticket that has just been addressed to a named attendee
@@ -66,6 +86,19 @@ TICKET_ASSIGNED = "booking.ticket_assigned"
 PAYMENT_CONFIRMED = "payments.payment_confirmed"
 PAYMENT_FAILED = "payments.payment_failed"
 PAYMENT_REFUNDED = "payments.payment_refunded"
+
+#: A customer has ASKED for their money back. Distinct from PAYMENT_REFUNDED,
+#: which means money actually moved — these three carry the request's lifecycle
+#: so `notifications` can tell the organizer somebody is waiting, and tell the
+#: customer what was decided.
+#:
+#: Payload: {refund_request_id, booking_id, event_id, organizer_id}
+REFUND_REQUESTED = "payments.refund_requested"
+#: Payload: {refund_request_id, booking_id, payment_id, note}
+REFUND_REQUEST_APPROVED = "payments.refund_request_approved"
+#: Payload: {refund_request_id, booking_id, note} — the note is REQUIRED here
+#: and is what the customer is shown.
+REFUND_REQUEST_REJECTED = "payments.refund_request_rejected"
 
 # apps.checkin
 TICKET_CHECKED_IN = "checkin.ticket_checked_in"

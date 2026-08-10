@@ -23,6 +23,7 @@ frees inventory even if every best-effort signal is missed.
 
 from __future__ import annotations
 
+import base64
 import logging
 import uuid
 from dataclasses import dataclass
@@ -36,10 +37,12 @@ from apps.events.repositories import EventRepository
 from apps.ticketing.repositories import TicketTypeRepository
 from apps.ticketing.services import TicketingService
 from core.audit import record_audit
+from core.errors import InvalidInputError, NotFoundError
 from core.events import (
     BOOKING_CANCELLED,
     BOOKING_CONFIRMED,
     BOOKING_CREATED,
+    BOOKING_RECEIPT_SHARED,
     TICKET_ASSIGNED,
     TICKET_ISSUED,
 )
@@ -106,6 +109,118 @@ class BookingService:
         self._qr_secret = qr_secret
         self._hold_minutes = hold_minutes
         self._platform_fee_per_ticket = platform_fee_per_ticket
+
+    # --- ShareReceipt ------------------------------------------------------
+
+    #: A hard ceiling on recipients per call. An authenticated endpoint that
+    #: loops over whatever it is handed is an unbounded write and a free mail
+    #: relay; the same reasoning as the saved-events list cap.
+    MAX_SHARE_RECIPIENTS = 10
+
+    def share_receipt(
+        self,
+        *,
+        booking_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        emails: list[str],
+        note: str = "",
+    ) -> int:
+        """Email this booking's RECEIPT to the people the buyer names.
+
+        Returns how many recipients were queued.
+
+        ── WHAT IS SENT, AND WHAT IS DELIBERATELY NOT ─────────────────────────
+
+        A one-page PDF receipt: what was booked, what it cost, the booking id.
+        NOT the QR codes, and NOT a link into the buyer's account. See
+        `apps.booking.receipt_pdf` — a PDF is forwardable by everyone it
+        reaches, so a code on it admits whoever opens the mail next. Ticketmaster
+        emails a claim link and reissues the code on acceptance; DICE never lets
+        it leave the app. The receipt is the part of this transaction that is
+        the recipient's to have.
+
+        ── ONLY THE BUYER, AND ONLY A PAID BOOKING ───────────────────────────
+
+        A `reserved` booking has not been paid for, so there is no receipt to
+        send — offering one would produce a document asserting a payment that
+        has not happened.
+        """
+        # Lazy: reportlab belongs to an optional extra, so a process that
+        # never shares a receipt never imports it.
+        from .receipt_pdf import Receipt, ReceiptLine, build_receipt_pdf
+
+        booking = self._bookings.get_detail(booking_id)
+        if booking is None:
+            raise NotFoundError("That booking does not exist.")
+        # NotFound rather than PermissionDenied, like the support module: a
+        # distinct "not yours" confirms the id names a real booking.
+        if str(booking.user_id) != str(actor_id):
+            raise NotFoundError("That booking does not exist.")
+        if booking.status != BookingStatus.PAID:
+            raise InvalidInputError(
+                "This booking has not been paid for yet, so there is no receipt to send."
+            )
+
+        cleaned = _clean_recipients(emails)
+        if not cleaned:
+            raise InvalidInputError("Add at least one email address.")
+        if len(cleaned) > self.MAX_SHARE_RECIPIENTS:
+            raise InvalidInputError(
+                f"You can send this to {self.MAX_SHARE_RECIPIENTS} people at a time."
+            )
+
+        event = booking.event
+        buyer = booking.user
+        receipt = Receipt(
+            booking_reference=str(booking.id),
+            booked_by=buyer.full_name or buyer.email,
+            booked_on=booking.created_at,
+            event_title=event.title,
+            event_starts_at=event.starts_at,
+            venue=event.venue,
+            city=event.city,
+            lines=tuple(
+                ReceiptLine(
+                    description=item.ticket_type.name,
+                    quantity=item.quantity,
+                    amount_minor=item.unit_price_minor * item.quantity,
+                )
+                for item in booking.items.all()
+            ),
+            total_minor=booking.total_amount_minor,
+            payment_reference=booking.payment_ref,
+        )
+
+        # Rendered HERE, before the transaction opens: it is CPU work with no
+        # database involvement, and the money-path rule about holding a
+        # transaction open across slow work applies to a PDF as much as to a
+        # network call.
+        pdf_b64 = base64.b64encode(build_receipt_pdf(receipt)).decode("ascii")
+
+        with UnitOfWork() as uow:
+            uow.publish(
+                BOOKING_RECEIPT_SHARED,
+                {
+                    "booking_id": str(booking.id),
+                    "recipients": cleaned,
+                    "note": note.strip()[:280],
+                    "booker_name": buyer.full_name or "Someone",
+                    "event_title": event.title,
+                    "event_when": event.starts_at.isoformat(),
+                    "event_where": f"{event.venue}, {event.city}",
+                    "booking_reference": str(booking.id),
+                    "total_minor": booking.total_amount_minor,
+                    # The rendered document travels with the event rather than
+                    # being rebuilt by the consumer. It keeps `notifications`
+                    # ignorant of booking's schema, and one page of receipt is
+                    # a few KB — bounded by `MAX_LINE_ITEMS` and the one-page
+                    # assertion, so this payload cannot grow without a test
+                    # failing first.
+                    "receipt_pdf_b64": pdf_b64,
+                },
+                aggregate_id=str(booking.id),
+            )
+        return len(cleaned)
 
     # --- CreateBooking -----------------------------------------------------
 
@@ -655,3 +770,26 @@ class BookingService:
                 )
         self._tickets.bulk_create(tickets)
         return tickets
+
+
+def _clean_recipients(emails: list[str]) -> list[str]:
+    """Trim, validate, lower-case and de-duplicate.
+
+    De-duplication is not tidiness: the same address twice is the same message
+    twice, and the notification ledger would dedupe the second one anyway —
+    silently, so the caller would be told it sent more mail than it did.
+    """
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    seen: list[str] = []
+    for raw in emails:
+        candidate = (raw or "").strip().lower()
+        if not candidate or candidate in seen:
+            continue
+        try:
+            validate_email(candidate)
+        except ValidationError:
+            raise InvalidInputError(f"{raw.strip()} does not look like an email address.") from None
+        seen.append(candidate)
+    return seen

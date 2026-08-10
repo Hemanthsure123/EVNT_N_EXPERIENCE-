@@ -70,6 +70,13 @@ class HealthCheckSerializer(serializers.Serializer):
 class HealthSerializer(serializers.Serializer):
     status = serializers.CharField()
     checks = HealthCheckSerializer(many=True)
+    #: Whether vendors were actually CONTACTED for this response.
+    #:
+    #: On the wire so the UI can say which kind of answer it is showing. Without
+    #: it, a shallow `unknown` tile and a deep one look identical, and an
+    #: operator cannot tell "we did not check" from "we checked and it is fine"
+    #: — which is the entire distinction this endpoint is built around.
+    deep = serializers.BooleanField()
 
 
 class AdminOrganizationSerializer(serializers.ModelSerializer):
@@ -96,6 +103,21 @@ class AdminUserSerializer(serializers.Serializer):
     #: `False` means SUSPENDED — `AuthService.authenticate` refuses an inactive
     #: account outright, so this is an access decision rather than a label.
     is_active = serializers.BooleanField()
+    #: Whether the address has been PROVEN. A SEPARATE fact from `is_active`:
+    #: conflating them would show every unverified sign-up as suspended, and
+    #: reinstating somebody would silently re-assert an address nobody
+    #: re-checked. The console needs both to say which of the two an account is
+    #: blocked by.
+    email_verified = serializers.BooleanField()
+    #: The platform's PRIMARY account. Its operator role cannot be removed by
+    #: anybody — there is no console path back from demoting the one account
+    #: that can always restore access.
+    #:
+    #: Exposed for the same reason `is_staff` is: without it the console
+    #: cannot tell which row to leave alone, and it would render a control
+    #: whose only possible outcome is a 409. It is a role flag, not a secret;
+    #: the API still enforces the refusal.
+    is_superuser = serializers.BooleanField()
     date_joined = serializers.DateTimeField()
 
 
@@ -104,6 +126,65 @@ class SuspendUserSerializer(serializers.Serializer):
     #: Recorded on the audit row. Optional, because an operator acting on an
     #: obvious abuse case should not be blocked by a required text box — but
     #: it is the first thing the next operator will look for.
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
+
+
+class AdminEnquirySerializer(serializers.Serializer):
+    """One hire enquiry, as the desk sees it.
+
+    Carries the CONTACT DETAILS, which the marketplace version of this payload
+    deliberately withheld: a performer seeing a lead was shown the job and not
+    the person. The only reader now is an operator whose entire job is to get
+    back to the customer, so withholding them would make the queue unworkable.
+    """
+
+    id = serializers.CharField()
+    performer_type = serializers.CharField()
+    performer_type_display = serializers.CharField()
+    occasion = serializers.CharField()
+    occasion_display = serializers.CharField()
+    city = serializers.CharField()
+    event_date = serializers.DateField()
+    budget_min_minor = serializers.IntegerField()
+    budget_max_minor = serializers.IntegerField()
+    guests = serializers.IntegerField(allow_null=True)
+    notes = serializers.CharField(allow_blank=True)
+
+    contact_name = serializers.CharField(allow_blank=True)
+    contact_phone = serializers.CharField(allow_blank=True)
+    contact_email = serializers.CharField(allow_blank=True)
+    customer_email = serializers.CharField()
+
+    status = serializers.CharField()
+    status_display = serializers.CharField()
+    admin_note = serializers.CharField(allow_blank=True)
+    handled_by_email = serializers.CharField(allow_blank=True)
+    created_at = serializers.DateTimeField()
+
+
+class DecideEnquirySerializer(serializers.Serializer):
+    """Where an operator is moving it, and what they want the next one to know."""
+
+    status = serializers.CharField(max_length=20)
+    #: Optional. An operator acting on an obvious case should not be blocked by
+    #: a text box — but it is the first thing the next operator looks for.
+    admin_note = serializers.CharField(
+        required=False, allow_blank=True, max_length=2000, default=""
+    )
+
+
+class PromoteUserSerializer(serializers.Serializer):
+    """Grant or remove the operator role."""
+
+    is_staff = serializers.BooleanField()
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
+
+
+class RevokeVerificationSerializer(serializers.Serializer):
+    """Only a reason. There is no boolean, because there is no un-revoke: the
+    way back is reinstating the account and having the person verify their
+    address again, which is the point of having withdrawn the trust."""
+
     reason = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
 
 
@@ -128,6 +209,73 @@ class AdminPaymentSerializer(serializers.Serializer):
     customer_name = serializers.CharField(allow_blank=True)
     event_id = serializers.CharField()
     event_title = serializers.CharField()
+
+
+class AdminBookingSerializer(serializers.Serializer):
+    """One booking, as the support desk's table renders it.
+
+    `is_expired_hold` is computed rather than stored — a booking sitting in
+    `reserved` past its `hold_expires_at` has not been swept yet, and telling
+    that apart from a live hold is what decides whether an operator waits or
+    acts.
+    """
+
+    id = serializers.CharField()
+    status = serializers.CharField()
+    #: Summed from `BookingItem` — there is no quantity column on Booking.
+    quantity = serializers.IntegerField()
+    #: On the LIST, not just the detail. "Were tickets actually issued?" is the
+    #: question this whole surface exists for, and making an operator open each
+    #: row to see it would defeat the search that got them here.
+    tickets_issued = serializers.IntegerField()
+    total_amount_minor = serializers.IntegerField()
+    platform_fee_minor = serializers.IntegerField()
+    payment_ref = serializers.CharField(allow_blank=True)
+    payment_order_id = serializers.CharField(allow_blank=True)
+    hold_expires_at = serializers.CharField(allow_null=True)
+    is_expired_hold = serializers.BooleanField()
+    created_at = serializers.CharField()
+    customer_id = serializers.CharField()
+    customer_email = serializers.CharField(allow_blank=True)
+    customer_name = serializers.CharField(allow_blank=True)
+    event_id = serializers.CharField()
+    event_title = serializers.CharField()
+    event_starts_at = serializers.CharField()
+
+
+class AdminBookingItemSerializer(serializers.Serializer):
+    ticket_type_id = serializers.CharField()
+    ticket_type_name = serializers.CharField()
+    quantity = serializers.IntegerField()
+    unit_price_minor = serializers.IntegerField()
+
+
+class AdminBookingTicketSerializer(serializers.Serializer):
+    """A ticket on a booking — WITHOUT its QR token.
+
+    The token is the credential that admits somebody. An operator answering
+    "did my tickets get issued?" needs to know that they exist and whether they
+    have been used; they never need the code itself, and including it would
+    make every operator session a set of usable tickets. `POST /checkin/lookup`
+    verifies a token the holder presents rather than handing one out.
+    """
+
+    id = serializers.CharField()
+    ticket_type_name = serializers.CharField()
+    status = serializers.CharField()
+    used_at = serializers.CharField(allow_null=True)
+    gate = serializers.CharField(allow_null=True)
+    attendee_name = serializers.CharField(allow_null=True)
+
+
+class AdminBookingDetailSerializer(AdminBookingSerializer):
+    """The expanded booking an operator opens during a call."""
+
+    items = AdminBookingItemSerializer(many=True)
+    tickets = AdminBookingTicketSerializer(many=True)
+    #: So the client can render "hold expired 4 minutes ago" against the
+    #: SERVER's clock rather than the operator's, which may be minutes off.
+    server_time = serializers.CharField()
 
 
 class AdminRefundSerializer(serializers.Serializer):
@@ -264,3 +412,17 @@ class OrganizationAnalyticsSerializer(serializers.Serializer):
 
     def to_representation(self, instance: dict) -> dict:
         return instance
+
+
+class DeleteEventResultSerializer(serializers.Serializer):
+    """What the click actually did.
+
+    A summary rather than a 204, because this action spends money: the operator
+    needs to see how many refunds started and how many holds were freed.
+    """
+
+    event_id = serializers.CharField()
+    title = serializers.CharField()
+    refunds_enqueued = serializers.IntegerField()
+    holds_released = serializers.IntegerField()
+    attendees_notified = serializers.IntegerField()

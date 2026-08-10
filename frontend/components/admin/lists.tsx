@@ -22,6 +22,8 @@ import {
 import { errorMessage } from '@/lib/api/errors';
 import { formatEventDate, formatMoney } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
+import { useDebouncedValue } from '@/lib/utils/use-debounced-value';
+import { useConsoleDateWindow } from './filters';
 import { type Column, DataTable, StatusPill } from './data-table';
 
 /**
@@ -184,9 +186,17 @@ export function VerificationsList() {
 
 export function OrganizationsList() {
   const highlight = useHighlight();
+  const [term, setTerm] = React.useState('');
+  const search = useDebouncedValue(term.trim(), 250);
+  const dates = useConsoleDateWindow();
+
   const { data, isPending } = useQuery({
-    queryKey: ['admin-organizations'],
-    queryFn: () => fetchAdminOrganizations(),
+    // SERVER-side, not the table's own box. This list is cursor-paginated, so
+    // searching the loaded page looks exactly like searching the platform and
+    // silently is not — which is how an operator concludes an organisation
+    // does not exist.
+    queryKey: ['admin-organizations', { search, dates: dates.key }],
+    queryFn: () => fetchAdminOrganizations({ q: search || undefined, ...dates.window }),
   });
 
   const columns: Column<AdminOrganization>[] = [
@@ -255,9 +265,16 @@ export function OrganizationsList() {
         loading={isPending}
         hasMore={Boolean(data?.meta.next)}
         highlightId={highlight}
-        searchPlaceholder="Search by name or id…"
-        emptyTitle="No organizations yet"
-        emptyBody="Organizations appear here as soon as someone creates one."
+        search={term}
+        onSearchChange={setTerm}
+        toolbarExtra={dates.control}
+        searchPlaceholder="Search by name…"
+        emptyTitle={search || dates.label ? 'No organizations match' : 'No organizations yet'}
+        emptyBody={
+          search || dates.label
+            ? 'Nothing matched that search in this date range. Widen the range or clear the filters.'
+            : 'Organizations appear here as soon as someone creates one.'
+        }
       />
     </ListPage>
   );

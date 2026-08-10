@@ -298,19 +298,32 @@ it, which is why the funnel works locally.)
 
 ---
 
-### 18. Profile editing — `PATCH /auth/me`, and `phone`
+### ~~18. Profile editing — `PATCH /auth/me`, and `phone`~~ — ✅ DONE
 
-**Interim:** the funnel shows the signed-in account's name and email as the
-delivery target, read-only. It does not collect contact details, because there
-is nowhere to put them: `/auth/me` is GET-only and `phone` is not on
-`UserSerializer` at all — a form here would silently discard what was typed.
+`PATCH /auth/me` exists and carries `full_name`, `phone`, `date_of_birth`,
+`gender` and `gender_self_described`; `POST /auth/me/onboarding` records that
+the welcome flow was ANSWERED (filled in or skipped).
 
-**Why a real one is better:** SMS ticket delivery already exists in
-`notifications` and needs a number, and people expect to fix a typo'd name
-before a ticket is issued in it.
+The frontend half is `components/account/profile-editor.tsx` (the settings
+screen's Profile section, which used to be read-only plain text with a note
+saying exactly why) and `components/account/onboarding.tsx` (four steps, every
+one skippable, saving per step).
 
-**Seam:** `step-booking.tsx` ("Where your tickets go") and `step-review.tsx`
-("Delivery").
+**The one shape decision worth carrying forward:** the column is
+`date_of_birth`, and AGE IS DERIVED on the server. An age is wrong the day
+after it is written, and this platform prints `Event.age_restriction` ("18+")
+next to events — so a stored age would let somebody who was 17 at sign-up walk
+an adult gate a year later.
+
+**Still not editable: `email`.** It is the sign-in identity AND the destination
+every ticket is delivered to, so moving it is a re-verification flow rather
+than a profile field. The settings screen says so rather than rendering a
+disabled box.
+
+**The funnel's seams remain open** (`step-booking.tsx` "Where your tickets go",
+`step-review.tsx` "Delivery"): they still show the account's name and email
+read-only. Now that there is somewhere to put an edit, offering one there is a
+small follow-up rather than a blocked one.
 
 ---
 

@@ -3,6 +3,7 @@ import {
   BarChart3,
   CalendarPlus,
   LayoutDashboard,
+  MessageSquare,
   QrCode,
   Receipt,
   Ticket,
@@ -99,6 +100,12 @@ export const ORGANIZER_SECTIONS: OrganizerSection[] = [
     label: 'Refunds',
     icon: Undo2,
     hint: 'Money already returned, and why',
+  },
+  {
+    href: '/dashboard/support',
+    label: 'Support',
+    icon: MessageSquare,
+    hint: 'Questions customers asked about your events',
   },
   {
     href: '/dashboard/activity',

@@ -80,7 +80,15 @@ export function draftTierToTicketTier(tier: DraftTier, eventId: string, now: num
   return {
     id: tier.serverId ?? tier.key,
     event_id: eventId,
+    // The wizard's tier form has no session field yet (sessions are a
+    // step of their own and only exist once the draft is saved), so a
+    // previewed tier belongs to no session — which is the honest shape
+    // for a draft and renders the panel exactly as a single-show event.
+    slot_id: null,
     name: tier.name.trim() || 'Ticket',
+    description: tier.description.trim(),
+    perks: tier.perks.map((perk) => perk.trim()).filter(Boolean),
+    position: 0,
     price,
     effective_price: current ? current.price : price,
     current_phase: current
@@ -93,9 +101,7 @@ export function draftTierToTicketTier(tier: DraftTier, eventId: string, now: num
           remaining: current.quantity,
         }
       : null,
-    next_price: current
-      ? (phases[phases.indexOf(current) + 1]?.price ?? price)
-      : null,
+    next_price: current ? (phases[phases.indexOf(current) + 1]?.price ?? price) : null,
     phases,
     quantity,
     sold: 0,
@@ -125,6 +131,9 @@ export function draftToPreview(
     title: draft.title.trim() || 'Untitled event',
     venue: draft.venue,
     city: draft.city,
+    // The organiser's own choice, so the preview's chip is the one the
+    // browse tile will show rather than a blank.
+    category: draft.category,
     place_id: draft.placeId,
     latitude: draft.latitude,
     longitude: draft.longitude,
@@ -152,6 +161,11 @@ export function draftToPreview(
     language: draft.language,
     age_restriction: draft.ageRestriction,
     accessibility_notes: draft.accessibilityNotes,
+    // Blank rows dropped, exactly as the save does — so the preview shows what
+    // would actually be published rather than what is on screen.
+    policies: draft.policies
+      .map((policy) => ({ title: policy.title.trim(), body: policy.body.trim() }))
+      .filter((policy) => policy.title && policy.body),
     seo_title: draft.seoTitle,
     seo_description: draft.seoDescription,
   };
@@ -164,7 +178,7 @@ export function draftToPreview(
    * sections simply do not appear, which is exactly what a visitor would see.
    * The cover image still previews, because it rides `poster_url` on the draft.
    */
-  const content: EventContent = { media: [], faqs: [], timeline: [] };
+  const content: EventContent = { media: [], faqs: [], timeline: [], slots: [] };
 
   return { event, tiers, content };
 }

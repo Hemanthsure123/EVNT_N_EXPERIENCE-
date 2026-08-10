@@ -198,8 +198,8 @@ export function ReviewStep({
           ))}
         </ul>
         <p className="text-caption text-muted-foreground">
-          Only a title, venue, city, future start time and one ticket type are required. A cover
-          image is optional but strongly recommended.
+          A title, venue, city, future start time and one ticket type are required. A cover
+          image is recommended.
         </p>
       </section>
 

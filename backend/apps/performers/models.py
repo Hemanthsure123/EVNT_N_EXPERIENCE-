@@ -221,24 +221,114 @@ class PerformerMedia(models.Model):
         return f"Media {self.id} for {self.performer_id}"
 
 
+class RequestKind(models.TextChoices):
+    """Which of the two flows a `BookingRequest` row belongs to.
+
+    ── WHY THIS COLUMN EXISTS ────────────────────────────────────────────
+
+    One table now serves two products that arrived a year apart:
+
+      MARKETPLACE  a customer posts a brief, listed acts quote on it, the
+                   customer accepts one.        open -> booked | cancelled | expired
+      ENQUIRY      a customer describes what they want and an OPERATOR gets
+                   back to them off-platform.   new -> in_progress -> closed_won |
+                                                closed_lost | cancelled
+
+    The two state machines are disjoint, so they could in principle share the
+    `status` column unaided. They cannot share the QUERIES: the operator queue
+    (`list_for_operator`) and the customer's own list (`list_for_customer`)
+    were both written when every row was an enquiry, and neither filters by
+    status — so a restored marketplace brief would surface in an operator's
+    enquiry queue as a row with an unrecognised state, and in a customer's
+    enquiry list beside genuine enquiries.
+
+    Discriminating explicitly is what keeps both features correct rather than
+    merely both present. Every query that means one flow now says so.
+
+    DEFAULT IS `enquiry` deliberately: it is what the live rows are, and it is
+    the flow a bare `BookingRequest.objects.create()` in future code most
+    likely means. A wrong default here is a marketplace brief appearing in an
+    operator's queue, which is exactly what this column exists to prevent.
+    """
+
+    MARKETPLACE = "marketplace", "Marketplace brief"
+    ENQUIRY = "enquiry", "Operator-handled enquiry"
+
+
 class RequestStatus(models.TextChoices):
+    """The life of an ENQUIRY, as an operator works it.
+
+    ── WHAT THIS REPLACED ────────────────────────────────────────────────
+
+    These states used to describe a MARKETPLACE: a brief sat `open` for
+    quotes, a customer accepted one and it became `booked`, and a sweep
+    `expired` whatever nobody bid on. That model needed a supply side —
+    performer listings, quotes, an acceptance transaction — and the platform
+    no longer has one. A customer sends their requirement; an operator reads
+    it and gets back to them off-platform.
+
+    So the states are now a WORK QUEUE's, and each is a fact about what a
+    human has done:
+
+    - `new` — nobody has looked at it. This is the number on the console's
+      attention bar, and it is the only state that means "somebody is
+      waiting on us".
+    - `in_progress` — an operator has picked it up. Distinct from `new`
+      precisely so two operators do not both phone the same customer.
+    - `closed_won` / `closed_lost` — it reached an outcome. Two states rather
+      than one `closed`, because "we booked it" and "they went elsewhere" are
+      the only two numbers worth having from this queue, and a single closed
+      state throws that away.
+
+    `cancelled` survives, and it is the CUSTOMER's: they withdrew it. Keeping
+    it apart from `closed_lost` matters — one is a lost deal and the other is
+    a request that stopped existing, and averaging them tells an operator
+    their conversion is worse than it is.
+    """
+
+    # ── MARKETPLACE states (kind=marketplace) ────────────────────────
+    # Restored alongside the enquiry states rather than replacing them. The
+    # two sets are disjoint and `kind` says which applies, so a row can never
+    # be ambiguous. Choices are not enforced by Postgres for a CharField, so
+    # widening this enum needs no data migration — only the `AlterField` that
+    # keeps Django's own validation and the admin in step.
     OPEN = "open", "Open for quotes"
-    #: The customer accepted a quote. Other quotes are declined in the same
-    #: transaction, so a request cannot have two winners.
     BOOKED = "booked", "Booked"
-    CANCELLED = "cancelled", "Cancelled"
-    #: The event date passed with nobody hired. Set by a sweep, not by a user.
     EXPIRED = "expired", "Expired"
+
+    # ── ENQUIRY states (kind=enquiry) ────────────────────────────────────
+    NEW = "new", "New"
+    IN_PROGRESS = "in_progress", "Being handled"
+    CLOSED_WON = "closed_won", "Booked"
+    CLOSED_LOST = "closed_lost", "Not booked"
+    CANCELLED = "cancelled", "Withdrawn by the customer"
 
 
 class BookingRequest(models.Model):
-    """A customer's brief. "A jazz band, in Mumbai, on 14 March, ~₹80,000."
+    """An ENQUIRY: "a jazz band, in Mumbai, on 14 March, around ₹80,000".
 
     Deliberately NOT tied to an `Event`. Most people hiring a band for a
     wedding are not running a ticketed event on this platform, and requiring
-    one would exclude the entire audience this marketplace exists for.
+    one would exclude the entire audience this exists for.
+
+    ── IT NOW CARRIES CONTACT DETAILS, WHICH IT POINTEDLY DID NOT ─────────
+
+    As a marketplace brief, this model held the job and NOT the person: a
+    performer seeing a lead was shown the requirement and nothing else,
+    because a customer's identity was not theirs to have until they were
+    hired. That rule was right and it is now moot — the only reader is an
+    operator, whose whole job is to get back to the customer.
+
+    So the fields below exist, and their absence would make the queue
+    unworkable. The account's email is on `customer`, but a phone number is
+    how this kind of conversation actually happens, and the name on the
+    account is often not the name of the person organising the wedding.
     """
 
+    #: Which flow this row belongs to. See `RequestKind` — it is what keeps
+    #: the operator's enquiry queue and the marketplace's brief list from
+    #: showing each other's rows.
+    kind = models.CharField(max_length=16, choices=RequestKind.choices, default=RequestKind.ENQUIRY)
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     customer = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="booking_requests"
@@ -254,9 +344,32 @@ class BookingRequest(models.Model):
     guests = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
 
+    #: Who to call, and on what. Defaulted from the account at submit time
+    #: rather than left blank: an enquiry an operator cannot answer is an
+    #: enquiry that wastes both people's time, and the account already knows
+    #: an email address.
+    contact_name = models.CharField(max_length=150, blank=True, default="")
+    contact_phone = models.CharField(max_length=20, blank=True, default="")
+    contact_email = models.EmailField(blank=True, default="")
+
     status = models.CharField(
-        max_length=20, choices=RequestStatus.choices, default=RequestStatus.OPEN
+        max_length=20, choices=RequestStatus.choices, default=RequestStatus.NEW
     )
+    #: The operator handling it. Null while `new` — that is what `new` means.
+    #: `SET_NULL` rather than PROTECT: an operator who leaves should not pin
+    #: every enquiry they ever touched, and the note below survives them.
+    handled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="handled_enquiries",
+    )
+    #: What was discussed, for the NEXT operator. Never shown to the customer
+    #: — the same rule the event moderation note follows, and for the same
+    #: reason: an internal judgement rendered to the person it is about is a
+    #: judgement published.
+    admin_note = models.TextField(blank=True, default="")
     #: Set when a quote is accepted. Denormalized so the customer's list can
     #: show "booked with X" without joining quotes.
     booked_performer = models.ForeignKey(
@@ -274,9 +387,21 @@ class BookingRequest(models.Model):
         app_label = "performers"
         db_table = "performers_booking_request"
         indexes = [
-            # The performer's own feed: open briefs of my type, in my city.
+            # The operator's queue: everything waiting, oldest first — and the
+            # console's status tabs, which filter on exactly this column and
+            # order by exactly this one. FIFO, like the event moderation
+            # queue, because an operator working top-down should be clearing
+            # the longest wait rather than the newest arrival.
+            # The ENQUIRY queue: the console lists by status, oldest first.
+            models.Index(fields=["status", "created_at"], name="enquiry_queue_idx"),
+            # The MARKETPLACE match, restored. `list_open_for_performer`
+            # filters kind+status+type+city and orders by recency; migration
+            # 0003 dropped this index when the routes went, so restoring the
+            # feature without it would leave that query scanning the table.
+            # `kind` leads because it is the most selective column now that one
+            # table holds both flows.
             models.Index(
-                fields=["status", "performer_type", "city", "-created_at"],
+                fields=["kind", "status", "performer_type", "city", "-created_at"],
                 name="request_open_match_idx",
             ),
             models.Index(fields=["customer", "-created_at"], name="request_customer_idx"),

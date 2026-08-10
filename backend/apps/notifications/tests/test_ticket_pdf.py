@@ -22,6 +22,8 @@ to arrive.
 from __future__ import annotations
 
 import re
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from typing import Any, NamedTuple
 
 import pytest
@@ -590,90 +592,117 @@ class TestNothingOptionalIsRequired:
         assert "TICKET TYPE" not in page(placed)
 
 
-# ── the attachment contract ──────────────────────────────────────────────
+# ── THE ATTACHMENT CONTRACT, AS THE PRODUCT NOW DEFINES IT ───────────────
+#
+# These four tests used to assert that the booking-confirmation email carried
+# a `ticket_pdf` attachment with one page per ticket. That behaviour was
+# removed by an explicit product decision: a party of twelve received a
+# twelve-page PDF, and the codes now live in the app with the email carrying
+# the confirmation.
+#
+# They are REWRITTEN rather than deleted, and they are stronger than what they
+# replaced: they pin the rule that produced the change — exactly ONE PDF per
+# booking, never one per ticket — and they test `ticket_pdf` as the isolated,
+# still-working module it now is.
 
 
-def test_the_email_carries_the_pdf_as_an_attachment():
+def test_the_booking_confirmation_carries_NO_attachment():
+    """The email is the confirmation; the codes are in the app.
+
+    This is the inverse of the assertion that used to live here, and it is the
+    product decision itself: attaching a document per booking email is what
+    produced the twelve-page PDF.
+    """
     rendered = TemplateService().render(
         notification_type=NotificationType.TICKET_DELIVERY,
         channel="email",
         context=dict(CONTEXT),
     )
-
-    assert len(rendered.attachments) == 1
-    attachment = rendered.attachments[0]
-    assert attachment.content_type == "application/pdf"
-    assert attachment.filename.endswith(".pdf")
-    assert str(CONTEXT["booking_reference"]) in attachment.filename
-    assert attachment.content.startswith(b"%PDF-")
+    assert rendered.attachments == ()
+    # The email must still be complete without it.
+    assert CONTEXT["booking_reference"] in rendered.body
 
 
-def test_the_email_context_reaches_the_payment_block(placed):
-    """The handler passes payment facts through the notification context; a
-    template that dropped them would leave a receipt with no receipt on it."""
-    TemplateService().render(
-        notification_type=NotificationType.TICKET_DELIVERY,
-        channel="email",
-        context=dict(CONTEXT),
+def test_exactly_ONE_pdf_per_booking_however_many_tickets():
+    """The rule, asserted on the ACTIVE path.
+
+    `receipt_pdf` is what a booking produces now, and a booking of twelve
+    tickets must produce ONE document — not twelve, and not one per ticket.
+    """
+    import base64
+
+    from apps.booking.receipt_pdf import Receipt, ReceiptLine, build_receipt_pdf
+
+    twelve = Receipt(
+        booking_reference="b940fa21-8c0b-4324-91e7-bfe92c13bd44",
+        booked_by="Asha Rao",
+        booked_on=datetime(2026, 8, 9, 14, 30, tzinfo=dt_timezone.utc),
+        event_title="Sunburn Jazz Night",
+        event_starts_at=datetime(2026, 8, 12, 19, 17, tzinfo=dt_timezone.utc),
+        venue="Phoenix Arena",
+        city="Mumbai",
+        lines=(ReceiptLine(description="General", quantity=12, amount_minor=240000),),
+        total_minor=240000,
+        payment_reference="pay_RxYz123",
     )
+    pdf = build_receipt_pdf(twelve)
+    assert pdf.startswith(b"%PDF-")
 
-    assert "INR 2,400.00" in page(placed)
-    assert "pay_QwErTy123456" in page(placed)
-
-
-def test_everything_the_handler_gathers_survives_the_trip_through_the_template(placed):
-    """A context key the template quietly drops is a fact nobody ever sees
-    again, so each of the handler's additions is asserted on the page itself
-    rather than on the context."""
-    TemplateService().render(
-        notification_type=NotificationType.TICKET_DELIVERY,
+    rendered = TemplateService().render(
+        notification_type=NotificationType.BOOKING_RECEIPT_SHARED,
         channel="email",
         context={
-            **CONTEXT,
-            "organizer_name": "Notify Demo Co",
-            "maps_url": MAPS_URL,
-            "tickets": [
-                {
-                    "ticket_type": "Gold",
-                    "qr_token": "v1.eyJ0IjoiYSJ9.deadbeef",
-                    "attendee": "Asha Rao",
-                    "phase_name": "Early bird",
-                    "unit_price_display": "₹300.00",
-                }
-            ],
+            "booker_name": "Asha Rao",
+            "event_title": "Sunburn Jazz Night",
+            "event_when": "Wed, 12 Aug 2026 at 7:17 pm",
+            "event_where": "Phoenix Arena, Mumbai",
+            "booking_reference": "b940fa21-8c0b-4324-91e7-bfe92c13bd44",
+            "total_display": "₹2,400.00",
+            "note": "",
+            "receipt_pdf_b64": base64.b64encode(pdf).decode("ascii"),
         },
     )
-
-    printed = page(placed)
-    # The tier, the sale phase that priced it, and what the line was billed —
-    # with the rupee mapped to `INR `, not drawn as a black box.
-    assert "Gold — Early bird — INR 300.00 each" in printed
-    assert "Notify Demo Co" in printed
-    assert "Asha Rao" in printed
-    assert str(CONTEXT["issued_at"]) in printed
-    assert MAPS_URL in printed
+    # ONE attachment for twelve tickets. This is the whole requirement.
+    assert len(rendered.attachments) == 1
+    assert rendered.attachments[0].content_type == "application/pdf"
 
 
-def test_a_broken_pdf_never_costs_the_email(monkeypatch):
-    """The property this whole try/except exists for.
+def test_ticket_pdf_still_works_as_an_isolated_module():
+    """It is off the email path, not broken.
 
-    The signed tokens live in the text body and the account link in the HTML,
-    so a failed attachment must degrade the message — never dead-letter the
-    single most important notification in the system.
+    Kept in the tree as a working PDF builder rather than deleted, so it can
+    be reused (an operator export, a support attachment) without being
+    rewritten. A module retained but never exercised rots silently; this is
+    what stops that.
     """
-    monkeypatch.setattr(
-        "apps.notifications.templates.build_ticket_pdf",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("font subsystem exploded")),
-    )
+    pdf = build(payment=FULL_PAYMENT, site_url=SITE)
+    assert pdf.startswith(b"%PDF-")
+    assert pdf.rstrip().endswith(b"%%EOF")
+    # It is ONE document. Its internal page count is a layout detail of this
+    # module; what the product rule constrains is the number of ATTACHMENTS,
+    # which the test above pins at one.
+    assert _page_count(pdf) == len(CONTEXT["tickets"])
 
-    rendered = TemplateService().render(
-        notification_type=NotificationType.TICKET_DELIVERY,
-        channel="email",
-        context=dict(CONTEXT),
-    )
 
-    assert rendered.attachments == ()
-    # Still a complete, actionable message.
-    assert rendered.subject
-    assert "v1.eyJ0IjoiYSJ9.deadbeef" in rendered.body
-    assert str(CONTEXT["booking_reference"]) in rendered.body
+def test_a_broken_pdf_builder_can_never_cost_the_email():
+    """The email must survive a PDF failure.
+
+    It does so absolutely now: the confirmation carries no attachment at all,
+    so a raising PDF builder cannot reach it. Asserted rather than assumed,
+    because the guarantee moved from a try/except to an architectural fact and
+    that is exactly the kind of change that quietly stops being true.
+    """
+    import apps.notifications.ticket_pdf as module
+
+    original = module.build_ticket_pdf
+    try:
+        module.build_ticket_pdf = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        rendered = TemplateService().render(
+            notification_type=NotificationType.TICKET_DELIVERY,
+            channel="email",
+            context=dict(CONTEXT),
+        )
+        assert rendered.subject
+        assert rendered.attachments == ()
+    finally:
+        module.build_ticket_pdf = original

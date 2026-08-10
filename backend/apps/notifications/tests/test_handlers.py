@@ -229,9 +229,13 @@ def test_each_ticket_carries_who_it_admits_and_what_its_line_was_billed(
     )
 
     tickets = _ticket_delivery_context(contexts)["tickets"]
-    # The named guest first (tickets are ordered by creation), the buyer's own
-    # seat blank — blank stays blank rather than being filled with the buyer.
-    assert [t["attendee"] for t in tickets] == ["Asha Rao", ""]
+    # One named guest and one blank — blank stays blank rather than being
+    # filled in with the buyer. NOT asserted positionally: a booking's tickets
+    # are written by one `bulk_create`, so every row carries the same
+    # `created_at` to the microsecond and only the id tiebreak makes the order
+    # stable at all (see `TicketRepository.list_for_booking`). Which of the two
+    # sorts first is arbitrary and means nothing.
+    assert sorted(t["attendee"] for t in tickets) == ["", "Asha Rao"]
     assert [t["phase_name"] for t in tickets] == ["Early bird", "Early bird"]
     assert [t["unit_price_display"] for t in tickets] == ["₹500.00", "₹500.00"]
 

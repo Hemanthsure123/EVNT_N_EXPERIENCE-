@@ -433,9 +433,11 @@ def test_publish_checks_are_extensible(service, make_event, owner, add_ticket_ty
 def test_create_with_poster_enqueues_async_processing(
     service, task_queue, organization, owner, django_capture_on_commit_callbacks
 ):
-    from django.core.files.uploadedfile import SimpleUploadedFile
+    from core.tests.images import event_image
 
-    poster = SimpleUploadedFile("p.jpg", b"bytes", content_type="image/jpeg")
+    # A real 16:9 JPEG: the poster path validates like every other upload
+    # now, so `b"bytes"` is refused rather than stored.
+    poster = event_image("p.jpg")
 
     with django_capture_on_commit_callbacks(execute=True):
         event = service.create_event(

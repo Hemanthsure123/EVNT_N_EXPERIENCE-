@@ -21,7 +21,6 @@ import {
   DateField,
   FieldFrame,
   NeedsSavedDraft,
-  NotStored,
   Section,
   SelectField,
   StepHeader,
@@ -31,6 +30,9 @@ import {
   type DraftSave,
 } from './fields';
 import { missingForSave } from './details-step';
+import { CATEGORIES } from '@/lib/discovery/categories';
+import { CategoryScene } from '@/components/illustrations/category-scenes';
+import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
 import { RunningOrder } from './running-order';
 
 type StepProps = {
@@ -71,7 +73,7 @@ export function BasicsStep({
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Basics"
-        blurb="The title is the single thing that decides whether someone opens your event. Everything else can be edited later."
+        blurb="What people see first when browsing."
       />
 
       {organizations.length > 1 ? (
@@ -117,12 +119,13 @@ export function BasicsStep({
         hint="Shown on the event page and in link previews. Plain text."
       />
 
-      <NotStored>
-        A short summary, category, tags, language and age restriction are not collected here because{' '}
-        <code>Event</code> has no columns for them — the model is title, description, venue, city
-        and dates. Category is the one worth adding first: it would make the browse filters exact
-        instead of inferred from wording. BACKLOG items 2 and 28.
-      </NotStored>
+      <Section
+        title="Category"
+        blurb="Which tile this appears under when somebody browses."
+      >
+        <CategoryPicker value={draft.category} onChange={(category) => update({ category })} />
+      </Section>
+
     </div>
   );
 }
@@ -184,7 +187,7 @@ export function VenueStep({ draft, update, issues }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Venue"
-        blurb="Where it happens. The city drives the browse filters and the “near you” rail, so it has to match how people write it."
+        blurb="Where it happens. The city is what people filter and search by."
       />
 
       <FieldFrame
@@ -282,15 +285,82 @@ export function VenueStep({ draft, update, issues }: StepProps) {
         </Button>
       ) : null}
 
-      <NotStored>
-        The venue’s place and pin ARE stored — <code>place_id</code>, <code>latitude</code> and{' '}
-        <code>longitude</code> are columns on <code>Event</code>, and both coordinates go up
-        together or not at all. What is still missing is a structured address (street, state,
-        country, pin code) and venue capacity: <code>venue</code> and <code>city</code> are free
-        strings, so browse filters match on the city text rather than on a place. Both need a{' '}
-        <code>venues</code> module — which is also what would make distance-based search real.
-        BACKLOG items 9 and 28.
-      </NotStored>
+    </div>
+  );
+}
+
+/**
+ * The browse category.
+ *
+ * ── TILES, NOT A SELECT ───────────────────────────────────────────────────
+ *
+ * Eight options, each of which already has a drawn scene the visitor will see
+ * on the browse page. Showing the organiser the SAME picture their event will
+ * sit under is what makes the choice concrete — a dropdown reading "Nightlife"
+ * is a word, and the tile is where the event actually ends up.
+ *
+ * ── "NONE OF THESE" IS AN OPTION, AND IT IS NOT A NINTH CATEGORY ──────────
+ *
+ * Blank means uncategorised, which is a real state rather than an omission: an
+ * event that is genuinely none of the eight should not be filed under the
+ * least-wrong one, because browse would then show it to people who asked for
+ * something else. It sits apart from the grid for that reason.
+ */
+function CategoryPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-stack">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {CATEGORIES.map((category) => {
+          const selected = value === category.slug;
+          return (
+            <button
+              key={category.slug}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onChange(selected ? '' : category.slug)}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border p-2 text-left',
+                'transition-colors duration-fast',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                selected
+                  ? 'border-primary bg-primary-subtle'
+                  : 'border-border hover:border-border-strong',
+              )}
+            >
+              <span className="h-12 w-full overflow-hidden rounded-lg">
+                <CategoryScene slug={category.slug} />
+              </span>
+              <span className="min-w-0 truncate text-caption font-medium">{category.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          aria-pressed={!value}
+          onClick={() => onChange('')}
+          className={cn(
+            'inline-flex h-control items-center rounded-full border px-4 text-body-sm transition-colors',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            value
+              ? 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
+              : 'border-primary bg-primary-subtle text-primary-subtle-foreground',
+          )}
+        >
+          None of these
+        </button>
+        <p className="text-caption text-muted-foreground">
+          An uncategorised event still appears in search and on your own page — it just does not
+          sit under a tile.
+        </p>
+      </div>
     </div>
   );
 }
@@ -314,7 +384,7 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Schedule"
-        blurb="When it starts, and when it ends. Times are in your device's timezone — the same clock an attendee in the same city reads."
+        blurb="When it starts and ends, in your device's timezone."
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -369,28 +439,37 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
       ) : null}
 
       <Section
-        title="Running order"
-        blurb="Doors, support, headline, curfew — the second thing people look for after the price."
+        title="Sessions"
+        blurb="Only for an event that runs more than once — a 6pm and a 9pm show, or the same play across a weekend."
       >
         {draft.eventId ? (
-          <RunningOrder eventId={draft.eventId} startsAtLocal={draft.startsAt} />
+          <SessionsEditor eventId={draft.eventId} startsAtLocal={draft.startsAt} />
         ) : (
           <NeedsSavedDraft
-            title="The running order unlocks once the draft is saved"
-            what="Each entry is stored against the event, so it has to exist first. Nothing above is lost in the meantime — it is all held on this device."
+            title="Sessions unlock once the draft is saved"
+            what="Each session sells its own tickets. Add them once the event exists."
             missing={missingForSave(draft)}
             save={save}
           />
         )}
       </Section>
 
-      <NotStored>
-        Timezone, a separate doors-open field on the event itself, and recurring events are not
-        offered because the backend has no columns for them: <code>Event</code> stores{' '}
-        <code>starts_at</code> and <code>ends_at</code> as instants, and recurrence would need a
-        whole series model. The doors line above is derived from the real check-in window setting,
-        not invented — and a doors entry in the running order is stored for real.
-      </NotStored>
+      <Section
+        title="Running order"
+        blurb="Doors, support, headline, curfew."
+      >
+        {draft.eventId ? (
+          <RunningOrder eventId={draft.eventId} startsAtLocal={draft.startsAt} />
+        ) : (
+          <NeedsSavedDraft
+            title="The running order unlocks once the draft is saved"
+            what="Add the running order once the event exists. Nothing above is lost in the meantime."
+            missing={missingForSave(draft)}
+            save={save}
+          />
+        )}
+      </Section>
+
     </div>
   );
 }

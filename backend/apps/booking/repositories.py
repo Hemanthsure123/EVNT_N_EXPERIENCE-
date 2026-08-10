@@ -100,6 +100,50 @@ class BookingRepository(BaseRepository[Booking]):
             .first()
         )
 
+    def get_with_event_owner(self, booking_id: uuid.UUID | str) -> Booking | None:
+        """Booking + its event + the owning organization, in ONE lean query.
+
+        Deliberately not `get_detail`: that one prefetches items and tickets
+        because the booking SCREEN renders them. A caller that only needs to
+        answer "is this yours, is it paid, and who owns the event" — the refund
+        request flow — would pay for two prefetches it never reads.
+        """
+        return (
+            Booking.objects.select_related("event", "event__organization")
+            .only(
+                "id",
+                "status",
+                "user_id",
+                "total_amount_minor",
+                "created_at",
+                "event__id",
+                "event__title",
+                "event__starts_at",
+                "event__organization__id",
+                "event__organization__owner_id",
+            )
+            .filter(pk=booking_id)
+            .first()
+        )
+
+    def list_live_for_event(self, event_id):
+        """Every booking a cancellation has to make good on.
+
+        PAID ones are owed a refund; RESERVED ones are holding inventory that
+        should be freed rather than left to the sweeper — a deleted event must
+        not keep seats. Cancelled and expired bookings are already settled and
+        are deliberately excluded, so re-running a deletion cannot email
+        somebody a second cancellation for a booking that was already dead.
+        """
+        return (
+            Booking.objects.select_related("user")
+            .filter(
+                event_id=event_id,
+                status__in=(BookingStatus.PAID, BookingStatus.RESERVED),
+            )
+            .order_by("created_at")
+        )
+
     def list_expired_reserved_ids(self, *, now: datetime, limit: int = 100) -> list[uuid.UUID]:
         """Ids of holds whose window has lapsed but are still reserved — the
         sweeper's work list. Ids only (each is re-loaded under lock before being
@@ -161,10 +205,22 @@ class TicketRepository(BaseRepository[Ticket]):
         return Ticket.objects.bulk_create(tickets)
 
     def list_for_booking(self, booking_id: uuid.UUID | str) -> list[Ticket]:
+        """A booking's tickets in a STABLE order.
+
+        `id` is the tiebreak, and it is not decoration: a booking's tickets are
+        written by ONE `bulk_create`, and `auto_now_add` stamps every row in
+        that batch with the same `timezone.now()` — identical to the
+        microsecond. `ORDER BY created_at` alone is therefore a tie, and
+        Postgres is free to return the rows in whichever order it finds them.
+
+        The delivery email renders this list. Without the tiebreak the same
+        booking lists its seats in a different order on a resend, which is how
+        somebody forwards "your second ticket" to the wrong guest.
+        """
         return list(
             Ticket.objects.select_related("ticket_type", "booking__event")
             .filter(booking_id=booking_id)
-            .order_by("created_at")
+            .order_by("created_at", "id")
         )
 
     def list_for_attendee_assignment(self, booking_id: uuid.UUID | str) -> list[Ticket]:
@@ -178,7 +234,11 @@ class TicketRepository(BaseRepository[Ticket]):
             Ticket.objects.select_related("ticket_type")
             .only("id", "status", "attendee_name", "attendee_email", "ticket_type__name")
             .filter(booking_id=booking_id)
-            .order_by("created_at")
+            # Same tiebreak, and it matters MORE here: the naming form submits
+            # attendees POSITIONALLY, so an unstable order writes a name onto
+            # the wrong ticket. See `list_for_booking` for why the timestamps
+            # tie in the first place.
+            .order_by("created_at", "id")
         )
 
     def set_attendees(self, tickets: list[Ticket]) -> int:
@@ -205,8 +265,64 @@ class TicketRepository(BaseRepository[Ticket]):
         pre-lock checks (wrong-event / not-active / scan-window). No lock — the
         authoritative admit decision re-reads the row under `lock_for_update`."""
         return (
-            Ticket.objects.select_related("booking", "ticket_type")
-            .only("id", "status", "used_at", "gate", "booking__event_id", "ticket_type__name")
+            Ticket.objects.select_related("booking", "ticket_type", "ticket_type__slot")
+            .only(
+                "id",
+                "status",
+                "used_at",
+                "gate",
+                "booking__event_id",
+                "ticket_type__name",
+                # The SESSION this ticket admits to, for the scan window. On a
+                # multi-session event the event's own start is the FIRST show,
+                # so deciding the window from it would open the 21:00 door at
+                # 17:00. Joined here rather than read lazily: this is the
+                # hottest write path in the system and a deferred load would
+                # be one extra query per scan.
+                "ticket_type__slot_id",
+                "ticket_type__slot__starts_at",
+                "ticket_type__slot__ends_at",
+                "ticket_type__slot__label",
+            )
+            .filter(pk=ticket_id)
+            .first()
+        )
+
+    def get_for_lookup(self, ticket_id: uuid.UUID | str) -> Ticket | None:
+        """Ticket + event title + tier name, for `checkin`'s READ-ONLY lookup.
+
+        A wider field set than `get_for_checkin` on purpose. The gate needs the
+        minimum to decide; a support agent on a phone call needs enough to
+        recognise the booking they are being told about out loud — the event's
+        NAME rather than its uuid, and the attendee named on the ticket where
+        one was given.
+
+        Still one query, still `.only()`-restricted. `attendee_name` is the
+        only near-personal field and it is already the ticket holder's own name
+        as the buyer entered it; the operator asking has the booking reference
+        in front of them.
+        """
+        return (
+            Ticket.objects.select_related(
+                "booking", "booking__event", "ticket_type", "ticket_type__slot"
+            )
+            .only(
+                "id",
+                "status",
+                "used_at",
+                "gate",
+                "attendee_name",
+                "booking__event_id",
+                "booking__event__title",
+                "ticket_type__name",
+                # Same reason as `get_for_checkin`: the lookup reports whether
+                # this ticket WOULD admit, and on a multi-session event that
+                # answer depends on the session, not the event.
+                "ticket_type__slot_id",
+                "ticket_type__slot__starts_at",
+                "ticket_type__slot__ends_at",
+                "ticket_type__slot__label",
+            )
             .filter(pk=ticket_id)
             .first()
         )

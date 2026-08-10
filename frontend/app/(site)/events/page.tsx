@@ -50,7 +50,7 @@ function describe(filters: DiscoveryFilters): {
   /** The banner's small scope line — never the same string as the h1. */
   bannerEyebrow: string;
   /** The banner's statement: what this scope IS, not what it's called. */
-  bannerHeadline: string;
+  bannerHeadline?: string;
   indexable: boolean;
 } {
   const category = categoryBySlug(filters.category);
@@ -65,10 +65,12 @@ function describe(filters: DiscoveryFilters): {
       ? `Events matching “${filters.q}”. Browse dates, venues and prices, and book in seconds.`
       : `Browse ${parts.join(' ').toLowerCase()} — dates, venues and prices at a glance. No account needed to browse.`,
     bannerEyebrow: [category?.label ?? 'All events', filters.city].filter(Boolean).join(' · '),
-    bannerHeadline: filters.q
-      ? `Everything matching “${filters.q}”, soonest first`
-      : (category?.blurb ??
-        `Every upcoming event${filters.city ? ` in ${filters.city}` : ''}, soonest first`),
+    // A CATEGORY has something to say about itself ("Arenas, amphitheatres and
+    // intimate gigs") and keeps its line. The unfiltered list does not: "every
+    // upcoming event, soonest first" restates the ordering the page already
+    // applies, under a heading that already says All events. With a real
+    // photograph behind it the band needs no sentence to justify itself.
+    bannerHeadline: category?.blurb,
     // A free-text search page is thin, near-duplicate content: crawl the links,
     // don't index the page.
     indexable: !filters.q,

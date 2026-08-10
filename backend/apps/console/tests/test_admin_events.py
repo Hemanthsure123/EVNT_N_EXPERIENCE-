@@ -130,7 +130,7 @@ class TestOperatorDelete:
     def test_a_clean_event_is_deleted(self, staff, event) -> None:
         resp = auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam")
 
-        assert resp.status_code == 204
+        assert resp.status_code == 200
         event.refresh_from_db()
         # SOFT: every read path filters on this, and a hard delete would be
         # refused by the PROTECT on bookings the moment one existed.
@@ -139,29 +139,44 @@ class TestOperatorDelete:
     def test_a_delete_needs_a_reason(self, staff, event) -> None:
         assert auth(staff).delete(f"/api/v1/admin/events/{event.id}").status_code == 422
 
-    def test_an_event_with_a_paid_booking_is_refused(self, staff, event, owner) -> None:
+    def test_an_event_with_a_paid_booking_DELETES_and_refunds(
+        self, staff, event, owner, django_capture_on_commit_callbacks
+    ) -> None:
+        """This used to be refused with "take it off sale instead".
+
+        The refusal was well-reasoned and backwards: it blocked in exactly the
+        cases an operator reaches for this — a fraudulent listing that has
+        already sold — and left the dangerous half, the refunds, as a separate
+        action somebody had to remember. The delete now does the whole job, so
+        the two can never come apart. See `EventModerationService.delete_event`.
+        """
         booking(event, owner, BookingStatus.PAID)
 
-        resp = auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam")
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam listing")
 
-        assert resp.status_code == 409
-        assert "take it off sale" in resp.data["error"]["message"].lower()
+        assert resp.status_code == 200
         event.refresh_from_db()
-        assert event.deleted_at is None
+        assert event.deleted_at is not None
 
-    def test_a_live_hold_also_blocks_the_delete(self, staff, event, owner) -> None:
-        # Somebody is in checkout right now. Deleting the event under them is
-        # the same failure as deleting it under a ticket holder.
+    def test_a_live_hold_does_not_block_the_delete_either(
+        self, staff, event, owner, django_capture_on_commit_callbacks
+    ) -> None:
+        # Somebody is in checkout right now. The hold is RELEASED rather than
+        # the delete refused — a removed event must not go on holding seats.
         booking(event, owner, BookingStatus.RESERVED)
 
-        assert auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam").status_code == 409
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam listing")
+
+        assert resp.status_code == 200
 
     def test_a_lapsed_hold_does_not_block_the_delete(self, staff, event, owner) -> None:
         # Nothing was issued and nobody is owed anything, so the event is
         # still a clean delete.
         booking(event, owner, BookingStatus.EXPIRED)
 
-        assert auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam").status_code == 204
+        assert auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam").status_code == 200
 
     def test_deleting_twice_is_404_rather_than_a_second_delete(self, staff, event) -> None:
         auth(staff).delete(f"/api/v1/admin/events/{event.id}?reason=spam")

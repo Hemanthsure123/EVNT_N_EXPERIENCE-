@@ -10,10 +10,7 @@ import {
   MapPin,
   Megaphone,
   Monitor,
-  Search,
-  ShieldCheck,
   Smartphone,
-  Sparkles,
   Star,
   Tag,
   TrendingUp,
@@ -84,11 +81,23 @@ import { AnnouncementsAdmin } from './announcements-admin';
  * on a page is two things claiming to be the point.
  */
 
+/*
+ * `hero`, `search` and `trust` were section ids here.
+ *
+ * The front page no longer has a hero: it opens on the curated showcase rail
+ * (components/discovery/showcase.tsx), search lives in the header on every
+ * route, and the trust badges went with the hero copy they sat under. The
+ * columns still exist on the CMS record — dropping them is a migration, and a
+ * migration to delete three text fields is not worth the risk to a live table —
+ * but nothing reads them.
+ *
+ * They are gone from this studio rather than left as editors, because an
+ * operator typing a headline, pressing save, seeing it succeed and finding the
+ * front page unchanged is the single most corrosive thing an admin tool can
+ * do. A section with no reader is removed, not disabled.
+ */
 type SectionId =
-  | 'hero'
-  | 'search'
   | 'ribbon'
-  | 'trust'
   | 'featured'
   | 'categories'
   | 'cities'
@@ -107,11 +116,13 @@ type TreeNode = {
 };
 
 const TREE: TreeNode[] = [
-  { id: 'hero', label: 'Hero', icon: Sparkles, blurb: 'Headline, description, two buttons' },
-  { id: 'search', label: 'Search bar', icon: Search, blurb: 'Placeholder text' },
-  { id: 'ribbon', label: 'Ribbon', icon: Megaphone, blurb: 'The strip above the hero' },
-  { id: 'trust', label: 'Trust badges', icon: ShieldCheck, blurb: 'Short claims under the hero' },
-  { id: 'featured', label: 'Featured events', icon: Star, blurb: 'Curated rails, in order' },
+  {
+    id: 'featured',
+    label: 'Featured events',
+    icon: Star,
+    blurb: 'The scrolling rail at the top of the front page',
+  },
+  { id: 'ribbon', label: 'Ribbon', icon: Megaphone, blurb: 'The strip above the page' },
   { id: 'categories', label: 'Categories', icon: Tag, blurb: 'The browse tiles' },
   { id: 'cities', label: 'Featured cities', icon: MapPin, blurb: 'Cities promoted on the home page' },
   {
@@ -130,7 +141,9 @@ const TREE: TreeNode[] = [
 ];
 
 export function CmsStudio() {
-  const [selected, setSelected] = React.useState<SectionId>('hero');
+  // Featured is the default because it is now the front page's first screen —
+  // the thing an operator most often came here to change.
+  const [selected, setSelected] = React.useState<SectionId>('featured');
   const [device, setDevice] = React.useState<'desktop' | 'mobile'>('desktop');
   const [previewKey, setPreviewKey] = React.useState(0);
 
@@ -203,10 +216,7 @@ function Tree({
   // what is live without opening every section. That is the difference between
   // a content tree and a settings menu.
   const summary: Partial<Record<SectionId, string>> = {
-    hero: draft?.hero_headline,
-    search: draft?.search_placeholder,
     ribbon: draft?.ribbon_enabled ? draft.ribbon_text : 'Hidden',
-    trust: draft ? `${draft.trust_badges.length} badge${draft.trust_badges.length === 1 ? '' : 's'}` : undefined,
     categories: `${categoryCount} live`,
     footer: draft?.footer_note,
   };
@@ -319,7 +329,7 @@ function Editor({ section, onSaved }: { section: SectionId; onSaved: () => void 
         remove={deletePopularSearch}
         primaryField="label"
         title="Popular searches"
-        blurb="Suggested searches shown when the search panel opens. These are a CURATION decision — the platform keeps no search-term log, so nothing here is a measurement."
+        blurb="Suggested searches shown when the search panel opens. You choose these."
         addLabel="Add search"
         fields={[
           { key: 'label', label: 'Chip text', placeholder: 'Comedy nights' },
@@ -437,9 +447,12 @@ function Preview({
         />
       </div>
 
+      {/* The behaviour is worth stating; the reason is not. "There is no
+          draft-render endpoint" is our architecture — an operator needs to
+          know the preview shows the SAVED copy, which is what they can act
+          on. */}
       <p className="text-caption text-muted-foreground">
-        Typing does not update this — there is no draft-render endpoint, so the server can only
-        show the saved version. BACKLOG item 57.
+        Shows the saved version. Save to see your changes here.
       </p>
     </div>
   );
@@ -457,7 +470,7 @@ export function CmsSummary() {
       <span className="min-w-0">
         <span className="block text-body-sm font-medium text-foreground">Front page</span>
         <span className="block truncate text-caption text-muted-foreground">
-          {draft.data?.hero_headline ?? 'Loading…'}
+          {draft.isPending ? 'Loading…' : 'Featured rail, categories and cities'}
         </span>
       </span>
     </Link>

@@ -469,8 +469,7 @@ function CustomerInspector({
                   {/* City is a real column on Event. "Preferred category" is
                       not — there is no category column at all (BACKLOG 2). */}
                   <p className="text-caption text-muted-foreground">
-                    Derived from the cities of the events they bought. There is no category column
-                    yet, so preferred categories are not shown.
+                    Derived from the cities of the events they bought.
                   </p>
                 </section>
               ) : null}
@@ -512,12 +511,10 @@ function CustomerInspector({
                   All their bookings
                 </Link>
               </Button>
-
-              <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-                Phone, avatar and internal notes are not shown: <code>User.phone</code> is not on
-                any serializer an organizer can read, there is no avatar column, and there is no
-                notes table to save into. BACKLOG item 30.
-              </p>
+      {/* A footnote here explained that `User.phone` was not on the payload
+          and that there was no notes table, citing a backlog item. It is now
+          also wrong — a phone number is on the account. Engineering copy on a
+          customer list ages badly and helps nobody who reads it. */}
             </div>
           )}
         </div>

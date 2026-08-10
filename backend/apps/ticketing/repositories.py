@@ -83,16 +83,31 @@ class TicketTypeRepository(BaseRepository[TicketType]):
 
     # --- reads -------------------------------------------------------------
 
-    def list_for_event(self, event_id: uuid.UUID | str) -> QuerySet[TicketType]:
+    def list_for_event(
+        self, event_id: uuid.UUID | str, *, slot_id: uuid.UUID | str | None = None
+    ) -> QuerySet[TicketType]:
         """All of an event's live tiers, cheapest first, with their phase
         schedules attached. Two queries total however many tiers there are —
         the tier list plus ONE prefetch for every schedule — never a phases
         query per tier."""
-        return (
+        qs = (
             self.get_queryset()
             .filter(event_id=event_id, deleted_at__isnull=True)
             .prefetch_related("phases")
-            .order_by("price_minor", "created_at")
+        )
+        if slot_id is not None:
+            qs = qs.filter(slot_id=slot_id)  # type: ignore[misc]
+        # Slot first, so a multi-session event's tiers arrive already grouped by
+        # the session a buyer picked; price within it, as before. `slot__position`
+        # rather than the slot's start time, because the organiser's arrangement
+        # is the one the ticket panel renders.
+        # `position` FIRST, price second. An organiser running a festival wants
+        # their weekend pass above the day tickets whatever it costs, and
+        # merchandising the list is the one thing a price sort cannot express.
+        # Every tier defaults to 0, so an organiser who never touches it gets
+        # exactly the old cheapest-first behaviour.
+        return qs.order_by(
+            "slot__position", "slot__starts_at", "position", "price_minor", "created_at"
         )
 
     def get_active_by_id(self, ticket_type_id: uuid.UUID | str) -> TicketType | None:
@@ -160,10 +175,20 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         sale_start=None,
         sale_end=None,
         max_per_order: int = 10,
+        slot_id: uuid.UUID | str | None = None,
+        description: str = "",
+        perks: list[str] | None = None,
+        position: int = 0,
     ) -> TicketType:
         return TicketType.objects.create(
             event_id=event_id,
+            slot_id=slot_id,
             name=name,
+            description=description,
+            # `or []` is not laziness: the DEFAULT must be a fresh list per row.
+            # A shared one would let an append on one tier reach another.
+            perks=perks or [],
+            position=position,
             price_minor=price_minor,
             quantity=quantity,
             sale_start=sale_start,

@@ -40,7 +40,7 @@ asynchronous and already retried.
 from __future__ import annotations
 
 import logging
-from email.utils import make_msgid
+from email.utils import make_msgid, parseaddr
 from typing import Any
 
 from django.core.mail import EmailMultiAlternatives, get_connection
@@ -78,7 +78,17 @@ class SmtpEmailAdapter(EmailPort):
             raise ValueError("SMTP_FROM_EMAIL is required with EMAIL_PROVIDER=smtp.")
 
         self._from_email = from_email
-        self._domain = from_email.rpartition("@")[2] or None
+        # `SMTP_FROM_EMAIL` may carry a DISPLAY NAME — `Curatix <a@b.com>` — which
+        # is what makes an inbox show the product rather than a bare address.
+        # `rpartition("@")` on that returns `b.com>`, trailing bracket included,
+        # and `make_msgid` would then stamp every message with a syntactically
+        # invalid `Message-ID`. That is not cosmetic: a malformed Message-ID is a
+        # spam-filter signal and breaks threading, and it fails in the direction
+        # nobody checks — the mail still sends.
+        #
+        # `parseaddr` understands both spellings and is in the standard library
+        # for exactly this. It returns ("", addr) for a bare address.
+        self._domain = parseaddr(from_email)[1].rpartition("@")[2] or None
         # `dict[str, Any]`, not the inferred `dict[str, object]`: `get_connection`
         # is typed with a distinct annotation per keyword, so splatting an
         # `object`-valued mapping into it cannot type-check. The values are

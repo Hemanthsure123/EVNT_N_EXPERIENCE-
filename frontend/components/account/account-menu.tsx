@@ -9,7 +9,6 @@ import {
   ChevronsUpDown,
   LayoutDashboard,
   LogOut,
-  Music4,
   Plus,
   Settings,
   ShieldCheck,
@@ -208,17 +207,6 @@ export function AccountMenu() {
             Host events
           </MenuLink>
         )}
-        {/* Gated on owning an organisation, which is the prerequisite for an
-            act — not on owning an act, because fetching every signed-in
-            visitor's performer list on every page to decide whether to draw one
-            menu row is a request nobody asked for. Somebody with an
-            organisation and no acts lands on the page that explains what a
-            listing is, which is the right destination for them anyway. */}
-        {isOrganizer ? (
-          <MenuLink href="/studio" icon={Music4} onNavigate={close}>
-            Performer studio
-          </MenuLink>
-        ) : null}
         {isAdmin ? (
           <MenuLink href="/admin" icon={ShieldCheck} onNavigate={close}>
             Operator console

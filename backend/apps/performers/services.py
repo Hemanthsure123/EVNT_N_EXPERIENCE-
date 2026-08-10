@@ -41,6 +41,8 @@ from core.uploads import storage_path, validate_image
 
 from .exceptions import (
     DuplicateQuoteError,
+    EnquiryNotFoundError,
+    EnquiryWithdrawnError,
     InvalidPerformerStateError,
     NotPerformerOwnerError,
     PerformerNotBookableError,
@@ -51,7 +53,15 @@ from .exceptions import (
     RequestNotFoundError,
     StalePerformerVersionError,
 )
-from .models import BookingRequest, Performer, PerformerStatus, Quote, QuoteStatus, RequestStatus
+from .models import (
+    BookingRequest,
+    Performer,
+    PerformerStatus,
+    Quote,
+    QuoteStatus,
+    RequestKind,
+    RequestStatus,
+)
 from .repositories import (
     BookingRequestRepository,
     PerformerMediaRepository,
@@ -445,7 +455,21 @@ class PerformerModerationService:
 
 
 class MarketplaceService:
-    """Briefs and quotes — the customer's side and the performer's."""
+    """The ENQUIRY DESK: a customer's requirement, and an operator working it.
+
+    ── WHAT THIS USED TO BE ───────────────────────────────────────────────
+
+    A two-sided marketplace: customers posted briefs, listed performers
+    quoted on them, and accepting a quote booked an act in one transaction.
+    The platform no longer has a supply side — a customer sends what they
+    need and an operator gets back to them off-platform — so the quote half
+    of this class is unreachable and the request half became a work queue.
+
+    `users` is optional so a unit test can build this without one; the
+    contact-detail fallback simply does not fire, which is the honest
+    degradation (a test that supplies its own contacts is testing the thing
+    it meant to).
+    """
 
     def __init__(
         self,
@@ -453,10 +477,12 @@ class MarketplaceService:
         requests: BookingRequestRepository,
         quotes: QuoteRepository,
         performers: PerformerRepository,
+        users=None,
     ) -> None:
         self._requests = requests
         self._quotes = quotes
         self._performers = performers
+        self._users = users
 
     def create_request(
         self,
@@ -470,15 +496,47 @@ class MarketplaceService:
         budget_max_minor: int,
         guests: int | None = None,
         notes: str = "",
+        contact_name: str = "",
+        contact_phone: str = "",
+        contact_email: str = "",
+        kind: str = RequestKind.ENQUIRY,
     ) -> BookingRequest:
+        """Take an enquiry, and make sure somebody can answer it.
+
+        ── THE CONTACT DETAILS ARE FILLED IN, NOT LEFT BLANK ──────────────
+
+        This used to be a marketplace brief that deliberately carried the job
+        and not the person: a performer seeing a lead was shown the
+        requirement and nothing else. The only reader now is an operator whose
+        entire job is to get back to the customer, so an enquiry nobody can
+        answer is an enquiry that wastes both people's time.
+
+        Anything the form left blank falls back to the ACCOUNT — which always
+        has an email, and often has a name and a phone. A blank field on the
+        form means "the account's is fine", not "do not contact me".
+        """
         if budget_max_minor < budget_min_minor:
             raise InvalidInputError("The top of the budget has to be at least the bottom of it.")
         if event_date < date.today():
             raise InvalidInputError("The event date has to be in the future.")
 
+        account = self._users.get_by_id(customer_id) if self._users is not None else None
+
         with UnitOfWork() as uow:
             request = self._requests.create(
+                kind=kind,
+                # The OPENING STATE differs by flow and there is no sensible
+                # shared default: a marketplace brief starts `open` (waiting
+                # for quotes), an enquiry starts `new` (waiting for an
+                # operator). Leaving the model default would file every
+                # restored brief into the operator's queue.
+                status=(
+                    RequestStatus.OPEN if kind == RequestKind.MARKETPLACE else RequestStatus.NEW
+                ),
                 customer_id=customer_id,
+                contact_name=(contact_name.strip() or (account.full_name if account else "")),
+                contact_phone=(contact_phone.strip() or (account.phone if account else "")),
+                contact_email=(contact_email.strip() or (account.email if account else "")),
                 performer_type=performer_type,
                 occasion=occasion,
                 city=city.strip(),
@@ -494,11 +552,67 @@ class MarketplaceService:
                     "request_id": str(request.id),
                     "performer_type": performer_type,
                     "city": request.city,
+                    "event_date": request.event_date.isoformat(),
+                    "contact_email": request.contact_email,
+                    "contact_name": request.contact_name,
                 },
                 aggregate_id=str(request.id),
             )
-        logger.info("booking_request_created", extra={"request_id": str(request.id)})
+        logger.info("enquiry_created", extra={"request_id": str(request.id)})
         return request
+
+    def decide_enquiry(
+        self,
+        *,
+        request_id,
+        actor_id,
+        status: str,
+        admin_note: str = "",
+    ) -> BookingRequest:
+        """An operator moves an enquiry through the queue.
+
+        ── WHY THE NOTE IS NOT SHOWN TO THE CUSTOMER ──────────────────────
+
+        The same rule the event moderation note follows: it is written for the
+        NEXT operator ("called twice, no answer"), and rendering an internal
+        judgement to the person it is about is a judgement published. The
+        customer hears back through whatever channel the operator used.
+
+        The move is refused on a WITHDRAWN enquiry. A customer who cancelled
+        has taken their request back, and closing it as won afterwards would
+        record a booking against a request that no longer exists.
+        """
+        if status not in set(BookingRequestRepository.OPERATOR_STATUSES):
+            raise InvalidInputError("That is not a state an operator can move an enquiry to.")
+
+        request = self._requests.get_by_id(request_id)
+        if request is None:
+            raise EnquiryNotFoundError(str(request_id))
+
+        with UnitOfWork():
+            if not self._requests.decide(
+                request_id=request_id,
+                status=status,
+                # Recorded even when moving BACK to `new`: "who last touched
+                # this" is the useful fact, and blanking it on a bounce-back
+                # would lose the only trail there is.
+                handled_by_id=actor_id,
+                admin_note=admin_note.strip(),
+            ):
+                raise EnquiryWithdrawnError()
+            record_audit(
+                actor_id=str(actor_id),
+                action="enquiry.decided",
+                target_type="enquiry",
+                target_id=str(request_id),
+                metadata={"status": status},
+            )
+
+        refreshed = self._requests.get_by_id(request_id)
+        if refreshed is None:  # pragma: no cover — just deleted mid-request
+            raise EnquiryNotFoundError(str(request_id))
+        logger.info("enquiry_decided", extra={"request_id": str(request_id), "status": status})
+        return refreshed
 
     def cancel_request(self, *, request_id: uuid.UUID, customer_id: uuid.UUID) -> BookingRequest:
         if not self._requests.cancel(request_id=request_id, customer_id=customer_id):
@@ -535,6 +649,15 @@ class MarketplaceService:
         request = self._requests.get_by_id(request_id)
         if request is None:
             raise RequestNotFoundError(str(request_id))
+        # UNREACHABLE. Quoting has no route (see `urls.py`) — the platform has
+        # no performer supply side, and an enquiry is worked by an operator by
+        # hand. Kept compiling against `NEW` rather than deleted mid-change, so
+        # the module still type-checks while the marketplace's remains are
+        # removed in their own pass.
+        # MARKETPLACE semantics: quotes are taken on a brief that is OPEN.
+        # The enquiry rewrite re-pointed this at `NEW`, which is the enquiry
+        # opening state — so with both flows live it would have refused every
+        # legitimate quote and accepted quotes on operator enquiries.
         if request.status != RequestStatus.OPEN:
             raise RequestClosedError()
 

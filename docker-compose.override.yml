@@ -25,7 +25,21 @@
 # =============================================================================
 
 services:
+  # ── THE LOCAL DATABASE, NOW OPT-IN ──────────────────────────────────────
+  #
+  # The application runs against Supabase (see `.env`). These two stay in the
+  # file because `pytest` still needs a database it is allowed to CREATE and
+  # DROP, and Supabase is emphatically not that — `config/settings/test.py`
+  # refuses a non-local host for exactly that reason.
+  #
+  # Behind a profile rather than deleted, and behind a profile rather than
+  # left running: a Postgres that starts on every `docker compose up` is a
+  # database somebody will point something at by accident, which is how the
+  # Supabase URLs in `.env` came to be inert in the first place.
+  #
+  #   docker compose --profile localdb up -d postgres pgbouncer
   postgres:
+    profiles: ["localdb"]
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -47,6 +61,7 @@ services:
   # (DISABLE_SERVER_SIDE_CURSORS, CONN_MAX_AGE=0, sslmode=require) is
   # exercised for real rather than only in production.
   pgbouncer:
+    profiles: ["localdb"]
     image: edoburu/pgbouncer:latest
     restart: unless-stopped
     environment:
@@ -70,10 +85,23 @@ services:
       postgres:
         condition: service_healthy
 
-  # Local stand-in for Upstash: stock Redis with its TLS listener on a second
-  # port, so `REDIS_URL=rediss://...` is exercised for real. The plain port
-  # stays open for the healthcheck only.
+  # ── Local Redis: OPT-IN, and not started by default ─────────────────────
+  #
+  # Development points at Upstash (see the note on REDIS_URL below), so this
+  # is here for the two cases that instance cannot serve: working offline, and
+  # debugging a cache problem without touching the shared one.
+  #
+  # It is a PROFILE rather than a running-but-unused container for the same
+  # reason `migrate` is one: a service in the compose file that nothing
+  # connects to reads, to the next person, as the thing the app is using.
+  #
+  #     docker compose --profile local-redis up -d redis
+  #     REDIS_URL=rediss://redis:6380/0?ssl_cert_reqs=none docker compose up web
+  #
+  # Its TLS listener is on a second port so `rediss://` is exercised for real
+  # even locally; the plain port stays open for the healthcheck only.
   redis:
+    profiles: ["local-redis"]
     image: redis:7-alpine
     restart: unless-stopped
     command: >
@@ -106,18 +134,52 @@ services:
         # set. Deliberately NOT in the production image: a test runner and a
         # profiler are attack surface and image weight that production has no
         # use for.
-        INSTALL_EXTRAS: "razorpay,push,observability,s3,tickets,dev"
+        INSTALL_EXTRAS: "razorpay,push,observability,s3,dev"
     environment: &dev-env
       # THE OVERRIDES. Explicit, named, and development-only.
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DATABASE_URL: postgres://app:app@pgbouncer:6432/eventsdb?sslmode=require
-      # Session-mode equivalent for migrations and pytest. Without this,
-      # DIRECT_DATABASE_URL falls through to .env — which is production
-      # Supabase — and `pytest` would create and drop a database THERE.
-      # `config/settings/test.py` now also refuses a non-local host, so this
-      # is defence in depth rather than the only guard.
-      DIRECT_DATABASE_URL: postgres://app:app@postgres:5432/eventsdb
-      REDIS_URL: rediss://redis:6380/0?ssl_cert_reqs=none
+      #
+      # `config.settings.cloud`, NOT `.dev`: this stack runs against the real
+      # Supabase Postgres in `.env`, and `.dev` refuses a non-local database
+      # for a good reason (DEBUG=True + CORS_ALLOW_ALL_ORIGINS over real data
+      # renders SECRET_KEY to any caller). See that module's docstring for the
+      # three things it relaxes and why each is safe on loopback only.
+      DJANGO_SETTINGS_MODULE: config.settings.cloud
+      # DATABASE_URL and DIRECT_DATABASE_URL ARE DELIBERATELY ABSENT.
+      #
+      # They were set here to a local Postgres, and `environment:` outranks
+      # `env_file:` — so the Supabase URLs in `.env` were INERT and every write
+      # went to a container with nothing anywhere saying so. That is the exact
+      # trap the header of `docker-compose.yml` documents, and it had been
+      # sprung on this file.
+      #
+      # `pytest` is the reason the local values were here: it CREATES and DROPS
+      # `test_<dbname>`, which must never happen on Supabase. That guard now
+      # lives where it cannot be bypassed by editing this file —
+      # `config/settings/test.py` refuses a non-local host outright. To run the
+      # suite, point it at a local database explicitly:
+      #
+      #   DIRECT_DATABASE_URL=postgres://app:app@localhost:5432/eventsdb       #     .venv/Scripts/python -m pytest
+      #
+      # with the `localdb` profile up (`docker compose --profile localdb up -d`).
+      # REDIS_URL IS DELIBERATELY ABSENT.
+      #
+      # `environment:` outranks `env_file:`, so setting it here would make the
+      # `REDIS_URL` in `.env` inert — which is exactly the bug the header of
+      # `docker-compose.yml` warns about, and it is how a carefully configured
+      # managed cache ends up unused with nothing anywhere saying so.
+      #
+      # Development now uses the SAME Upstash instance the deployed app does.
+      # That is a real trade and it is the right one: the cache is the layer
+      # where "works locally" diverges most from production — TLS, an
+      # off-box round trip, dropped idle connections, rate limits — and none
+      # of those are exercised by a Redis in the next container.
+      #
+      # `core/adapters/redis/adapter.py` fails OPEN, so a dropped connection
+      # degrades to a database read rather than a 500. That handling exists
+      # BECAUSE of this line's absence.
+      #
+      # To work offline, or against a local Redis, start the profile below and
+      # export `REDIS_URL=rediss://redis:6380/0?ssl_cert_reqs=none`.
       DISABLE_SERVER_SIDE_CURSORS: "true"
       CONN_MAX_AGE: "0"
       CACHE_BACKEND: redis
@@ -149,37 +211,36 @@ services:
       # real people the moment somebody runs a seed script is how a test
       # fixture ends up in a customer's inbox.
       EMAIL_PROVIDER: ${DEV_EMAIL_PROVIDER:-console}
-      STORAGE_BACKEND: local
+      # STORAGE_BACKEND IS DELIBERATELY ABSENT — same reason as the database
+      # URLs above. It was pinned to `local`, so uploads went to the
+      # container's disk and vanished on restart while a fully working S3
+      # bucket sat configured in `.env` and unused.
     command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py runserver 0.0.0.0:8000"
+      sh -c "python manage.py runserver 0.0.0.0:8000 --insecure"
     volumes:
       # Bind mount for hot reload. Development only — the production file has
       # no volumes, so the image is immutable there.
       - ./backend:/app
-    depends_on:
-      pgbouncer:
-        condition: service_started
-      redis:
-        condition: service_healthy
+    # No `depends_on`: the database is Supabase and the cache is Upstash,
+    # both already up. Waiting on a profiled container that is not started
+    # would hang `docker compose up` forever.
+      # No `redis` here, and that is not an omission: the cache is Upstash and
+      # is already up. Waiting on a profiled container that is not started
+      # would hang `docker compose up` forever.
 
   scheduler:
     environment: *dev-env
-    depends_on:
-      pgbouncer:
-        condition: service_started
-      redis:
-        condition: service_healthy
+    # No `depends_on`: the database is Supabase and the cache is Upstash,
+    # both already up. Waiting on a profiled container that is not started
+    # would hang `docker compose up` forever.
     volumes:
       - ./backend:/app
 
   worker:
     environment: *dev-env
-    depends_on:
-      pgbouncer:
-        condition: service_started
-      redis:
-        condition: service_healthy
+    # No `depends_on`: the database is Supabase and the cache is Upstash,
+    # both already up. Waiting on a profiled container that is not started
+    # would hang `docker compose up` forever.
     volumes:
       - ./backend:/app
 

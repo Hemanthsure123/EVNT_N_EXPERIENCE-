@@ -477,6 +477,20 @@
   --sticky-top: calc(var(--header-height) + 1rem);
   --sticky-top-lg: calc(var(--header-height-lg) + 1rem);
 
+  /* The ticket list's floor. A tier card is ~9rem; the scroll region between
+     the pinned header and the pinned footer must never be shorter than one of
+     them, or the panel renders a nameless fragment of a card with a scrollbar
+     beside it — which is what a short viewport produced. A floor is the right
+     tool: it costs nothing when there is room and prevents the one state that
+     is unreadable when there is not. */
+  --ticket-scroll-min: 11rem;
+
+  /* The event poster's height ceiling. `min()` so it is a share of a short
+     laptop screen and a fixed size on a tall monitor — 68vh keeps the title,
+     the date and the ticket panel above the fold, and 620px stops the artwork
+     becoming a billboard on a 4K display. */
+  --hero-media-height: min(68vh, 620px);
+
   /* Radius -- one ladder, applied by ROLE, never ad hoc:
        sm  controls inside controls   md  small inputs/chips
        lg  thumbnails/medallions      xl  CARDS
@@ -799,6 +813,244 @@
 }
 
 /* ==========================================================================
+ * ILLUSTRATION REACTIONS -- movement INSIDE the drawing, on hover.
+ *
+ * The ambient `illo-float` / `illo-sway` / `illo-pulse` above run forever and
+ * are for a single decorative mark beside a heading. These are different: they
+ * are IDLE until somebody points at the thing, and then something happens
+ * inside the picture -- the disco ball turns, the steam rises, the chart bars
+ * grow, the ball bounces. That is what makes an illustration feel alive rather
+ * than printed.
+ *
+ * WHY THE TRIGGER IS `a:hover` AND NOT A TAILWIND `group-hover:`
+ *
+ * These scenes are placed inside several different hosts, and two of them use
+ * NAMED Tailwind groups (`group/card`). An unnamed `group-hover:` silently does
+ * nothing inside a named group, so the same component would animate on the
+ * category tiles and sit dead on the event cards -- with no error anywhere.
+ * Every placement is inside an anchor, so the anchor is the one reliable
+ * ancestor. `:focus-visible` is included so a keyboard user gets the same
+ * feedback a mouse does.
+ *
+ * WHY `transform-box: fill-box` IS ON EVERY RULE
+ *
+ * A transform on an SVG child resolves its origin against the SVG VIEWPORT by
+ * default, so `rotate` about "the centre" spins the element around the corner
+ * of the drawing and throws it off screen. `fill-box` makes the origin mean the
+ * element's own box, which is what every one of these needs.
+ *
+ * All of it is off under reduced motion, at the bottom.
+ * ========================================================================== */
+
+/* The base: nothing moves until asked, and everything eases the same way. */
+[class*='illo-r-'] {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transition:
+    transform var(--duration-slow) var(--ease-spring),
+    opacity var(--duration-slow) var(--ease-out);
+}
+
+/* Lift -- a mic, a tool, a glass. The most common reaction. */
+a:hover .illo-r-lift,
+a:focus-visible .illo-r-lift {
+  transform: translateY(-4px);
+}
+
+/* Turn -- a mirror ball, a ferris wheel. */
+a:hover .illo-r-turn,
+a:focus-visible .illo-r-turn {
+  transform: rotate(24deg);
+}
+
+/* Tilt -- bunting, a hanging sign. Smaller, because a big rotation on a wide
+   element reads as the drawing breaking rather than moving. */
+a:hover .illo-r-tilt,
+a:focus-visible .illo-r-tilt {
+  transform: rotate(-3deg);
+}
+
+/* Brighten -- light beams, a spotlight cone, a stage wash. Opacity only: these
+   are the elements whose bounding box centre is not where they radiate from. */
+a:hover .illo-r-glow,
+a:focus-visible .illo-r-glow {
+  opacity: 0.32;
+}
+
+/* Rise -- steam, sparks. Travels further than a lift and fades as it goes. */
+a:hover .illo-r-rise,
+a:focus-visible .illo-r-rise {
+  transform: translateY(-8px);
+  opacity: 0.75;
+}
+
+/* Grow -- chart bars, an equaliser. Anchored at the BOTTOM so a bar grows
+   upward out of its baseline instead of expanding from its middle. */
+.illo-r-grow {
+  transform-origin: 50% 100%;
+}
+
+a:hover .illo-r-grow,
+a:focus-visible .illo-r-grow {
+  transform: scaleY(1.35);
+}
+
+/* Bounce -- a ball. A keyframed hop rather than a transition, because the
+   whole character of a bounce is the return. */
+@keyframes illo-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  40% {
+    transform: translateY(-12px);
+  }
+
+  70% {
+    transform: translateY(-3px);
+  }
+}
+
+a:hover .illo-r-hop,
+a:focus-visible .illo-r-hop {
+  animation: illo-hop 0.9s var(--ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*='illo-r-'] {
+    transition: none;
+  }
+
+  a:hover [class*='illo-r-'],
+  a:focus-visible [class*='illo-r-'] {
+    transform: none;
+    opacity: inherit;
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+ * ILLUSTRATION AMBIENTS -- movement that runs on its own, for ONE scene.
+ *
+ * The `illo-r-*` reactions above are the general rule: an illustration in a
+ * grid stays still and moves only when its anchor is hovered, because eight or
+ * nine drifting tiles is a page that will not sit still.
+ *
+ * These are the exception, and the exception is narrow: the ONBOARDING scenes,
+ * where exactly one is on screen at a time, it is the largest thing on it, and
+ * the person is being asked to fill in a form they did not come for. There a
+ * scene with a little life in it is doing work rather than competing for
+ * attention.
+ *
+ * Every one is slow (4s+) and small (a few pixels, a few percent of opacity).
+ * Anything faster or larger stops being ambience and becomes something to
+ * watch, which is the failure mode this whole section is bounded against.
+ *
+ * They are CSS rather than SMIL (`<animate>`) deliberately: the media query at
+ * the foot of this block cannot reach SMIL, so an SVG animating that way keeps
+ * moving for somebody who asked the whole system to stop.
+ * ========================================================================== */
+
+[class*='illo-a-'] {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+/* Float -- a card, a frame, a ticket. The default ambient. */
+@keyframes illo-a-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.illo-a-float {
+  animation: illo-a-float 5s var(--ease-in-out) infinite;
+}
+
+/* Pulse -- a light, a marked date, a shutter. Opacity only: these are the
+   elements whose bounding-box centre is not where they radiate from. */
+@keyframes illo-a-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.illo-a-pulse {
+  animation: illo-a-pulse 4s var(--ease-in-out) infinite;
+}
+
+/* Swing -- a door on its hinge. Anchored at the LEFT edge, because a door
+   rotating about its middle is a door coming off its frame. */
+@keyframes illo-a-swing {
+  0%,
+  100% {
+    transform: rotateY(0deg);
+  }
+
+  50% {
+    transform: rotateY(-6deg);
+  }
+}
+
+.illo-a-swing {
+  transform-origin: 0% 50%;
+  animation: illo-a-swing 6s var(--ease-in-out) infinite;
+}
+
+/* Write -- a nib above the line it is about to write on. Two axes, because a
+   pen that only bobs vertically reads as hovering rather than writing. */
+@keyframes illo-a-write {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+
+  50% {
+    transform: translate(-4px, 3px);
+  }
+}
+
+.illo-a-write {
+  animation: illo-a-write 4.5s var(--ease-in-out) infinite;
+}
+
+/* Drift -- sparks. Travels further than a float and fades as it goes. */
+@keyframes illo-a-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.7;
+  }
+
+  50% {
+    transform: translateY(-9px);
+    opacity: 0.35;
+  }
+}
+
+.illo-a-drift {
+  animation: illo-a-drift 6s var(--ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*='illo-a-'] {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* ==========================================================================
  * CONTRAST LEDGER -- every pair this file defines, computed, not estimated.
  *
  * WCAG 2.1 relative-luminance contrast. Thresholds: 4.5:1 for body text, 3:1
@@ -937,3 +1189,228 @@
  *    surface -> muted 1.210     | surface -> border 1.489 (hairline)
  *    surface -> border-strong 2.104 (divider)
  * ========================================================================== */
+
+/* ==========================================================================
+ * AURORA — the showcase backdrop
+ * ==========================================================================
+ *
+ * Three blurred colour fields drifting on prime-ish, mutually indivisible
+ * cycles (19s / 23s / 29s) so the composite never visibly repeats. This is the
+ * 2026 "aurora" treatment, built to the constraints that make it survive
+ * contact with a real device rather than a design file:
+ *
+ *  1. THREE BLOBS, NOT FIVE. Each is a separate compositor layer with a large
+ *     blur; the blur radius, not the count, is what costs. Three reads as
+ *     atmosphere and still fits in a phone's layer budget.
+ *  2. TRANSFORM AND OPACITY ONLY. Never background-position, never the blur
+ *     radius itself — animating either re-rasterises the layer every frame,
+ *     which is how this effect becomes a scroll-jank complaint.
+ *  3. THE TEXT NEVER SITS ON THE COLOUR. Cards and copy have their own opaque
+ *     or near-opaque surfaces above it; the aurora is behind everything, so
+ *     no contrast ratio depends on where a blob happens to be.
+ *  4. IT STOPS COMPLETELY under `prefers-reduced-motion`. Not slowed — stopped,
+ *     leaving a static gradient that is a perfectly good backdrop on its own.
+ *     Drift in peripheral vision is exactly what that preference is about.
+ *
+ * `will-change` is deliberately NOT set: these animate for the life of the
+ * page, so a permanent compositor-layer promotion is a permanent memory cost
+ * on the device least able to pay it. The transform already promotes them for
+ * as long as the animation runs.
+ */
+.aurora-field {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(72px);
+  opacity: 0.55;
+  animation-duration: 23s;
+  animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+@media (min-width: 768px) {
+  .aurora-field {
+    filter: blur(96px);
+  }
+}
+
+.aurora-field--one {
+  inset-block-start: -18%;
+  inset-inline-start: -12%;
+  inline-size: 58%;
+  block-size: 70%;
+  background: rgb(var(--violet-500) / 0.5);
+  animation-name: aurora-drift-a;
+  animation-duration: 19s;
+}
+
+.aurora-field--two {
+  inset-block-start: -10%;
+  inset-inline-end: -14%;
+  inline-size: 52%;
+  block-size: 66%;
+  background: rgb(var(--butter-300) / 0.66);
+  animation-name: aurora-drift-b;
+  animation-duration: 23s;
+}
+
+.aurora-field--three {
+  inset-block-end: -30%;
+  inset-inline-start: 26%;
+  inline-size: 62%;
+  block-size: 62%;
+  background: rgb(var(--violet-700) / 0.32);
+  animation-name: aurora-drift-c;
+  animation-duration: 29s;
+}
+
+/* Dark carries more saturation on purpose: on a near-black page the aurora is
+   the only thing holding colour, where in light the page itself already does. */
+.dark .aurora-field {
+  opacity: 0.42;
+}
+
+.dark .aurora-field--one {
+  background: rgb(var(--violet-500) / 0.72);
+}
+
+.dark .aurora-field--two {
+  background: rgb(var(--violet-400) / 0.4);
+}
+
+.dark .aurora-field--three {
+  background: rgb(var(--violet-700) / 0.66);
+}
+
+@keyframes aurora-drift-a {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(14%, 10%, 0) scale(1.18);
+  }
+}
+
+@keyframes aurora-drift-b {
+  from {
+    transform: translate3d(0, 0, 0) scale(1.1);
+  }
+
+  to {
+    transform: translate3d(-16%, 14%, 0) scale(0.92);
+  }
+}
+
+@keyframes aurora-drift-c {
+  from {
+    transform: translate3d(0, 0, 0) scale(0.95);
+  }
+
+  to {
+    transform: translate3d(12%, -12%, 0) scale(1.22);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-field {
+    animation: none;
+  }
+}
+
+/* Hide the scrollbar without disabling scrolling.
+ *
+ * The showcase rail carries its own affordances — arrows, drag, wheel, swipe —
+ * and a scrollbar under a row of posters is chrome nobody needs. Scrolling
+ * itself is untouched, which is the difference between this and
+ * `overflow: hidden`: keyboard, trackpad and touch all still work. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+ * MARQUEE — the showcase rail
+ * ==========================================================================
+ *
+ * The track holds the cards TWICE and translates by exactly -50%, so the
+ * second copy lands where the first began and the loop has no seam. Halving
+ * the distance is why the duplicate exists at all; a single copy would snap.
+ *
+ * `--marquee-duration` is set per instance from the card count, so five cards
+ * and fifteen move at the same SPEED rather than in the same TIME — a fixed
+ * duration makes a long rail sprint and a short one crawl.
+ *
+ * Paused by `[data-marquee-paused='true']` on hover, on focus-within and while
+ * the tab is hidden. Focus matters most: a keyboard user tabbing into a moving
+ * rail is otherwise chasing the thing they are trying to reach.
+ */
+/* The `.marquee-track` translate animation and its `marquee-scroll` keyframes
+ * lived here. The rail is a real scroll container now (see
+ * components/discovery/marquee.tsx): it advances by writing `scrollLeft`, so
+ * the CSS that moved a transform, and the reduced-motion override that stopped
+ * it, both have no consumer. Reduced motion is honoured in the component,
+ * where it can skip the animation frame loop entirely rather than pause a
+ * transform. */
+
+.marquee-mask {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    rgb(0 0 0) 5rem,
+    rgb(0 0 0) calc(100% - 5rem),
+    transparent 100%
+  );
+}
+
+/* ==========================================================================
+ * CONFETTI — the one-shot flourish when tickets are issued
+ * ==========================================================================
+ *
+ * Falls, drifts sideways and fades, once. `forwards` leaves every piece
+ * invisible at the end, and the component unmounts the layer afterwards — so
+ * nothing keeps compositing behind a page people leave open until the gate.
+ *
+ * `translate3d` and `opacity` only: both are compositor properties, so the
+ * burst never triggers layout on a screen that is also fetching a booking.
+ */
+.confetti-piece {
+  position: absolute;
+  inset-block-start: -1rem;
+  border-radius: 2px;
+  opacity: 0;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.6, 0.4, 1);
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -1rem, 0) rotate(0deg);
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--confetti-drift, 0), 16rem, 0)
+      rotate(var(--confetti-rotate, 180deg));
+  }
+}
+
+/* Nothing at all, rather than a slower burst: a spray of moving objects is
+   precisely what this preference exists to prevent. The component also returns
+   null, so this is defence in depth for a cached stylesheet. */
+@media (prefers-reduced-motion: reduce) {
+  .confetti-piece {
+    display: none;
+  }
+}

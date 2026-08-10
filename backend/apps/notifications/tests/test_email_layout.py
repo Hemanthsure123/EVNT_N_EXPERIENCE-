@@ -28,6 +28,21 @@ SITE = "https://curatix.test"
 # collapse to a common supertype and indexing a ticket stops type-checking.
 CONTEXTS: dict[str, dict[str, Any]] = {
     NotificationType.WELCOME: {"name": "Asha Rao", "email": "asha@example.com"},
+    # The buyer forwarding their RECEIPT to whoever they booked for. No code,
+    # no account link — see `apps.booking.receipt_pdf` for why that is a
+    # security decision rather than a content preference.
+    NotificationType.BOOKING_RECEIPT_SHARED: {
+        "booker_name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "event_when": "Sat 23 Aug 2026, 20:10 IST",
+        "event_where": "Phoenix Arena, Mumbai",
+        "booking_reference": "3f1d9c22-0000-4000-8000-000000000001",
+        "total_display": "₹2,400.00",
+        "note": "See you there!",
+        # A real (tiny) base64 payload, so the attachment branch is exercised
+        # rather than skipped — that branch is the whole point of this type.
+        "receipt_pdf_b64": "JVBERi0xLjQK",
+    },
     NotificationType.TICKET_DELIVERY: {
         "name": "Asha Rao",
         "event_title": "Sunburn Jazz Night",
@@ -82,6 +97,50 @@ CONTEXTS: dict[str, dict[str, Any]] = {
         "amount_display": "₹1,84,320.00",
         "provider_ref": "trf_QwErTy123456",
     },
+    # ── The refund REQUEST lifecycle ────────────────────────────────────
+    # Three types, three audiences. The organiser is told somebody is waiting;
+    # the customer is told what was decided. None of them says "you have been
+    # refunded" — that is REFUND_CONFIRMATION, which fires only once money has
+    # actually moved.
+    NotificationType.REFUND_REQUEST_RECEIVED: {
+        "customer_email": "asha@example.com",
+        "customer_name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "booking_reference": "44444444-4444-4444-8444-444444444444",
+        "amount_display": "₹2,500.00",
+        "reason": "The headline act was replaced and I only bought for them.",
+    },
+    NotificationType.REFUND_REQUEST_APPROVED: {
+        "name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "booking_reference": "44444444-4444-4444-8444-444444444444",
+        "amount_display": "₹2,500.00",
+        # Optional on an approval — the block is simply omitted without one.
+        "note": "Sorry about the line-up change.",
+    },
+    NotificationType.REFUND_REQUEST_REJECTED: {
+        "name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "booking_reference": "44444444-4444-4444-8444-444444444444",
+        # REQUIRED. The service refuses a rejection without one, so a context
+        # here that omitted it would be testing a message that cannot be sent.
+        "note": "The support act changed, not the headliner. Tickets stay valid.",
+    },
+    # An operator removed an event. Two audiences, two messages — the attendee
+    # is told their booking is cancelled and their money is coming back; the
+    # organiser is told their event was removed and why.
+    NotificationType.EVENT_CANCELLED_ATTENDEE: {
+        "name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "booking_reference": "55555555-5555-4555-8555-555555555555",
+    },
+    NotificationType.EVENT_DELETED_ORGANIZER: {
+        "event_title": "Sunburn Jazz Night",
+        # REQUIRED by the service, so a context without it would be testing a
+        # message that cannot be sent.
+        "reason": "Could not produce a venue licence for this date.",
+        "refunded_bookings": 12,
+    },
     NotificationType.ADMIN_EVENT_REVIEW: {
         "event_id": "11111111-1111-4111-8111-111111111111",
         "event_title": "Sunburn Jazz Night",
@@ -96,6 +155,25 @@ CONTEXTS: dict[str, dict[str, Any]] = {
         "performer_id": "33333333-3333-4333-8333-333333333333",
         "stage_name": "The Bombay Brass",
         "submitted_by": "organiser@example.com",
+    },
+    # The hire desk. Two audiences, two messages: the operator gets the
+    # contact details (the alert IS the delivery mechanism — nothing is
+    # matched automatically), the customer gets an acknowledgement with no
+    # timeframe in it.
+    NotificationType.ADMIN_HIRE_ENQUIRY: {
+        "performer_type": "Band",
+        "city": "Mumbai",
+        "event_date": "2026-12-01",
+        "contact_name": "Asha Rao",
+        "contact_phone": "+91 98765 43210",
+        "contact_email": "asha@example.com",
+        "budget": "₹50,000.00 - ₹80,000.00",
+    },
+    NotificationType.HIRE_ENQUIRY_RECEIVED: {
+        "performer_type": "Band",
+        "city": "Mumbai",
+        "event_date": "2026-12-01",
+        "contact_name": "Asha Rao",
     },
 }
 

@@ -192,8 +192,15 @@ class TestSuspension:
         assert member.is_active is False
 
     def test_a_suspended_account_cannot_authenticate(self, staff, member):
-        """The whole point — `is_active` is an access decision, not a label."""
-        from apps.accounts.exceptions import InvalidCredentialsError
+        """The whole point — `is_active` is an access decision, not a label.
+
+        It raises `AccountSuspendedError`, not `InvalidCredentialsError`: the
+        password was RIGHT, and disguising the refusal as a bad credential sent
+        suspended people to reset a password that was never wrong. Naming it is
+        safe because this line is only reached after the password verified —
+        see `apps/accounts/tests/test_suspension.py`.
+        """
+        from apps.accounts.exceptions import AccountSuspendedError
         from apps.accounts.repositories import UserRepository
         from apps.accounts.services import AuthService
         from core.adapters.local.console_email import ConsoleEmailAdapter
@@ -204,7 +211,7 @@ class TestSuspension:
             users=UserRepository(), email=ConsoleEmailAdapter(), task_queue=SyncTaskQueueAdapter()
         )
 
-        with pytest.raises(InvalidCredentialsError):
+        with pytest.raises(AccountSuspendedError):
             service.authenticate(email="member@example.com", password="member12345")
 
     def test_reinstating_restores_access(self, staff, member):

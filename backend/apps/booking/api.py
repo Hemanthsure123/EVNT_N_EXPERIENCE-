@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from config.di import build_booking_service
+from core.throttling import ShareReceiptThrottle
 
 from .exceptions import BookingNotFoundError, NotBookingOwnerError
 from .pagination import MyTicketsCursorPagination
@@ -25,6 +26,8 @@ from .schemas import (
     BookingDetailSerializer,
     BookingSummarySerializer,
     CreateBookingRequestSerializer,
+    ShareReceiptRequestSerializer,
+    ShareReceiptResponseSerializer,
     TicketSerializer,
 )
 from .selectors import get_booking_detail, list_my_tickets
@@ -150,3 +153,32 @@ class MyTicketsView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         data = cast(list, TicketSerializer(page, many=True).data)
         return _no_store(paginator.get_paginated_response(data))
+
+
+class ShareReceiptView(APIView):
+    """Email this booking's receipt to people the buyer names.
+
+    `private, no-store` like every other booking read: the request body is a
+    list of somebody's friends' email addresses.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ShareReceiptThrottle]
+
+    @extend_schema(
+        request=ShareReceiptRequestSerializer,
+        responses={202: ShareReceiptResponseSerializer},
+        tags=["booking"],
+    )
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = ShareReceiptRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        queued = build_booking_service().share_receipt(
+            booking_id=booking_id,
+            actor_id=cast(User, request.user).id,
+            emails=list(payload.validated_data["emails"]),
+            note=payload.validated_data.get("note", ""),
+        )
+        # 202: the mail is queued, not sent. A 200 here would assert delivery
+        # that has not happened yet.
+        return _no_store(Response({"queued": queued}, status=status.HTTP_202_ACCEPTED))

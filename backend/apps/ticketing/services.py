@@ -51,6 +51,7 @@ from .exceptions import (
     NotTicketTypeOwnerError,
     PhasePriceAbovePriceError,
     QuantityBelowCommittedError,
+    SlotNotFoundError,
     StaleTicketTypeVersionError,
     TicketTypeNotFoundError,
 )
@@ -67,6 +68,12 @@ _EDITABLE_TIER_FIELDS = (
     "sale_start",
     "sale_end",
     "max_per_order",
+    # Content, not inventory. None of these three can affect what is sold —
+    # they are what the panel READS — so they ride the same optimistic-locked
+    # UPDATE as everything else here with no extra rule.
+    "description",
+    "perks",
+    "position",
 )
 
 MAX_PHASES = 5
@@ -159,6 +166,10 @@ class TicketingService:
         sale_end: datetime | None = None,
         max_per_order: int = 10,
         phases: list[dict] | None = None,
+        slot_id: uuid.UUID | str | None = None,
+        description: str = "",
+        perks: list[str] | None = None,
+        position: int = 0,
     ) -> TicketType:
         event = self._events.get_active_for_write(event_id)
         if event is None:
@@ -167,6 +178,14 @@ class TicketingService:
             raise NotTicketTypeOwnerError()
         if phases:
             _validate_phase_schedule(phases, face_price_minor=price_minor)
+        if slot_id is not None:
+            # Scoped by EVENT, not just by id. Without this an organiser could
+            # attach their tier to somebody else's session — and every counter
+            # on this row would then be sold against a show they do not run.
+            from apps.events.repositories import EventSlotRepository
+
+            if EventSlotRepository().get_for_event(event.id, slot_id) is None:
+                raise SlotNotFoundError(str(slot_id))
 
         with UnitOfWork() as uow:
             tt = self._ticket_types.create(
@@ -177,6 +196,10 @@ class TicketingService:
                 sale_start=sale_start,
                 sale_end=sale_end,
                 max_per_order=max_per_order,
+                slot_id=slot_id,
+                description=description.strip(),
+                perks=perks or [],
+                position=position,
             )
             if phases:
                 self._ticket_types.set_phases(ticket_type_id=tt.id, phases=phases)

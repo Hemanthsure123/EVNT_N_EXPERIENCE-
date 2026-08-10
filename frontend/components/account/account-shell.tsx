@@ -70,17 +70,24 @@ import { cn } from '@/lib/utils/cn';
  * a capsule around two lines of text reads as a lozenge rather than a tab.
  */
 
-type Section = { href: string; label: string; icon: LucideIcon; hint: string };
+/**
+ * `hint` is gone. Each nav item shows its label only.
+ *
+ * "Overview / Your account at a glance", "Tickets / Upcoming, past and
+ * refunded" — five two-line rows whose second line restated the first in more
+ * words. A nav is scanned, not read, and the label is already the clearest
+ * word available for what it points at.
+ */
+type Section = { href: string; label: string; icon: LucideIcon };
 
 const SECTIONS: Section[] = [
-  { href: '/account', label: 'Overview', icon: UserIcon, hint: 'Your account at a glance' },
-  { href: '/account/tickets', label: 'Tickets', icon: Ticket, hint: 'Upcoming, past and refunded' },
-  { href: '/account/saved', label: 'Saved', icon: Bookmark, hint: 'Events you bookmarked' },
+  { href: '/account', label: 'Overview', icon: UserIcon },
+  { href: '/account/tickets', label: 'Tickets', icon: Ticket },
+  { href: '/account/saved', label: 'Saved', icon: Bookmark },
   {
     href: '/account/organizer',
     label: 'Host events',
     icon: Building2,
-    hint: 'Create an organization and get verified',
   },
   {
     href: '/account/settings',
@@ -88,8 +95,7 @@ const SECTIONS: Section[] = [
     icon: Settings,
     // Named after the sections that actually exist there, in their rail order
     // (`components/account/settings-sections.ts`) — a hint that promises more
-    // than the destination holds is the same defect as a dead nav entry.
-    hint: 'Profile, appearance, privacy',
+    // than the destination holds is the same defect as a dead nav entry.,
   },
 ];
 
@@ -116,9 +122,7 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="mx-auto flex max-w-md flex-col items-center gap-stack-lg py-section text-center lg:py-section-lg">
         <h1 className="text-h3 md:text-h2">Sign in to see your account</h1>
-        <p className="text-body text-muted-foreground">
-          Your tickets, orders and saved events live here. Browsing needs no account — this does.
-        </p>
+        <p className="text-body text-muted-foreground">Tickets, orders and saved events.</p>
         <Link
           href="/sign-in?next=%2Faccount"
           className="mt-stack inline-flex h-control items-center rounded-full bg-cta px-pill-lg text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:bg-cta-active"
@@ -131,7 +135,16 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="grid gap-block-lg py-block-lg lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-section-lg lg:py-section">
-      <nav aria-label="Account sections" className="min-w-0">
+      {/* STICKY FROM `lg`. The nav scrolled away with the page, so on a long
+          Tickets or Saved list the only way back to another section was to
+          scroll the whole page up again. It is a rail, not content — the one
+          thing on this screen that should always be reachable.
+          `self-start` matters: a grid item stretches to the row height by
+          default, and a full-height item has nothing to stick to. */}
+      <nav
+        aria-label="Account sections"
+        className="min-w-0 lg:sticky lg:top-sticky-top-lg lg:self-start"
+      >
         {/* Horizontal below lg, vertical above — the same responsive rail the
             wizard uses, so the pattern is learned once. `-mx-1 px-1` lets the
             focus ring of the first and last chip breathe inside the scroller
@@ -155,17 +168,6 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
                   <section.icon className="size-4 shrink-0" aria-hidden />
                   <span className="min-w-0">
                     <span className="block truncate text-label">{section.label}</span>
-                    <span
-                      className={cn(
-                        'hidden truncate text-caption lg:block',
-                        // A ratio that can be computed, rather than `opacity-70`
-                        // over whatever happens to be behind it: 7.0:1 on the
-                        // cream pill, 4.94:1+ on the canvas.
-                        active ? 'text-nav-active-foreground/75' : 'text-foreground-subtle',
-                      )}
-                    >
-                      {section.hint}
-                    </span>
                   </span>
                 </Link>
               </li>

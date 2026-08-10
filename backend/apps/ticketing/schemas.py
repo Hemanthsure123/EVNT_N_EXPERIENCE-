@@ -56,8 +56,49 @@ def _reject_phase_above_price(attrs: dict) -> None:
             )
 
 
+#: How many perks one tier may list. Past this it is a brochure, and the panel
+#: renders them all — a perk behind a "show more" is one a buyer will say they
+#: were never promised.
+MAX_PERKS = 8
+PERK_MAX_LENGTH = 60
+
+
+class PerkListField(serializers.ListField):
+    """The "what is included" list.
+
+    Blank entries are DROPPED rather than refused: an organiser who tabbed
+    through an empty row should not have their tier save fail, and an empty
+    tick on the panel is a rendering fault rather than a promise. Duplicates go
+    too — the same perk twice reads as a bug.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        kwargs.setdefault(
+            "child", serializers.CharField(max_length=PERK_MAX_LENGTH, allow_blank=True)
+        )
+        kwargs.setdefault("max_length", MAX_PERKS)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        cleaned: list[str] = []
+        for perk in super().to_internal_value(data):
+            text = perk.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned
+
+
 class CreateTicketTypeRequestSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
+    description = serializers.CharField(
+        max_length=280, required=False, allow_blank=True, default=""
+    )
+    perks = PerkListField(required=False)
+    position = serializers.IntegerField(required=False, min_value=0, default=0)
+    #: Which session this tier sells, for an event that runs more than once.
+    #: Null is the ordinary single-session event, and stays the default so
+    #: every existing caller keeps working unchanged.
+    slot_id = serializers.UUIDField(required=False, allow_null=True)
     price = serializers.IntegerField(min_value=0)  # minor units
     quantity = serializers.IntegerField(min_value=1)
     sale_start = serializers.DateTimeField(required=False, allow_null=True)
@@ -77,6 +118,10 @@ class UpdateTicketTypeRequestSerializer(serializers.Serializer):
     # Optimistic-lock version the client last read; 409 if the tier changed since.
     version = serializers.IntegerField(min_value=1)
     name = serializers.CharField(max_length=100, required=False)
+    description = serializers.CharField(max_length=280, required=False, allow_blank=True)
+    #: Replaced wholesale; an empty list CLEARS them.
+    perks = PerkListField(required=False)
+    position = serializers.IntegerField(required=False, min_value=0)
     price = serializers.IntegerField(min_value=0, required=False)  # minor units
     quantity = serializers.IntegerField(min_value=1, required=False)
     sale_start = serializers.DateTimeField(required=False, allow_null=True)
@@ -87,6 +132,9 @@ class UpdateTicketTypeRequestSerializer(serializers.Serializer):
 
     _EDITABLE = {
         "name",
+        "description",
+        "perks",
+        "position",
         "price",
         "quantity",
         "sale_start",
@@ -133,7 +181,11 @@ class TicketTypeSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "event_id",
+            "slot_id",
             "name",
+            "description",
+            "perks",
+            "position",
             "price",
             "effective_price",
             "current_phase",

@@ -42,13 +42,12 @@ import { Panel, Skeleton } from '@/components/organizer/primitives';
  * hierarchy instead is size and surface: an `h2` name, then three stat cards
  * that lift off the white canvas on a hairline plus `shadow-sm`, then two
  * shortcut cards, then the honesty note recessed into `bg-sunken` so it reads
- * as a footnote rather than as another card. The identity medallion is the
- * warm cream circle used everywhere a person is represented now, replacing the
- * violet→pink gradient.
+ * The identity medallion is the warm cream circle used everywhere a person is
+ * represented now, replacing the violet→pink gradient.
  */
 export function AccountOverview() {
   const { user } = useAuth();
-  const { organizations, isOrganizer, isAdmin } = useScope();
+  const { organizations, isOrganizer } = useScope();
   const savedIds = useSavedEventIds();
 
   // The first page only — the overview needs a count and a sense of scale,
@@ -96,7 +95,6 @@ export function AccountOverview() {
         <Stat
           label="Saved events"
           value={savedIds === null ? null : String(savedIds.length)}
-          hint="Kept on this device"
           href="/account/saved"
         />
         <Stat
@@ -116,7 +114,6 @@ export function AccountOverview() {
       {isOrganizer ? (
         <Panel
           title="Your organisations"
-          subtitle="Switch scope from the avatar menu at any time"
           className="shadow-sm"
         >
           <ul className="divide-y divide-border">
@@ -155,26 +152,21 @@ export function AccountOverview() {
           href="/account/tickets"
           icon={TicketIcon}
           title="My tickets"
-          body="Show a code at the gate, or check what is coming up."
         />
         <Shortcut
           href="/account/saved"
           icon={Bookmark}
           title="Saved events"
-          body="Everything you bookmarked while browsing."
         />
       </div>
 
-      {/* Recessed rather than raised: this is a footnote about what the data
-          model does NOT hold, and drawing it as another lifted card would give
-          it the same weight as the things that are true. */}
-      <p className="rounded-xl border border-border bg-sunken p-card text-caption text-muted-foreground">
-        A phone number, city and preferred categories are not shown because the account record
-        does not expose them — <code>User</code> holds an email, a name, a picture and role flags.
-        Phone verification, connected accounts, active sessions and account deletion each need
-        endpoints that do not exist yet; BACKLOG items 37–39 name them.
-        {isAdmin ? ' Your operator access is real, and enforced on every admin endpoint.' : ''}
-      </p>
+      {/* A paragraph here used to list the fields the account record does not
+          hold, name the `User` model, and cite three backlog items. On a
+          customer's own overview.
+          Some of it is now simply wrong — a phone number IS on the account and
+          editable in settings — which is the second cost of shipping this kind
+          of copy: it describes a snapshot of the code, so it rots the moment
+          the code moves, in the place a reader is least able to tell. */}
     </div>
   );
 }
@@ -187,7 +179,8 @@ function Stat({
 }: {
   label: string;
   value: string | null;
-  hint: string;
+  /** Optional: several cards read better with the label alone. */
+  hint?: string;
   href?: string;
 }) {
   const body = (
@@ -200,7 +193,9 @@ function Stat({
       ) : (
         <p className="mt-1 truncate text-h3 tabular-nums">{value}</p>
       )}
-      <p className="truncate text-caption text-muted-foreground">{hint}</p>
+      {/* Guarded: an optional subtitle must not leave an empty element
+          reserving a line of vertical space. */}
+      {hint ? <p className="truncate text-caption text-muted-foreground">{hint}</p> : null}
     </>
   );
 
@@ -231,7 +226,8 @@ function Shortcut({
   href: string;
   icon: typeof TicketIcon;
   title: string;
-  body: string;
+  /** Optional: a card whose title says it all does not need a second line. */
+  body?: string;
 }) {
   return (
     <Link
@@ -246,7 +242,7 @@ function Shortcut({
       </span>
       <span className="min-w-0">
         <span className="block text-body-sm font-semibold">{title}</span>
-        <span className="block text-caption text-muted-foreground">{body}</span>
+        {body ? <span className="block text-caption text-muted-foreground">{body}</span> : null}
       </span>
     </Link>
   );

@@ -31,6 +31,7 @@ from apps.performers.models import (
     PerformerStatus,
     PerformerType,
     QuoteStatus,
+    RequestKind,
     RequestStatus,
 )
 from apps.performers.repositories import (
@@ -406,6 +407,9 @@ class TestModeration:
 class TestBookingRequests:
     def test_a_customer_can_post_a_brief(self, marketplace, customer):
         request = marketplace.create_request(
+            # Explicit: the service now serves both flows and defaults to the
+            # enquiry. A marketplace brief has to ask for one.
+            kind=RequestKind.MARKETPLACE,
             customer_id=customer.id,
             performer_type=PerformerType.BAND,
             occasion=Occasion.WEDDING,

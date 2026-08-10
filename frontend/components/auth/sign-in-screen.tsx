@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { History, ShieldCheck, Ticket, Zap } from 'lucide-react';
 import { BrandMark } from '@/components/shell/brand-mark';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { BRAND_NAME } from '@/lib/brand';
@@ -11,12 +10,25 @@ import { AuthPanel } from './auth-panel';
 import { SignInArt } from './sign-in-art';
 import { safeNext } from './safe-next';
 
-const BENEFITS = [
-  { icon: Ticket, label: 'QR tickets ready at the gate' },
-  { icon: Zap, label: 'Checkout already filled in' },
-  { icon: History, label: 'Orders, receipts and refunds' },
-  { icon: ShieldCheck, label: 'Refunds to your original card' },
-];
+/**
+ * ── THE REASSURANCE BLOCK IS GONE ─────────────────────────────────────────
+ *
+ * Four benefit bullets ("QR tickets ready at the gate", "Checkout already
+ * filled in", "Orders, receipts and refunds", "Refunds to your original card")
+ * and a closing sentence explaining that browsing needs no account.
+ *
+ * All of it removed. Nobody arrives at a sign-in page undecided about whether
+ * to have an account — they are here because they pressed Sign in, or because
+ * a checkout sent them. Selling the account at that point is copy written for
+ * a landing page, in a place where the only useful thing is the form.
+ *
+ * It also read as filler. Four short reassuring lines under a form, each
+ * pairing an icon with a benefit phrase, is the exact shape of generated
+ * marketing furniture — and a product that explains itself at every step reads
+ * as one that is not sure it works. No comparable ticketing site does this.
+ *
+ * The page is now the mark, the form, and nothing else.
+ */
 
 /**
  * The standalone sign-in screen.
@@ -96,7 +108,9 @@ export function SignInScreen() {
   }, [status, router, next]);
 
   return (
-    <div className="flex w-full max-w-md flex-col gap-section">
+        // `gap-block`, not `gap-section`: 40px between a wordmark and the card it
+    // sits above is page rhythm applied to two things that belong together.
+    <div className="flex w-full max-w-md flex-col gap-block">
       {/* The mark, not a second wordmark in the header's size. On the front
           door of an account it answers "whose sign-in is this" before the
           form asks for a password — which is the question a phishing page
@@ -127,37 +141,6 @@ export function SignInScreen() {
             onAuthenticated={() => router.replace(next)}
           />
         </div>
-      </div>
-
-      {/* Reassurance, deliberately quieter than the form and BELOW it. Two
-          columns at sm+ so four short lines read as a block rather than a
-          list long enough to push the footer off a phone screen. */}
-      <div className="flex flex-col gap-block">
-        <ul className="grid grid-cols-1 gap-x-6 gap-y-stack sm:grid-cols-2">
-          {BENEFITS.map((benefit) => (
-            <li key={benefit.label} className="flex items-start gap-2.5">
-              <benefit.icon
-                className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
-                aria-hidden
-              />
-              <span className="text-body-sm text-muted-foreground">{benefit.label}</span>
-            </li>
-          ))}
-        </ul>
-
-        <p className="text-caption text-foreground-subtle">
-          Browsing needs no account —{' '}
-          {/* Underlined at rest, not only on hover: a link inside a paragraph
-              distinguished by colour alone fails WCAG 1.4.1, and this one's
-              contrast against the surrounding text is 1.32:1. */}
-          <Link
-            href="/events"
-            className="rounded text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            keep exploring events
-          </Link>{' '}
-          and sign in when you book.
-        </p>
       </div>
     </div>
   );

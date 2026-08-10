@@ -23,11 +23,14 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from core.errors import InvalidInputError, NotFoundError
+from core.query_params import date_range_params, text_param, uuid_param
 
 from . import selectors
 from .health import get_health
 from .pagination import (
     ConsoleAuditPagination,
+    ConsoleBookingPagination,
+    ConsoleEnquiryPagination,
     ConsoleModerationHistoryPagination,
     ConsoleModerationPagination,
     ConsoleOrganizationPagination,
@@ -40,6 +43,9 @@ from .permissions import IsPlatformAdmin
 from .repositories import ConsoleRepository
 from .schemas import (
     ActivitySerializer,
+    AdminBookingDetailSerializer,
+    AdminBookingSerializer,
+    AdminEnquirySerializer,
     AdminOrganizationSerializer,
     AdminPaymentSerializer,
     AdminRefundSerializer,
@@ -47,6 +53,8 @@ from .schemas import (
     AdminUserSerializer,
     AuditEntrySerializer,
     BreakdownSerializer,
+    DecideEnquirySerializer,
+    DeleteEventResultSerializer,
     HealthSerializer,
     ModerationDecisionSerializer,
     ModerationQueueSerializer,
@@ -54,6 +62,8 @@ from .schemas import (
     OrganizerEventAnalyticsSerializer,
     OverviewSerializer,
     PendingVerificationSerializer,
+    PromoteUserSerializer,
+    RevokeVerificationSerializer,
     SuspendUserSerializer,
     TimeseriesSerializer,
 )
@@ -126,21 +136,54 @@ class ActivityView(ConsoleView):
 
 
 class HealthView(ConsoleView):
-    @extend_schema(responses={200: HealthSerializer})
+    """Dependency status tiles.
+
+    `?deep=1` additionally CONTACTS the payment provider and the storage bucket
+    and inspects the outbox, instead of only reporting which adapter is
+    configured. Opt-in rather than default, and cached for a minute, because a
+    dashboard left open on a wall must not become traffic against Razorpay —
+    and because an operator wants the deep answer before a Friday on-sale, not
+    on every poll all week.
+    """
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "deep",
+                bool,
+                description=(
+                    "Contact the payment provider and storage, and check the outbox. " "Cached 60s."
+                ),
+            )
+        ],
+        responses={200: HealthSerializer},
+    )
     def get(self, request: Request) -> Response:
-        return _no_store(Response(HealthSerializer(get_health()).data))
+        deep = request.query_params.get("deep") in ("1", "true", "True", "yes")
+        return _no_store(Response(HealthSerializer(get_health(deep=deep)).data))
 
 
 class OrganizationListView(ConsoleView):
     pagination_class = ConsoleOrganizationPagination
 
     @extend_schema(
-        parameters=[OpenApiParameter("verified_level", str)],
+        parameters=[
+            OpenApiParameter("verified_level", str),
+            OpenApiParameter("q", str, description="Organisation name"),
+            OpenApiParameter("created_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("created_before", str, description="ISO-8601, inclusive"),
+        ],
         responses={200: AdminOrganizationSerializer(many=True)},
     )
     def get(self, request: Request) -> Response:
+        created_after, created_before = date_range_params(
+            request, after="created_after", before="created_before"
+        )
         queryset = ConsoleRepository().list_organizations(
-            verified_level=request.query_params.get("verified_level")
+            verified_level=request.query_params.get("verified_level"),
+            search=text_param(request, "q"),
+            created_after=created_after,
+            created_before=created_before,
         )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -158,12 +201,20 @@ class UserListView(ConsoleView):
         parameters=[
             OpenApiParameter("q", str),
             OpenApiParameter("role", str, description="organizer | staff | attendee | suspended"),
+            OpenApiParameter("created_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("created_before", str, description="ISO-8601, inclusive"),
         ],
         responses={200: AdminUserSerializer(many=True)},
     )
     def get(self, request: Request) -> Response:
+        created_after, created_before = date_range_params(
+            request, after="created_after", before="created_before"
+        )
         queryset = ConsoleRepository().list_users(
-            search=request.query_params.get("q"), role=request.query_params.get("role")
+            search=text_param(request, "q"),
+            role=request.query_params.get("role"),
+            created_after=created_after,
+            created_before=created_before,
         )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -197,6 +248,121 @@ class UserSuspensionView(ConsoleView):
         return _no_store(Response(AdminUserSerializer(user).data))
 
 
+class EnquiryListView(ConsoleView):
+    """The hire desk.
+
+    Somebody wanting a band sends what they need; this is where it lands, and
+    an operator gets back to them. There is no matching and no quoting — the
+    platform has no performer supply side, so a queue an operator works by
+    hand is the whole mechanism rather than a fallback for one.
+    """
+
+    pagination_class = ConsoleEnquiryPagination
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "status",
+                str,
+                description="new (default view) | in_progress | closed_won | closed_lost",
+            ),
+            OpenApiParameter("q", str, description="City, contact, or anything in the notes"),
+        ],
+        responses={200: AdminEnquirySerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        from apps.performers.repositories import BookingRequestRepository
+
+        queryset = BookingRequestRepository().list_for_operator(
+            status=request.query_params.get("status"),
+            search=text_param(request, "q"),
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        rows = selectors.enquiry_payloads(list(page or []))
+        data = cast(list, AdminEnquirySerializer(rows, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
+
+
+class EnquiryDecisionView(ConsoleView):
+    """Move one enquiry through the queue."""
+
+    @extend_schema(request=DecideEnquirySerializer, responses={200: AdminEnquirySerializer})
+    def patch(self, request: Request, enquiry_id: UUID) -> Response:
+        from apps.console.selectors import enquiry_payloads
+        from config.di import build_marketplace_service
+
+        payload = DecideEnquirySerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        updated = build_marketplace_service().decide_enquiry(
+            request_id=enquiry_id,
+            actor_id=cast(User, request.user).id,
+            status=payload.validated_data["status"],
+            admin_note=payload.validated_data.get("admin_note", ""),
+        )
+        return _no_store(Response(AdminEnquirySerializer(enquiry_payloads([updated])[0]).data))
+
+
+class UserRoleView(ConsoleView):
+    """Grant or remove the operator role.
+
+    ── WHY THIS IS SEPARATE FROM SUSPENSION ───────────────────────────────
+
+    Suspension is an ACCESS decision — it stops somebody signing in at all.
+    This is a ROLE decision: it changes what an account can reach while signed
+    in. `AccountAdminService.set_suspended` already refuses to suspend a staff
+    member and tells the operator to "remove their operator role first" — this
+    is that endpoint, and until now it did not exist, so the instruction
+    pointed at nothing.
+    """
+
+    @extend_schema(request=PromoteUserSerializer, responses={200: AdminUserSerializer})
+    def post(self, request: Request, user_id: UUID) -> Response:
+        from config.di import build_account_admin_service
+
+        payload = PromoteUserSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        user = build_account_admin_service().set_operator(
+            user_id=user_id,
+            actor_id=cast(User, request.user).id,
+            is_operator=payload.validated_data["is_staff"],
+            reason=payload.validated_data.get("reason", ""),
+        )
+        return _no_store(Response(AdminUserSerializer(user).data))
+
+
+class UserVerificationView(ConsoleView):
+    """Revoke an operator's trust in a proven address.
+
+    Its own endpoint rather than a flag on the suspension one, because it is a
+    DIFFERENT decision: suspension says "this person is out of service",
+    revocation says "the address they proved is no longer trusted" — and the
+    second implies the first while the first does not imply the second.
+    Collapsing them would make reinstating somebody silently re-assert an
+    address nobody re-checked.
+
+    There is deliberately no un-revoke. The way back is the ordinary one: an
+    operator reinstates the account and the person verifies their address
+    again, which is the whole point of having withdrawn the trust.
+    """
+
+    @extend_schema(request=RevokeVerificationSerializer, responses={200: AdminUserSerializer})
+    def delete(self, request: Request, user_id: UUID) -> Response:
+        from config.di import build_account_admin_service
+
+        payload = RevokeVerificationSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        user = build_account_admin_service().revoke_verification(
+            user_id=user_id,
+            actor_id=cast(User, request.user).id,
+            reason=payload.validated_data.get("reason", ""),
+        )
+        return _no_store(Response(AdminUserSerializer(user).data))
+
+
 class PaymentListView(ConsoleView):
     """Every payment on the platform.
 
@@ -212,12 +378,20 @@ class PaymentListView(ConsoleView):
         parameters=[
             OpenApiParameter("status", str, description="created | paid | failed | refunded"),
             OpenApiParameter("q", str, description="Provider reference or customer email"),
+            OpenApiParameter("created_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("created_before", str, description="ISO-8601, inclusive"),
         ],
         responses={200: AdminPaymentSerializer(many=True)},
     )
     def get(self, request: Request) -> Response:
+        created_after, created_before = date_range_params(
+            request, after="created_after", before="created_before"
+        )
         queryset = ConsoleRepository().list_payments(
-            status=request.query_params.get("status"), search=request.query_params.get("q")
+            status=request.query_params.get("status"),
+            search=text_param(request, "q"),
+            created_after=created_after,
+            created_before=created_before,
         )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -226,15 +400,97 @@ class PaymentListView(ConsoleView):
         return _no_store(paginator.get_paginated_response(data))
 
 
+class BookingListView(ConsoleView):
+    """Search every booking on the platform — the support desk's core tool.
+
+    Before this existed there was NO way to answer "the customer says they paid
+    but has no ticket" from the product. `GET /bookings/{id}` is scoped to the
+    booking's owner, so an operator could not open one even holding the id, and
+    the only route was the Django admin.
+
+    The payment search partly covered it and structurally could not cover it
+    fully: a booking that never reached payment — the abandoned checkout, which
+    is exactly what people phone about — has no `Payment` row to be found by.
+    """
+
+    pagination_class = ConsoleBookingPagination
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("status", str, description="reserved | paid | cancelled | expired"),
+            OpenApiParameter(
+                "q",
+                str,
+                description=(
+                    "Customer email, booking id (prefix), payment reference, "
+                    "payment order id, or event title"
+                ),
+            ),
+            OpenApiParameter("created_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("created_before", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("event_id", str, description="One event, by id"),
+        ],
+        responses={200: AdminBookingSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        created_after, created_before = date_range_params(
+            request, after="created_after", before="created_before"
+        )
+        queryset = ConsoleRepository().list_bookings(
+            status=request.query_params.get("status"),
+            search=text_param(request, "q"),
+            created_after=created_after,
+            created_before=created_before,
+            # A malformed id is treated as ABSENT rather than as a 400, the
+            # same rule the date filters follow: the list is already
+            # staff-scoped, so the worst it can do is widen.
+            event_id=uuid_param(request, "event_id"),
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        rows = selectors.decorate_bookings(list(page or []))
+        data = cast(list, AdminBookingSerializer(rows, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
+
+
+class BookingDetailView(ConsoleView):
+    """One booking, expanded — items, and whether tickets were actually issued.
+
+    A separate endpoint rather than fattening every row of the list: the
+    tickets and items are only wanted for the ONE booking an operator opens,
+    and prefetching them for a page of 25 would be a much heavier query for a
+    table that shows neither.
+    """
+
+    @extend_schema(responses={200: AdminBookingDetailSerializer})
+    def get(self, request: Request, booking_id: str) -> Response:
+        booking = ConsoleRepository().booking_detail(booking_id)
+        if booking is None:
+            raise NotFoundError(f"Booking '{booking_id}' not found.")
+        payload = selectors.booking_detail_payload(booking)
+        return _no_store(Response(AdminBookingDetailSerializer(payload).data))
+
+
 class RefundListView(ConsoleView):
     pagination_class = ConsoleRefundPagination
 
     @extend_schema(
-        parameters=[OpenApiParameter("q", str, description="Provider reference or customer email")],
+        parameters=[
+            OpenApiParameter("q", str, description="Provider reference or customer email"),
+            OpenApiParameter("created_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("created_before", str, description="ISO-8601, inclusive"),
+        ],
         responses={200: AdminRefundSerializer(many=True)},
     )
     def get(self, request: Request) -> Response:
-        queryset = ConsoleRepository().list_refunds(search=request.query_params.get("q"))
+        created_after, created_before = date_range_params(
+            request, after="created_after", before="created_before"
+        )
+        queryset = ConsoleRepository().list_refunds(
+            search=text_param(request, "q"),
+            created_after=created_after,
+            created_before=created_before,
+        )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
         rows = selectors.decorate_refunds(list(page or []))
@@ -307,7 +563,10 @@ class EventModerationQueueView(ConsoleView):
                 "status",
                 str,
                 description="pending_review (default) | live | rejected | archived",
-            )
+            ),
+            OpenApiParameter("q", str, description="Event title, venue, city or organiser"),
+            OpenApiParameter("starts_after", str, description="ISO-8601, inclusive"),
+            OpenApiParameter("starts_before", str, description="ISO-8601, inclusive"),
         ],
         responses={200: ModerationQueueSerializer(many=True)},
     )
@@ -318,7 +577,15 @@ class EventModerationQueueView(ConsoleView):
         # widening — the repository owns that rule, so `draft` cannot be
         # reached by guessing a query string.
         wanted = request.query_params.get("status")
-        queryset = EventRepository().list_for_moderation(status=wanted)
+        starts_after, starts_before = date_range_params(
+            request, after="starts_after", before="starts_before"
+        )
+        queryset = EventRepository().list_for_moderation(
+            status=wanted,
+            search=text_param(request, "q"),
+            starts_after=starts_after,
+            starts_before=starts_before,
+        )
         # The paginator's ordering has to MATCH the queryset's — cursor
         # pagination does not check, and a mismatch silently returns wrong
         # pages rather than failing. Pending is FIFO; every decided list is
@@ -432,17 +699,30 @@ class AdminEventDetailView(ConsoleView):
             Response({"id": str(event.id), "status": event.status, "version": event.version})
         )
 
-    @extend_schema(request=None, responses={204: None})
+    @extend_schema(request=None, responses={200: DeleteEventResultSerializer})
     def delete(self, request: Request, event_id: UUID) -> Response:
+        """Remove an event, in ANY state, and make good on it.
+
+        ── IT NO LONGER RETURNS 204 ───────────────────────────────────────
+
+        It used to, because it used to be a no-op on anything with bookings —
+        it refused those outright. It now REFUNDS them, so the response carries
+        a summary: how many refunds started, how many holds were freed, how
+        many attendees were emailed. A destructive action that spends money
+        must not answer with a blank success.
+
+        See `EventModerationService.delete_event` for why the operator is never
+        blocked and why the delete is soft.
+        """
         from config.di import build_event_moderation_service
 
         # The reason rides a query parameter because a DELETE body is not
         # reliably forwarded by every proxy, and this one is audited.
         reason = str(request.query_params.get("reason", "") or request.data.get("reason", ""))
-        build_event_moderation_service().delete_event(
+        summary = build_event_moderation_service().delete_event(
             event_id=event_id, actor_id=cast(User, request.user).id, reason=reason
         )
-        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+        return _no_store(Response(DeleteEventResultSerializer(summary).data))
 
 
 class AdminEventAnalyticsView(ConsoleView):

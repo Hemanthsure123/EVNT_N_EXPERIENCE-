@@ -11,7 +11,9 @@ import {
   Plus,
   Ticket,
   Trash2,
+  X,
 } from 'lucide-react';
+import type { EventSlot } from '@/lib/api/event-content';
 import { formatMoney } from '@/lib/discovery/format';
 import {
   MAX_PHASES,
@@ -84,10 +86,18 @@ export function TicketBuilder({
   tiers,
   onChange,
   issues,
+  sessions = [],
 }: {
   tiers: DraftTier[];
   onChange: (next: DraftTier[]) => void;
   issues: Map<string, string[]>;
+  /**
+   * The event's sessions, when it runs more than once. Empty is the common
+   * case and the session field does not render at all — asking "which
+   * showtime" of an event with one showtime is a field whose only possible
+   * answer is the one already true.
+   */
+  sessions?: EventSlot[];
 }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const dragging = React.useRef<number | null>(null);
@@ -134,7 +144,7 @@ export function TicketBuilder({
         <EmptyState
           icon={Ticket}
           title="No tickets yet"
-          body="An event needs at least one ticket type before it can be published. Most events start with a single General Admission tier."
+          body="At least one ticket type is required before you can publish."
           action={
             <Button
               variant="outline"
@@ -284,6 +294,14 @@ export function TicketBuilder({
                       placeholder="General Admission"
                     />
                     <Field
+                      label="What it is"
+                      id={`${tier.key}-description`}
+                      value={tier.description}
+                      onChange={(value) => patch(tier.key, { description: value })}
+                      placeholder="Standing, front of the barrier"
+                      hint="Optional. The sentence that stops somebody buying the wrong ticket."
+                    />
+                    <Field
                       label="Price (₹)"
                       id={`${tier.key}-price`}
                       value={tier.price}
@@ -303,6 +321,13 @@ export function TicketBuilder({
                       placeholder="100"
                       hint="The hard cap. Overselling is impossible below it."
                     />
+                    {sessions.length ? (
+                      <SessionField
+                        tier={tier}
+                        sessions={sessions}
+                        onChange={(slotId) => patch(tier.key, { slotId })}
+                      />
+                    ) : null}
                     <Field
                       label="Max per order"
                       id={`${tier.key}-max`}
@@ -329,6 +354,8 @@ export function TicketBuilder({
                     />
                   </div>
 
+                  <PerkEditor tier={tier} onChange={(perks) => patch(tier.key, { perks })} />
+
                   <PhaseEditor tier={tier} onChange={(phases) => patch(tier.key, { phases })} />
 
                   {problems.length ? (
@@ -341,14 +368,17 @@ export function TicketBuilder({
                     </ul>
                   ) : null}
 
-                  {/* The fields the brief asked for that this table has no
-                      column for. Said once, here, rather than rendered as
-                      inputs that would silently discard what was typed. */}
-                  <p className="mt-stack-lg border-t border-border pt-stack text-caption text-muted-foreground">
-                    Per-tier description, perks, visibility and a refundable flag are not stored by
-                    the ticketing API yet — see BACKLOG item 28. Refunds are handled per booking,
-                    not per tier.
-                  </p>
+                  {/* A footnote here said description and perks were not
+                      stored — which was true when it was written and is now
+                      contradicted by the two editors directly above it, both
+                      of which write real columns. That is the failure mode of
+                      engineering copy in a product surface: it does not fail
+                      loudly, it just quietly starts lying.
+
+                      What remains genuinely absent is a per-tier refundable
+                      flag; refunds act on a booking, and the organiser learns
+                      that where they act on one rather than in a caption on a
+                      form. */}
                 </div>
               ) : null}
             </li>
@@ -400,8 +430,8 @@ function PhaseEditor({
         <div className="flex min-w-0 flex-col gap-1">
           <h4 className="text-body-sm font-medium text-foreground">Pricing phases</h4>
           <p className="text-caption text-muted-foreground">
-            Optional. Sell the first seats cheaper, then step the price up. Buyers see the live
-            phase price with this ticket&apos;s normal price struck through beside it.
+            Optional. Sell the first seats cheaper, then step the price up. Buyers see the
+            live phase price with the normal price struck through.
           </p>
         </div>
         <Button
@@ -601,6 +631,186 @@ function Field({
         <p id={`${id}-hint`} className="text-caption text-muted-foreground">
           {hint}
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+const SESSION_FORMAT: Intl.DateTimeFormatOptions = {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  hour: 'numeric',
+  minute: '2-digit',
+};
+
+/**
+ * Which showtime this tier sells.
+ *
+ * LOCKED ONCE THE TIER EXISTS. Inventory lives on the tier row, and after a
+ * sale so do issued tickets — moving the row to another session would re-point
+ * somebody's ticket at a different evening. The server's editable set refuses
+ * it for the same reason, so this is the boundary agreeing with the rule
+ * rather than a second one.
+ *
+ * "Every session" is a real option, not a blank: a tier with no session admits
+ * across the whole event, which is exactly what the gate does with it (the
+ * scan window falls back to the event's own span). A season pass is that
+ * ticket.
+ */
+function SessionField({
+  tier,
+  sessions,
+  onChange,
+}: {
+  tier: DraftTier;
+  sessions: EventSlot[];
+  onChange: (slotId: string) => void;
+}) {
+  const id = `${tier.key}-session`;
+  const locked = Boolean(tier.serverId);
+  const chosen = sessions.find((session) => session.id === tier.slotId);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-body-sm font-medium">
+        Session
+      </label>
+      {locked ? (
+        // Not a disabled select: a greyed control invites clicking at it. The
+        // decision is shown as the fact it now is.
+        <>
+          <p
+            id={id}
+            className="flex h-control items-center rounded-md border border-border bg-muted px-2.5 text-body text-foreground"
+          >
+            {chosen ? sessionLabel(chosen) : 'Every session'}
+          </p>
+          <p className="text-caption text-muted-foreground">
+            Fixed once the tier is created — tickets are issued against it. Add a new tier to sell
+            a different session.
+          </p>
+        </>
+      ) : (
+        <>
+          <select
+            id={id}
+            value={tier.slotId ?? ''}
+            onChange={(event) => onChange(event.target.value)}
+            className="h-control rounded-md border border-input bg-surface px-2.5 text-body text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <option value="">Every session</option>
+            {sessions.map((session) => (
+              <option key={session.id} value={session.id} disabled={!session.is_active}>
+                {sessionLabel(session)}
+                {session.is_active ? '' : ' — not selling'}
+              </option>
+            ))}
+          </select>
+          <p className="text-caption text-muted-foreground">
+            Each session counts its own stock, so this tier can sell out without touching the
+            others.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function sessionLabel(session: EventSlot): string {
+  const at = new Date(session.starts_at);
+  const when = Number.isNaN(at.valueOf())
+    ? session.starts_at
+    : at.toLocaleString('en-IN', SESSION_FORMAT);
+  return session.label ? `${when} · ${session.label}` : when;
+}
+
+/** `MAX_PERKS` in `apps/ticketing/schemas.py`, mirrored so the studio refuses
+ *  what the server would rather than surfacing a 400 after a save. */
+const MAX_PERKS = 8;
+
+/**
+ * What is included with this tier.
+ *
+ * ── ONE INPUT, NOT A REPEATER ─────────────────────────────────────────────
+ *
+ * Perks are two or three words each ("Early entry", "Dedicated bar"), so a row
+ * with its own label and delete button per perk is more chrome than content.
+ * Type and press Enter; the chips below are the list, and each removes itself.
+ *
+ * ── BLANK AND DUPLICATE ENTRIES ARE DROPPED AT THE BOUNDARY ───────────────
+ *
+ * Not here. An organiser mid-typing must not have a row vanish under them, and
+ * the server drops them anyway — so this only refuses what would be visibly
+ * wrong: a perk that is already in the list.
+ */
+function PerkEditor({
+  tier,
+  onChange,
+}: {
+  tier: DraftTier;
+  onChange: (perks: string[]) => void;
+}) {
+  const [draft, setDraft] = React.useState('');
+  const atCap = tier.perks.length >= MAX_PERKS;
+
+  const add = () => {
+    const value = draft.trim();
+    if (!value || atCap || tier.perks.includes(value)) return;
+    onChange([...tier.perks, value]);
+    setDraft('');
+  };
+
+  return (
+    <div className="mt-stack-lg flex flex-col gap-stack">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={`${tier.key}-perk`} className="text-body-sm font-medium">
+          What is included <span className="font-normal text-muted-foreground">— optional</span>
+        </label>
+        <div className="flex gap-2">
+          <Input
+            id={`${tier.key}-perk`}
+            value={draft}
+            maxLength={60}
+            disabled={atCap}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                // The form around this submits the whole wizard step; Enter in
+                // a perk field must add a perk, not save the draft.
+                event.preventDefault();
+                add();
+              }
+            }}
+            placeholder="Early entry"
+          />
+          <Button variant="outline" onClick={add} disabled={!draft.trim() || atCap}>
+            Add
+          </Button>
+        </div>
+        <p className="text-caption text-muted-foreground">
+          {atCap
+            ? `That is the limit of ${MAX_PERKS}. Past this it is a brochure.`
+            : 'Short phrases. They render as ticks beside the price, so a buyer comparing two tiers sees the difference.'}
+        </p>
+      </div>
+
+      {tier.perks.length ? (
+        <ul className="flex flex-wrap gap-2">
+          {tier.perks.map((perk) => (
+            <li key={perk}>
+              <button
+                type="button"
+                onClick={() => onChange(tier.perks.filter((entry) => entry !== perk))}
+                aria-label={`Remove ${perk}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface py-1 pl-3 pr-2 text-caption text-foreground transition-colors hover:border-destructive hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {perk}
+                <X className="size-3" aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

@@ -8,8 +8,7 @@ import { Building2, Clock, CornerDownLeft, Loader2, MapPin, Search, Ticket, X } 
 import { Modal, ModalContent, ModalTitle } from '@/components/ui/modal';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { browseHref } from '@/lib/discovery/filters';
-import { POPULAR_SEARCHES, type PopularSearch } from '@/lib/search/popular-searches';
-import { fetchHomepage } from '@/lib/api/cms';
+import { useSearchOverlay } from './search-context';
 import {
   type RecentSearch,
   clearRecentSearches,
@@ -20,6 +19,7 @@ import { derivedSuggestions } from '@/lib/search/suggestions';
 import type { Suggestion, SuggestionType } from '@/lib/search/types';
 import { useDebouncedValue } from '@/lib/utils/use-debounced-value';
 import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
+import { ClayIcon } from '@/components/illustrations/clay';
 import { cn } from '@/lib/utils/cn';
 import { placeAnchoredPanel } from './anchored-position';
 import { RollingHint, useRollingTerm } from './rolling-placeholder';
@@ -138,6 +138,7 @@ export type SearchOverlayProps = {
 };
 
 export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: SearchOverlayProps) {
+  const { terms } = useSearchOverlay();
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
@@ -155,24 +156,18 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
   const [recents, setRecents] = React.useState<RecentSearch[]>([]);
   const [focused, setFocused] = React.useState(false);
 
-  // Curated by an operator, and already on the homepage payload the front page
-  // fetched. `staleTime` is generous because this is editorial copy that
-  // changes weekly at most — re-requesting it every time the panel opens would
-  // be a round trip for a list of six chips.
-  const curated = useQuery({
-    queryKey: ['homepage', 'popular-searches'],
-    queryFn: () => fetchHomepage(),
-    staleTime: 10 * 60 * 1000,
-    enabled: open,
-  });
-
-  const popular = React.useMemo<PopularSearch[]>(() => {
-    const rows = curated.data?.popular_searches ?? [];
-    // Falls back to the bundled list rather than rendering nothing: the panel
-    // opens on pages that never fetched the homepage.
-    if (!rows.length) return POPULAR_SEARCHES;
-    return rows.map((row) => ({ label: row.label, href: browseHref({ q: row.query }) }));
-  }, [curated.data]);
+  /*
+   * The operator's suggested searches, from CONTEXT — server-rendered in the
+   * site layout and shared with the header bar.
+   *
+   * This replaces a client `useQuery` for `GET /homepage` fired every time the
+   * panel opened. Two things were wrong with it and only one was the request:
+   * the header bar and this panel were reading the same list through two
+   * different paths, so on a cold open the bar showed the operator's terms
+   * while the panel showed the bundled defaults until the fetch landed. One
+   * source means they cannot disagree, and it costs no round trip at all.
+   */
+  const popular = terms;
 
   /**
    * The suggestion the field is offering, and what Enter on an empty box runs.
@@ -186,15 +181,16 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
   const suggestion = rolling.item;
   const hintTerms = React.useMemo(() => popular.map((entry) => entry.label), [popular]);
   /**
-   * The input's own `placeholder`, and the operator owns it: `hero.
-   * search_placeholder` has been on the homepage payload and editable in the
-   * CMS studio since `cms` shipped, with nothing on the frontend reading it.
-   * It is the STABLE sentence — the moving suggestions never touch this
-   * attribute.
+   * The input's own `placeholder`. It is the STABLE sentence — the moving
+   * suggestions are painted over it and never touch this attribute, because a
+   * field with no visible label is named by its placeholder and an accessible
+   * name that changes every three seconds cannot be read out or acted on.
+   *
+   * It was `hero.search_placeholder` from the CMS. That field went with the
+   * hero it belonged to; a one-line placeholder was never worth an editor, and
+   * the suggestions rolling over it are the part an operator actually curates.
    */
-  const placeholder =
-    (curated.data?.hero.search_placeholder ?? '').trim() ||
-    'Search events, artists, venues, cities…';
+  const placeholder = 'Search events, artists, venues, cities…';
   /** No hint once anything is typed — the field is the user's now. */
   const showHint = !query && hintTerms.length > 0;
 
@@ -368,6 +364,14 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
       {open && !anchored ? (
         <div className="fixed inset-0 z-modal bg-overlay/60 animate-in fade-in-0" aria-hidden />
       ) : null}
+      {/* NO `onPointerDownOutside` GUARD, deliberately.
+          One lived here, suppressing the dismissal when a press landed on the
+          panel's own trigger. It did not reliably win — Dialog has more than
+          one route to dismissal — and it is no longer needed: the trigger
+          decides in the CAPTURE phase, before any of this runs, so the
+          dismissal that follows closes an already-closed panel. One mechanism
+          rather than two racing ones. See `triggerProps` in
+          search-context.tsx. */}
       <ModalContent
         ref={contentRef}
         hideClose
@@ -378,7 +382,51 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           // transform and the max-width must both be off — otherwise the panel
           // is placed correctly and then translated away from the trigger.
           anchored
-            ? 'max-w-none translate-x-0 translate-y-0'
+            ? cn(
+                'max-w-none translate-x-0 translate-y-0',
+                // ── THE ANCHORED PANEL DROPS FROM ITS TRIGGER ──────────────
+                //
+                // `ModalContent`'s default is `zoom-in-95` / `zoom-out-95`:
+                // a scale about the element's own CENTRE. That is right for a
+                // dialog, which has no origin on the page, and wrong for a
+                // dropdown, which has one — the panel appeared to inflate out
+                // of its own middle and, on close, to collapse into itself
+                // somewhere below the field that opened it. It read as a
+                // glitch rather than as a dismissal.
+                //
+                // Overridden here rather than in `ModalContent` because the
+                // CENTRED palette still wants the dialog behaviour: this is a
+                // difference between two shapes of the same overlay, not a
+                // mistake in the primitive.
+                //
+                // `origin-top` + a short slide is what every dropdown does,
+                // and the reason it is the convention: the panel grows out of
+                // the edge it is attached to and retracts into it. Closing is
+                // FASTER than opening (`duration-fast` vs `duration-base`) —
+                // an exit that takes as long as an entrance feels like the UI
+                // is arguing about whether to go.
+                // ── THE DROPDOWN CURVE ─────────────────────────────────────
+                //
+                // Grows from the edge it is attached to and retracts into it.
+                // Three things make it read as one object rather than a box
+                // that appeared:
+                //
+                //   origin-top      the scale pivots at the field, not the
+                //                   panel's own middle
+                //   zoom-in-[0.98]  a 2% scale, not 5% — at this size a larger
+                //                   one reads as a bounce, which is a modal's
+                //                   gesture, not a menu's
+                //   slide-*-1       4px of travel. Enough to feel attached,
+                //                   little enough that it never looks like the
+                //                   panel is being thrown
+                //
+                // Out is FASTER than in (`duration-fast` vs `duration-base`):
+                // an exit that takes as long as an entrance reads as the UI
+                // hesitating about whether to go.
+                'origin-top zoom-in-[0.98] duration-base ease-out slide-in-from-top-1',
+                'data-[state=closed]:zoom-out-[0.98] data-[state=closed]:duration-fast',
+                'data-[state=closed]:ease-in data-[state=closed]:slide-out-to-top-1',
+              )
             : // TRUE vertical centring, at every breakpoint.
               //
               // This was `sm:top-1/3`, which put the panel's midpoint a third
@@ -530,7 +578,18 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
               : null}
 
             {!isSearching && recents.length ? (
-              <OptionGroup label="Recent searches">
+              <OptionGroup
+                label="Recent"
+                action={
+                  <button
+                    type="button"
+                    onClick={() => setRecents(clearRecentSearches())}
+                    className="rounded-sm text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Clear
+                  </button>
+                }
+              >
                 {recents.map((entry) => {
                   const index = nextIndex();
                   const item = idleOptions[index];
@@ -552,20 +611,9 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           {/* Not options — so deliberately OUTSIDE the listbox. */}
           {!isSearching ? (
             <div className="px-3 pb-2 pt-3">
-              <div className="flex items-center justify-between gap-2 pb-2">
-                <p className="text-label uppercase tracking-wide text-foreground-subtle">
-                  Browse by category
-                </p>
-                {recents.length ? (
-                  <button
-                    type="button"
-                    onClick={() => setRecents(clearRecentSearches())}
-                    className="rounded-sm text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Clear recent searches
-                  </button>
-                ) : null}
-              </div>
+              <p className="pb-2 text-label uppercase tracking-wide text-foreground-subtle">
+                Browse by category
+              </p>
               <div className="flex flex-wrap gap-2">
                 {CATEGORIES.map((category) => (
                   <button
@@ -577,7 +625,13 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
                     // chip on it reads as a hole rather than a chip.
                     className="inline-flex items-center gap-1.5 rounded-full border border-border bg-transparent px-3 py-2 text-label text-foreground transition-colors duration-fast ease-out hover:border-border-strong hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <category.icon className="size-3.5" aria-hidden />
+                    {/* The clay artwork, not the lucide glyph the chip used
+                        to carry. Every other category affordance in the
+                        product — the home tiles, the landing banner — is this
+                        illustration, and a line icon here made the search
+                        panel the one surface with a second visual language
+                        for the same eight things. */}
+                    <ClayIcon slug={category.slug} className="size-6" />
                     {category.label}
                   </button>
                 ))}
@@ -630,7 +684,6 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
             <kbd className="font-sans">Enter</kbd> open · <kbd className="font-sans">Esc</kbd> close
           </span>
           <span className="sm:hidden">Tap a suggestion to open it</span>
-          <span className="shrink-0">Browsing is free — no account needed</span>
         </div>
       </ModalContent>
     </Modal>
@@ -641,19 +694,30 @@ function OptionGroup({
   label,
   children,
   className,
+  action,
 }: {
   label: string;
   children: React.ReactNode;
   className?: string;
+  /**
+   * A control that belongs to THIS group, on its heading row.
+   *
+   * "Clear recent searches" used to sit on the CATEGORIES heading, because
+   * that is where there happened to be room — so the button that empties one
+   * list was captioned by another. A group's action goes on that group's
+   * heading; anything else is a mis-labelled control.
+   */
+  action?: React.ReactNode;
 }) {
   return (
     <div className={cn('py-1', className)} role="group" aria-label={label}>
       {/* `text-label` (13/600) rather than `text-caption` (12/500): the group
           heading has to out-rank the option labels beneath it, and at the old
           weight the two read as one flat list. */}
-      <p className="px-3 py-1.5 text-label uppercase tracking-wide text-foreground-subtle">
-        {label}
-      </p>
+      <div className="flex items-center justify-between gap-3 px-3 py-1.5">
+        <p className="text-label uppercase tracking-wide text-foreground-subtle">{label}</p>
+        {action}
+      </div>
       {children}
     </div>
   );

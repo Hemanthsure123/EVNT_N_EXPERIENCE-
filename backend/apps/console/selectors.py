@@ -29,6 +29,7 @@ from typing import Any
 
 from django.utils import timezone
 
+from apps.booking.models import BookingStatus
 from core.ports.cache_port import CachePort
 
 from .repositories import ConsoleRepository
@@ -225,6 +226,94 @@ def decorate_payments(payments: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def decorate_bookings(bookings: list[Any]) -> list[dict[str, Any]]:
+    """Flatten a page of bookings into the support desk's row.
+
+    `tickets_issued` is the column an operator actually reads: the whole
+    question behind "I paid but got nothing" is whether tickets exist. It is
+    counted from the prefetched relation rather than queried per row.
+
+    `is_expired_hold` is COMPUTED rather than stored, the same way `is_partial`
+    is on a refund — a booking sitting in `reserved` with a lapsed
+    `hold_expires_at` has not been swept yet, and that distinction (reserved
+    but dead vs reserved and live) is exactly what tells an operator whether to
+    wait or to act.
+    """
+    now = timezone.now()
+    return [
+        {
+            "id": str(booking.id),
+            "status": booking.status,
+            # Both annotated by `_booking_base` as correlated subqueries —
+            # quantity lives on BookingItem and tickets on Ticket, so neither
+            # is a column on Booking. See the note there on why aggregate
+            # joins would inflate each other.
+            "quantity": booking.quantity_total,
+            "tickets_issued": booking.tickets_issued_total,
+            "total_amount_minor": booking.total_amount_minor,
+            "platform_fee_minor": booking.platform_fee_minor,
+            "payment_ref": booking.payment_ref,
+            "payment_order_id": booking.payment_order_id,
+            "hold_expires_at": (
+                booking.hold_expires_at.isoformat() if booking.hold_expires_at else None
+            ),
+            "is_expired_hold": bool(
+                booking.status == BookingStatus.RESERVED
+                and booking.hold_expires_at
+                and booking.hold_expires_at <= now
+            ),
+            "created_at": booking.created_at.isoformat(),
+            "customer_id": str(booking.user_id),
+            "customer_email": booking.user.email,
+            "customer_name": booking.user.full_name,
+            "event_id": str(booking.event_id),
+            "event_title": booking.event.title,
+            "event_starts_at": booking.event.starts_at.isoformat(),
+        }
+        for booking in bookings
+    ]
+
+
+def booking_detail_payload(booking: Any) -> dict[str, Any]:
+    """One booking, expanded — what an operator reads out on a support call.
+
+    The tickets list is the answer to the most common question this surface
+    exists for, so each carries its status: "three issued, one already used at
+    the North gate" resolves a call that would otherwise involve the organizer.
+
+    NO QR TOKEN is included, deliberately. It is the credential that admits
+    somebody, an operator has no need for it to answer a question, and putting
+    it in an admin payload would make every operator session a set of usable
+    tickets. `POST /checkin/lookup` is how a token is checked, and it takes the
+    token rather than handing one out.
+    """
+    now = timezone.now()
+    return {
+        **decorate_bookings([booking])[0],
+        "items": [
+            {
+                "ticket_type_id": str(item.ticket_type_id),
+                "ticket_type_name": item.ticket_type.name,
+                "quantity": item.quantity,
+                "unit_price_minor": item.unit_price_minor,
+            }
+            for item in booking.items.all()
+        ],
+        "tickets": [
+            {
+                "id": str(ticket.id),
+                "ticket_type_name": ticket.ticket_type.name,
+                "status": ticket.status,
+                "used_at": ticket.used_at.isoformat() if ticket.used_at else None,
+                "gate": ticket.gate or None,
+                "attendee_name": ticket.attendee_name or None,
+            }
+            for ticket in booking.tickets.all()
+        ],
+        "server_time": now.isoformat(),
+    }
+
+
 def decorate_refunds(refunds: list[Any]) -> list[dict[str, Any]]:
     """Flatten a page of refunds.
 
@@ -249,4 +338,43 @@ def decorate_refunds(refunds: list[Any]) -> list[dict[str, Any]]:
             "event_title": refund.payment.booking.event.title,
         }
         for refund in refunds
+    ]
+
+
+def enquiry_payloads(rows: list) -> list[dict]:
+    """Enquiry rows as the console renders them.
+
+    The `_display` values are resolved HERE rather than in the client for the
+    same reason `gender_display` is: a frontend that has to know the label for
+    every enum value is a frontend that will get one wrong, and these two enums
+    have fourteen members between them.
+
+    `customer_email` sits alongside `contact_email` and is not a duplicate: the
+    account's address and the address they asked to be contacted on are often
+    different people — the bride's account, the planner's phone.
+    """
+    return [
+        {
+            "id": str(row.id),
+            "performer_type": row.performer_type,
+            "performer_type_display": row.get_performer_type_display(),
+            "occasion": row.occasion,
+            "occasion_display": row.get_occasion_display(),
+            "city": row.city,
+            "event_date": row.event_date,
+            "budget_min_minor": row.budget_min_minor,
+            "budget_max_minor": row.budget_max_minor,
+            "guests": row.guests,
+            "notes": row.notes,
+            "contact_name": row.contact_name,
+            "contact_phone": row.contact_phone,
+            "contact_email": row.contact_email,
+            "customer_email": row.customer.email if row.customer_id else "",
+            "status": row.status,
+            "status_display": row.get_status_display(),
+            "admin_note": row.admin_note,
+            "handled_by_email": row.handled_by.email if row.handled_by_id else "",
+            "created_at": row.created_at,
+        }
+        for row in rows
     ]

@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarDays,
   Clock,
+  Info,
   Languages,
   MapPin,
   Navigation,
@@ -15,9 +16,14 @@ import {
   UserCheck,
   type LucideIcon,
 } from 'lucide-react';
-import type { EventFaq, EventTimelineEntry, TimelineKind } from '@/lib/api/event-content';
+import type {
+  EventFaq,
+  EventMedia,
+  EventTimelineEntry,
+  TimelineKind,
+} from '@/lib/api/event-content';
 import { VenueMap } from '@/components/maps/venue-map';
-import type { EventDetail } from '@/lib/api/types';
+import type { EventDetail, EventPolicy } from '@/lib/api/types';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateLong, formatEventTime, machineDate } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
@@ -478,9 +484,22 @@ function Faq({ question, answer }: { question: string; answer: string }) {
           </svg>
         </span>
       </summary>
-      <p className="whitespace-pre-line px-card pb-card text-body text-muted-foreground">
-        {answer}
-      </p>
+      {/* ── THE ANSWER NEEDS ROOM, AND A LINE ABOVE IT ──────────────────
+          It used to be `px-card pb-card` with NO top padding, so the answer
+          began immediately under the summary's own bottom padding — against
+          the tinted open row, a one-word answer ("yes") read as a caption
+          stuck to the question rather than as the body of the disclosure.
+
+          A hairline inset to the text column separates the two without adding
+          a second box, and `leading-relaxed` gives a real paragraph the
+          measure it needs — most of these answers are several sentences about
+          a refund or a bag policy, and this is the one place on the page
+          somebody reads carefully. */}
+      <div className="mx-card border-t border-border pb-card pt-card-lg">
+        <p className="whitespace-pre-line text-body leading-relaxed text-muted-foreground">
+          {answer}
+        </p>
+      </div>
     </details>
   );
 }
@@ -518,6 +537,46 @@ const POLICIES: { icon: LucideIcon; title: string; body: string }[] = [
   },
 ];
 
+/**
+ * The organiser's own rules, above the platform's.
+ *
+ * ORDER IS NOT ARBITRARY. "Carry a photo ID" is the one that stops somebody at
+ * the gate; "no card data is stored" is reassurance. The specific, actionable
+ * rules come first and the standing guarantees follow, because a reader gives
+ * this section about four seconds.
+ *
+ * Renders NOTHING when the organiser set none — not a heading with an empty
+ * space under it, and not a placeholder inviting them to add some (this is the
+ * public page; that prompt belongs in the studio).
+ */
+export function OrganizerPolicies({ policies }: { policies: EventPolicy[] }) {
+  if (!policies.length) return null;
+  return (
+    <ul className="flex flex-col gap-3">
+      {policies.map((policy) => (
+        <li
+          key={policy.title}
+          className="flex items-start gap-3 rounded-lg border border-border bg-sunken p-4"
+        >
+          <span
+            className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-surface text-muted-foreground"
+            aria-hidden
+          >
+            <Info className="size-4" />
+          </span>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p className="text-body font-semibold text-foreground">{policy.title}</p>
+            {/* `whitespace-pre-line`, so an organiser's line breaks survive.
+                A list of prohibited items typed one per line collapsing into a
+                paragraph is the difference between readable and not. */}
+            <p className="whitespace-pre-line text-body-sm text-muted-foreground">{policy.body}</p>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function Policies() {
   return (
     <ul className="grid gap-4 sm:grid-cols-2">
@@ -536,5 +595,51 @@ export function Policies() {
         </li>
       ))}
     </ul>
+  );
+}
+
+
+/**
+ * The event's trailer.
+ *
+ * ── IT IS AN EMBED, AND THAT IS A DELIBERATE LIMIT ────────────────────────
+ *
+ * The server stores only a URL it BUILT itself from an extracted YouTube or
+ * Vimeo id — never the string an organiser pasted — so what lands in this
+ * iframe is one of exactly two hosts with a documented, sandboxed player. That
+ * is what makes rendering somebody else's document beside ours defensible at
+ * all, and it is why this component does no URL handling of its own: any
+ * cleverness here would be a second place for the rule to live.
+ *
+ * ── LOADED LAZILY, BEHIND THE FOLD ────────────────────────────────────────
+ *
+ * `loading="lazy"` because a YouTube player is ~900 KB of script and this sits
+ * below the photograph, the price and the buy button — the three things
+ * anybody opened the page for. It must never compete with them for the first
+ * paint.
+ */
+export function EventVideo({ video }: { video: EventMedia }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-sunken">
+      {/* 16:9 by construction rather than by a fixed height: a hard height is
+          how an embed ends up letterboxed on a phone and cropped on a desktop. */}
+      <div className="relative aspect-video">
+        <iframe
+          src={video.url}
+          title={video.alt_text || 'Event video'}
+          loading="lazy"
+          // The narrowest set a player actually needs. `allow-same-origin` is
+          // absent on purpose — the embed hosts do not require it, and granting
+          // it would hand the frame our origin.
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          referrerPolicy="strict-origin-when-cross-origin"
+          allowFullScreen
+          className="absolute inset-0 size-full border-0"
+        />
+      </div>
+      {video.caption ? (
+        <p className="px-4 py-3 text-caption text-muted-foreground">{video.caption}</p>
+      ) : null}
+    </div>
   );
 }

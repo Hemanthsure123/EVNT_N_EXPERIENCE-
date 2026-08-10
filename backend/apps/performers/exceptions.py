@@ -73,3 +73,26 @@ class PerformerNotBookableError(InvalidInputError):
 
     def __init__(self) -> None:
         super().__init__("Only a published performer profile can send quotes.")
+
+
+class EnquiryNotFoundError(NotFoundError):
+    """No enquiry with that id."""
+
+    code = "enquiry_not_found"
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"Enquiry '{request_id}' not found.")
+
+
+class EnquiryWithdrawnError(ConflictError):
+    """The customer took it back before an operator closed it.
+
+    A `409` rather than a silent success, so a double-click cannot write a
+    second audit row claiming a second decision — and so an operator who was
+    about to record a booking learns that the request is gone.
+    """
+
+    code = "enquiry_withdrawn"
+
+    def __init__(self) -> None:
+        super().__init__("The customer withdrew this enquiry. It can no longer be moved.")

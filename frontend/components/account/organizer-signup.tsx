@@ -3,8 +3,22 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, BadgeCheck, Building2, Clock, Loader2, ShieldAlert, Upload } from 'lucide-react';
-import { createOrganization, fetchVerification, submitVerification } from '@/lib/api/organizations';
+import {
+  ArrowRight,
+  BadgeCheck,
+  Building2,
+  Clock,
+  Loader2,
+  ShieldAlert,
+  Upload,
+  Wallet,
+} from 'lucide-react';
+import {
+  createOrganization,
+  fetchVerification,
+  linkPayoutAccount,
+  submitVerification,
+} from '@/lib/api/organizations';
 // The LIST shape, from the scope hook that already fetches it — not the
 // detail shape. Two components fetching the same list under two keys is how
 // the header and this page end up disagreeing about what exists.
@@ -14,7 +28,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Skeleton } from '@/components/organizer/primitives';
-import { errorMessage } from '@/lib/api/errors';
+import { ApiError, errorMessage } from '@/lib/api/errors';
+import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -71,8 +86,8 @@ export function OrganizerSignup() {
       <header className="flex flex-col gap-stack">
         <h1 className="text-h3 md:text-h2">Host events</h1>
         <p className="max-w-prose text-body text-muted-foreground">
-          Create an organization to publish events and sell tickets. You keep the account you
-          already have — an organization sits on top of it, and you can own more than one.
+          Create an organization to publish events and sell tickets. You keep your existing
+          account, and can own more than one.
         </p>
       </header>
 
@@ -273,9 +288,8 @@ function OrganizationCard({ organization }: { organization: Organization }) {
         </p>
       ) : state === 'pending' ? (
         <p className="text-body-sm text-muted-foreground">
-          Submitted for review. An operator checks each application by hand, so this is not
-          instant. You can keep building draft events while you wait — publishing and payouts
-          unlock once it is approved.
+          Submitted for review. You can keep building draft events while you wait;
+          publishing and payouts unlock on approval.
         </p>
       ) : (
         <VerificationForm
@@ -311,6 +325,7 @@ function OrganizationCard({ organization }: { organization: Organization }) {
             Open organizer dashboard
             <ArrowRight className="size-4" aria-hidden />
           </Link>
+          <PayoutAccountButton organization={organization} />
         </div>
       ) : null}
     </div>
@@ -352,9 +367,8 @@ function VerificationForm({
       <div className="flex flex-col gap-stack">
         <h3 className="text-h4">{heading}</h3>
         <p className="text-body-sm text-muted-foreground">
-          Verification is what lets you publish events and be paid out. Tell us who you are —
-          the registered entity, what you run, and anything an operator would need to confirm
-          it.
+          Verification unlocks publishing and payouts. Tell us the registered entity and
+          what you run.
         </p>
       </div>
 
@@ -400,5 +414,68 @@ function StatusPill({ state }: { state: 'verified' | 'pending' | 'rejected' | 'n
       <Icon className="size-3.5" aria-hidden />
       {label}
     </span>
+  );
+}
+
+/**
+ * Link the account money is paid into, or refresh it.
+ *
+ * ── WHY IT IS HERE AND NOT ONLY IN THE DASHBOARD ──────────────────────────
+ *
+ * This card is where somebody sets an organization up, and being paid is part
+ * of setting one up. An organizer who never finds this sells tickets into a
+ * settlement that has nowhere to release to — which surfaces weeks later as a
+ * payout that will not go, long after the event.
+ *
+ * ── "UPDATE" IS HONEST, AND THAT WAS WORTH CHECKING ───────────────────────
+ *
+ * There is no edit endpoint. `POST .../payout-account` calls the provider with
+ * `reference_id = organization.id`, so re-running it resolves to the SAME
+ * linked account and refreshes it against the organization's current name and
+ * the owner's current email. That makes a second press safe and makes
+ * "Update" a true description rather than a label over a create.
+ *
+ * If it were not idempotent this would be a link-once control that disappears,
+ * because a button that silently creates a second payout account is how money
+ * goes to the wrong place.
+ */
+function PayoutAccountButton({ organization }: { organization: Organization }) {
+  const client = useQueryClient();
+  const toast = useToast();
+  const linked = Boolean(organization.payout_account_id);
+
+  const mutation = useMutation({
+    mutationFn: () => linkPayoutAccount(organization.id),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['account', 'organizations'] });
+      toast.toast({
+        title: linked ? 'Payout account updated' : 'Payout account added',
+        description: 'Settlements for your events release to this account.',
+        variant: 'success',
+      });
+    },
+    onError: (error: unknown) =>
+      toast.toast({
+        title: 'Could not save that',
+        description:
+          error instanceof ApiError ? error.message : 'Please try again in a moment.',
+        variant: 'destructive',
+      }),
+  });
+
+  return (
+    <button
+      type="button"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      className="inline-flex h-control items-center gap-1.5 rounded-full border border-border bg-surface px-pill text-label transition-colors hover:bg-muted disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    >
+      {mutation.isPending ? (
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+      ) : (
+        <Wallet className="size-4" aria-hidden />
+      )}
+      {linked ? 'Edit payout account' : 'Add payout account'}
+    </button>
   );
 }

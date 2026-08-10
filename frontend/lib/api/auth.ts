@@ -118,17 +118,48 @@ export type OAuthProvider = 'google' | 'apple';
  * to know otherwise, and a button that 503s is worse than no button. Same
  * pattern as `GET /push/config`.
  */
-export async function googleSignInAvailable(): Promise<boolean> {
+/**
+ * Three answers, not two — and collapsing them is a bug that has already bitten.
+ *
+ * - `available`    — the backend holds Google credentials. Show the button.
+ * - `unconfigured` — the backend answered and said no. Hide it silently; this
+ *                    deployment genuinely does not offer Google.
+ * - `unreachable`  — we could not ask. NOT the same thing at all.
+ *
+ * ── WHY THE THIRD ONE HAD TO BE SPLIT OUT ────────────────────────────────
+ *
+ * This used to be `Promise<boolean>` with `catch { return false }`, and the
+ * comment defended it as "the safe failure". It is safe, and it is also how a
+ * working feature silently disappears: point `NEXT_PUBLIC_API_BASE_URL` at a
+ * backend that is down — a stopped container, a rotated Cloudflare quick
+ * tunnel — and the Google button vanishes with no explanation, while the email
+ * form stays on screen looking fine and fails only on submit. The user
+ * concludes the feature was removed.
+ *
+ * Which is exactly what it looked like: "my existing feature google sign in is
+ * missing." Nothing was missing. The backend was unreachable, and this function
+ * reported that as "not configured".
+ *
+ * `unreachable` is worth surfacing because it is information about the WHOLE
+ * panel, not about one provider: if the config call cannot complete, neither
+ * can signing in with a password. Saying so once beats letting somebody type
+ * their credentials into a form that cannot submit.
+ */
+export type GoogleSignInAvailability = 'available' | 'unconfigured' | 'unreachable';
+
+export async function googleSignInAvailable(): Promise<GoogleSignInAvailability> {
   try {
     const { available } = await api.get<{ available: boolean }>(
       '/auth/oauth/google/signin/config',
       { auth: false },
     );
-    return available;
+    return available ? 'available' : 'unconfigured';
   } catch {
-    // Unreachable backend is not "configured". Hiding the button is the safe
-    // failure: the alternative offers a control that cannot work.
-    return false;
+    // Deliberately does NOT distinguish a 5xx from a network failure. Both mean
+    // "this deployment cannot answer right now", which is the same thing to the
+    // person trying to sign in, and guessing between them would be inventing
+    // detail from an exception we did not inspect.
+    return 'unreachable';
   }
 }
 

@@ -65,9 +65,23 @@ export async function SellingFastSection() {
           />
         </Reveal>
 
-        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {/* ── A RAIL ON A PHONE, A GRID ON EVERYTHING ELSE ───────────────
+            `grid-cols-1` meant one full-width card per row, so a shelf of
+            eight was eight screens of scrolling to pass ONE section — and the
+            home page has several. A horizontal snap rail turns that into one
+            screen with a swipe, which is what District and BookMyShow both do
+            on a phone and what the hero carousel above already does here.
+
+            Pure CSS: `flex` + scroll snap below `sm`, `grid` from `sm` where
+            the pointer and the width make a grid the better shape. No
+            JavaScript, so it costs nothing and cannot fail to hydrate.
+
+            The card is `w-4/5`, not full width, deliberately — the sliver of
+            the next card is the affordance. A rail whose items are exactly
+            100% wide looks identical to a stack and nobody swipes it. */}
+        <ul className="scrollbar-none -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 xl:grid-cols-4">
           {scarce.map((event, index) => (
-            <li key={event.id} className="h-full">
+            <li key={event.id} className="h-full w-4/5 shrink-0 snap-start sm:w-auto sm:shrink">
               <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
                 <SellingFastCard event={event} />
               </Reveal>

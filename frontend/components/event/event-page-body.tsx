@@ -12,6 +12,8 @@ import {
   EventFaqs,
   Faqs,
   OrganizerCard,
+  EventVideo,
+  OrganizerPolicies,
   Policies,
   QuickFacts,
   RunningOrder,
@@ -19,8 +21,10 @@ import {
   VenueCard,
 } from '@/components/event/sections';
 import { TicketPanel } from '@/components/event/ticket-panel';
+import { EventReviews } from '@/components/reviews/event-reviews';
 import type { EventContent } from '@/lib/api/event-content';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
+import { ClayIcon } from '@/components/illustrations/clay';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateLong, formatEventTime } from '@/lib/discovery/format';
 import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
@@ -97,6 +101,11 @@ export function EventPageBody({
    * "repeat the same picture" failure this component was written to avoid.
    */
   const hero = content.media.find((item) => item.kind === 'hero');
+  // Capped at one by the server, so `find` is the whole story rather than a
+  // first-of-many. It renders as its own section BELOW the description, not in
+  // the filmstrip: a still that plays when you click it is not a photograph,
+  // and mixing the two makes the gallery's arrow keys mean two things.
+  const video = content.media.find((item) => item.kind === 'video');
   const gallery: GalleryImage[] = [
     ...(hero
       ? [{ url: hero.url, alt: hero.alt_text || event.title }]
@@ -132,13 +141,33 @@ export function EventPageBody({
         */}
         <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-12">
           <div className="flex min-w-0 flex-col gap-6 lg:col-start-1 lg:row-start-1">
+            {/* ── PICTURE FIRST, THEN WHAT AND WHEN ─────────────────────────
+                The order is the one every study of this page type arrives at,
+                and it is not a style preference. A large clear image is what a
+                visitor processes first — and then, immediately beneath it, the
+                facts that decide whether the rest of the page is worth reading.
+                Ticketmaster describes the EDP as "the starting point of the
+                purchase flow"; the pattern is image, identity, price, in that
+                order, with the price reachable without scrolling.
+
+                Two previous arrangements failed here for opposite reasons.
+                Stacked full-width, a poster-shaped hero filled the first screen
+                and pushed the title and the ticket panel below the fold. Side
+                by side, the frame was sized by height with an automatic width,
+                so a landscape image resolved 917px wide inside a 352px column
+                and ran over the title — which is the bug in the screenshots.
+
+                The frame is fixed 16:9 and bounded by the COLUMN now, so it can
+                do neither: at 1440 the left column is 832px, the hero is 468px
+                tall, and the title, the date and the top of the ticket panel
+                are all on the first screen. */}
             <HeroGallery images={gallery} categorySlug={category?.slug} />
 
-            <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-2">
                 {category ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-caption text-muted-foreground">
-                    <category.icon className="size-3.5" aria-hidden />
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface py-1 pl-1.5 pr-3 text-caption text-muted-foreground">
+                    <ClayIcon slug={category.slug} className="size-5" />
                     {category.label}
                   </span>
                 ) : null}
@@ -202,10 +231,23 @@ export function EventPageBody({
               breathing room, derived rather than the hard-coded 80px it was —
               which had already drifted from a 72px header. */}
           <div className="lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1">
-            <TicketPanel eventId={event.id} initialTiers={tiers} preview={preview} />
+            <TicketPanel
+              eventId={event.id}
+              initialTiers={tiers}
+              slots={content.slots}
+              cancelled={event.status === 'cancelled'}
+              preview={preview}
+            />
           </div>
 
           <div className="flex min-w-0 flex-col gap-10 lg:col-start-1 lg:row-start-2">
+            {video ? (
+              <section className="flex flex-col gap-4">
+                <SectionHeading>Watch</SectionHeading>
+                <EventVideo video={video} />
+              </section>
+            ) : null}
+
             <section className="flex flex-col gap-4">
               <SectionHeading>Good to know</SectionHeading>
               <QuickFacts event={event} />
@@ -259,8 +301,24 @@ export function EventPageBody({
               <Faqs />
             </section>
 
+            {/* Reviews sit AFTER the practical detail and BEFORE the rules:
+                somebody deciding has already read what the event is, and other
+                people's experience is the last input before the terms. In a
+                preview there is nothing to show — a draft has no attendees. */}
+            {preview ? null : (
+              <section className="flex flex-col gap-4">
+                <SectionHeading>Reviews</SectionHeading>
+                <EventReviews eventId={event.id} />
+              </section>
+            )}
+
             <section className="flex flex-col gap-4">
               <SectionHeading>Before you book</SectionHeading>
+              {/* The organiser's rules FIRST: "carry a photo ID" is the one
+                  that stops somebody at the gate, and "no card data is
+                  stored" is reassurance. A reader gives this section about
+                  four seconds. */}
+              <OrganizerPolicies policies={event.policies} />
               <Policies />
             </section>
           </div>
@@ -270,7 +328,13 @@ export function EventPageBody({
       </Container>
 
       {/* Mobile only, and only once the panel above has scrolled away. */}
-      {preview ? null : <BookingBar eventId={event.id} initialTiers={tiers} />}
+      {/* A cancelled event gets no sticky CTA. The bar's whole job is to keep
+          a price and a Book button on screen; on an event that is not
+          happening, that is a button pointing at a checkout nobody can
+          complete — and the panel above already says where the money is. */}
+      {preview || event.status === 'cancelled' ? null : (
+        <BookingBar eventId={event.id} initialTiers={tiers} />
+      )}
     </>
   );
 }

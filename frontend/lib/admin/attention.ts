@@ -9,6 +9,7 @@ import {
   fetchOverview,
   fetchPendingVerifications,
 } from '@/lib/api/admin';
+import { adminQueryKeys } from './query-keys';
 
 /**
  * "What requires attention?" — the question the console exists to answer.
@@ -62,7 +63,11 @@ export function useAdminAttention() {
       { queryKey: ['admin', 'overview'], queryFn: fetchOverview, staleTime: 30_000 },
       { queryKey: ['admin', 'health'], queryFn: fetchHealth, staleTime: 30_000 },
       {
-        queryKey: ['admin', 'moderation', { status: 'pending_review' }],
+        // A COUNT probe, and keyed as one. The queue screen reads the same
+        // endpoint through useInfiniteQuery, which stores a differently
+        // shaped cache entry — see lib/admin/query-keys for what sharing one
+        // key between the two did.
+        queryKey: adminQueryKeys.moderationCount('pending_review'),
         queryFn: () => fetchModerationQueue({ status: 'pending_review' }),
         staleTime: 30_000,
       },

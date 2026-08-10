@@ -74,14 +74,15 @@ jobs:
       # Keep this list in step with INSTALL_EXTRAS in backend/Dockerfile —
       # `TestImagePackaging` in core/tests/test_deployment_topology.py fails
       # if they drift.
-      # `tickets` (reportlab) is NOT optional-in-practice like the others.
-      # apps/notifications/handlers.py imports templates.py imports
-      # ticket_pdf.py, which does `from reportlab...` at MODULE scope — and
-      # handlers.py is imported from NotificationsConfig.ready(). So without
-      # this extra `django.setup()` itself raises ModuleNotFoundError and the
-      # whole job dies at collection, before one test runs.
+      # The `tickets` extra (reportlab) is gone with the booking PDF it existed
+      # for — the confirmation is the EMAIL now, and the scannable code lives
+      # in the app. It was called out here as NOT-optional-in-practice because
+      # `templates.py` imported `ticket_pdf.py`, which imported reportlab at
+      # module scope, from a chain reachable via `NotificationsConfig.ready()`;
+      # missing it killed the whole job at collection. That chain no longer
+      # exists, and the extra no longer does either.
       - name: Install dependencies
-        run: python -m pip install -e ".[dev,razorpay,push,observability,s3,tickets]"
+        run: python -m pip install -e ".[dev,razorpay,push,observability,s3]"
 
       - name: Ruff (lint)
         run: python -m ruff check .

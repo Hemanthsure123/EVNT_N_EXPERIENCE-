@@ -2,40 +2,54 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react';
 import {
   OCCASION_LABELS,
   PERFORMER_TYPE_LABELS,
-  createBookingRequest,
+  createEnquiry,
   type Occasion,
   type PerformerType,
-} from '@/lib/api/performers';
+} from '@/lib/api/enquiries';
 import { ApiError } from '@/lib/api/errors';
 import { SpotHireABand } from '@/components/illustrations/spots';
+import { SceneOnboardingDone } from '@/components/illustrations/onboarding-scenes';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
-import { PerformerArt } from './performer-art';
+import { PerformerScene } from '@/components/illustrations/performer-scenes';
+import { DayPicker } from '@/components/ui/day-picker';
+import { CityCombobox } from '@/components/ui/city-combobox';
 import { cn } from '@/lib/utils/cn';
 
 /**
- * Post a brief.
+ * Send an enquiry.
  *
- * ── THE FLOW IS THE BRIEF'S SHAPE, NOT A WIZARD FOR ITS OWN SAKE ──────────
+ * ── WHAT THIS USED TO BE ──────────────────────────────────────────────────
  *
- * What, where, when, how much. Four steps because those are the four things a
- * performer needs before they can put a number on it, and asking them one at a
- * time is what makes a form of nine fields feel like a conversation. Everything
- * else — guest count, notes — is optional and lives on the last step where it
- * cannot block anyone.
+ * A marketplace brief: the customer described the job once and every listed
+ * act that fitted answered with a quote. There is no supply side any more —
+ * this goes to a person on our team, who reads it and gets back in touch.
  *
- * ── IT IS ONE BRIEF, NOT A MESSAGE TO ONE ACT ─────────────────────────────
+ * That is not a smaller version of the same thing, and the copy on every step
+ * had to change with it. "Every act in your city will see this" was true and
+ * is now a lie; "our team will read this" is what happens.
  *
- * That is the whole marketplace shape: the customer describes the job once and
- * every act that fits answers. Coming from a specific performer's page just
- * pre-fills the type and city, and the copy says so — a "message this band"
- * button that quietly broadcast to twelve would be a nasty surprise.
+ * ── THE FLOW IS THE ENQUIRY'S SHAPE, NOT A WIZARD FOR ITS OWN SAKE ────────
+ *
+ * What, where, when, how much, and how to reach you. Five steps because those
+ * are the five things somebody has to know before they can pick up the phone,
+ * and asking them one at a time is what makes a form of ten fields feel like a
+ * conversation. Everything optional — guest count, notes — sits with the
+ * budget where it cannot block anyone.
+ *
+ * ── THE CONTACT STEP IS THE ONE THAT MATTERS ──────────────────────────────
+ *
+ * Nothing is matched automatically. If the details are wrong or missing,
+ * nobody can answer — so this step is last (it is the least interesting
+ * question, and asking it first is how a form gets abandoned), it is
+ * PRE-FILLED from the account, and everything on it is optional precisely
+ * because the account already has an email address to fall back to.
  *
  * ── SIGN-IN IS ASKED FOR AT THE END, NOT THE START ────────────────────────
  *
@@ -61,9 +75,17 @@ import { cn } from '@/lib/utils/cn';
  * 44px each is two targets 8px apart at the bottom of a thumb's reach.
  */
 
-const STEPS = ['What', 'Where', 'When', 'Budget'] as const;
+const STEPS = ['What', 'Where', 'When', 'Budget', 'You'] as const;
 
 /** Rupees. Converted to minor units at the boundary, once. */
+/**
+ * The bands are SHORTCUTS now, not the only way to answer.
+ *
+ * Five fixed brackets ending at "₹2,50,000+" cannot express a real budget —
+ * a wedding with ₹4,00,000 to spend picked the top band and was quoted as if
+ * it had ₹2,50,000. The form takes a min and a max; pressing a band fills
+ * them, and either can then be typed over.
+ */
 const BUDGET_BANDS = [
   { min: 1_000_00, max: 2_500_00, label: '₹10,000 – ₹25,000' },
   { min: 2_500_00, max: 5_000_00, label: '₹25,000 – ₹50,000' },
@@ -73,48 +95,130 @@ const BUDGET_BANDS = [
 ];
 
 export function BriefForm() {
-  const router = useRouter();
   const params = useSearchParams();
-  const { status } = useAuth();
+  const { status, user } = useAuth();
 
   const [step, setStep] = React.useState(0);
   const [type, setType] = React.useState<PerformerType | ''>(
     (params?.get('type') as PerformerType) ?? '',
   );
   const [occasion, setOccasion] = React.useState<Occasion | ''>('');
+  /**
+   * What "Something else" actually was.
+   *
+   * The chip alone told the person reading the brief nothing — "other" is the
+   * one answer that carries no information, and it is chosen precisely when
+   * the list did not fit. Asking straight away is cheaper than a reply that
+   * only asks what they meant.
+   *
+   * Appended to the notes on submit rather than stored in a column: the
+   * backend's `type` and `occasion` are enums, and inventing a free-text
+   * column for them would mean a value nothing else can read.
+   */
+  const [typeOther, setTypeOther] = React.useState('');
+  const [occasionOther, setOccasionOther] = React.useState('');
   const [city, setCity] = React.useState(params?.get('city') ?? '');
   const [eventDate, setEventDate] = React.useState('');
   const [band, setBand] = React.useState<number | null>(null);
+  /**
+   * The actual numbers, in RUPEES (the API takes paise; converted on submit).
+   *
+   * Five fixed brackets ending at "₹2,50,000+" could not express a real
+   * budget: a wedding with ₹4,00,000 had to pick the top band and was read as
+   * having ₹2,50,000. Pressing a band fills these; either can then be typed
+   * over, which is what makes the bands a shortcut rather than the only
+   * vocabulary.
+   */
+  const [budgetMin, setBudgetMin] = React.useState('');
+  const [budgetMax, setBudgetMax] = React.useState('');
   const [guests, setGuests] = React.useState('');
   const [notes, setNotes] = React.useState('');
+  const [contactName, setContactName] = React.useState('');
+  const [contactPhone, setContactPhone] = React.useState('');
+  const [contactEmail, setContactEmail] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
+  const [sent, setSent] = React.useState(false);
+
+  // Pre-filled from the account, once it has loaded. `??=` semantics by way of
+  // the empty check: a value somebody has already typed is never overwritten
+  // by a profile arriving a moment later.
+  React.useEffect(() => {
+    if (!user) return;
+    setContactName((current) => current || user.full_name || '');
+    setContactPhone((current) => current || user.phone || '');
+    setContactEmail((current) => current || user.email || '');
+  }, [user]);
 
   const create = useMutation({
-    mutationFn: createBookingRequest,
-    onSuccess: (request) => router.push(`/hire/requests/${request.id}`),
+    mutationFn: createEnquiry,
+    // No detail page to land on — there is nothing to watch. The confirmation
+    // is inline and says what happens next, which is the only thing anybody
+    // wants at that moment.
+    onSuccess: () => setSent(true),
     onError: (thrown) =>
       setError(
-        thrown instanceof ApiError ? thrown.message : 'Could not post that brief. Try again.',
+        thrown instanceof ApiError ? thrown.message : 'Could not send that enquiry. Try again.',
       ),
   });
 
-  const chosen = band === null ? null : BUDGET_BANDS[band];
-  const complete = [Boolean(type && occasion), Boolean(city), Boolean(eventDate), chosen !== null];
+  /**
+   * The budget step is complete when there are two usable numbers, whether
+   * they came from a band or were typed. Reading the BAND here would have made
+   * a hand-typed range look unanswered — the exact thing the range was added
+   * to allow.
+   */
+  const budgetReady =
+    budgetMin !== '' && budgetMax !== '' && Number(budgetMax) >= Number(budgetMin);
+
+  const complete = [
+    Boolean(type && occasion),
+    Boolean(city),
+    Boolean(eventDate),
+    budgetReady,
+    // Nothing on the contact step is required: the account has an email, and
+    // the server falls back to it. Blocking here would be the form insisting
+    // on a value it can already answer for itself.
+    true,
+  ];
   const canAdvance = complete[step];
   const ready = complete.every(Boolean);
 
+  /**
+   * The notes, with whatever "Something else" turned out to mean.
+   *
+   * Prepended rather than appended: it is the answer to the FIRST question on
+   * the form, and somebody reading the brief needs to know what kind of act is
+   * being asked for before they read the description of the evening.
+   *
+   * Collected and then dropped would be worse than never asking — the person
+   * typed it, so it has to arrive.
+   */
+  const composedNotes = () => {
+    const lines: string[] = [];
+    if (type === 'other' && typeOther.trim()) lines.push(`Act: ${typeOther.trim()}`);
+    if (occasion === 'other' && occasionOther.trim()) {
+      lines.push(`Occasion: ${occasionOther.trim()}`);
+    }
+    const rest = notes.trim();
+    if (rest) lines.push(rest);
+    return lines.join('\n');
+  };
+
   const submit = () => {
-    if (!ready || !chosen) return;
+    if (!ready) return;
     setError(null);
     create.mutate({
       performer_type: type as PerformerType,
       occasion: occasion as Occasion,
       city: city.trim(),
       event_date: eventDate,
-      budget_min_minor: chosen.min,
-      budget_max_minor: chosen.max,
+      budget_min_minor: rupeesToMinor(budgetMin),
+      budget_max_minor: rupeesToMinor(budgetMax),
       guests: guests ? Number(guests) : null,
-      notes: notes.trim(),
+      notes: composedNotes(),
+      contact_name: contactName.trim(),
+      contact_phone: contactPhone.trim(),
+      contact_email: contactEmail.trim(),
     });
   };
 
@@ -122,49 +226,162 @@ export function BriefForm() {
   // letting somebody choose a date the API will reject.
   const today = new Date().toISOString().slice(0, 10);
 
-  return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 sm:gap-8">
-      <header className="flex items-center gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <h1 className="text-h3 sm:text-h2">Tell us about your event</h1>
-          <p className="text-body-sm text-muted-foreground">
-            One brief, four short steps. Every act that fits it can answer with a real quote.
+  if (sent) {
+    return (
+      <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-6 py-6 text-center">
+        <SceneOnboardingDone className="h-40 w-52" />
+        <div className="flex flex-col gap-2">
+          <h1 className="text-h3 sm:text-h2">We have your enquiry</h1>
+          {/* NO TIMEFRAME. Nothing here measures or enforces one, so "within
+              24 hours" would be a number with nothing behind it — and the
+              first person it disappoints is somebody already waiting. What it
+              promises instead is checkable: a person reads it, and replies to
+              the details given. */}
+          <p className="max-w-prose text-body-sm text-muted-foreground">
+            It is with our team now. Somebody will read it and get back to you on the details
+            you gave us — we have emailed you a copy.
           </p>
         </div>
-        <SpotHireABand className="h-16 w-auto shrink-0 sm:h-24" />
-      </header>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Link
+            href="/events"
+            className="inline-flex h-control items-center justify-center rounded-xl bg-cta px-5 text-label text-cta-foreground transition-colors hover:bg-cta-hover"
+          >
+            Browse events
+          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              setSent(false);
+              setStep(0);
+              setType('');
+              setOccasion('');
+              setCity('');
+              setEventDate('');
+              setBand(null);
+              setGuests('');
+              setNotes('');
+            }}
+            className="inline-flex h-control items-center justify-center rounded-xl border border-border px-5 text-label transition-colors hover:bg-muted"
+          >
+            Send another
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-      <nav aria-label="Progress">
-        <ol className="flex gap-2">
-          {STEPS.map((label, index) => (
-            <li key={label} className="flex flex-1 flex-col gap-1.5">
-              <span
-                className={cn(
-                  'h-1 rounded-full transition-colors duration-base motion-reduce:transition-none',
-                  index <= step ? 'bg-primary' : 'bg-muted',
-                )}
-                aria-hidden
-              />
-              <span
-                className={cn(
-                  'text-caption',
-                  index === step ? 'text-foreground' : 'text-muted-foreground',
-                )}
-              >
-                {label}
-              </span>
-            </li>
-          ))}
-        </ol>
-      </nav>
+  return (
+    // ── A RAIL AND A CARD, NOT ONE CENTRED COLUMN ──────────────────────
+    //
+    // This was a 2xl column with a header, a progress bar and the step
+    // floating on the page background. It read as a document rather than a
+    // form: nothing bounded the fields, the artwork sat beside a heading with
+    // no relationship to the work, and on a wide screen the whole thing was a
+    // narrow strip in a lot of empty page.
+    //
+    // The shape now is the one every good multi-step form has. A sticky rail
+    // carries the steps VERTICALLY — five labels down a column are readable
+    // where five under a bar are five truncated words — plus the two things
+    // somebody hesitating actually wants to know: that it is free, and that a
+    // person reads it. The form sits in a bordered surface, so the fields have
+    // an edge and the page has a subject.
+    <div className="mx-auto grid w-full max-w-5xl gap-block lg:grid-cols-[17rem_minmax(0,1fr)] lg:gap-block-lg">
+      <aside className="flex flex-col gap-block lg:sticky lg:top-sticky-top-lg lg:self-start">
+        <header className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <h1 className="text-h4 sm:text-h3">Tell us about your event</h1>          </div>
+          <SpotHireABand className="h-14 w-auto shrink-0 lg:hidden" />
+        </header>
 
-      <div className="min-h-64">
+        <SpotHireABand className="hidden h-32 w-auto self-start lg:block" />
+
+        {/* Vertical on desktop, and a horizontal bar under `lg` — five labels
+            in a row on a phone is five truncated words, which is a progress
+            indicator that has stopped indicating anything. */}
+        <nav aria-label="Progress" className="hidden lg:block">
+          <ol className="flex flex-col gap-1">
+            {STEPS.map((label, index) => (
+              <li key={label}>
+                <span
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-body-sm transition-colors duration-base motion-reduce:transition-none',
+                    index === step
+                      ? 'bg-nav-active font-medium text-nav-active-foreground'
+                      : index < step
+                        ? 'text-foreground'
+                        : 'text-muted-foreground',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-flex size-5 shrink-0 items-center justify-center rounded-full text-caption tabular-nums',
+                      index < step
+                        ? 'bg-primary text-primary-foreground'
+                        : index === step
+                          ? 'bg-nav-active-foreground/15'
+                          : 'bg-muted',
+                    )}
+                    aria-hidden
+                  >
+                    {index < step ? <Check className="size-3" /> : index + 1}
+                  </span>
+                  {label}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </nav>
+
+      </aside>
+
+      <div className="flex min-w-0 flex-col gap-block">
+        <nav aria-label="Progress" className="lg:hidden">
+          <ol className="flex gap-2">
+            {STEPS.map((label, index) => (
+              <li key={label} className="flex flex-1 flex-col gap-1.5">
+                <span
+                  className={cn(
+                    'h-1 rounded-full transition-colors duration-base motion-reduce:transition-none',
+                    index <= step ? 'bg-primary' : 'bg-muted',
+                  )}
+                  aria-hidden
+                />
+                <span
+                  className={cn(
+                    'truncate text-caption',
+                    index === step ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  {label}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </nav>
+
+        <div className="min-h-64 rounded-xl border border-border bg-surface p-card shadow-sm lg:p-card-lg">
         {step === 0 ? (
           <Fieldset
             title="What are you looking for?"
-            blurb="Pick the kind of act. Every performer of that kind in your city will see the brief."
+            blurb="Pick the kind of act. If it is not here, choose something else and describe it in the notes."
           >
             <ActPicker value={type} onChange={setType} />
+            {/* "Something else" is the one answer that carries no information,
+                and it is chosen exactly when the list did not fit. Asking here
+                is cheaper than a reply whose only content is "what did you
+                mean?". Both answers ride along in the notes on submit — the
+                backend's `type` and `occasion` are enums, and a free-text
+                column beside them would hold a value nothing else can read. */}
+            {type === 'other' ? (
+              <OtherField
+                id="brief-type-other"
+                label="What kind of act?"
+                placeholder="A qawwali group"
+                value={typeOther}
+                onChange={setTypeOther}
+              />
+            ) : null}
             <Chips
               label="Occasion"
               options={(Object.keys(OCCASION_LABELS) as Occasion[]).map((value) => ({
@@ -174,25 +391,41 @@ export function BriefForm() {
               value={occasion}
               onChange={(value) => setOccasion(value as Occasion)}
             />
+            {occasion === 'other' ? (
+              <OtherField
+                id="brief-occasion-other"
+                label="What is the occasion?"
+                placeholder="A retirement party"
+                value={occasionOther}
+                onChange={setOccasionOther}
+              />
+            ) : null}
           </Fieldset>
         ) : step === 1 ? (
           <Fieldset
             title="Where is it?"
-            blurb="Acts based in this city see your brief. Many travel further — their profiles say how far."
+            blurb="The city the event is in. We will tell you what is available there, and what it costs to bring somebody in."
           >
             <div className="flex flex-col gap-2">
               <label htmlFor="brief-city" className="text-body-sm font-medium">
                 City
               </label>
-              <input
-                id="brief-city"
-                value={city}
-                onChange={(event) => setCity(event.target.value)}
-                placeholder="Mumbai"
-                className="h-12 rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
+              {/* A real combobox, not the `datalist` this was. That element
+                  renders NOTHING until somebody types, so a step showing nine
+                  chips and a box looked like it offered nine cities — which is
+                  exactly how it was reported. The list opens on focus now and
+                  filters as you type, which is what the WAI-ARIA combobox
+                  pattern prescribes and what the header's city switcher
+                  already does over the same 186 rows.
+
+                  Still free text: somebody in a town we do not list can type
+                  it and be heard. The list is a shortcut, never a gate. */}
+              <CityCombobox id="brief-city" value={city} onChange={setCity} />
               <ul className="flex flex-wrap gap-1.5 pt-1">
-                {POPULAR_CITIES.slice(0, 8).map((entry) => (
+                {/* The chips stay the popular few — a hundred of them is a
+                    wall, not a shortcut. Every other city is one press of the
+                    field away, in a list that is visible rather than implied. */}
+                {POPULAR_CITIES.map((entry) => (
                   <li key={entry.name}>
                     <button
                       type="button"
@@ -224,27 +457,53 @@ export function BriefForm() {
               <label htmlFor="brief-date" className="text-body-sm font-medium">
                 Event date
               </label>
-              <input
+              {/* The same calendar the profile uses. `yearRange` is this
+                  year and the next two — a booking further out than that is
+                  not a date somebody is picking from a grid, and offering a
+                  hundred years here would be as unhelpful as offering ten on a
+                  birthday. */}
+              <DayPicker
                 id="brief-date"
-                type="date"
-                value={eventDate}
+                value={eventDate || null}
+                onChange={setEventDate}
                 min={today}
-                onChange={(event) => setEventDate(event.target.value)}
-                className="h-12 w-full rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-64"
+                yearRange={{ from: new Date().getFullYear(), to: new Date().getFullYear() + 2 }}
+                placeholder="Pick the date"
+                className="sm:w-64"
               />
             </div>
           </Fieldset>
-        ) : (
+        ) : step === 3 ? (
           <Fieldset
             title="What is the budget?"
-            blurb="A range, not a number — it is how performers decide whether to answer at all, and a brief with no budget gets far fewer replies."
+            blurb="A range, not a number. This is not a commitment."
           >
+            <BudgetRange
+              min={budgetMin}
+              max={budgetMax}
+              onMin={(value) => {
+                setBudgetMin(value);
+                // Typing over a band means the band no longer describes the
+                // answer, so it stops being shown as chosen.
+                setBand(null);
+              }}
+              onMax={(value) => {
+                setBudgetMax(value);
+                setBand(null);
+              }}
+            />
+
+            <p className="pt-1 text-caption text-muted-foreground">Or pick a range</p>
             <ul className="flex flex-col gap-2">
               {BUDGET_BANDS.map((option, index) => (
                 <li key={option.label}>
                   <button
                     type="button"
-                    onClick={() => setBand(index)}
+                    onClick={() => {
+                      setBand(index);
+                      setBudgetMin(String(option.min / 100));
+                      setBudgetMax(String(option.max / 100));
+                    }}
                     aria-pressed={band === index}
                     className={cn(
                       'flex min-h-control w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors',
@@ -299,20 +558,78 @@ export function BriefForm() {
               />
             </div>
           </Fieldset>
+        ) : (
+          <Fieldset
+            title="How should we reach you?"
+            blurb="Pre-filled from your account. Change it if somebody else is organising."
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <label htmlFor="brief-contact-name" className="text-body-sm font-medium">
+                  Name
+                </label>
+                <input
+                  id="brief-contact-name"
+                  value={contactName}
+                  maxLength={150}
+                  onChange={(event) => setContactName(event.target.value)}
+                  placeholder="Asha Rao"
+                  className="h-12 rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label htmlFor="brief-contact-phone" className="text-body-sm font-medium">
+                  Phone
+                </label>
+                <input
+                  id="brief-contact-phone"
+                  type="tel"
+                  value={contactPhone}
+                  maxLength={20}
+                  onChange={(event) => setContactPhone(event.target.value)}
+                  placeholder="+91 98765 43210"
+                  className="h-12 rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="brief-contact-email" className="text-body-sm font-medium">
+                Email
+              </label>
+              <input
+                id="brief-contact-email"
+                type="email"
+                value={contactEmail}
+                onChange={(event) => setContactEmail(event.target.value)}
+                placeholder="asha@example.com"
+                className="h-12 rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              {/* Nothing here is required, and saying so is the point: the
+                  account already has an address the server falls back to, so a
+                  required field would be the form insisting on a value it can
+                  answer for itself. */}
+              <p className="text-caption text-muted-foreground">
+                Leave any of these blank and we will use your account details.
+              </p>
+            </div>
+          </Fieldset>
         )}
-      </div>
 
-      {error ? (
-        <p role="alert" className="text-body-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
+        {error ? (
+          <p role="alert" className="pt-4 text-body-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
 
-      {/* Stacked and full width below `sm`, with the forward action at the
-          BOTTOM — the end of the thumb's arc — and "Back" above it. Side by
-          side they were two 44px targets 12px apart at the bottom of the
-          screen, which is where a mis-tap costs somebody their answers. */}
-      <div className="flex flex-col gap-2 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:pt-6">
+        {/* INSIDE the card, so the rule above it reads as the card's own
+            footer rather than a line drawn across the page.
+
+            Stacked and full width below `sm`, with the forward action at the
+            BOTTOM — the end of the thumb's arc — and "Back" above it. Side by
+            side they were two 44px targets 12px apart at the bottom of the
+            screen, which is where a mis-tap costs somebody their answers. */}
+        <div className="mt-block flex flex-col gap-2 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:pt-6">
         {step > 0 ? (
           <button
             type="button"
@@ -341,10 +658,10 @@ export function BriefForm() {
           // to, but asking before somebody has said what they want is how a
           // marketplace loses the people it is for.
           <Link
-            href="/sign-in?next=%2Fhire%2Fnew"
+            href="/sign-in?next=%2Fhire"
             className="inline-flex h-control items-center justify-center gap-1.5 rounded-xl bg-cta px-5 text-label text-cta-foreground transition-colors hover:bg-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            Sign in to post this brief
+            Sign in to send this
           </Link>
         ) : (
           <button
@@ -354,9 +671,11 @@ export function BriefForm() {
             className="inline-flex h-control items-center justify-center gap-2 rounded-xl bg-cta px-5 text-label text-cta-foreground transition-colors hover:bg-cta-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {create.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-            Request quotes
+            Send enquiry
           </button>
         )}
+        </div>
+      </div>
       </div>
     </div>
   );
@@ -401,9 +720,16 @@ function ActPicker({
 }) {
   const types = Object.keys(PERFORMER_TYPE_LABELS) as PerformerType[];
 
+  // ── THE GAP HAS TO BE A MARGIN ON THE LEGEND ────────────────────────────
+  // A `<legend>` is the fieldset's CAPTION, not one of its flex items, so a
+  // `gap-*` on the fieldset never applies to it. This was first "fixed" by
+  // raising the gap from 8px to 12px, which changed the computed `row-gap`
+  // and moved nothing: measured in the browser afterwards, the legend's
+  // bottom and the grid's top were the same pixel, both before and after.
+  // `mb-3` is on the legend itself, which does apply.
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-body-sm font-medium">Act</legend>
+    <fieldset className="flex flex-col">
+      <legend className="mb-3 text-body-sm font-medium">Act</legend>
       <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {types.map((option) => (
           <li key={option}>
@@ -419,7 +745,11 @@ function ActPicker({
                   : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
-              <PerformerArt type={option} className="size-9 shrink-0 sm:size-10" />
+              {/* The same scene the homepage tile shows, so somebody who
+                  pressed "Band" there recognises what they picked here. It
+                  keeps its 4:3 box: cropping a scene to a square cuts the
+                  ground out from under the figures. */}
+              <PerformerScene type={option} className="h-10 w-[3.3rem] shrink-0 sm:h-11 sm:w-14" />
               <span className="min-w-0 text-caption font-medium leading-tight sm:text-body-sm">
                 {PERFORMER_TYPE_LABELS[option]}
               </span>
@@ -443,8 +773,9 @@ function Chips({
   onChange: (value: string) => void;
 }) {
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-body-sm font-medium">{label}</legend>
+    <fieldset className="flex flex-col">
+      {/* `mb-3` on the legend, not `gap` on the fieldset — see ActPicker. */}
+      <legend className="mb-3 text-body-sm font-medium">{label}</legend>
       <ul className="flex flex-wrap gap-2">
         {options.map((option) => (
           <li key={option.value}>
@@ -468,5 +799,107 @@ function Chips({
         ))}
       </ul>
     </fieldset>
+  );
+}
+
+/**
+ * The one extra question a "Something else" answer earns.
+ *
+ * Deliberately not required: somebody who cannot name it in the chip list may
+ * not be able to name it in a box either, and blocking the form on a label is
+ * worse than reading it in the notes. It is a prompt, not a gate.
+ */
+function OtherField({
+  id,
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-body-sm font-medium">
+        {label} <span className="text-muted-foreground">— optional</span>
+      </label>
+      <input
+        id={id}
+        value={value}
+        maxLength={80}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-12 rounded-xl border border-border bg-background px-4 text-body-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+    </div>
+  );
+}
+
+/** Rupees as typed -> paise, which is what the API stores. */
+function rupeesToMinor(value: string): number {
+  const parsed = Number(value.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
+}
+
+/**
+ * Two numbers rather than one, and it is worth saying why.
+ *
+ * A single figure invites every reply to be exactly it. A range says what is
+ * comfortable and what is the ceiling, which is the conversation somebody is
+ * actually trying to have — and it is what the API has always stored
+ * (`budget_min_minor` / `budget_max_minor`); the form was the part that could
+ * only offer five brackets.
+ */
+function BudgetRange({
+  min,
+  max,
+  onMin,
+  onMax,
+}: {
+  min: string;
+  max: string;
+  onMin: (value: string) => void;
+  onMax: (value: string) => void;
+}) {
+  const invalid = min !== '' && max !== '' && Number(max) < Number(min);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {[
+          { id: 'brief-budget-min', label: 'Minimum', value: min, onChange: onMin, hint: '10,000' },
+          { id: 'brief-budget-max', label: 'Maximum', value: max, onChange: onMax, hint: '50,000' },
+        ].map((field) => (
+          <div key={field.id} className="flex flex-col gap-1.5">
+            <label htmlFor={field.id} className="text-body-sm font-medium">
+              {field.label}
+            </label>
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 focus-within:ring-2 focus-within:ring-ring">
+              <span className="text-body-sm text-muted-foreground" aria-hidden>
+                ₹
+              </span>
+              <input
+                id={field.id}
+                // `inputMode` rather than `type="number"`: a number input on a
+                // phone still shows a spinner and rejects a pasted "50,000".
+                inputMode="numeric"
+                value={field.value}
+                onChange={(event) => field.onChange(event.target.value.replace(/[^0-9]/g, ''))}
+                placeholder={field.hint}
+                className="h-12 w-full bg-transparent text-body-sm outline-none"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      {invalid ? (
+        <p role="alert" className="text-caption text-destructive-subtle-foreground">
+          The maximum is below the minimum.
+        </p>
+      ) : null}
+    </div>
   );
 }

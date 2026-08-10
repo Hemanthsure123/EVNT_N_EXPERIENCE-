@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -16,6 +17,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { Button } from '@/components/ui';
+import { fetchOwnerSlots } from '@/lib/api/event-content';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { useOrganizations } from '@/lib/identity/scope';
 import { useInvalidateOrganizer } from '@/lib/organizer/queries';
@@ -109,6 +111,22 @@ export function EventWizard() {
     () => ({ state: wizard.state, error: wizard.error }),
     [wizard.state, wizard.error],
   );
+
+  /**
+   * The event's sessions, so the tickets step can ask which showtime a tier
+   * sells. Only queried once the draft exists on the server — slots are stored
+   * against the event, so before that there is nothing to ask for and no
+   * question to put to the organiser.
+   *
+   * The SAME query key the sessions editor writes through, so adding a session
+   * on the Schedule step is visible in the tier form without a reload.
+   */
+  const slotsQuery = useQuery({
+    queryKey: ['event-slots', draft.eventId],
+    queryFn: () => fetchOwnerSlots(draft.eventId as string),
+    enabled: Boolean(draft.eventId),
+  });
+  const sessions = React.useMemo(() => slotsQuery.data ?? [], [slotsQuery.data]);
 
   const [step, setStep] = React.useState<StepId>('basics');
   const [previewOpen, setPreviewOpen] = React.useState(false);
@@ -266,8 +284,8 @@ export function EventWizard() {
       <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
         <h1 className="text-h3">Could not load your organisations</h1>
         <p className="text-body-sm text-muted-foreground">
-          An event has to be created under one of them, so the Studio cannot start until this list
-          arrives. Nothing you have typed before is affected — drafts are held on this device.
+          An event is created under an organization, so this list has to load first. Your
+          draft is safe on this device.
         </p>
         <Button
           onClick={() => void organizationsQuery.refetch()}
@@ -366,11 +384,16 @@ export function EventWizard() {
                 <header className="flex flex-col gap-1.5">
                   <h1 className="text-h3">Tickets</h1>
                   <p className="max-w-prose text-body-sm text-muted-foreground">
-                    At least one tier is required to publish. Quantity is a hard cap — the database
-                    refuses to sell past it, so an oversell is impossible.
+                    At least one tier is required to publish. Quantity is a hard cap and
+                    cannot be oversold.
                   </p>
                 </header>
-                <TicketBuilder tiers={draft.tiers} onChange={setTiers} issues={tierIssues} />
+                <TicketBuilder
+                  tiers={draft.tiers}
+                  onChange={setTiers}
+                  issues={tierIssues}
+                  sessions={sessions}
+                />
               </div>
             ) : step === 'media' ? (
               <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} save={save} />

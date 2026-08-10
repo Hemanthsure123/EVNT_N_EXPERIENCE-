@@ -48,8 +48,9 @@ import { Rise, StepTransition } from './motion';
  * renders, so the two cannot drift, and its buttons are that component's to
  * restyle rather than this one's. Guest checkout is still deliberately absent:
  * issuing a ticket requires a user to issue it to. Signing in REPLACES this
- * history entry, so Back from review returns to the ticket picker rather than
- * to a sign-in screen that would bounce forward again.
+ * history entry, so Back from review returns to the EVENT PAGE — where the
+ * tickets were chosen — rather than to a sign-in screen that would bounce
+ * forward again.
  */
 
 const BENEFITS = [

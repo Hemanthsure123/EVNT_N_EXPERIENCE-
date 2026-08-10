@@ -37,28 +37,47 @@ import uuid
 from dataclasses import dataclass
 
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.booking.exceptions import BookingNotFoundError, NotBookingOwnerError
 from apps.booking.models import BookingStatus
 from apps.booking.repositories import BookingRepository
 from apps.booking.services import BookingService
 from core.audit import record_audit
-from core.events import PAYMENT_CONFIRMED, PAYMENT_FAILED, PAYMENT_REFUNDED
+from core.events import (
+    PAYMENT_CONFIRMED,
+    PAYMENT_FAILED,
+    PAYMENT_REFUNDED,
+    REFUND_REQUEST_APPROVED,
+    REFUND_REQUEST_REJECTED,
+    REFUND_REQUESTED,
+)
 from core.ports.payment_port import PaymentPort, SimulatedPaymentPort
 from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
     BookingNotPayableError,
+    BookingNotRefundableError,
     InvalidWebhookSignatureError,
     MalformedWebhookError,
+    NotAllowedToDecideRefundError,
     NotAllowedToRefundError,
     PaymentNotFoundError,
     PaymentNotRefundableError,
+    RefundDecisionNoteRequiredError,
+    RefundRequestAlreadyDecidedError,
+    RefundRequestAlreadyOpenError,
+    RefundRequestNotFoundError,
     SimulatedPaymentUnavailableError,
 )
-from .models import Payment, PaymentStatus
-from .repositories import PaymentRepository, ProcessedWebhookRepository, RefundRepository
+from .models import Payment, PaymentStatus, RefundRequest, RefundRequestStatus
+from .repositories import (
+    PaymentRepository,
+    ProcessedWebhookRepository,
+    RefundRepository,
+    RefundRequestRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +344,6 @@ class PaymentService:
         call, and `verify_and_confirm` opens its own short transaction.
         """
         from django.conf import settings
-        from django.utils import timezone
 
         now = timezone.now()
         candidates = self._bookings.list_awaiting_reconciliation(
@@ -555,3 +573,199 @@ class PaymentService:
             _REFUND_TASK, {"payment_id": str(payment.id), "reason": "organizer_refund"}
         )
         return payment
+
+
+class RefundRequestService:
+    """The refund REQUEST lifecycle: ask -> decide -> (refund | refusal).
+
+    ── WHY THIS IS ITS OWN SERVICE ────────────────────────────────────────
+
+    Every method on `PaymentService` is part of the money path — a signed
+    webhook, a confirmation, the execution of a refund. Every method here is
+    part of a HUMAN WORKFLOW: somebody asks, somebody else decides, and the
+    outcome is communicated. Different actors, different failure modes,
+    different audience. The same reasoning that gave `AccountAdminService` its
+    own class rather than growing `AuthService` applies unchanged.
+
+    It also keeps the dependency honest. This service ENQUEUES a refund; it
+    never performs one. `PaymentService.execute_refund` stays the single place
+    money moves, so its idempotency, its row lock and its vendor idempotency key
+    remain the only things standing between a retry and a double refund.
+
+    ── WHAT IT DELIBERATELY DOES NOT DO ───────────────────────────────────
+
+    **It does not decide amounts.** A request carries no `amount_minor`, and
+    approving one refunds the payment in full — because `execute_refund`
+    refunds `payment.amount_minor` and nothing else. There is no partial-refund
+    path in this system. A request carrying an amount the executor would ignore
+    is a field that silently discards what was typed, which is exactly what the
+    rest of this codebase refuses. Partial refunds need `execute_refund` to
+    accept an amount FIRST; then this grows the field.
+
+    **It does not auto-approve anything.** No amount threshold, no "within 24
+    hours" rule. Every request is decided by a person, because the policy that
+    would automate it does not exist and inventing one here would be a rule
+    nobody agreed to.
+    """
+
+    def __init__(
+        self,
+        *,
+        requests: RefundRequestRepository,
+        payments: PaymentRepository,
+        bookings: BookingRepository,
+        task_queue: TaskQueuePort,
+    ) -> None:
+        self._requests = requests
+        self._payments = payments
+        self._bookings = bookings
+        self._task_queue = task_queue
+
+    # --- the customer's half ------------------------------------------------
+
+    def request_refund(
+        self, *, booking_id: uuid.UUID | str, user_id: uuid.UUID | str, reason: str
+    ) -> RefundRequest:
+        """Raise a request against the caller's own PAID booking."""
+        booking = self._bookings.get_with_event_owner(booking_id)
+        if booking is None or str(booking.user_id) != str(user_id):
+            # The SAME answer for "no such booking" and "not yours". Splitting
+            # them would let this endpoint enumerate other people's bookings by
+            # id, one 403 at a time.
+            raise RefundRequestNotFoundError(str(booking_id))
+        if booking.status != BookingStatus.PAID:
+            # A lapsed hold released its own inventory and was never charged; a
+            # cancelled booking likewise. There is nothing to give back.
+            raise BookingNotRefundableError(booking.status)
+        if self._requests.has_open_request(booking_id):
+            raise RefundRequestAlreadyOpenError()
+
+        with UnitOfWork() as uow:
+            try:
+                request = self._requests.create(
+                    booking_id=booking_id, requested_by_id=user_id, reason=reason
+                )
+            except IntegrityError as exc:
+                # The partial unique index caught a concurrent double-submit —
+                # two taps on a slow connection. The pre-check above is the
+                # cheap path; THIS is the correctness guarantee, exactly the way
+                # CreateBooking's idempotency key works.
+                raise RefundRequestAlreadyOpenError() from exc
+
+            uow.publish(
+                REFUND_REQUESTED,
+                {
+                    "refund_request_id": str(request.id),
+                    "booking_id": str(booking_id),
+                    "event_id": str(booking.event_id),
+                    "organizer_id": str(booking.event.organization.owner_id),
+                },
+                aggregate_id=str(request.id),
+            )
+        logger.info(
+            "payments.refund_requested",
+            extra={"refund_request_id": str(request.id), "booking_id": str(booking_id)},
+        )
+        return request
+
+    # --- the organizer's / operator's half ---------------------------------
+
+    def decide(
+        self,
+        *,
+        request_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        approve: bool,
+        note: str = "",
+        is_admin: bool = False,
+    ) -> RefundRequest:
+        """Approve or reject, exactly once, under the request row's lock.
+
+        Approving ENQUEUES `payments.process_refund`; it does not refund
+        inline. That keeps the decision fast and puts the vendor call on the
+        queue's retry + dead-letter path, where every other external call in
+        this module already lives.
+
+        The enqueue is registered with `transaction.on_commit`. Doing it inside
+        the transaction would be the outbox bug in miniature: with the
+        synchronous task adapter the refund would run and SUCCEED while the
+        decision authorising it could still roll back — money returned against
+        a request that still reads `pending`.
+        """
+        request = self._requests.get_for_decision(request_id)
+        if request is None:
+            raise RefundRequestNotFoundError(str(request_id))
+        owner_id = request.booking.event.organization.owner_id
+        if not is_admin and str(owner_id) != str(actor_id):
+            raise NotAllowedToDecideRefundError()
+        if not approve and not note.strip():
+            raise RefundDecisionNoteRequiredError()
+
+        payment = self._payments.get_paid_for_booking(request.booking_id) if approve else None
+        if approve and payment is None:
+            # Approving with no captured payment behind it would enqueue a
+            # refund that can never run, and leave the request reading
+            # "approved" forever while nothing was sent.
+            raise PaymentNotRefundableError("no captured payment for this booking")
+
+        new_status = RefundRequestStatus.APPROVED if approve else RefundRequestStatus.REJECTED
+
+        with UnitOfWork() as uow:
+            locked = self._requests.lock_for_update(request_id)
+            if locked is None:  # pragma: no cover — vanished between load and lock
+                raise RefundRequestNotFoundError(str(request_id))
+            # Re-read under the lock: this IS the race. Two people working the
+            # same queue press Approve and Reject a second apart; the loser is
+            # told so rather than overwriting the winner — and, critically,
+            # cannot enqueue a second refund.
+            if locked.status != RefundRequestStatus.PENDING:
+                raise RefundRequestAlreadyDecidedError(locked.status)
+
+            self._requests.decide(
+                locked,
+                status=new_status,
+                decided_by_id=actor_id,
+                note=note.strip(),
+                decided_at=timezone.now(),
+            )
+            uow.publish(
+                REFUND_REQUEST_APPROVED if approve else REFUND_REQUEST_REJECTED,
+                {
+                    "refund_request_id": str(request_id),
+                    "booking_id": str(request.booking_id),
+                    "payment_id": str(payment.id) if payment else None,
+                    "note": note.strip(),
+                },
+                aggregate_id=str(request_id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action=f"refund_request.{'approved' if approve else 'rejected'}",
+                target_type="refund_request",
+                target_id=str(request_id),
+            )
+
+            if approve and payment is not None:
+                payment_id = str(payment.id)
+                request_ref = str(request_id)
+                transaction.on_commit(
+                    lambda: self._task_queue.enqueue(
+                        _REFUND_TASK,
+                        {
+                            "payment_id": payment_id,
+                            "reason": "customer_request",
+                            # Carried so the task can mark the REQUEST failed if
+                            # the vendor call never succeeds. Without it an
+                            # approved-but-unpaid request reads "approved"
+                            # forever, telling the customer money is coming.
+                            "refund_request_id": request_ref,
+                        },
+                    )
+                )
+
+        request.refresh_from_db()
+        logger.info(
+            "payments.refund_request_decided",
+            extra={"refund_request_id": str(request_id), "status": new_status},
+        )
+        return request

@@ -11,10 +11,10 @@ import {
   type Issue,
 } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
+import { PolicyEditor } from './policy-editor';
 import { FaqBuilder } from './faq-builder';
 import {
   NeedsSavedDraft,
-  NotStored,
   Section,
   StepHeader,
   TextArea,
@@ -77,7 +77,7 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Details"
-        blurb="The practical questions people ask before they buy. Leave anything you are unsure about blank — the page omits what you do not fill in rather than guessing."
+        blurb="The practical questions people ask before they buy. Anything left blank is omitted from the event page."
       />
 
       <TextField
@@ -144,7 +144,7 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
           placeholder="18+"
           max={AGE_RESTRICTION_MAX}
           error={errorFor(issues, 'ageRestriction')}
-          hint="Left blank, the page says nothing about age — which is right if you have no policy, and wrong if you do. Nobody wants to be turned away at the door."
+          hint="Shown on the event page. Leave blank if you have no age policy."
         />
         <Chips
           label="Common policies"
@@ -166,6 +166,17 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
       />
 
       <Section
+        title="Event policies"
+        blurb="Your own rules — entry, prohibited items, refunds."
+      >
+        {/* LOCAL, unlike the FAQs below: `policies` is a column on the event
+            written by the same PATCH as everything else on this step, so it
+            saves before the draft exists on the server and needs no
+            "unlocks once saved" panel. */}
+        <PolicyEditor policies={draft.policies} onChange={(policies) => update({ policies })} />
+      </Section>
+
+      <Section
         title="Frequently asked questions"
         blurb="Answered here, not in your inbox on the day."
       >
@@ -174,18 +185,13 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
         ) : (
           <NeedsSavedDraft
             title="FAQs unlock once the draft is saved"
-            what="They are stored against the event, so it has to exist first. Fill in the fields below and the draft saves itself."
+            what="Add these once the event exists. Fill in the fields below and the draft saves itself."
             missing={missingForSave(draft)}
             save={save}
           />
         )}
       </Section>
 
-      <NotStored>
-        Category, tags, dress code, a bag policy and re-entry rules are not collected: <code>Event</code>{' '}
-        has no columns for them. Category is the one worth adding first — it would make the browse
-        filters exact instead of inferred from wording. BACKLOG items 2 and 28.
-      </NotStored>
     </div>
   );
 }
@@ -243,11 +249,20 @@ export function missingForSave(draft: Draft): string[] {
   // with several organisations it could read "nothing missing" while every
   // flush early-returned on exactly this — the panel promising a save the
   // engine had already refused.
-  if (!draft.organizationId) missing.push('Which organisation is running it');
-  if (!draft.title.trim()) missing.push('A title');
-  if (!draft.venue.trim()) missing.push('A venue');
-  if (!draft.city.trim()) missing.push('A city');
-  if (!draft.startsAt) missing.push('A start date in the future');
-  else if (new Date(draft.startsAt) <= new Date()) missing.push('A start date in the future');
+  //
+  // ── EACH ITEM NAMES ITS STEP ─────────────────────────────────────────
+  //
+  // The panel that renders this sits on Media or Details, and the fields are
+  // all on Basics, Venue or Schedule. A bare list ("A title", "A venue") tells
+  // somebody what is wrong and not where to go — which reads, from a step
+  // whose uploader is greyed out, as the uploader being broken rather than as
+  // three fields waiting two steps back.
+  if (!draft.organizationId) missing.push('Which organisation is running it — on Basics');
+  if (!draft.title.trim()) missing.push('A title — on Basics');
+  if (!draft.venue.trim()) missing.push('A venue — on Venue');
+  if (!draft.city.trim()) missing.push('A city — on Venue');
+  if (!draft.startsAt || new Date(draft.startsAt) <= new Date()) {
+    missing.push('A start date in the future — on Schedule');
+  }
   return missing;
 }

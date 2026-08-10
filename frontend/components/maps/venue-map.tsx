@@ -66,18 +66,47 @@ export function VenueMap({
   const state = useGoogleMaps('places');
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<unknown>(null);
+  /**
+   * The map could not be built, whatever the loader thinks.
+   *
+   * ── WHY THIS EXISTS ───────────────────────────────────────────────────
+   *
+   * `useGoogleMaps` reported `ready` while `google.maps.Map` was not a
+   * constructor, so `new maps.Map(...)` threw INSIDE an effect — and an
+   * exception in an effect is not contained to the component that threw it.
+   * React unwound to the nearest error boundary, so the whole event page was
+   * replaced by "Something went wrong": no title, no tickets, no Book button,
+   * because a decorative map beside the venue address failed.
+   *
+   * A map is the least important thing on this page and it must not be able
+   * to take the page down. It falls back to the address and a directions link
+   * — which this component already renders for four other reasons, and which
+   * is arguably the better artefact anyway.
+   */
+  const [failed, setFailed] = React.useState(false);
 
   React.useEffect(() => {
     if (state !== 'ready' || !hasCoordinates || !containerRef.current) return;
 
     // Typed loosely on purpose: pulling in `@types/google.maps` for one marker
     // adds a large ambient declaration for an API surface used in one file.
-    const maps = (window as unknown as { google: { maps: Record<string, never> } }).google
-      .maps as unknown as {
-      Map: new (el: Element, options: unknown) => unknown;
-      Marker: new (options: unknown) => unknown;
-    };
+    const maps = (window as unknown as { google?: { maps?: Record<string, never> } }).google
+      ?.maps as unknown as
+      | {
+          Map: new (el: Element, options: unknown) => unknown;
+          Marker: new (options: unknown) => unknown;
+        }
+      | undefined;
 
+    // `ready` means the SCRIPT arrived. It does not mean this library did:
+    // a rejected key, a blocked request or an async library import still in
+    // flight all leave `google.maps` present and `Map` undefined.
+    if (typeof maps?.Map !== 'function' || typeof maps?.Marker !== 'function') {
+      setFailed(true);
+      return;
+    }
+
+    try {
     const position = { lat: lat as number, lng: lng as number };
     const map = new maps.Map(containerRef.current, {
       center: position,
@@ -94,12 +123,18 @@ export function VenueMap({
     mapRef.current = map;
 
     new maps.Marker({ position, map, title: venue });
+    } catch {
+      // Anything Google changes on their side degrades to the address rather
+      // than to a blank page. Deliberately silent: there is nothing the reader
+      // can do, and the fallback below tells them what they actually needed.
+      setFailed(true);
+    }
   }, [state, hasCoordinates, lat, lng, zoom, venue]);
 
   const address = [venue, city].filter(Boolean).join(', ');
   const link = directionsUrl(venue, city, hasCoordinates ? { latitude: lat!, longitude: lng! } : null);
 
-  const showMap = hasCoordinates && state !== 'unavailable' && state !== 'error';
+  const showMap = hasCoordinates && state !== 'unavailable' && state !== 'error' && !failed;
 
   return (
     <div className={cn('flex flex-col gap-3', className)}>

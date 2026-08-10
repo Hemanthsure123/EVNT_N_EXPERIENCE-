@@ -174,9 +174,20 @@ def get_performer_detail_payload(
 def decorate_requests(
     requests: list, *, quotes: QuoteRepository | None = None
 ) -> list[dict[str, Any]]:
-    """A customer's briefs, each with its quote count.
+    """A customer's own enquiries, as their list renders them.
 
-    The counts come from ONE grouped query for the page, not one per row.
+    ── `quote_count` IS ALWAYS 0 NOW, AND STAYS ON THE PAYLOAD ────────────
+
+    Nothing quotes any more: the platform has no performer supply side, and
+    the routes that let one bid are unmounted. The field survives because
+    removing it is a breaking change to a response shape for no gain — a
+    client reading `0` behaves correctly, and one that has not been rebuilt
+    does not crash on a missing key. It is computed rather than hard-coded so
+    that if quoting ever returns, this reports the truth on the same day.
+
+    `status_display` is resolved here rather than in the client for the same
+    reason the console's is: five states, and a frontend that has to know all
+    five labels is a frontend that will get one wrong.
     """
     quotes = quotes or QuoteRepository()
     ids = [request.id for request in requests]
@@ -194,6 +205,10 @@ def decorate_requests(
             "guests": request.guests,
             "notes": request.notes,
             "status": request.status,
+            "status_display": request.get_status_display(),
+            "contact_name": request.contact_name,
+            "contact_phone": request.contact_phone,
+            "contact_email": request.contact_email,
             "quote_count": counts.get(request.id, 0),
             "booked_performer_id": (
                 str(request.booked_performer_id) if request.booked_performer_id else None

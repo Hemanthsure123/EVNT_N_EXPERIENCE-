@@ -13,7 +13,9 @@ import {
   X,
 } from 'lucide-react';
 import {
-  checkFile,
+  EVENT_IMAGE_HINT,
+  addMedia,
+  checkImageFile,
   fetchEventContent,
   removeMedia,
   reorderMedia,
@@ -23,12 +25,12 @@ import {
   type MediaKind,
   type UploadHandle,
 } from '@/lib/api/event-content';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, errorMessage } from '@/lib/api/errors';
 import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
 import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
-import { NeedsSavedDraft, NotStored, Section, StepHeader, type DraftSave } from './fields';
+import { Section, StepHeader, type DraftSave } from './fields';
 import { missingForSave } from './details-step';
 
 /**
@@ -166,21 +168,24 @@ export function MediaStep({
   // Paste support: an organizer copying a poster from a design tool expects
   // ⌘V to work, and it is the fastest path there is.
   React.useEffect(() => {
-    if (!eventId) return;
     const onPaste = (event: ClipboardEvent) => {
       const files = Array.from(event.clipboardData?.files ?? []);
-      if (files.length) stage(files);
+      if (files.length) void stage(files);
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
 
-  const stage = (files: File[]) => {
+  // Async now, because measuring a picture means decoding its header. The
+  // await is per-file and off the main thread; a dozen dropped files resolve
+  // in a few milliseconds, and the alternative is finding out after the bytes
+  // have already gone up.
+  const stage = async (files: File[]) => {
     const accepted: File[] = [];
     const rejected: Pending[] = [];
     for (const file of files) {
-      const problem = checkFile(file);
+      const problem = await checkImageFile(file);
       if (problem) {
         // Rejected client-side, but shown as a failed tile rather than a toast
         // — the organizer needs to see WHICH file was refused.
@@ -216,9 +221,22 @@ export function MediaStep({
     return existing + taken;
   };
 
-  const start = (file: File, altText: string) => {
+  const start = (file: File, altText: string, forKind: MediaKind = kind) => {
+    // `forKind` is passed rather than read off state, because a QUEUED file is
+    // uploaded later — possibly after the organiser has changed the selector
+    // to something else. Reading `kind` at flush time would file a gallery
+    // photo as the hero, silently, and the hero is the card image on every
+    // list on the platform.
     const key = `${file.name}-${Date.now()}-${Math.random()}`;
-    const entry: Pending = { key, file, kind, altText, percent: 0, error: null, handle: null };
+    const entry: Pending = {
+      key,
+      file,
+      kind: forKind,
+      altText,
+      percent: 0,
+      error: null,
+      handle: null,
+    };
 
     const handle = uploadMedia(
       eventId as string,
@@ -226,7 +244,7 @@ export function MediaStep({
       // `media.length + 1` for every file in a staged batch, counting media of
       // ALL kinds — so five files at once all claimed the same position and
       // only looked ordered because the server falls back to `created_at`.
-      { file, kind, altText, position: nextPosition(kind) },
+      { file, kind: forKind, altText, position: nextPosition(forKind) },
       (percent) =>
         setPending((current) =>
           current.map((row) => (row.key === key ? { ...row, percent } : row)),
@@ -259,13 +277,58 @@ export function MediaStep({
       });
   };
 
+  /**
+   * Send every described image, or hold them until there is somewhere to send
+   * them to.
+   *
+   * ── WHY THE QUEUE EXISTS ──────────────────────────────────────────────
+   *
+   * `POST /events/{id}/media/upload` needs an event id, and before the first
+   * save there is not one. The old answer was to disable the whole section
+   * until the draft saved. This is the same answer the COVER image has always
+   * given instead: keep the bytes on this device and send them the moment the
+   * id arrives.
+   *
+   * The files live in component state rather than in the draft on purpose —
+   * the draft is persisted to `localStorage`, and a `File` does not survive
+   * `JSON.stringify`. So a queued image is lost on a reload, which is why the
+   * panel says "when the draft saves" rather than implying it is safe: the
+   * wizard autosaves within seconds of the required fields existing, so the
+   * window is small, and claiming more than that would be the lie.
+   */
+  const [queued, setQueued] = React.useState<
+    { file: File; altText: string; kind: MediaKind }[]
+  >([]);
+
+  const flush = (items: { file: File; altText: string }[]) => {
+    // The kind is CAPTURED here, at the moment of the decision, not read at
+    // upload time — see `start`.
+    const withKind = items.map((item) => ({ ...item, kind }));
+    if (!eventId) {
+      setQueued((current) => [...current, ...withKind]);
+      return;
+    }
+    withKind.forEach((item) => start(item.file, item.altText, item.kind));
+  };
+
+  // The id arriving is the signal. `queued` is cleared FIRST so a second
+  // render cannot send the same bytes twice — an upload is not idempotent and
+  // a duplicated gallery image is a real, visible bug.
+  React.useEffect(() => {
+    if (!eventId || queued.length === 0) return;
+    const batch = queued;
+    setQueued([]);
+    batch.forEach((item) => start(item.file, item.altText, item.kind));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId, queued.length]);
+
   const media = content.data?.media ?? [];
 
   return (
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Media"
-        blurb="One cover image for the card and the link preview, then a gallery for the event page. Every gallery image needs alt text — it is what a screen reader reads out, and the server requires it."
+        blurb="One cover image for the card and the link preview, then a gallery for the event page. Both work before the draft is saved — pick photos now and they upload themselves. Every image needs alt text: it is what a screen reader reads out, and the server requires it."
       />
 
       {/* THE COVER AND THE GALLERY ARE DIFFERENT THINGS, so they are different
@@ -282,17 +345,18 @@ export function MediaStep({
         <CoverUploader draft={draft} onPoster={onPoster} posterFile={posterFile} />
       </Section>
 
-      {!eventId ? (
-        <Section title="Gallery" blurb="Photos on the event page itself.">
-          <NeedsSavedDraft
-            title="The gallery unlocks once the draft is saved"
-            what="Gallery images are stored against the event, so it has to exist first. The cover image above works right now — it uploads with the next save."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        </Section>
-      ) : (
-        <>
+      {/* ── NO GATE ────────────────────────────────────────────────────
+          This used to be replaced by a "unlocks once the draft is saved"
+          panel, because gallery images are stored against the event and
+          before the first save there is no event to store them against.
+
+          That constraint is real; making it the ORGANISER's problem was the
+          mistake. The cover image above has always solved it the other way —
+          held on this device, uploaded with the next save — and there was no
+          reason the gallery could not do the same. So it does: pick photos,
+          describe them, keep working, and they upload themselves the moment
+          the draft exists. `flush` below is the whole mechanism. */}
+      <>
           <div className="flex flex-wrap items-center gap-stack">
             <label className="text-caption font-medium text-muted-foreground" htmlFor="media-kind">
               Uploading as
@@ -325,7 +389,7 @@ export function MediaStep({
             onDrop={(event) => {
               event.preventDefault();
               setOver(false);
-              stage(Array.from(event.dataTransfer.files));
+              void stage(Array.from(event.dataTransfer.files));
             }}
             className={cn(
               'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
@@ -343,9 +407,15 @@ export function MediaStep({
               <ImagePlus className="size-5 text-muted-foreground" />
             </span>
             <p className="text-body-sm font-medium">Drop images here, or paste with ⌘V</p>
+            {/* The requirement, before the file picker — not after an
+                upload fails. It said "1200×800 or larger works best", which
+                described a preference where there is now a rule: the event
+                page draws every picture in one 16:9 frame and the server
+                refuses anything that cannot fill it. Copy that under-states a
+                hard constraint is how somebody uploads eight posters and has
+                all eight refused. */}
             <p className="max-w-sm text-caption text-muted-foreground">
-              JPEG, PNG, WebP, AVIF or GIF, up to 10 MB. Landscape at 1200×800 or larger works best
-              — cards crop to 3:2.
+              {EVENT_IMAGE_HINT} JPEG, PNG, WebP, AVIF or GIF, up to 10 MB.
             </p>
             <Button variant="outline" onClick={() => inputRef.current?.click()}>
               Choose files
@@ -358,7 +428,7 @@ export function MediaStep({
               className="sr-only"
               aria-label="Choose images to upload"
               onChange={(event) => {
-                stage(Array.from(event.target.files ?? []));
+                void stage(Array.from(event.target.files ?? []));
                 event.target.value = '';
               }}
             />
@@ -399,14 +469,21 @@ export function MediaStep({
                     (file, index) => !(altDraft[`${file.name}-${index}`] ?? '').trim(),
                   )}
                   onClick={() => {
-                    staged.forEach((file, index) =>
-                      start(file, (altDraft[`${file.name}-${index}`] ?? '').trim()),
+                    flush(
+                      staged.map((file, index) => ({
+                        file,
+                        altText: (altDraft[`${file.name}-${index}`] ?? '').trim(),
+                      })),
                     );
                     setStaged([]);
                     setAltDraft({});
                   }}
                 >
-                  Upload {staged.length === 1 ? 'image' : `${staged.length} images`}
+                  {eventId
+                    ? `Upload ${staged.length === 1 ? 'image' : `${staged.length} images`}`
+                    : // It genuinely is not uploading yet, so it does not say
+                      // it is. The queue below then says when it will.
+                      `Add ${staged.length === 1 ? 'image' : `${staged.length} images`}`}
                 </Button>
                 <Button
                   variant="ghost"
@@ -418,6 +495,65 @@ export function MediaStep({
                   Cancel
                 </Button>
               </div>
+            </section>
+          ) : null}
+
+          {queued.length ? (
+            <section className="flex flex-col gap-stack rounded-xl border border-dashed border-border bg-sunken p-card">
+              <h3 className="text-body-sm font-semibold">
+                {queued.length === 1 ? '1 image' : `${queued.length} images`} waiting for the
+                first save
+              </h3>
+              <ul className="flex flex-col gap-1">
+                {queued.map((item) => (
+                  <li key={item.file.name} className="truncate text-caption text-muted-foreground">
+                    {KIND_LABEL[item.kind]} · {item.file.name} — {item.altText}
+                  </li>
+                ))}
+              </ul>
+              {/* Names the fields, because "save the draft" is not an action
+                  anybody can take directly — the wizard saves itself once
+                  these exist. */}
+              {missingForSave(draft).length ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-caption text-muted-foreground">
+                    They upload on their own once the draft has:
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {missingForSave(draft).map((item) => (
+                      <li
+                        key={item}
+                        className="flex items-center gap-2 text-caption text-muted-foreground"
+                      >
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-border-strong"
+                          aria-hidden
+                        />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-caption text-muted-foreground">
+                  {save?.state === 'error'
+                    ? (save.error ?? 'The last save failed.')
+                    : 'Saving now — they go up in a moment.'}
+                </p>
+              )}
+              {/* A queued file lives in this tab's memory: the draft persists
+                  to localStorage and a `File` does not survive that. Saying so
+                  is the difference between a small window and a surprise. */}
+              <p className="text-caption text-muted-foreground">
+                They are held in this tab until then — reloading loses them.
+              </p>
+              <Button
+                variant="ghost"
+                className="w-fit"
+                onClick={() => setQueued([])}
+              >
+                Clear the queue
+              </Button>
             </section>
           ) : null}
 
@@ -433,8 +569,10 @@ export function MediaStep({
                     }}
                     onRetry={() => {
                       setPending((current) => current.filter((item) => item.key !== row.key));
-                      if (!checkFile(row.file)) start(row.file, row.altText);
-                      else setStaged((current) => [...current, row.file]);
+                      void checkImageFile(row.file).then((problem) => {
+                        if (!problem) start(row.file, row.altText);
+                        else setStaged((current) => [...current, row.file]);
+                      });
                     }}
                   />
                 </li>
@@ -461,7 +599,7 @@ export function MediaStep({
               <EmptyState
                 icon={ImagePlus}
                 title="No gallery images yet"
-                body="Four or five photographs of the last one sell an event better than any amount of description. A crowd shot works harder than an empty stage."
+                body="Photographs from a previous event. Four or five is plenty."
               />
             </div>
           ) : (
@@ -481,16 +619,18 @@ export function MediaStep({
               ))}
             </ul>
           )}
-        </>
-      )}
+      </>
 
-      <NotStored>
-        Cropping, rotation and client-side compression are not offered: the API stores exactly the
-        bytes it is given, so a crop here would be destructive rather than a rendition. Video is in
-        the model but has no upload path (the validator is image-only), so the kind is not offered.
-        Both are backend dependencies, not omissions. Reordering and alt-text edits now write
-        through <code>PATCH</code> on the media row.
-      </NotStored>
+      {eventId ? (
+        <Section
+          title="Trailer"
+          blurb="A YouTube or Vimeo link. It plays in its own section on the event page, below the description."
+          count={media.some((item) => item.kind === 'video') ? 'Added' : 'None'}
+        >
+          <VideoLink eventId={eventId} media={media} />
+        </Section>
+      ) : null}
+
     </div>
   );
 }
@@ -518,11 +658,13 @@ function CoverUploader({
   const [problem, setProblem] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
-  const take = (candidate: File | undefined) => {
+  const take = async (candidate: File | undefined) => {
     if (!candidate) return;
-    // The same pre-check the gallery uses, so a 14 MB cover is refused here
-    // rather than at the end of the next autosave.
-    const rejected = checkFile(candidate);
+    // The same pre-check the gallery uses — type, size AND shape — so a 14 MB
+    // cover or a portrait poster is refused here rather than at the end of the
+    // next autosave. The cover is the picture the hero frame draws, so if
+    // anything has to be 16:9 it is this one.
+    const rejected = await checkImageFile(candidate);
     setProblem(rejected);
     if (!rejected) onPoster(candidate);
   };
@@ -538,7 +680,7 @@ function CoverUploader({
         onDrop={(event) => {
           event.preventDefault();
           setOver(false);
-          take(event.dataTransfer.files[0]);
+          void take(event.dataTransfer.files[0]);
         }}
         className={cn(
           'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
@@ -593,7 +735,7 @@ function CoverUploader({
             </span>
             <p className="text-body-sm font-medium">Drop the cover image here</p>
             <p className="max-w-sm text-caption text-muted-foreground">
-              Landscape, at least 1200×800. It is cropped to 3:2 on cards, so keep faces and text
+              {EVENT_IMAGE_HINT} It is the picture the event page opens on, so keep faces and text
               away from the edges.
             </p>
             <Button variant="outline" onClick={() => inputRef.current?.click()}>
@@ -609,7 +751,7 @@ function CoverUploader({
           className="sr-only"
           aria-label="Cover image"
           onChange={(event) => {
-            take(event.target.files?.[0]);
+            void take(event.target.files?.[0]);
             event.target.value = '';
           }}
         />
@@ -848,5 +990,124 @@ function MediaTile({
         </div>
       </figcaption>
     </figure>
+  );
+}
+
+/**
+ * The event's trailer, as a link.
+ *
+ * ── THE VALIDATION LIVES ON THE SERVER, AND ONLY THERE ────────────────────
+ *
+ * A pasted URL is normalised there into an embed URL the server BUILDS from an
+ * extracted id — the allow-list and the id patterns are the security boundary,
+ * and re-implementing them here would be a second copy of a rule that must not
+ * drift. So this field posts what was typed and renders whatever sentence
+ * comes back, which is written to be shown ("that YouTube link does not
+ * contain a video id — use the Share button's link").
+ *
+ * One video, enforced by the server. With one attached the field is replaced
+ * by the row and a Remove, rather than an input that would 422 on submit.
+ */
+function VideoLink({ eventId, media }: { eventId: string; media: EventMedia[] }) {
+  const client = useQueryClient();
+  const existing = media.find((item) => item.kind === 'video') ?? null;
+  const [url, setUrl] = React.useState('');
+  const [altText, setAltText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const invalidate = () => client.invalidateQueries({ queryKey: ['event-content', eventId] });
+
+  const attach = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await addMedia(eventId, {
+        kind: 'video',
+        url: url.trim(),
+        // Required by the server for every media row, including this one: a
+        // player with no accessible name is an unlabelled region to a screen
+        // reader, and "video" is not a description of anything.
+        alt_text: altText.trim() || 'Event trailer',
+        caption: '',
+        position: 0,
+      });
+      setUrl('');
+      setAltText('');
+      void invalidate();
+    } catch (thrown) {
+      setError(errorMessage(thrown));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!existing) return;
+    setBusy(true);
+    try {
+      await removeMedia(eventId, existing.id);
+      void invalidate();
+    } catch (thrown) {
+      setError(errorMessage(thrown));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (existing) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-card">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-body-sm font-medium">{existing.alt_text}</span>
+          <span className="block truncate text-caption text-muted-foreground">{existing.url}</span>
+        </span>
+        <Button variant="ghost" size="sm" onClick={() => void remove()} disabled={busy}>
+          Remove
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-stack">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="video-url" className="text-body-sm font-medium">
+          Video link
+        </label>
+        <Input
+          id="video-url"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="https://www.youtube.com/watch?v=..."
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="video-alt" className="text-body-sm font-medium">
+          What it shows <span className="font-normal text-muted-foreground">— optional</span>
+        </label>
+        <Input
+          id="video-alt"
+          value={altText}
+          maxLength={200}
+          onChange={(event) => setAltText(event.target.value)}
+          placeholder="Highlights from last year"
+        />
+      </div>
+      {error ? (
+        <p role="alert" className="text-caption text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <Button
+        variant="outline"
+        onClick={() => void attach()}
+        disabled={!url.trim() || busy}
+        loading={busy}
+        className="w-fit"
+      >
+        Add the trailer
+      </Button>
+    </div>
   );
 }

@@ -191,6 +191,12 @@ class BookingRequestSerializer(serializers.Serializer):
     guests = serializers.IntegerField(allow_null=True)
     notes = serializers.CharField(allow_blank=True)
     status = serializers.CharField()
+    status_display = serializers.CharField()
+    contact_name = serializers.CharField(allow_blank=True)
+    contact_phone = serializers.CharField(allow_blank=True)
+    contact_email = serializers.CharField(allow_blank=True)
+    #: Always 0 — nothing quotes any more. Kept on the shape because removing
+    #: it breaks a client for no gain; see `decorate_requests`.
     quote_count = serializers.IntegerField()
     booked_performer_id = serializers.CharField(allow_null=True)
     booked_performer_name = serializers.CharField(allow_blank=True)
@@ -229,6 +235,22 @@ class CreateBookingRequestSerializer(serializers.Serializer):
         min_value=1, max_value=1_000_000, required=False, allow_null=True
     )
     notes = serializers.CharField(required=False, allow_blank=True, default="", max_length=2000)
+
+    #: How to get back to them. All three are OPTIONAL and blank falls back to
+    #: the account — which always has an email, and often a name and a phone.
+    #: A blank field means "the account's is fine", not "do not contact me".
+    #:
+    #: They exist at all because the reader changed: this used to be a
+    #: marketplace brief shown to performers, and a performer seeing a lead was
+    #: deliberately shown the job and not the person. The only reader now is an
+    #: operator whose whole job is to reply.
+    contact_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=150
+    )
+    contact_phone = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=20
+    )
+    contact_email = serializers.EmailField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs: dict) -> dict:
         if attrs["budget_max_minor"] < attrs["budget_min_minor"]:

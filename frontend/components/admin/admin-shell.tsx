@@ -3,12 +3,13 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Loader2, Menu, PanelLeftClose, Search, ShieldAlert, Ticket, X } from 'lucide-react';
+import { Loader2, Menu, PanelLeftClose, Search, ShieldAlert, X } from 'lucide-react';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { ADMIN_SECTIONS, adminBreadcrumbs } from '@/lib/admin/nav';
+import { BrandMark } from '@/components/shell/brand-mark';
 import { cn } from '@/lib/utils/cn';
 import { AdminCommandPalette } from './command-palette';
 import { useAdminAttentionBadge } from './attention-panel';
@@ -203,7 +204,16 @@ function Sidebar({
             href="/"
             className="inline-flex min-w-0 items-center gap-2 rounded-full px-1 font-display text-body-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <Ticket className="size-5 shrink-0 text-primary" aria-hidden />
+            {/* THE product mark, not a stand-in.
+
+                Both console shells drew a lucide `Ticket` glyph here while the
+                public site drew the CX monogram — so the same product had two
+                different logos depending on which half of it you were in, and
+                an organizer moving between the site and their dashboard saw the
+                brand change under them. `BrandMark` is the one definition
+                (`components/shell/brand-mark.tsx`); it inherits `currentColor`,
+                so it takes the sidebar's ink without a second asset. */}
+            <BrandMark className="size-5 shrink-0 text-foreground" title="" />
             <span className="truncate">Curatix</span>
           </Link>
           <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-caption text-secondary-foreground">

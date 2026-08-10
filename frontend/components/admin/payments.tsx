@@ -26,6 +26,7 @@ import {
   TableToolbar,
 } from '@/components/organizer/data-table';
 import { SearchField, SelectFilter } from '@/components/organizer/filters';
+import { useConsoleDateWindow } from '@/components/admin/filters';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -134,13 +135,18 @@ function Transactions() {
   const [term, setTerm] = React.useState('');
   const [status, setStatus] = React.useState('');
   const search = useDebouncedValue(term.trim(), 250);
+  const dates = useConsoleDateWindow();
 
   const query = useInfiniteQuery({
-    queryKey: ['admin', 'payments', { search, status }],
+    // The window is part of the key: it changes WHICH rows a cursor walks, and
+    // one cache entry across two windows would append the second window's
+    // pages onto the first window's list.
+    queryKey: ['admin', 'payments', { search, status, dates: dates.key }],
     queryFn: ({ pageParam }) =>
       fetchAdminPayments({
         q: search || undefined,
         status: status || undefined,
+        ...dates.window,
         cursor: pageParam ?? undefined,
       }),
     initialPageParam: null as string | null,
@@ -180,6 +186,7 @@ function Transactions() {
           options={STATUS_FILTERS}
           label="Filter by status"
         />
+        {dates.control}
         <p className="text-caption text-muted-foreground">
           <span className="font-medium tabular-nums text-foreground">{formatMoney(captured)}</span>{' '}
           captured in the rows loaded
@@ -227,11 +234,16 @@ function Transactions() {
 function Refunds() {
   const [term, setTerm] = React.useState('');
   const search = useDebouncedValue(term.trim(), 250);
+  const dates = useConsoleDateWindow();
 
   const query = useInfiniteQuery({
-    queryKey: ['admin', 'refunds', { search }],
+    queryKey: ['admin', 'refunds', { search, dates: dates.key }],
     queryFn: ({ pageParam }) =>
-      fetchAdminRefunds({ q: search || undefined, cursor: pageParam ?? undefined }),
+      fetchAdminRefunds({
+        q: search || undefined,
+        ...dates.window,
+        cursor: pageParam ?? undefined,
+      }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => cursorFromNextLink(last.meta.next),
     staleTime: 0,
@@ -259,6 +271,7 @@ function Refunds() {
           placeholder="Reference or customer email"
           label="Search refunds"
         />
+        {dates.control}
         <p className="text-caption text-muted-foreground">
           <span className="font-medium tabular-nums text-foreground">{formatMoney(total)}</span>{' '}
           returned in the rows loaded
@@ -278,7 +291,7 @@ function Refunds() {
         <EmptyState
           icon={Undo2}
           title={term ? 'No refunds match' : 'No refunds'}
-          body="A refund is recorded only after the provider confirms the money has gone back, so nothing on this page is in flight."
+          body="Recorded once the provider confirms the money has gone back."
         />
       ) : (
         <DataGrid

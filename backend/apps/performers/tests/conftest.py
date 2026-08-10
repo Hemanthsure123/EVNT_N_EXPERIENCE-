@@ -26,6 +26,8 @@ from apps.performers.models import (
     PerformerMedia,
     PerformerStatus,
     PerformerType,
+    RequestKind,
+    RequestStatus,
 )
 from config.di import cache_port
 
@@ -109,6 +111,12 @@ def make_request(customer):
     def _make(**overrides) -> BookingRequest:
         fields = {
             "customer": customer,
+            # Used ONLY by test_marketplace.py, so it builds the marketplace
+            # shape: a brief that is open for quotes. An enquiry is a
+            # different kind with a different opening state and has its own
+            # fixtures in test_enquiries.py.
+            "kind": RequestKind.MARKETPLACE,
+            "status": RequestStatus.OPEN,
             "performer_type": PerformerType.BAND,
             "occasion": Occasion.WEDDING,
             "city": "Mumbai",

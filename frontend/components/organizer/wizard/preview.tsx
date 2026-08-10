@@ -116,7 +116,20 @@ export function LivePreview({
         <div style={scale ? { height: innerHeight * scale } : undefined}>
           <div
             ref={inner}
-            inert
+            // `inert=""`, NOT a bare `inert`.
+            //
+            // Bare JSX `inert` compiles to `inert={true}`, and React 18 does
+            // not know `inert` — it warns "Received `true` for a non-boolean
+            // attribute" and DROPS IT. So the attribute was never in the DOM
+            // and the keyboard trap this comment describes did not exist: tab
+            // walked straight into a scaled clone of the event page and got
+            // stranded in links that go nowhere. An empty string is what React
+            // 18 passes through verbatim, which is a valid boolean attribute
+            // in HTML. React 19 handles the boolean form; until then this is
+            // the spelling that works.
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-expect-error -- valid HTML that React 18's types predate.
+            inert=""
             style={{
               width: PREVIEW_WIDTH,
               transform: scale ? `scale(${scale})` : undefined,

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.request import Request
@@ -69,11 +69,34 @@ class TicketTypeListCreateView(APIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
-    @extend_schema(responses={200: TicketTypeSerializer(many=True)})
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "slot",
+                str,
+                description=(
+                    "Only tiers selling this session. An unknown or malformed id "
+                    "returns an EMPTY list rather than every tier — a chooser that "
+                    "silently falls back to 'all sessions' is how somebody buys a "
+                    "ticket for the wrong show."
+                ),
+            )
+        ],
+        responses={200: TicketTypeSerializer(many=True)},
+    )
     def get(self, request: Request, event_id: str) -> Response:
         # Public availability display: identical for everyone, so a CDN may
         # cache it briefly.
-        body = {"data": get_event_tiers_payload(event_id)}
+        rows = get_event_tiers_payload(event_id)
+        slot = request.query_params.get("slot")
+        if slot:
+            # Filtered HERE rather than with a cache key per session. The whole
+            # tier list for one event is a handful of rows already in Redis, so
+            # a second key per slot would multiply the invalidation surface to
+            # save a list comprehension. `str()` on both sides because the
+            # value is a UUID before the cache round-trip and a string after.
+            rows = [row for row in rows if str(row.get("slot_id")) == slot]
+        body = {"data": rows}
         etag = make_etag(body)
         if is_not_modified(request, etag):
             return Response(status=status.HTTP_304_NOT_MODIFIED)
@@ -103,6 +126,10 @@ class TicketTypeListCreateView(APIView):
             sale_end=data.get("sale_end"),
             max_per_order=data["max_per_order"],
             phases=_to_service_phases(data.get("phases")),
+            slot_id=data.get("slot_id"),
+            description=data.get("description", ""),
+            perks=data.get("perks"),
+            position=data.get("position", 0),
         )
         return _no_store(
             Response(TicketTypeSerializer(ticket_type).data, status=status.HTTP_201_CREATED)

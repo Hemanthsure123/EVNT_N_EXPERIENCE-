@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from core.errors import ConflictError, DomainError, NotFoundError, PermissionDeniedError
+from core.errors import (
+    ConflictError,
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 
 
 class InvalidWebhookSignatureError(DomainError):
@@ -95,3 +101,82 @@ class BookingNotPayableError(ConflictError):
 
     def __init__(self, status: str) -> None:
         super().__init__(f"A booking in '{status}' state can't take a payment.")
+
+
+class RefundRequestNotFoundError(NotFoundError):
+    code = "refund_request_not_found"
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"Refund request '{request_id}' not found.")
+
+
+class RefundRequestAlreadyOpenError(ConflictError):
+    """One open request per booking.
+
+    Not merely tidiness: without it a frustrated customer pressing the button
+    four times produces four rows, an organizer approves two, and the queue
+    shows two decisions and sends two "approved" emails for one refund. The
+    money is safe — `execute_refund` is idempotent — but the record and the
+    customer's inbox are not.
+    """
+
+    code = "refund_request_already_open"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "There is already an open refund request for this booking. "
+            "You will hear back on that one."
+        )
+
+
+class RefundRequestAlreadyDecidedError(ConflictError):
+    """Two people worked the queue at once.
+
+    A `409` rather than a silent overwrite, so the second decider is told their
+    click did nothing instead of believing they rejected something that was
+    already approved and refunded.
+    """
+
+    code = "refund_request_already_decided"
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"This request has already been {status}.")
+
+
+class BookingNotRefundableError(ConflictError):
+    """Only a PAID booking can be asked about.
+
+    A reserved hold that lapses releases its own inventory and was never
+    charged; a cancelled or expired booking likewise. Offering "request a
+    refund" on one would collect a request nobody could ever action, which is
+    the same failure as a form that discards what was typed.
+    """
+
+    code = "booking_not_refundable"
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"A booking with status '{status}' has nothing to refund.")
+
+
+class NotAllowedToDecideRefundError(PermissionDeniedError):
+    """Only the event's organizer (or an operator) may decide a request."""
+
+    code = "not_allowed_to_decide_refund"
+
+    def __init__(self) -> None:
+        super().__init__("Only the event's organizer can decide this refund request.")
+
+
+class RefundDecisionNoteRequiredError(InvalidInputError):
+    """A rejection must say why.
+
+    A refusal with no reason is what turns a declined refund into a chargeback,
+    and it is the one field the customer actually reads. Required by the API
+    even though the column allows blank — the column is permissive so an
+    approval (which needs no note) shares the same row shape.
+    """
+
+    code = "refund_decision_note_required"
+
+    def __init__(self) -> None:
+        super().__init__("Say why the request is being rejected — the customer is shown this.")

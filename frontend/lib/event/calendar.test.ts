@@ -17,6 +17,7 @@ const EVENT: EventDetail = {
   description: 'An evening of live jazz.',
   venue: 'The Hall, Level 2',
   city: 'Mumbai',
+  category: '',
   starts_at: '2026-12-01T13:30:00Z',
   ends_at: '2026-12-01T17:00:00Z',
   status: 'live',
@@ -32,6 +33,7 @@ const EVENT: EventDetail = {
   language: '',
   age_restriction: '',
   accessibility_notes: '',
+  policies: [],
   seo_title: '',
   seo_description: '',
 };
@@ -135,9 +137,7 @@ describe('ICS conformance', () => {
   it('folds every line to 75 octets or fewer', () => {
     const ics = toIcs(toCalendarEvent(longEvent, 'https://e.test/events/evt-1'), 'evt-1');
 
-    const tooLong = contentLines(ics).filter(
-      (line) => new TextEncoder().encode(line).length > 75,
-    );
+    const tooLong = contentLines(ics).filter((line) => new TextEncoder().encode(line).length > 75);
     expect(tooLong).toEqual([]);
   });
 

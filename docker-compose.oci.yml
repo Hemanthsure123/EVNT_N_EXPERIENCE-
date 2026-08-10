@@ -97,7 +97,24 @@ services:
   #
   # which binds gunicorn to loopback only: unreachable from the internet, still
   # reachable over an SSH tunnel for a shell or a one-off management command.
+  # ── The media volume ────────────────────────────────────────────────────
+  # `STORAGE_BACKEND=local` writes uploads to MEDIA_ROOT (= /app/media), which
+  # is the container's own filesystem — so every poster, performer photo and
+  # avatar is destroyed by the next `up --force-recreate`, silently, one image
+  # at a time. That is precisely why preflight refuses `local` in production.
+  #
+  # A named volume does not make it production-correct (it is still one host's
+  # disk, not object storage, and it cannot be shared across machines), but it
+  # does make it SURVIVE a redeploy, which is the difference between "uploads
+  # work" and "uploads appear to work until you restart". Both web and worker
+  # mount it: web writes them and serves them, and the ticket PDF renderer in
+  # worker READS the event poster to put it on the ticket.
+  #
+  # Switching to S3 later needs no change here — the route simply stops being
+  # used. See docker/Caddyfile's note on `/media`.
   web:
+    volumes:
+      - eventful-media:/app/media
     depends_on:
       eventful-db:
         condition: service_healthy
@@ -105,6 +122,8 @@ services:
         condition: service_healthy
 
   scheduler:
+    volumes:
+      - eventful-media:/app/media
     depends_on:
       eventful-db:
         condition: service_healthy
@@ -112,6 +131,8 @@ services:
         condition: service_healthy
 
   worker:
+    volumes:
+      - eventful-media:/app/media
     depends_on:
       eventful-db:
         condition: service_healthy
@@ -189,5 +210,6 @@ services:
 
 volumes:
   eventful-pgdata:
+  eventful-media:
   eventful-caddy-data:
   eventful-caddy-config:

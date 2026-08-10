@@ -98,20 +98,38 @@ export function CategoriesMenu({ active }: { active: boolean }) {
                 onClick={(event) => go(event, `/categories/${category.slug}`)}
                 className="group flex items-center gap-3 rounded-lg p-2 transition-colors duration-fast ease-out hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {/* Same artwork as the homepage tiles, one size down, on the
-                    same pastel disc — so the menu and the page a visitor lands
-                    on show the same object rather than a line glyph in one
-                    place and a modelled one in the other. */}
+                {/* ── THE ARTWORK, AT A SIZE THAT READS AS ARTWORK ──────────
+                    A 28px illustration inside a 40px plate was reported as
+                    "no illustrations", and that reading was correct: the clay
+                    set is modelled — gradients, a specular highlight, a cast
+                    shadow — and none of it survives at 28px. It rendered as a
+                    flat glyph on a coloured square, which is exactly what it
+                    was built not to be.
+
+                    56px plate, 40px object. The lighting is now visible, and
+                    it is the same artwork at the same relative scale as the
+                    homepage tiles and the category banner — one object per
+                    category across the whole product.
+
+                    Hover LIFTS rather than only scaling: a modelled object
+                    rising off its plate is the movement that matches how it
+                    is drawn, and the shadow it already casts does the rest. */}
                 <span
                   className={cn(
-                    'inline-flex size-10 shrink-0 items-center justify-center rounded-xl',
+                    'inline-flex size-14 shrink-0 items-center justify-center rounded-2xl',
+                    'transition-shadow duration-base ease-spring group-hover:shadow-md',
+                    'motion-reduce:transition-none',
                     TINT_CLASS[category.slug],
                   )}
                   aria-hidden
                 >
                   <ClayIcon
                     slug={category.slug}
-                    className="size-7 transition-transform duration-base ease-spring group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                    className={cn(
+                      'size-10 transition-transform duration-base ease-spring',
+                      'group-hover:-translate-y-0.5 group-hover:scale-105',
+                      'motion-reduce:transition-none motion-reduce:group-hover:translate-y-0 motion-reduce:group-hover:scale-100',
+                    )}
                   />
                 </span>
                 <span className="min-w-0">

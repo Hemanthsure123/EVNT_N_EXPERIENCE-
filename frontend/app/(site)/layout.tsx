@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { AnnouncementBar } from '@/components/shell/announcement-bar';
-import { fetchAnnouncementsSafe } from '@/lib/api/cms';
+import { fetchAnnouncementsSafe, fetchHomepageSafe } from '@/lib/api/cms';
+import { browseHref } from '@/lib/discovery/filters';
+import { Onboarding } from '@/components/account/onboarding';
+import { ReviewPrompt } from '@/components/reviews/review-prompt';
 import { CookieConsent } from '@/components/consent/cookie-consent';
 import { FavouritesSync } from '@/components/account/favourites-sync';
 import { SiteFooter } from '@/components/shell/site-footer';
@@ -24,9 +27,23 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
   // same for every visitor, so they belong in the HTML rather than behind a
   // client request that would land after first paint.
   const announcements = await fetchAnnouncementsSafe('home');
+
+  // The operator's suggested searches, for the header bar's rolling hint AND
+  // the panel's suggestion group — one read, one list.
+  //
+  // This costs NO extra request: the home page reads the same URL with the same
+  // options, so Next memoises it within the render pass and serves it from the
+  // data cache across requests. Fetching it in the client instead would put a
+  // round trip in front of a hint that is identical for everybody.
+  const cms = await fetchHomepageSafe();
+  const terms = (cms?.popular_searches ?? []).map((row) => ({
+    label: row.label,
+    href: browseHref({ q: row.query }),
+  }));
+
   return (
     <LocationProvider>
-      <SearchProvider>
+      <SearchProvider terms={terms}>
         {/* The first focusable thing on every page, so it wears the product's
             primary action: the near-black pill (near-white in dark), fully
             rounded. `focus:z-tooltip` keeps it above the sticky header — a skip
@@ -59,6 +76,20 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
           </div>
           <SiteBottomNav />
           <CookieConsent />
+          {/* The welcome flow. Renders nothing unless somebody has verified
+              their address and has not yet ANSWERED it — where skipping counts
+              as answering. It sits here rather than on a route of its own so
+              it can open wherever the person happens to land after verifying,
+              which is usually mid-way through booking something. */}
+          <Onboarding />
+          {/* The post-event review prompt. Renders nothing unless somebody has
+              an unreviewed event inside the window AND has not already
+              dismissed that one — see the component for why a dismissal is
+              permanent and why that is safe (the tickets page keeps the
+              opportunity open indefinitely). Sits beside Onboarding for the
+              same reason: it must be able to open wherever the person lands,
+              not on a route of its own. */}
+          <ReviewPrompt />
           {/* Renders nothing. Mirrors saved events to the account once signed in,
               and merges whatever was saved while logged out. */}
           <FavouritesSync />

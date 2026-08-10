@@ -116,3 +116,17 @@ class ExceedsMaxPerOrderError(InvalidInputError):
             f"You can order at most {max_per_order} of this ticket type at a time.",
             max_per_order=max_per_order,
         )
+
+
+class SlotNotFoundError(NotFoundError):
+    """No such session on THIS event.
+
+    Scoped by event on purpose: a slot id that exists but belongs to somebody
+    else's show is the same answer as one that does not exist at all, and
+    saying so would confirm the other event's session ids to anyone guessing.
+    """
+
+    code = "slot_not_found"
+
+    def __init__(self, slot_id: str) -> None:
+        super().__init__(f"Session '{slot_id}' not found on this event.")

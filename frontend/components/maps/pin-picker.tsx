@@ -321,8 +321,8 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
       </div>
 
       <p className="max-w-prose text-body-sm text-muted-foreground">
-        Click the map, or drag the pin. The event page shows a map only once a pin is saved —
-        without one it shows the address and a directions link, which is honest but plainer.
+        Click the map or drag the pin. Without one, the event page shows the address and a
+        directions link instead of a map.
       </p>
 
       {state === 'error' ? (

@@ -52,13 +52,15 @@ if TYPE_CHECKING:
     )
     from apps.notifications.services import NotificationService, ReminderService
     from apps.organizations.services import OrganizationFollowService, OrganizationService
-    from apps.payments.services import PaymentService
+    from apps.payments.services import PaymentService, RefundRequestService
     from apps.performers.services import (
         MarketplaceService,
         PerformerModerationService,
         PerformerService,
     )
+    from apps.reviews.services import ReviewService
     from apps.settlements.services import SettlementService
+    from apps.support.services import SupportService
     from apps.ticketing.services import TicketingService
 
 
@@ -291,6 +293,36 @@ def task_queue_port() -> TaskQueuePort:
 # ever imports both a repository and an adapter side by side.
 
 
+def build_support_service() -> SupportService:
+    """Support queries.
+
+    No ports: this module writes two tables and reads them back. Notifying the
+    other side goes through `apps.notifications` on the outbox, so there is no
+    email or queue dependency to inject here.
+    """
+    from apps.support.repositories import SupportRepository
+    from apps.support.services import SupportService
+
+    return SupportService(queries=SupportRepository())
+
+
+def build_review_service() -> ReviewService:
+    """Post-event reviews.
+
+    Takes the EVENT repository as well as its own: `Event.rating_sum` /
+    `rating_count` are denormalised counters this module owns and writes
+    through `EventRepository.apply_rating_delta`, the same arrangement
+    `ticketing` has for `from_price_minor`. Injected rather than imported at
+    call time so the service stays constructible in a unit test without
+    Django settings deciding anything.
+    """
+    from apps.events.repositories import EventRepository
+    from apps.reviews.repositories import ReviewRepository
+    from apps.reviews.services import ReviewService
+
+    return ReviewService(reviews=ReviewRepository(), events=EventRepository())
+
+
 def build_auth_service() -> AuthService:
     from apps.accounts.repositories import UserRepository
     from apps.accounts.services import AuthService
@@ -412,7 +444,8 @@ def build_performer_moderation_service() -> PerformerModerationService:
 
 
 def build_marketplace_service() -> MarketplaceService:
-    """Briefs and quotes - the customer's side and the performer's."""
+    """The enquiry desk: a customer's requirement, and an operator working it."""
+    from apps.accounts.repositories import UserRepository
     from apps.performers.repositories import (
         BookingRequestRepository,
         PerformerRepository,
@@ -424,6 +457,10 @@ def build_marketplace_service() -> MarketplaceService:
         requests=BookingRequestRepository(),
         quotes=QuoteRepository(),
         performers=PerformerRepository(),
+        # For the contact-detail fallback: an enquiry with no way to answer it
+        # is one that wastes both people's time, and the account always has an
+        # email address.
+        users=UserRepository(),
     )
 
 
@@ -485,13 +522,18 @@ def build_homepage_service() -> HomepageService:
 
 def build_event_content_service() -> EventContentService:
     """Media, FAQs and running order. Ownership is checked in the service."""
-    from apps.events.repositories import EventContentRepository, EventRepository
+    from apps.events.repositories import (
+        EventContentRepository,
+        EventRepository,
+        EventSlotRepository,
+    )
     from apps.events.services import EventContentService
 
     return EventContentService(
         events=EventRepository(),
         content=EventContentRepository(),
         storage=storage_port(),
+        slots=EventSlotRepository(),
     )
 
 
@@ -570,6 +612,26 @@ def build_payment_service() -> PaymentService:
         bookings=BookingRepository(),
         booking_service=build_booking_service(),
         payments_port=payment_port(),
+        task_queue=task_queue_port(),
+    )
+
+
+def build_refund_request_service() -> RefundRequestService:
+    """The refund-REQUEST workflow, separate from the money path.
+
+    Note what it is NOT given: `PaymentPort`. This service enqueues a refund and
+    never performs one, so it has no way to reach a vendor even by accident —
+    `PaymentService.execute_refund` stays the single place money moves, with its
+    lock, its idempotency and its vendor idempotency key.
+    """
+    from apps.booking.repositories import BookingRepository
+    from apps.payments.repositories import PaymentRepository, RefundRequestRepository
+    from apps.payments.services import RefundRequestService
+
+    return RefundRequestService(
+        requests=RefundRequestRepository(),
+        payments=PaymentRepository(),
+        bookings=BookingRepository(),
         task_queue=task_queue_port(),
     )
 

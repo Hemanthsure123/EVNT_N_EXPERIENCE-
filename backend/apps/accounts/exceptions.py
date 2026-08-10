@@ -59,6 +59,36 @@ class EmailNotVerifiedError(AuthenticationError):
         super().__init__("Verify your email address to sign in. We can send you a new code.")
 
 
+class AccountSuspendedError(AuthenticationError):
+    """An operator has taken this account out of service.
+
+    ── WHY THIS IS SAFE TO SAY OUT LOUD ──────────────────────────────────
+
+    It is raised only AFTER the credential has been proven — the password
+    checked, or Google having asserted the address. Anyone who reaches this
+    line already knows the account exists, so naming its state leaks nothing
+    an enumeration attack could use. The same reasoning orders the
+    `email_not_verified` check after the password.
+
+    Answering a suspended sign-in with "invalid credentials" — which is what
+    this replaced — sends somebody to the password-reset flow to fix a
+    password that was never wrong, and they will do that repeatedly. There is
+    no self-service route out of a suspension, so the message has to name the
+    one route there is.
+    """
+
+    code = "account_suspended"
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(
+            message
+            or (
+                "This account has been suspended by an administrator. "
+                "Contact support to have it reviewed."
+            )
+        )
+
+
 class VerificationCodeInvalidError(InvalidInputError):
     """Wrong code, or a code that has expired or already been used.
 

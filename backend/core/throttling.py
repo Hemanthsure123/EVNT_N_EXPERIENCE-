@@ -197,3 +197,47 @@ class WriteThrottle(_UserScopedThrottle):
     costs nothing to serve twice."""
 
     scope = "write"
+
+
+class ShareReceiptThrottle(SimpleRateThrottle):
+    """Sending a receipt puts mail into somebody else's inbox on our reputation.
+
+    That makes it the one authenticated endpoint on this platform that can be
+    used to bother a third party, so it is metered per USER rather than per IP —
+    an IP bucket is shared by everyone behind a carrier NAT and is defeated by
+    changing networks.
+
+    Fails OPEN with the rest of them (see the note at the top of this file): a
+    Redis outage must not stop somebody sending their friend a receipt.
+    """
+
+    scope = "share_receipt"
+    rate = "20/hour"
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {"scope": self.scope, "ident": request.user.pk}
+
+
+class ReviewWriteThrottle(SimpleRateThrottle):
+    """Metered per USER, because a review is attributed to one.
+
+    The unique constraint already stops the obvious abuse — one review per
+    event per person — so this is not the duplicate guard. It bounds the OTHER
+    shape: an account walking every event it ever attended, or retrying a
+    submission in a loop, each attempt costing an eligibility check across
+    three tables.
+
+    Per user rather than per IP: an IP bucket is shared by everyone behind a
+    carrier NAT and defeated by changing networks, and this endpoint requires
+    authentication anyway. Fails open with the rest of them.
+    """
+
+    scope = "review_write"
+    rate = "30/hour"
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {"scope": self.scope, "ident": request.user.pk}

@@ -87,15 +87,37 @@ describe('verifyEmail', () => {
 
 describe('googleSignInAvailable', () => {
   it('reports what the backend says', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => json({ available: true })));
-    await expect(googleSignInAvailable()).resolves.toBe(true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => json({ available: true })),
+    );
+    await expect(googleSignInAvailable()).resolves.toBe('available');
   });
 
-  it('treats an unreachable backend as unavailable', async () => {
-    // Hiding the button is the safe failure: the alternative offers a control
-    // that cannot work.
-    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))));
-    await expect(googleSignInAvailable()).resolves.toBe(false);
+  it('distinguishes a backend that says NO from one that cannot answer', async () => {
+    /**
+     * This returned a plain boolean, with `catch { return false }` defended as
+     * "the safe failure". It is safe, and it is also how a working feature
+     * silently disappears: point the app at a backend that is down — a stopped
+     * container, a rotated tunnel — and the Google button vanishes with no
+     * explanation while the email form stays on screen looking fine and fails
+     * only on submit. It reads as a removed feature.
+     *
+     * The two cases now have two names, because the panel does two different
+     * things with them: hide the button silently, or say the service cannot be
+     * reached (which is also why the password form will not work).
+     */
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => json({ available: false })),
+    );
+    await expect(googleSignInAvailable()).resolves.toBe('unconfigured');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('offline'))),
+    );
+    await expect(googleSignInAvailable()).resolves.toBe('unreachable');
   });
 });
 

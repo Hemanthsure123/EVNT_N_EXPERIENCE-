@@ -54,3 +54,66 @@ class PaymentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class RefundRequestCreateSerializer(serializers.Serializer):
+    """What a customer sends to ask for their money back.
+
+    ONE field, and it is prose. No `amount_minor`: approving a request refunds
+    the payment in full because `execute_refund` refunds `payment.amount_minor`
+    and nothing else, so an amount here would be a number the executor ignores
+    — a field that silently discards what was typed, which is exactly what this
+    codebase refuses everywhere else. Partial refunds need `execute_refund` to
+    accept an amount first.
+
+    A `min_length` because "refund" is not a reason and the organizer reading it
+    has to decide something. Twenty characters is roughly one honest sentence.
+    """
+
+    reason = serializers.CharField(max_length=1000, min_length=20, trim_whitespace=True)
+
+
+class RefundDecisionSerializer(serializers.Serializer):
+    """Approve or reject.
+
+    `note` is optional at the schema level and REQUIRED for a rejection by the
+    service (`RefundDecisionNoteRequiredError`). The rule lives there rather
+    than in a conditional serializer validator because it is a business rule
+    about what a refusal must contain, and it holds no matter which of the
+    three surfaces — customer-facing, organizer, or console — is asking.
+    """
+
+    approve = serializers.BooleanField()
+    note = serializers.CharField(
+        max_length=1000, required=False, allow_blank=True, default="", trim_whitespace=True
+    )
+
+
+class RefundRequestSerializer(serializers.Serializer):
+    """One request, as every surface renders it.
+
+    Deliberately ONE serializer for the customer, the organizer and the
+    operator. The fields are the same facts, and three near-identical
+    serializers is how the customer's view and the organizer's view end up
+    disagreeing about what was decided.
+
+    It carries no amount of its own — `booking_total_minor` is what would be
+    refunded, read from the booking, so the number shown is the number that
+    would actually move.
+    """
+
+    id = serializers.CharField()
+    status = serializers.CharField()
+    reason = serializers.CharField()
+    decision_note = serializers.CharField(allow_blank=True)
+    created_at = serializers.CharField()
+    decided_at = serializers.CharField(allow_null=True)
+    decided_by_email = serializers.CharField(allow_null=True)
+    booking_id = serializers.CharField()
+    booking_total_minor = serializers.IntegerField()
+    booking_status = serializers.CharField()
+    requested_by_email = serializers.CharField()
+    requested_by_name = serializers.CharField(allow_blank=True)
+    event_id = serializers.CharField()
+    event_title = serializers.CharField()
+    event_starts_at = serializers.CharField()

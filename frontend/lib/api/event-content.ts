@@ -1,4 +1,5 @@
 import { api } from './client';
+import { API_BASE_URL } from './config';
 
 /**
  * Event content: media, FAQs and running order.
@@ -59,16 +60,78 @@ export type EventTimelineEntry = {
   position: number;
 };
 
+/**
+ * One session of an event that runs more than once — a showtime.
+ *
+ * `label` is optional because most sessions have no name worth giving; a
+ * chooser falls back to the time, which is what a buyer is picking between
+ * anyway. `ends_at` is optional for the same reason it is nullable on the
+ * server: an organiser who does not know when the set finishes must be able to
+ * leave it out rather than invent one.
+ */
+export type EventSlot = {
+  id: string;
+  label: string;
+  starts_at: string;
+  ends_at: string | null;
+  position: number;
+  is_active: boolean;
+};
+
 export type EventContent = {
   media: EventMedia[];
   faqs: EventFaq[];
   timeline: EventTimelineEntry[];
+  /**
+   * ACTIVE sessions only, in the organiser's own order. Empty for the ordinary
+   * single-show event, which is why every consumer treats "no slots" as the
+   * normal case rather than as missing data.
+   */
+  slots: EventSlot[];
 };
 
 const base = (eventId: string) => `/events/${encodeURIComponent(eventId)}`;
 
 export const fetchEventContent = (eventId: string) =>
   api.get<EventContent>(`${base(eventId)}/content`);
+
+/**
+ * The organiser's session list — INCLUDING the ones switched off, unlike the
+ * public content payload. The only way to bring a cancelled session back is to
+ * be able to see it.
+ */
+export const fetchOwnerSlots = (eventId: string) =>
+  api.get<EventSlot[]>(`${base(eventId)}/slots`);
+
+export const addSlot = (
+  eventId: string,
+  input: { starts_at: string; label?: string; ends_at?: string | null; position?: number },
+) => api.post<EventSlot>(`${base(eventId)}/slots`, input);
+
+export const updateSlot = (
+  eventId: string,
+  slotId: string,
+  changes: Partial<Pick<EventSlot, 'label' | 'starts_at' | 'ends_at' | 'position' | 'is_active'>>,
+) => api.patch<EventSlot>(`${base(eventId)}/slots/${encodeURIComponent(slotId)}`, changes);
+
+/**
+ * Delete a session outright. The server refuses (`409 slot_in_use`) once ticket
+ * tiers are attached — those tiers hold the inventory counters and, after a
+ * sale, the issued tickets. Switching it off is the operation that always
+ * works, and is what a cancelled session actually is.
+ */
+export const removeSlot = (eventId: string, slotId: string) =>
+  api.delete<void>(`${base(eventId)}/slots/${encodeURIComponent(slotId)}`);
+
+/**
+ * Attach media by URL, rather than by uploading bytes.
+ *
+ * The route a VIDEO takes: the server normalises a pasted YouTube or Vimeo
+ * link into an embed URL it builds itself from an extracted id, and refuses
+ * every other host. `POST .../media/upload` is image-only and says so.
+ */
+export const addMedia = (eventId: string, input: Omit<EventMedia, 'id'>) =>
+  api.post<EventMedia>(`${base(eventId)}/media`, input);
 
 export const addFaq = (eventId: string, input: Omit<EventFaq, 'id'>) =>
   api.post<EventFaq>(`${base(eventId)}/faqs`, input);
@@ -109,7 +172,22 @@ export function uploadMedia(
 
   const request = new XMLHttpRequest();
   const promise = new Promise<EventMedia>((resolve, reject) => {
-    request.open('POST', `/api/v1${base(eventId)}/media/upload`);
+    // `API_BASE_URL` is NOT optional here, and leaving it off is why every
+    // gallery and cover upload failed.
+    //
+    // A relative `/api/v1/...` resolves against the PAGE's origin — the Next
+    // server on :3000 — not the API on :8000. Next has no such route, so it
+    // answered with its own 404 HTML page. That is not JSON, the parse below
+    // threw into its `catch`, and the reject fell back to the generic
+    // "That upload did not go through." So a wrong URL surfaced as a message
+    // that describes no cause and suggests no fix.
+    //
+    // Every other call goes through `lib/api/client.ts`, which prefixes
+    // `API_BASE_URL` centrally; this function talks to `XMLHttpRequest`
+    // directly (for upload progress, which `fetch` cannot report) and so had
+    // to build its own URL. `uploadAvatar` in `profile.ts` is the same shape
+    // and got it right — the two are worth reading together.
+    request.open('POST', `${API_BASE_URL}/api/v1${base(eventId)}/media/upload`);
     const token = tokenStore.getAccess();
     if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
 
@@ -135,12 +213,22 @@ export function uploadMedia(
       }
       // Surface the server's own message — it is written to be actionable
       // ("that image is 14.2 MB, the limit is 10 MB").
+      //
+      // The FALLBACK has to say something too. It used to be "That upload did
+      // not go through." for every non-JSON response, which is what a
+      // misrouted request looks like — and it hid a wrong URL for as long as
+      // nobody tried an upload in a browser. When there is no envelope the
+      // status code is the only fact available, so it is in the message.
       const envelope = parsed as { error?: { code?: string; message?: string } } | null;
+      const fallback =
+        request.status === 0
+          ? 'The upload could not reach the server.'
+          : `The server rejected the upload (HTTP ${request.status}).`;
       reject(
         new ApiError(
           request.status,
           envelope?.error?.code ?? 'upload_failed',
-          envelope?.error?.message ?? 'That upload did not go through.',
+          envelope?.error?.message ?? fallback,
           {},
         ),
       );
@@ -167,6 +255,91 @@ export function checkFile(file: File): string | null {
   if (file.size > MAX_IMAGE_BYTES) {
     const megabytes = (file.size / (1024 * 1024)).toFixed(1);
     return `${file.name} is ${megabytes} MB — the limit is 10 MB.`;
+  }
+  return null;
+}
+
+/**
+ * ── THE SHAPE EVERY EVENT IMAGE HAS TO BE ─────────────────────────────────
+ *
+ * Mirrors `core.uploads.EVENT_IMAGE_SPEC`. The SERVER is authoritative — this
+ * copy exists so an organiser learns about a 2:3 poster before uploading 8 MB
+ * of it over a hotel wifi, not to decide anything. If the two ever disagree,
+ * the server refuses and its message is what gets shown.
+ *
+ * 16:9 because the event page draws every picture — hero, filmstrip, lightbox
+ * — in one widescreen frame, and a fixed frame can only be kept honest at the
+ * door. Eventbrite, Luma and Skiddle each pin exactly one ratio for the same
+ * reason.
+ */
+export const EVENT_IMAGE = {
+  recommendedWidth: 1920,
+  recommendedHeight: 1080,
+  minWidth: 1280,
+  minHeight: 720,
+  /** 3:2 (a camera) through 2:1 (Eventbrite's banner). Anything inside loses
+   *  at most about a sixth of itself to the frame. */
+  minRatio: 1.5,
+  maxRatio: 2.0,
+} as const;
+
+/** One sentence for the dropzone, so the rule is visible before the mistake. */
+export const EVENT_IMAGE_HINT = `Landscape only — ${EVENT_IMAGE.recommendedWidth} x ${EVENT_IMAGE.recommendedHeight} (16:9) is ideal, ${EVENT_IMAGE.minWidth} x ${EVENT_IMAGE.minHeight} minimum.`;
+
+/** The pixel size of a picked file, without putting it in the DOM. */
+async function readDimensions(file: File): Promise<{ width: number; height: number } | null> {
+  // `createImageBitmap` decodes off the main thread and needs no element and no
+  // object URL to revoke. Safari below 17 lacks it for some types, hence the
+  // fallback — and if BOTH fail we return null and let the server decide,
+  // because refusing a file the browser merely could not measure would block
+  // an upload that is actually fine.
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const size = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+      return size;
+    } catch {
+      /* fall through */
+    }
+  }
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const image = new window.Image();
+    image.onload = () => {
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      URL.revokeObjectURL(url);
+    };
+    image.onerror = () => {
+      resolve(null);
+      URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  });
+}
+
+/**
+ * The full pre-check: type, size, then shape.
+ *
+ * Shape is reported BEFORE resolution for the same reason the server does it —
+ * a 1200x1800 poster fails both, and telling somebody to enlarge it sends them
+ * back with a 1400x2100 poster that fails again. Scaling cannot fix a shape.
+ */
+export async function checkImageFile(file: File): Promise<string | null> {
+  const basic = checkFile(file);
+  if (basic) return basic;
+
+  const size = await readDimensions(file);
+  if (!size || size.width <= 0 || size.height <= 0) return null;
+
+  const ratio = size.width / size.height;
+  if (ratio < EVENT_IMAGE.minRatio || ratio > EVENT_IMAGE.maxRatio) {
+    const shape =
+      ratio < 1 ? 'taller than it is wide' : ratio < EVENT_IMAGE.minRatio ? 'close to square' : 'very wide';
+    return `${file.name} is ${size.width} x ${size.height}, which is ${shape}. Event images have to be landscape — export it at ${EVENT_IMAGE.recommendedWidth} x ${EVENT_IMAGE.recommendedHeight} (16:9).`;
+  }
+  if (size.width < EVENT_IMAGE.minWidth || size.height < EVENT_IMAGE.minHeight) {
+    return `${file.name} is ${size.width} x ${size.height} — too small. Event images need at least ${EVENT_IMAGE.minWidth} x ${EVENT_IMAGE.minHeight}.`;
   }
   return null;
 }

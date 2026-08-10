@@ -65,6 +65,12 @@ export type EventStatus =
   | 'live'
   | 'paused'
   | 'finished'
+  /**
+   * Called off, with everybody refunded. PUBLIC and terminal — the event page
+   * still resolves and says so, because hundreds of people hold a link in an
+   * email and a 404 there reads as "the platform lost my booking".
+   */
+  | 'cancelled'
   | 'archived';
 
 export type EventRow = {

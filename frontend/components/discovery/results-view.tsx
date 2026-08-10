@@ -99,7 +99,8 @@ export type ResultsViewProps = {
   initialError: string | null;
   /** Banner copy, resolved on the server from the filters. */
   bannerEyebrow: string;
-  bannerHeadline: string;
+  /** Optional: the unfiltered list carries a photograph and no sentence. */
+  bannerHeadline?: string;
   /** Server-rendered backdrop `<Image>`, so the photo is in the initial HTML. */
   bannerBackdrop?: React.ReactNode;
 };

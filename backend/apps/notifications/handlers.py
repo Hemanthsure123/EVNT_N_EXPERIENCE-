@@ -547,3 +547,295 @@ def handle_event_published(payload: dict) -> None:
         "notifications.reminder_scheduled",
         extra={"event_id": str(event.id), "delay_seconds": delay},
     )
+
+
+# --- the refund REQUEST lifecycle ------------------------------------------
+#
+# Three handlers, three audiences. None of them says "your refund happened" —
+# that is `handle_payment_refunded` above, which fires on PAYMENT_REFUNDED once
+# money has ACTUALLY moved. A request is a conversation; a refund is a fact, and
+# conflating them is how a customer is told their money is back before it is.
+
+
+def _refund_request_context(request) -> dict:
+    """The facts all three messages are rendered from, read once."""
+    booking = request.booking
+    return {
+        "name": booking.user.full_name,
+        "customer_email": booking.user.email,
+        "customer_name": request.requested_by.full_name,
+        "event_title": booking.event.title,
+        "booking_reference": str(booking.id),
+        "amount_display": _amount_display(booking.total_amount_minor),
+        "reason": request.reason,
+        "note": request.decision_note,
+    }
+
+
+def _load_request(refund_request_id: str, log_key: str):
+    from apps.payments.repositories import RefundRequestRepository
+
+    request = RefundRequestRepository().get_for_decision(refund_request_id)
+    if request is None:
+        logger.warning(log_key, extra={"refund_request_id": refund_request_id})
+    return request
+
+
+def handle_refund_requested(payload: dict) -> None:
+    """REFUND_REQUESTED -> tell the ORGANIZER somebody is waiting.
+
+    Sent to the organization's owner, resolved from the event rather than taken
+    from the payload: the payload's `organizer_id` is a convenience for
+    consumers that only need an id, and re-reading here means one source of
+    truth for who actually owns the event today.
+    """
+    from config.di import build_notification_service
+
+    request_id = payload["refund_request_id"]
+    request = _load_request(request_id, "notifications.refund_request.missing")
+    if request is None:
+        return
+
+    owner = request.booking.event.organization.owner
+    build_notification_service().notify(
+        notification_type=NotificationType.REFUND_REQUEST_RECEIVED,
+        recipient=owner.email,
+        context=_refund_request_context(request),
+        # Keyed on the REQUEST id, which is unique by construction — never on a
+        # timestamp. A key that includes "now" collides for two requests in the
+        # same second and gets one of them swallowed by the idempotency ledger,
+        # which is exactly the bug the email-verification flow hit once.
+        dedupe_key=f"refundreq:{request_id}:email:{owner.email}",
+    )
+
+
+def handle_refund_request_approved(payload: dict) -> None:
+    """REFUND_REQUEST_APPROVED -> tell the CUSTOMER it is being processed.
+
+    Deliberately NOT "you have been refunded". Approval enqueues the vendor
+    call; `PAYMENT_REFUNDED` fires the confirmation once the money has moved.
+    """
+    from config.di import build_notification_service
+
+    request_id = payload["refund_request_id"]
+    request = _load_request(request_id, "notifications.refund_request_approved.missing")
+    if request is None:
+        return
+
+    recipient = request.requested_by.email
+    build_notification_service().notify(
+        notification_type=NotificationType.REFUND_REQUEST_APPROVED,
+        recipient=recipient,
+        context=_refund_request_context(request),
+        dedupe_key=f"refundreq_approved:{request_id}:email:{recipient}",
+    )
+
+
+def handle_refund_request_rejected(payload: dict) -> None:
+    """REFUND_REQUEST_REJECTED -> tell the CUSTOMER, with the reason.
+
+    The reason is the whole message. The service refuses a rejection without
+    one, so `decision_note` is always populated by the time this runs.
+    """
+    from config.di import build_notification_service
+
+    request_id = payload["refund_request_id"]
+    request = _load_request(request_id, "notifications.refund_request_rejected.missing")
+    if request is None:
+        return
+
+    recipient = request.requested_by.email
+    build_notification_service().notify(
+        notification_type=NotificationType.REFUND_REQUEST_REJECTED,
+        recipient=recipient,
+        context=_refund_request_context(request),
+        dedupe_key=f"refundreq_rejected:{request_id}:email:{recipient}",
+    )
+
+
+def handle_event_deleted_by_operator(payload: dict) -> None:
+    """EVENT_DELETED_BY_OPERATOR -> tell the attendees AND the organizer.
+
+    Two audiences, two messages, and neither is the other's with a word
+    changed. The ATTENDEE is told their event is off and their money is coming
+    back; the ORGANIZER is told their event was removed and why.
+
+    The attendee list rides on the PAYLOAD rather than being re-queried,
+    because by the time this runs the event is already soft-deleted — every
+    read in `EventRepository` filters `deleted_at__isnull=True`, so a re-query
+    here would find nothing and silently email nobody.
+
+    Deduped per (event, recipient), so re-running a deletion — or a queue
+    redelivery — cannot send somebody a second cancellation for the same event.
+    """
+    from config.di import build_notification_service
+
+    service = build_notification_service()
+    event_id = payload["event_id"]
+    context = {
+        "event_title": payload.get("title", ""),
+        "reason": payload.get("reason", ""),
+        "refunded_bookings": payload.get("refunded_bookings", 0),
+        "booking_reference": "",
+    }
+
+    for email in payload.get("attendee_emails", []) or []:
+        service.notify(
+            notification_type=NotificationType.EVENT_CANCELLED_ATTENDEE,
+            recipient=email,
+            context={**context, "name": ""},
+            dedupe_key=f"event_cancelled:{event_id}:email:{email}",
+        )
+
+    owner_email = payload.get("owner_email", "")
+    if owner_email:
+        service.notify(
+            notification_type=NotificationType.EVENT_DELETED_ORGANIZER,
+            recipient=owner_email,
+            context=context,
+            dedupe_key=f"event_deleted:{event_id}:email:{owner_email}",
+        )
+
+
+def handle_event_cancelled_by_organizer(payload: dict) -> None:
+    """EVENT_CANCELLED_BY_ORGANIZER -> tell the attendees.
+
+    The SAME message an operator deletion sends them, deliberately. From a
+    ticket holder's side the two are one fact — the event is off and their
+    money is coming back — and two differently-worded cancellation emails for
+    the same outcome is how one of them ends up out of date about the refund
+    timing, which is the line people actually read.
+
+    No organizer email here, unlike the deletion path: they are the ones who
+    just pressed the button. Telling somebody what they did a second later is
+    the kind of message that trains people to ignore the sender.
+
+    Deduped per (event, recipient), so a queue redelivery cannot send a second
+    cancellation for the same event.
+    """
+    from config.di import build_notification_service
+
+    service = build_notification_service()
+    event_id = payload["event_id"]
+
+    for email in payload.get("attendee_emails", []) or []:
+        service.notify(
+            notification_type=NotificationType.EVENT_CANCELLED_ATTENDEE,
+            recipient=email,
+            context={
+                "event_title": payload.get("title", ""),
+                "reason": payload.get("reason", ""),
+                "refunded_bookings": payload.get("refunded_bookings", 0),
+                "booking_reference": "",
+                "name": "",
+                # The organiser wrote this FOR the attendees — the endpoint
+                # requires it and says so on the form — so it is forwarded.
+                # The operator-deletion path deliberately does not set it: an
+                # operator's note is written for the ORGANISER, and passing it
+                # on would publish an internal judgement to a customer.
+                "attendee_reason": payload.get("reason", ""),
+            },
+            # The SAME key shape the deletion path uses. An event that is
+            # cancelled and then deleted must not email everybody twice for
+            # what is, to them, one event being called off.
+            dedupe_key=f"event_cancelled:{event_id}:email:{email}",
+        )
+
+
+def handle_hire_enquiry_created(payload: dict) -> None:
+    """PERFORMER_REQUEST_CREATED -> tell the operator, and acknowledge to the customer.
+
+    ── THIS IS THE DELIVERY MECHANISM, NOT A NOTIFICATION ABOUT ONE ──────
+
+    When this was a marketplace, a brief was matched to listed acts and the
+    performers were the ones who acted on it; an operator alert would have been
+    a courtesy. There is no supply side now, so this email IS how the enquiry
+    reaches anybody. If it is not sent, or the ops mailbox is unset, the
+    customer hears nothing at all — which is why the operator half runs first
+    and logs loudly when there is nowhere to send it.
+
+    The customer's acknowledgement is second and is not conditional on the
+    first: an unset ops mailbox is an operator's problem, and it must not also
+    leave the customer wondering whether the form worked.
+    """
+    from apps.performers.repositories import BookingRequestRepository
+
+    request_id = str(payload["request_id"])
+    enquiry = BookingRequestRepository().get_by_id(request_id)
+    if enquiry is None:
+        logger.warning("notifications.hire_enquiry.missing", extra={"request_id": request_id})
+        return
+
+    context = {
+        "performer_type": enquiry.get_performer_type_display(),
+        "city": enquiry.city,
+        "event_date": enquiry.event_date.isoformat(),
+        "contact_name": enquiry.contact_name,
+        "contact_phone": enquiry.contact_phone,
+        "contact_email": enquiry.contact_email,
+        "budget": (
+            f"{_amount_display(enquiry.budget_min_minor)} - "
+            f"{_amount_display(enquiry.budget_max_minor)}"
+        ),
+    }
+
+    if not _no_operator_configured("hire_enquiry"):
+        _alert_admins(
+            notification_type=NotificationType.ADMIN_HIRE_ENQUIRY,
+            context=context,
+            dedupe_scope=f"hire_enquiry:{request_id}",
+        )
+
+    # The address they asked to be contacted on, which is not always the
+    # account's — the bride's account, the planner's inbox.
+    recipient = enquiry.contact_email or (enquiry.customer.email if enquiry.customer_id else "")
+    if recipient:
+        from config.di import build_notification_service
+
+        build_notification_service().notify(
+            notification_type=NotificationType.HIRE_ENQUIRY_RECEIVED,
+            recipient=recipient,
+            context=context,
+            dedupe_key=f"hire_enquiry_ack:{request_id}:email:{recipient}",
+        )
+
+
+def handle_booking_receipt_shared(payload: dict) -> None:
+    """Mail the buyer's receipt to each person they named.
+
+    One `notify` per recipient, each with its own dedupe key, so a redelivered
+    outbox event cannot send anybody a second copy — and so one bad address
+    cannot stop the others going out.
+    """
+    from config.di import build_notification_service
+
+    service = build_notification_service()
+    booking_id = payload["booking_id"]
+    for email in payload.get("recipients", []):
+        service.notify(
+            notification_type=NotificationType.BOOKING_RECEIPT_SHARED,
+            recipient=email,
+            context={
+                "booker_name": payload.get("booker_name") or "Someone",
+                "event_title": payload["event_title"],
+                "event_when": _when_display(payload["event_when"]),
+                "event_where": payload["event_where"],
+                "booking_reference": payload["booking_reference"],
+                "total_display": _amount_display(int(payload["total_minor"])),
+                "note": payload.get("note") or "",
+                "receipt_pdf_b64": payload.get("receipt_pdf_b64") or "",
+            },
+            dedupe_key=f"receipt_shared:{booking_id}:email:{email}",
+        )
+
+
+def _when_display(iso: str) -> str:
+    """The event's start, in words. Falls back to the raw value rather than
+    raising: a malformed timestamp should cost a nicely formatted date, not the
+    whole receipt."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(iso).strftime("%a, %d %b %Y at %I:%M %p").replace(" 0", " ")
+    except (TypeError, ValueError):
+        return str(iso)

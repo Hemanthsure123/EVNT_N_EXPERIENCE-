@@ -1,6 +1,7 @@
 import pytest
 
 from apps.accounts.exceptions import (
+    AccountSuspendedError,
     EmailAlreadyRegisteredError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
@@ -89,11 +90,14 @@ def test_authenticate_rejects_unknown_email(auth_service):
 
 @pytest.mark.django_db
 def test_authenticate_rejects_an_inactive_user(auth_service):
+    """And says WHY. `InvalidCredentialsError` here looked identical to a typo,
+    so a suspended person reset a password that was never wrong and was refused
+    again — see `test_suspension.py` for the whole loop this ended."""
     user = auth_service.register(email="inactive@example.com", password="correct-pass")
     user.is_active = False
     user.save(update_fields=["is_active"])
 
-    with pytest.raises(InvalidCredentialsError):
+    with pytest.raises(AccountSuspendedError):
         auth_service.authenticate(email="inactive@example.com", password="correct-pass")
 
 

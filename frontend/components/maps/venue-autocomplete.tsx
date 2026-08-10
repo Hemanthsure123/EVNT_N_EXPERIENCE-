@@ -263,8 +263,7 @@ export function VenueAutocomplete({
       {/* States that change what the organizer should expect, each said once. */}
       {!mapsAvailable && !config.isPending ? (
         <p className="text-caption text-muted-foreground">
-          Venue search is unavailable on this deployment — type the venue name and city, and the
-          event page will show an address and a directions link instead of a map.
+          Venue search is unavailable. Type the venue name and city instead.
         </p>
       ) : pinned ? (
         <p className="text-caption text-success-subtle-foreground">
