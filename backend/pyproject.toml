@@ -4,10 +4,11 @@ version = "0.1.0"
 description = "Event & Experience Platform - backend (Django + DRF, hexagonal architecture)"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-  "Django>=5.0,<5.2",
+  "Django>=5.2.16,<6.1",
   "djangorestframework>=3.15,<3.16",
   "django-environ>=0.11,<0.12",
-  "djangorestframework-simplejwt>=5.3,<5.6",
+  "djangorestframework-simplejwt>=5.5.1,<5.6",
+  "cryptography>=50.0.0,<51.0",
   "drf-spectacular>=0.27,<0.28",
   "django-cors-headers>=4.4,<4.5",
   "psycopg2-binary>=2.9,<2.10",
