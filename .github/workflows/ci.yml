@@ -249,7 +249,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Create CI environment file template
-        run: test -f .env.example && cp .env.example .env || cp .env.tunnel.example .env
+        run: cp -f .env.example .env
 
       - name: The base production file is valid
         run: docker compose -f docker-compose.yml config --quiet
