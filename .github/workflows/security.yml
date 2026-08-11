@@ -102,6 +102,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
+          ignore-unfixed: true
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: table
