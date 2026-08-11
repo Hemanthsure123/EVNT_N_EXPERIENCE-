@@ -35,7 +35,7 @@ jobs:
       - name: Lint (CSS incl. color-no-hex)
         run: npm run lint:css
       - name: Unit + component tests
-        run: npm run test
+        run: npm run test -- --pool=forks
       - name: Build
         run: npm run build
       - name: Bundle-size budget
