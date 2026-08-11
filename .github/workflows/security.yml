@@ -60,9 +60,7 @@ jobs:
       # dependencies would miss razorpay, boto3 and reportlab — which is most
       # of what handles money, storage and untrusted input.
       - name: Install (production extras included)
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[razorpay,push,observability,s3]"
+        run: python -m pip install -e ".[razorpay,push,observability,s3]"
 
       - name: pip-audit
         run: |
