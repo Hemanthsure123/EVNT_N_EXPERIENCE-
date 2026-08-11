@@ -1,5 +1,13 @@
 # Deployment runbook
 
+> **Which deployment document?** `DEPLOY_EC2.md` is the authoritative runbook
+> for the **AWS EC2 production** deployment (Caddy, Supabase, Upstash).
+> `DEPLOYMENT.md` explains the rules that apply to every target;
+> `DEPLOY_ORACLE.md` is the single-box Oracle topology and
+> `DEPLOY_RENDER_VERCEL.md` the short-lived Render/Vercel test topology. Do not
+> mix instructions between them — they use different databases and different
+> compose files.
+
 How to take Eventful from a checkout to serving real customers, in order, with
 the reason each step exists and what to do when one fails.
 

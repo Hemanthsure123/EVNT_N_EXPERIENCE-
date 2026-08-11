@@ -1,5 +1,13 @@
 # Deploying to Oracle Cloud (Always Free)
 
+> **Which deployment document?** `DEPLOY_EC2.md` is the authoritative runbook
+> for the **AWS EC2 production** deployment (Caddy, Supabase, Upstash).
+> `DEPLOYMENT.md` explains the rules that apply to every target;
+> `DEPLOY_ORACLE.md` is the single-box Oracle topology and
+> `DEPLOY_RENDER_VERCEL.md` the short-lived Render/Vercel test topology. Do not
+> mix instructions between them — they use different databases and different
+> compose files.
+
 Everything on one Ampere VM: Postgres, Redis, the three backend processes, the
 Next.js frontend, and Caddy terminating TLS.
 

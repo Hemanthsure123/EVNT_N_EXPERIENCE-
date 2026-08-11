@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -464,3 +465,496 @@ class TestImagePackaging:
 
     def test_the_image_declares_a_healthcheck(self):
         assert "HEALTHCHECK" in DOCKERFILE.read_text(encoding="utf-8")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE EC2 TOPOLOGY
+#
+# `docker-compose.ec2.yml` is an OVERLAY on the production file above. These
+# assert the things about it that no other test can see and that a reviewer
+# would otherwise have to hold in their head — every one of them a way the
+# site goes down or leaks with nothing in the application failing.
+#
+# They parse YAML rather than shelling out to `docker compose config`, so they
+# run in CI with no Docker daemon. `docker compose config` IS also run in CI
+# (.github/workflows/ci.yml), which is what catches a merge-key or
+# interpolation error these cannot.
+# ══════════════════════════════════════════════════════════════════════════
+
+EC2 = REPO_ROOT / "docker-compose.ec2.yml"
+
+
+def _code_only(text: str) -> str:
+    """Strip whole-line `#` comments.
+
+    Every "this must NOT appear" assertion below has to run against what
+    EXECUTES, not against the prose explaining why it is absent. Otherwise a
+    comment saying "the runner holds no .pem" fails a test asserting there is
+    no `.pem` — and the tempting fix is deleting the explanation.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _compose_loader():
+    """A SafeLoader that tolerates Compose's own tags.
+
+    `ports: !reset []` is Compose 2.24+ syntax for "clear the inherited
+    value". `yaml.safe_load` raises on the unknown tag, so without this the
+    test file would fail to parse the very file it exists to protect.
+
+    Built with `type()` rather than a `class` statement because `yaml` here is
+    `pytest.importorskip`'s return value — mypy sees `Any`, and cannot resolve
+    a base class it cannot name.
+    """
+    loader: Any = type("_ComposeLoader", (yaml.SafeLoader,), {})
+    for tag in ("!reset", "!override"):
+        loader.add_constructor(tag, lambda ldr, node: ldr.construct_sequence(node))
+    return loader
+
+
+@pytest.fixture(scope="module")
+def ec2() -> dict:
+    return yaml.load(EC2.read_text(encoding="utf-8"), Loader=_compose_loader()) or {}
+
+
+@pytest.mark.skipif(not EC2.exists(), reason="no EC2 overlay in this checkout")
+class TestEc2Topology:
+    def test_caddy_is_the_only_service_with_host_ports(self, ec2):
+        """Everything reaches the internet through TLS, or not at all.
+
+        The base file publishes web on 8000, which is right for a host with
+        nothing in front of it. Behind Caddy it puts Django on the public
+        internet unencrypted, bypassing the forwarded-header contract and the
+        single-origin routing — and a browser that reached it would send a JWT
+        in clear text.
+        """
+        for name, svc in ec2["services"].items():
+            if name == "caddy":
+                continue
+            assert not svc.get("ports"), (
+                f"'{name}' publishes host ports {svc.get('ports')} in the EC2 "
+                f"overlay. Only caddy may. Use `expose:` for internal reachability."
+            )
+
+    def test_the_inherited_web_port_is_actually_cleared(self, ec2):
+        """`ports: !reset []`, not `ports: []`.
+
+        Compose MERGES `ports` lists across files: an override that restates
+        the key APPENDS to the inherited value rather than replacing it, so
+        `ports: []` here would leave 8000 published and the check above would
+        still pass by reading only this file. `!reset` is the one tag that
+        clears it.
+        """
+        assert (
+            "ports" in ec2["services"]["web"]
+        ), "web must explicitly clear the port published by docker-compose.yml"
+        raw = EC2.read_text(encoding="utf-8")
+        assert re.search(r"^\s*ports:\s*!reset\s*\[\]", raw, re.MULTILINE), (
+            "web's inherited `8000:8000` is cleared with `ports: !reset []`. "
+            "A plain `ports: []` MERGES and leaves 8000 public."
+        )
+
+    def test_the_backend_is_still_reachable_internally(self, ec2):
+        """Clearing the publish must not also make Caddy unable to route."""
+        assert "8000" in [str(p) for p in ec2["services"]["web"].get("expose", [])]
+
+    def test_no_database_and_no_cache_run_on_the_box(self, ec2):
+        """Supabase and Upstash are the database and the cache.
+
+        A local Postgres on a 3.7 GiB box competes with the application for
+        memory and — worse — invites somebody to point DATABASE_URL at it,
+        after which bookings are written to a database with no backups that
+        vanishes with the instance.
+        """
+        forbidden = {"db", "postgres", "postgresql", "redis", "pgbouncer", "valkey"}
+        present = forbidden & set(ec2["services"])
+        assert not present, (
+            f"{sorted(present)} must not run on the EC2 host — the database is "
+            f"Supabase and the cache is Upstash. docker-compose.oci.yml is the "
+            f"single-box topology; that is a different deployment."
+        )
+        volumes = set(ec2.get("volumes") or {})
+        assert not volumes & {"eventful-pgdata", "pgdata", "redis-data"}
+
+    def test_every_long_running_process_is_present(self, ec2, production):
+        """web, worker, scheduler, frontend, caddy — all five.
+
+        Losing `scheduler` is the expensive one and the quietest: held ticket
+        inventory is never released and organisers are never paid, with no
+        error anywhere, because the jobs stay registered and simply never
+        fire. Losing `worker` means no email, SMS or push is ever delivered.
+        """
+        defined = set(ec2["services"]) | set(production["services"])
+        for required in ("web", "worker", "scheduler", "frontend", "caddy"):
+            assert required in defined, (
+                f"'{required}' is gone from the EC2 topology. "
+                f"docker-compose.ec2.yml records what each one carries."
+            )
+
+    def test_every_service_rotates_its_logs(self, ec2):
+        """The single most likely way this box falls over.
+
+        Docker's default json-file driver has NO size limit. Five always-on
+        containers on a 30 GB disk fill it, and the failure presents as every
+        service dying at once for no visible reason.
+        """
+        raw = EC2.read_text(encoding="utf-8")
+        assert "max-size" in raw and "max-file" in raw, "log rotation limits removed"
+        for name, svc in ec2["services"].items():
+            options = (svc.get("logging") or {}).get("options") or {}
+            assert options.get("max-size"), f"'{name}' has no log size limit"
+            assert options.get("max-file"), f"'{name}' has no log file count limit"
+
+    def test_caddy_certificates_survive_a_redeploy(self, ec2):
+        """Let's Encrypt allows 5 certificates per domain per week.
+
+        Without a persistent /data, every `up` re-issues. The fifth deploy in
+        a week leaves the site without HTTPS for days, with nothing broken in
+        the application to explain it.
+        """
+        mounts = [m for m in ec2["services"]["caddy"]["volumes"] if isinstance(m, str)]
+        targets = {m.split(":")[1] for m in mounts if ":" in m}
+        assert "/data" in targets, "caddy's /data volume is what stores issued certificates"
+        assert "/config" in targets
+        declared = set(ec2.get("volumes") or {})
+        assert {"caddy-data", "caddy-config"} <= declared, (
+            "the certificate volumes must be NAMED volumes; a bind mount into "
+            "the checkout would be wiped by a fresh clone"
+        )
+
+    def test_the_caddyfile_is_mounted_read_only(self, ec2):
+        assert any(
+            m.endswith(":ro") and "Caddyfile" in m
+            for m in ec2["services"]["caddy"]["volumes"]
+            if isinstance(m, str)
+        )
+
+    def test_caddy_is_health_checked_through_its_admin_api(self, ec2):
+        """A process check would report healthy while Caddy sat refusing a bad
+        Caddyfile — which is exactly the failure that takes the whole site
+        down, because every route lives in that file. The admin API answers
+        only once a config has been parsed AND loaded."""
+        test = str(ec2["services"]["caddy"].get("healthcheck", {}).get("test", ""))
+        assert "2019" in test, "caddy's healthcheck must prove a config is loaded"
+
+    def test_the_images_are_not_pinned_to_latest(self, ec2):
+        """A rollback needs something to roll back TO.
+
+        `latest` is a moving pointer: two deploys of it can ship different
+        code, and `deploy/deploy.sh` refuses any tag that is not a 40-char
+        commit SHA. The overlay must therefore take the ref from the
+        environment rather than hard-coding one.
+        """
+        # `migrate` belongs in this list and is the one that was missed. Left
+        # on the base file's `eventful-backend:latest` it names an image that
+        # does not exist on the host, so Compose either pulls
+        # `docker.io/library/eventful-backend` — an UNCLAIMED public name, i.e.
+        # a stranger's image run with the production .env attached — or builds
+        # from source on the box. Either way the SCHEMA would be migrated by
+        # code that is not the reviewed, scanned artefact about to serve.
+        for name in ("web", "worker", "scheduler", "migrate"):
+            assert "${BACKEND_IMAGE" in str(
+                ec2["services"][name].get("image", "")
+            ), f"'{name}' must run the SHA-tagged image deploy.sh exports"
+        assert "${FRONTEND_IMAGE" in str(ec2["services"]["frontend"].get("image", ""))
+
+    def test_nothing_migrates_on_boot(self, ec2):
+        """Same rule as the base file, restated for the overlay.
+
+        Auto-migrate applies unreviewed schema changes on every deploy and
+        races itself across replicas. `deploy/deploy.sh` runs `migrate_safe`
+        as an explicit, ordered step instead.
+        """
+        for name, svc in ec2["services"].items():
+            command = str(svc.get("command", "")) + str(svc.get("entrypoint", ""))
+            assert "migrate" not in command, f"'{name}' migrates on boot"
+
+    def test_no_source_is_mounted_over_the_images(self, ec2):
+        """The image is the artefact. A bind mount means what runs in
+        production is whatever happens to be in the checkout, and a rollback
+        to a previous image changes nothing."""
+        for name, svc in ec2["services"].items():
+            if name == "caddy":
+                continue  # the Caddyfile, read-only, asserted above
+            for mount in svc.get("volumes") or []:
+                assert not str(mount).startswith(
+                    ("./backend", "./frontend", "./config")
+                ), f"'{name}' mounts source over the image: {mount}"
+
+    def test_the_frontend_public_urls_are_build_args(self, ec2):
+        """`NEXT_PUBLIC_*` is inlined into the client bundle by the compiler.
+
+        Setting one in `.env` and restarting does nothing — the single most
+        common source of "I changed the API URL and it still calls the old
+        one". The two that cannot be wrong use `:?`, so a build without them
+        fails at build time rather than in a visitor's browser.
+        """
+        args = ec2["services"]["frontend"]["build"]["args"]
+        assert ":?" in str(args["NEXT_PUBLIC_API_BASE_URL"])
+        assert ":?" in str(args["NEXT_PUBLIC_SITE_URL"])
+
+    def test_no_secret_is_written_into_the_compose_file(self, ec2):
+        """Everything secret arrives via `env_file: .env`, which is rendered
+        from Secrets Manager on the instance. A value inline here would be in
+        git, in every clone, and in the workflow that checks it out."""
+        raw = EC2.read_text(encoding="utf-8")
+        for marker in ("rzp_live_", "rzp_test_", "SECRET_KEY:", "postgres://", "postgresql://"):
+            assert marker not in raw, f"'{marker}' looks like a secret in the compose file"
+
+
+@pytest.mark.skipif(not EC2.exists(), reason="no EC2 overlay in this checkout")
+class TestDeployScripts:
+    """`deploy/deploy.sh` runs on the instance, so its guards are the last
+    ones standing when somebody deploys by hand."""
+
+    deploy = REPO_ROOT / "deploy" / "deploy.sh"
+    render = REPO_ROOT / "deploy" / "render-env.sh"
+
+    def test_it_refuses_a_mutable_tag(self):
+        body = self.deploy.read_text(encoding="utf-8")
+        assert 'tag" = "latest"' in body and "-ne 40" in body, (
+            "deploy.sh must refuse `latest` and any tag that is not a 40-char "
+            "commit SHA — a hand-run deploy must not bypass the rule the "
+            "workflow enforces."
+        )
+
+    def test_it_refuses_a_world_readable_env_file(self):
+        body = self.deploy.read_text(encoding="utf-8")
+        assert "600" in body and ".env is missing" in body
+
+    def test_it_migrates_before_starting_new_containers(self):
+        """New code requires the new schema: 0004 adds `BookingRequest.kind`
+        and every `kind` query 500s without it. The reverse order means every
+        request between `up` and `migrate` fails."""
+        body = self.deploy.read_text(encoding="utf-8")
+        assert body.index("migrate_safe") < body.index("up -d --no-deps")
+
+    def test_it_pulls_before_it_stops_anything(self):
+        """A registry outage or a bad tag then fails while the current version
+        is still serving."""
+        body = self.deploy.read_text(encoding="utf-8")
+        assert body.index("docker pull") < body.index("up -d --no-deps")
+
+    def test_the_secret_renderer_never_prints_a_value(self):
+        """A rendered secret in an SSM or workflow log is a leaked secret —
+        those logs are retained, searchable, and readable by more people than
+        the secret itself is."""
+        body = self.render.read_text(encoding="utf-8")
+        assert "umask 077" in body, "the file must be 600 from the instant it exists"
+        assert "cat " not in body
+        assert "set -x" not in body
+
+    def test_the_renderer_keeps_a_working_env_when_the_secret_is_wrong(self):
+        """Overwriting a good `.env` with a truncated one takes the site down
+        with no way back that does not involve AWS."""
+        body = self.render.read_text(encoding="utf-8")
+        assert "left untouched" in body
+
+    def test_it_authenticates_to_ecr_before_pulling(self):
+        """THE INSTANCE ROLE IS NOT ENOUGH ON ITS OWN.
+
+        IAM authorises the ECR *API*; `docker pull` speaks the *registry*
+        protocol and needs a registry credential. Without a login every pull
+        fails with `no basic auth credentials` — which reads like a missing IAM
+        permission and is not one, so the fix people reach for is widening the
+        role, which does nothing.
+        """
+        body = _code_only(self.deploy.read_text(encoding="utf-8"))
+        assert "get-login-password" in body, "deploy.sh never authenticates to ECR"
+        assert body.index("get-login-password") < body.index(
+            "docker pull"
+        ), "the ECR login must come before the first pull"
+        assert "--password-stdin" in body, (
+            "the token must not reach argv, where `ps` shows it to every user " "on the machine"
+        )
+
+    def test_it_refuses_a_mismatched_backend_and_frontend(self):
+        """A backend from one commit and a frontend from another is a
+        combination nothing ever tested; the symptom is a UI calling an API
+        contract that no longer exists."""
+        body = self.deploy.read_text(encoding="utf-8")
+        assert 'BACKEND_IMAGE##*:}" != "${FRONTEND_IMAGE##*:}' in body
+
+    def test_it_records_the_rollback_target_only_after_health_checks(self):
+        """`.deployed` is what the rollback job reads to find the last version
+        that ACTUALLY WORKED. Written before the checks, it would record a
+        broken release as the recovery target."""
+        body = _code_only(self.deploy.read_text(encoding="utf-8"))
+        # The exact record write, not a prefix — `> .deployed` also matches
+        # `> .deployed-sha`, which is only a convenience file for humans and
+        # would let the real one be deleted with this test still passing.
+        assert "> .deployed <<RECORD" in body, "deploy.sh records no rollback target"
+        assert ".deployed.prev" in body, "the previous record must be kept to roll back to"
+        record = body.index("> .deployed <<RECORD")
+        for check, label in (
+            ("never became healthy", "the health poll"),
+            ("is '${state:-MISSING}', not running", "the per-service running check"),
+            ("crash loop", "the crash-loop check"),
+        ):
+            assert body.index(check) < record, (
+                f"the deployment record is written before {label} — a broken "
+                f"release would be recorded as the rollback target"
+            )
+
+    def test_it_removes_orphaned_containers(self):
+        """A container from a service that used to be in the compose file and
+        no longer is keeps running forever, holding ports and memory, with
+        nothing referencing it."""
+        assert "--remove-orphans" in self.deploy.read_text(encoding="utf-8")
+
+    def test_the_renderer_encodes_values_literally(self):
+        """A `$` in a secret must survive.
+
+        In a Compose env-file a DOUBLE-quoted value is expanded and unescaped
+        like a shell string — verified against a real container, not assumed:
+
+            "ab$cd"  ->  ab          ($cd expands to an undefined variable)
+            "a\\\\b"    ->  a<BS>       (\\b is read as the backspace escape)
+
+        `django.core.management.utils.get_random_secret_key()` draws from a
+        charset that INCLUDES `$`, so an ordinary SECRET_KEY would be silently
+        truncated at the first one: every session invalidated, every signed
+        token rejected, and no parse error anywhere. This test exists because
+        the first version of the renderer double-quoted everything.
+
+        Single quotes are literal in that grammar and carry real newlines, so
+        they are the default; the double-quoted fallback (for a value
+        containing a single quote) must escape `$`.
+        """
+        body = self.render.read_text(encoding="utf-8")
+        assert (
+            '"\'" not in text' in body
+        ), "values must be single-quoted unless they contain a single quote"
+        assert (
+            '.replace("$", "\\\\$")' in body
+        ), "the double-quoted fallback must escape `$`, or Compose expands it"
+        # Backslash must be escaped BEFORE the others, or the escaping itself
+        # forms a `\\b`/`\\t` sequence that Compose then interprets.
+        fallback = body[body.index("def quote(") : body.index("out = []")]
+        assert fallback.index('replace("\\\\", "\\\\\\\\")') < fallback.index('replace("$"')
+
+    def test_the_renderer_does_not_need_jq(self):
+        """Amazon Linux 2023 ships python3 and does NOT ship jq.
+
+        Depending on jq means this script fails on a fresh instance with a
+        message about a JSON tool — a confusing way to discover a packaging
+        assumption, at the moment somebody is trying to configure production.
+        """
+        body = _code_only(self.render.read_text(encoding="utf-8"))
+        assert "jq" not in body, "render-env.sh still depends on jq"
+        assert "python3" in body
+
+
+@pytest.mark.skipif(
+    not (REPO_ROOT / ".github" / "workflows" / "release.yml").exists(),
+    reason="no release workflow in this checkout",
+)
+class TestReleaseWorkflow:
+    """The deployment pipeline's own guards, asserted from the file.
+
+    These are cheap string checks rather than a simulated run — but each one
+    encodes a defect that was actually present and would have shipped.
+    """
+
+    body = _code_only(
+        (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    )
+
+    def test_no_long_lived_aws_credentials(self):
+        """A stored access key is standing AWS access that outlives any leak.
+        OIDC mints a token per run that expires with it."""
+        for forbidden in ("aws-access-key-id", "aws-secret-access-key", "AWS_SESSION_TOKEN"):
+            assert forbidden not in self.body, f"{forbidden} must never appear"
+        assert "id-token: write" in self.body
+        assert "role-to-assume" in self.body
+
+    def test_no_ssh_key_reaches_the_runner(self):
+        """SSM needs no inbound port and no key. A `.pem` in CI is a
+        credential that can be exfiltrated from a build log."""
+        for forbidden in ("ssh-private-key", ".pem", "webfactory/ssh-agent"):
+            assert forbidden not in self.body, f"{forbidden} must never appear"
+
+    def test_manual_dispatch_is_gated_on_ci_too(self):
+        """`workflow_dispatch` is the DOCUMENTED way to redeploy a known-good
+        SHA, so it is the path a human uses under pressure. It must not be the
+        lenient one — without this, a commit whose tests failed can be typed in
+        and shipped after approval."""
+        assert "conclusion ci.yml" in self.body
+
+    def test_publish_is_idempotent_against_immutable_tags(self):
+        """ECR repositories are IMMUTABLE-tagged, so re-pushing an existing tag
+        errors. Re-running a release for the same SHA is NORMAL — it is the
+        recovery from an approval timeout, and how a rollback is triggered by
+        hand — so publish must skip rather than fail.
+
+        Parsed rather than string-matched: EVERY pushing build step needs the
+        guard, and a substring check passes while one of the two is missing.
+        """
+        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        pushing = [
+            step
+            for step in workflow["jobs"]["publish"]["steps"]
+            if str(step.get("with", {}).get("push", "")).lower() == "true"
+        ]
+        assert len(pushing) == 2, f"expected a backend and a frontend push, found {len(pushing)}"
+        for step in pushing:
+            assert "skip != 'true'" in str(step.get("if", "")), (
+                f"'{step.get('name')}' pushes unconditionally — a re-run of an "
+                f"already-published SHA will fail on the immutable tag"
+            )
+
+    def test_the_rollback_target_is_read_from_the_instance(self):
+        """Parsed from the step that actually resolves it, so a leftover
+        mention elsewhere in the file cannot satisfy this."""
+        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        steps = workflow["jobs"]["rollback"]["steps"]
+        resolver = next(s for s in steps if s.get("id") == "prev")
+        run = _code_only(resolver["run"])
+        assert ".deployed" in run, "the rollback target must come from the instance's record"
+        assert "rev-parse" not in run, (
+            "'the parent commit' is only the last-known-good release when every "
+            "commit deploys; after two failed deploys it is something that was "
+            "never in production"
+        )
+
+    def test_every_poll_outlasts_the_command_it_waits_on(self):
+        """If a poll gave up first, the workflow would report failure and
+        rollback would send a SECOND SSM command while the first was still
+        running `docker compose up` — two deployments racing on one host.
+
+        Compared as NUMBERS, for every step that dispatches one: a substring
+        check passes while one of the two loops is still too short.
+        """
+        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        checked = 0
+        for job in workflow["jobs"].values():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                if "executionTimeout" not in run:
+                    continue
+                found = [
+                    re.search(pattern, run)
+                    for pattern in (
+                        r'executionTimeout: \["(\d+)"\]',
+                        r"seq 1 (\d+)",
+                        r"sleep (\d+)",
+                    )
+                ]
+                assert all(found), (
+                    f"{step.get('name')!r} dispatches an SSM command but its poll "
+                    f"loop could not be read — it may not wait for the result at all"
+                )
+                limit, iterations, sleep_s = (int(m.group(1)) for m in found if m)
+                assert iterations * sleep_s > limit, (
+                    f"{step.get('name')!r} polls for {iterations * sleep_s}s but the "
+                    f"command may run for {limit}s — it would abandon a live deploy"
+                )
+                checked += 1
+        assert checked == 2, f"expected the deploy and rollback polls, checked {checked}"
+
+    def test_ssm_parameters_are_json_not_the_comma_splitting_shorthand(self):
+        """`--parameters commands=...` splits its value on commas into separate
+        list elements. The base64 config bundle is exactly the kind of value
+        that would be torn into fragments — silently."""
+        assert "--parameters commands=" not in self.body
+        assert "file:///tmp/ssm-" in self.body

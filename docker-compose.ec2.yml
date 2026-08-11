@@ -1,0 +1,248 @@
+# The AWS EC2 production topology.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ec2.yml up -d
+#
+# ── WHY AN OVERLAY AND NOT A STANDALONE FILE ──────────────────────────────
+#
+# `docker-compose.yml` already defines web, worker, scheduler and the migrate
+# profile, and a set of deployment tests assert things about it: gunicorn not
+# runserver, nothing migrating on boot, `stop_grace_period` outliving
+# gunicorn's graceful timeout, exactly one scheduler replica, no source
+# mounted. A standalone EC2 file would copy all of that and then drift from
+# it silently, and the tests would keep passing while the file actually
+# deployed did something else.
+#
+# So this file ADDS the two services EC2 needs (Caddy, the Next.js frontend)
+# and adjusts the three that already exist. Everything not mentioned here is
+# inherited, which is the point.
+#
+# ── WHY NOT docker-compose.oci.yml ────────────────────────────────────────
+#
+# That file is the single-box topology: it starts PostgreSQL and Redis as
+# containers with a `eventful-pgdata` volume, and makes web/worker/scheduler
+# `depends_on` them. On EC2 the database is Supabase and the cache is Upstash,
+# so those services must not exist — not merely be unused, because a running
+# Postgres on a 3.7 GiB box competes for memory with the application and
+# invites somebody to point `DATABASE_URL` at it by accident.
+#
+# It also mounts `eventful-media:/app/media` on all three backend services.
+# That is correct for `STORAGE_BACKEND=local`; on EC2 storage is Supabase's
+# S3-compatible bucket, so the volume would be an empty directory nothing
+# writes to. Omitted deliberately — see STORAGE below.
+
+# ── LOG ROTATION ──────────────────────────────────────────────────────────
+#
+# The single most likely way this box falls over. Five always-on containers
+# emitting structured JSON to a 30 GB disk with Docker's default `json-file`
+# driver, which has NO limit: the logs grow until the filesystem is full, and
+# the failure presents as every service failing at once for no visible reason.
+#
+# 10 MB × 5 files is 50 MB per service, 250 MB across the stack — about 0.8%
+# of the disk, and enough history to investigate an incident from the previous
+# day on a service this size. Rotation is per-container, so a chatty web
+# process cannot consume the worker's share.
+#
+# `compress` on the rotated files: they are JSON and compress ~10:1, so the
+# retained history is far longer for the same bytes. Only the current file is
+# uncompressed, so `docker logs` stays fast.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+      compress: "true"
+
+services:
+  # ── WEB ─────────────────────────────────────────────────────────────────
+  # Everything about how it runs — gunicorn, the config file, the healthcheck,
+  # `stop_grace_period: 40s`, `restart: unless-stopped`, `env_file: .env` —
+  # is inherited from docker-compose.yml unchanged.
+  web:
+    <<: *logging
+    # ── THE IMAGE IS AN IMMUTABLE ECR REF, NOT `latest` ─────────────────
+    # `deploy/deploy.sh` exports BACKEND_IMAGE as `<registry>/curatix-backend:
+    # <40-char-sha>` and REFUSES anything else, so what runs is always
+    # traceable to one commit and a rollback has something to roll back TO.
+    # The local default keeps `docker compose config` working off the box.
+    image: ${BACKEND_IMAGE:-eventful-backend:latest}
+    # ── THE ONE REAL INCOMPATIBILITY, AND HOW IT IS FIXED ────────────────
+    #
+    # The base file publishes `"${WEB_PORT:-8000}:8000"`. That is right for a
+    # host with nothing in front of it; behind Caddy it puts Django directly
+    # on the public internet on port 8000, bypassing TLS termination, the
+    # forwarded-header contract and the single-origin routing.
+    #
+    # Compose MERGES `ports` lists, so an override cannot remove an inherited
+    # publish by restating it — `!reset` is the explicit "clear the inherited
+    # value" tag (Compose 2.24+; the EC2 host runs 5.4.0). Verified: with the
+    # overlay applied, `config` emits no `ports` key for this service at all.
+    #
+    # The security group also blocks 8000, but defence in depth is cheap and a
+    # security group is edited by people.
+    ports: !reset []
+    # Reachable on the internal network only. `expose` publishes nothing to
+    # the host; it documents the port for humans and for Caddy's upstream.
+    expose:
+      - "8000"
+
+  # ── WORKER ──────────────────────────────────────────────────────────────
+  # Drains the outbox: every email, SMS and push notification. Separate from
+  # web on purpose — a request process restarting must not lose queued
+  # deliveries, and a slow provider must not occupy a gunicorn worker.
+  #
+  # Command, `restart: unless-stopped`, the PID-1 healthcheck and
+  # `replicas: 1` all come from the base file. No ports: it serves nothing.
+  worker:
+    image: ${BACKEND_IMAGE:-eventful-backend:latest}
+    <<: *logging
+
+  # ── SCHEDULER ───────────────────────────────────────────────────────────
+  # The clock. Without it, held ticket inventory is never released and
+  # organisers are never paid — silently, because the jobs stay registered and
+  # simply never fire.
+  #
+  # `deploy.replicas: 1` in the base file is what protects against duplicate
+  # execution, and it must stay 1: two schedulers would double-fire every job.
+  # `run_scheduled_jobs` is the supervised loop rather than `--once` because
+  # Compose has no cron; the jobs it fires are individually idempotent
+  # (release-expired clamps, reconcile is keyed on payment id), so a
+  # double-fire is survivable — but it is not licence to run two.
+  scheduler:
+    image: ${BACKEND_IMAGE:-eventful-backend:latest}
+    <<: *logging
+
+  # ── MIGRATE (profile: migrate) ──────────────────────────────────────────
+  # THE SAME IMAGE AS web. This is not tidiness.
+  #
+  # The base file gives every backend service `eventful-backend:latest`. The
+  # three above are re-pointed at the pulled ECR ref; if `migrate` is left out,
+  # it keeps `eventful-backend:latest` — a tag that does not exist on this host.
+  # Compose would then either pull `docker.io/library/eventful-backend:latest`
+  # (an UNCLAIMED public name, i.e. a stranger's image run with the production
+  # .env attached) or fall back to building from source on the box.
+  #
+  # Either way the schema would be migrated by code that is NOT the reviewed,
+  # scanned artefact about to serve traffic. It is also the slowest possible
+  # way to run a migration on a t3.medium.
+  migrate:
+    image: ${BACKEND_IMAGE:-eventful-backend:latest}
+    <<: *logging
+
+  # ── FRONTEND ────────────────────────────────────────────────────────────
+  # Next.js in `output: 'standalone'` mode — the production server, never
+  # `next dev`. No source is mounted; the image is the artefact.
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # BAKED IN AT BUILD TIME. `NEXT_PUBLIC_*` values are inlined into the
+        # client bundle by the compiler, so changing one in `.env` and
+        # restarting does nothing — the image must be rebuilt. This is the
+        # single most common source of "I changed the API URL and it still
+        # calls the old one".
+        #
+        # `:?` on the two that cannot be wrong: a frontend built without them
+        # would deploy successfully and then fail in the browser.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set it in .env}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set it in .env}
+        NEXT_PUBLIC_MEDIA_BASE_URL: ${NEXT_PUBLIC_MEDIA_BASE_URL:-}
+        NEXT_PUBLIC_RAZORPAY_KEY_ID: ${NEXT_PUBLIC_RAZORPAY_KEY_ID:-}
+        NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}
+    image: ${FRONTEND_IMAGE:-eventful-frontend:latest}
+    restart: unless-stopped
+    # No host port. Caddy reaches it as `frontend:3000` on the internal
+    # network; publishing 3000 would let somebody bypass TLS and the proxy.
+    expose:
+      - "3000"
+    healthcheck:
+      # `/` rather than a bespoke route: it exercises the real render path, so
+      # a server that boots but cannot render is reported unhealthy instead of
+      # serving 500s behind a green check.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      - web
+    <<: *logging
+
+  # ── CADDY ───────────────────────────────────────────────────────────────
+  # TLS termination and the single-origin split. The ONLY service with host
+  # ports. Uses `docker/Caddyfile` unchanged — the routing architecture is not
+  # reinvented here.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # QUIC/HTTP3. Harmless if the security group does not allow UDP — simply
+      # unused, and it costs nothing to have ready.
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # ── THE CERTIFICATES MUST SURVIVE A REDEPLOY ────────────────────────
+      # Without these volumes every `up` re-issues a certificate, and Let's
+      # Encrypt's limit is 5 per domain per week. The fifth deploy in a week
+      # would leave the site without HTTPS for days — with nothing broken in
+      # the application to explain it.
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      # Caddy reads these from its OWN environment, not from `.env`: it is not
+      # a backend service and does not share that file. These are hostnames
+      # and an ACME contact address — not secrets.
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN, e.g. fastride.xyz}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-frontend:3000}
+    healthcheck:
+      # ── A REAL CHECK, NOT `pgrep caddy` ──────────────────────────────
+      # Caddy's admin API on 127.0.0.1:2019 answers only once the config has
+      # been PARSED AND LOADED. A process check would report healthy while
+      # Caddy sat refusing a bad Caddyfile, which is precisely the failure
+      # that takes the whole site down — every route lives in that file.
+      #
+      # `wget` because caddy:2-alpine ships busybox and no curl. `--spider`
+      # makes it a HEAD-like request with no body written.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    depends_on:
+      - web
+      - frontend
+    <<: *logging
+
+# ── STORAGE ───────────────────────────────────────────────────────────────
+# Only Caddy's state is persisted. There is deliberately NO database volume
+# (Supabase), NO cache volume (Upstash) and NO media volume (Supabase's
+# S3-compatible bucket, via `STORAGE_BACKEND=s3`).
+#
+# If `STORAGE_BACKEND` is ever set to `local` on this host, uploads would go
+# to the container filesystem and vanish on the next redeploy — which is why
+# `core/preflight.py` refuses `local` in production rather than leaving it to
+# be noticed later.
+volumes:
+  caddy-data:
+  caddy-config:
+
+# ── NETWORKING ────────────────────────────────────────────────────────────
+# No `networks:` block, and that is deliberate rather than an omission.
+# Compose puts every service on one project-scoped bridge network, which is
+# already private: container ports are reachable between services by name and
+# from nowhere else unless published. Declaring a custom network here would
+# require declaring it on the inherited services too — and any service that
+# named it would LEAVE the default, so a partial declaration would silently
+# put Caddy on a different network from `web` and break the proxy.
+#
+# Caddy therefore reaches `web:8000` and `frontend:3000` by service name, and
+# only 80/443 cross the host boundary.

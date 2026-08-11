@@ -1,0 +1,660 @@
+# Build an immutable image, publish it, and deploy it — with a human in the
+# middle and a way back.
+#
+# ── WHY THIS IS A SEPARATE WORKFLOW ───────────────────────────────────────
+#
+# `ci.yml` and `frontend.yml` answer "is this commit correct?". They run on
+# every pull request and must stay fast and side-effect-free. This workflow
+# answers "should this commit be running in production?", touches AWS, and
+# must never run on a pull request. Two questions, two workflows.
+#
+# It is triggered by CI COMPLETING on main rather than by the push itself, so
+# an image is never built — let alone deployed — from a commit whose tests
+# failed. `workflow_run` gives that ordering; a plain `push` trigger would
+# race CI and could publish a broken artefact.
+#
+# `ci.yml`, `frontend.yml` and `security.yml` are ALL gates, but only one can
+# be the trigger — `workflow_run` fires when ANY listed workflow completes, not
+# when all of them pass. So CI is the trigger and the `resolve` job verifies the
+# others through the API for that exact SHA. `frontend.yml` is path-filtered, so
+# "did not run" is a legitimate answer for a backend-only commit and is handled
+# explicitly rather than waved through.
+#
+# ── NOTHING HERE WORKS UNTIL THE AWS SIDE EXISTS ──────────────────────────
+#
+# The ECR repositories, the OIDC role and the EC2 instance profile are human
+# steps recorded in DEPLOY_EC2.md. Until they exist this workflow will fail at
+# the `configure-aws-credentials` step — loudly, before doing anything, which
+# is the correct failure.
+#
+# ── NOTHING IS COPIED TO THE INSTANCE EXCEPT A CONFIG BUNDLE ──────────────
+#
+# The application arrives as an ECR image. The compose files, the Caddyfile and
+# these scripts arrive as a small tarball inside the SSM command, built from the
+# SAME commit as the images. So the instance needs no git clone, no repository
+# credential, and cannot drift from the release it is running.
+
+name: release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # A manual re-run, for redeploying a known-good SHA without a new commit —
+  # which is also how a rollback is performed. See DEPLOY_EC2.md.
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Full 40-char commit SHA to deploy (defaults to this branch's HEAD)"
+        required: false
+        type: string
+
+# ── ONE DEPLOYMENT AT A TIME ──────────────────────────────────────────────
+#
+# Two concurrent runs would race: both would `docker compose up` on the same
+# host, and the loser could finish last and leave the OLDER image serving.
+# `cancel-in-progress: false` on purpose — cancelling a deploy halfway through
+# is worse than queueing behind it, because a cancelled run leaves the stack
+# in whatever half-updated state it reached.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_BACKEND: curatix-backend
+  ECR_FRONTEND: curatix-frontend
+
+permissions:
+  contents: read
+  # Reading other workflows' conclusions for this SHA — see `gate` below.
+  actions: read
+  # Required for OIDC. NO long-lived AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+  # is stored anywhere: GitHub mints a short-lived token per run and AWS trusts
+  # it via the role's trust policy. A leaked repo secret cannot then become
+  # standing AWS access.
+  id-token: write
+
+jobs:
+  # ── 1. RESOLVE WHAT WE ARE SHIPPING ─────────────────────────────────────
+  # One job whose only output is the immutable SHA every later job uses. Doing
+  # this once means the image that is scanned, pushed and deployed cannot
+  # differ from each other.
+  resolve:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      short: ${{ steps.pick.outputs.short }}
+    steps:
+      - id: pick
+        run: |
+          SHA="${{ inputs.image_sha || github.event.workflow_run.head_sha || github.sha }}"
+          if [ ${#SHA} -ne 40 ]; then
+            echo "::error::Refusing a non-40-char SHA ('$SHA'). Deployment tags must be the full immutable commit id."
+            exit 1
+          fi
+          echo "sha=$SHA"            >> "$GITHUB_OUTPUT"
+          echo "short=${SHA:0:7}"    >> "$GITHUB_OUTPUT"
+          echo "### Deploying \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── EVERY CHECK, NOT JUST THE ONE THAT TRIGGERED US ─────────────────
+      #
+      # `workflow_run` can only watch ONE workflow, and with several listed it
+      # fires when ANY of them completes rather than when all of them pass. So
+      # the trigger is CI, and the OTHER workflows are verified here by asking
+      # the API what they concluded FOR THIS EXACT SHA.
+      #
+      # Without this, a deploy proceeds while `frontend` is red — the backend
+      # tests pass, CI goes green, and a frontend that fails typecheck, unit
+      # tests or the accessibility sweep ships to customers. The frontend image
+      # still BUILDS in that state, so nothing else would notice.
+      #
+      # A workflow that has not run for this SHA is treated as MISSING and
+      # blocks: "no result" and "passed" must never be the same answer, which
+      # is the same rule the console's health tiles follow.
+      #
+      # `frontend.yml` is the exception, and it needs care rather than an
+      # exemption. It is PATH-FILTERED (`frontend/**`), so a backend-only
+      # commit legitimately has no frontend run — and treating that as a pass
+      # would let a frontend change ride in on a later backend commit
+      # untested. So when there is no run for this SHA, the question asked is
+      # the one that actually matters: has anything under `frontend/` changed
+      # since the last GREEN frontend run? If yes, block. If no, the last
+      # green result still describes the code being shipped.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pick.outputs.sha }}
+          fetch-depth: 0 # the comparison below needs history
+
+      - name: Every other required workflow passed for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.pick.outputs.sha }}
+        run: |
+          set -euo pipefail
+          blocked=0
+
+          conclusion() {
+            gh api "repos/$REPO/actions/workflows/$1/runs?head_sha=$SHA&per_page=1" \
+              --jq '.workflow_runs[0].conclusion // "missing"' 2>/dev/null || echo "missing"
+          }
+
+          # ── ci.yml IS CHECKED HERE TOO, AND THAT IS NOT REDUNDANT ────────
+          # On the `workflow_run` path CI passing is what triggered this run.
+          # On the `workflow_dispatch` path nothing has verified anything — and
+          # manual dispatch is the DOCUMENTED way to redeploy a known-good SHA,
+          # so without this a commit whose tests failed can be typed in and
+          # shipped after approval. The gate must not be weaker on the path a
+          # human uses under pressure.
+          C=$(conclusion ci.yml)
+          echo "  ci.yml: $C"
+          if [ "$C" != "success" ]; then
+            echo "::error::ci.yml concluded '$C' for $SHA — refusing to deploy an unverified commit"
+            blocked=1
+          fi
+
+          # No path filter: it runs on every push to main, so missing is a real
+          # problem rather than a legitimate skip.
+          C=$(conclusion security.yml)
+          echo "  security.yml: $C"
+          if [ "$C" != "success" ]; then
+            echo "::error::security.yml concluded '$C' for $SHA"
+            blocked=1
+          fi
+
+          C=$(conclusion frontend.yml)
+          echo "  frontend.yml: $C"
+          if [ "$C" = "success" ]; then
+            :
+          elif [ "$C" != "missing" ]; then
+            echo "::error::frontend.yml concluded '$C' for $SHA"
+            blocked=1
+          else
+            LAST=$(gh api "repos/$REPO/actions/workflows/frontend.yml/runs?branch=main&status=success&per_page=1" \
+                     --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || echo "")
+            if [ -z "$LAST" ]; then
+              echo "::error::frontend.yml has never passed on main — nothing verifies the frontend"
+              blocked=1
+            elif git diff --name-only "$LAST" "$SHA" -- frontend/ | grep -q .; then
+              echo "::error::frontend/ changed since the last green frontend run ($LAST) but frontend.yml did not run for $SHA"
+              git diff --name-only "$LAST" "$SHA" -- frontend/ | head -20
+              blocked=1
+            else
+              echo "    frontend/ unchanged since green run ${LAST:0:7} — the last result still applies"
+            fi
+          fi
+
+          [ "$blocked" = "0" ] || exit 1
+
+  # ── 2. BUILD AND PUBLISH IMMUTABLE IMAGES ───────────────────────────────
+  publish:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.tags.outputs.backend }}
+      frontend: ${{ steps.tags.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The exact commit, not the branch tip — the branch may have moved
+          # since CI passed, and shipping something CI never saw is the whole
+          # failure this workflow exists to prevent.
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - id: tags
+        run: |
+          R="${{ steps.ecr.outputs.registry }}"
+          S="${{ needs.resolve.outputs.sha }}"
+          echo "backend=$R/${{ env.ECR_BACKEND }}:$S"   >> "$GITHUB_OUTPUT"
+          echo "frontend=$R/${{ env.ECR_FRONTEND }}:$S" >> "$GITHUB_OUTPUT"
+
+      # ── ALREADY PUBLISHED? THEN DO NOT PUBLISH AGAIN ────────────────────
+      #
+      # ECR repositories are IMMUTABLE-tagged, which is what makes "the SHA
+      # that is deployed" a fact rather than a pointer. The cost is that
+      # re-pushing an existing tag is an error (`ImageTagAlreadyExistsException`),
+      # and re-running a release for the same SHA is NORMAL: it is how you
+      # redeploy after an approval timeout, and how DEPLOY_EC2.md §7 says to
+      # roll back. Without this check the recovery path fails at the first job.
+      #
+      # Skipping is also correct on the merits — the image for a SHA already
+      # exists and is immutable, so rebuilding could only produce the same
+      # artefact or an unexpectedly different one.
+      - name: Are these images already in ECR?
+        id: exists
+        run: |
+          set -euo pipefail
+          S="${{ needs.resolve.outputs.sha }}"
+          present=0
+          for repo in "${{ env.ECR_BACKEND }}" "${{ env.ECR_FRONTEND }}"; do
+            if aws ecr describe-images --repository-name "$repo" --image-ids imageTag="$S" >/dev/null 2>&1; then
+              present=$((present + 1))
+            fi
+          done
+          # Only a COMPLETE pair counts. One of two means a previous run failed
+          # part-way, and rebuilding both is the way to repair it.
+          if [ "$present" = "2" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "both images for $S are already in ECR — skipping the build"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "$present/2 images present for $S — building"
+          fi
+
+      # THE DEPLOYED TAG IS ALWAYS THE FULL SHA. `main-<short>` is pushed
+      # alongside purely so a human reading the ECR console can tell what a
+      # digest corresponds to; nothing deploys from it, and nothing may.
+      - name: Backend image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.backend }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_BACKEND }}:main-${{ needs.resolve.outputs.short }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # `NEXT_PUBLIC_*` are compiled INTO the bundle, so they are build args
+      # and not runtime env. They are public by definition — an API base URL
+      # and a Razorpay *publishable* key — and are held as repository
+      # variables, never secrets.
+      - name: Frontend image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.frontend }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_FRONTEND }}:main-${{ needs.resolve.outputs.short }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+            NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
+            NEXT_PUBLIC_MEDIA_BASE_URL=${{ vars.NEXT_PUBLIC_MEDIA_BASE_URL }}
+            NEXT_PUBLIC_RAZORPAY_KEY_ID=${{ vars.NEXT_PUBLIC_RAZORPAY_KEY_ID }}
+            NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${{ vars.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ── 3. SCAN THE ARTEFACT THAT WILL ACTUALLY RUN ─────────────────────────
+  # Scanning the pushed image rather than the source tree: a CVE in a base-image
+  # OS package is invisible to `pip-audit`, and the base image is most of the
+  # attack surface. This gate is between publish and deploy on purpose — a
+  # published-but-unscanned tag is recoverable; a deployed one is an incident.
+  scan-image:
+    needs: [resolve, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      # CRITICAL and HIGH fail the deploy. MEDIUM and below are reported and
+      # do not, because a base image carries a standing tail of unfixed
+      # low-severity advisories and blocking on them trains people to bypass
+      # the gate — which is worse than the vulnerabilities.
+      #
+      # `ignore-unfixed`: an advisory with no available patch cannot be acted
+      # on by this pipeline. It is still visible in the report; it just does
+      # not block a deploy nobody can unblock.
+      - name: Trivy — backend image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.publish.outputs.backend }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Trivy — frontend image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.publish.outputs.frontend }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  # ── 4. HUMAN APPROVAL, THEN DEPLOY ──────────────────────────────────────
+  # `environment: production` is what pauses here. The required-reviewer rule
+  # is configured in GitHub's UI, not in this file — a workflow that could
+  # grant itself approval would not be an approval. See DEPLOY_EC2.md.
+  deploy:
+    needs: [resolve, publish, scan-image]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://fastride.xyz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── SSM, NOT SSH ──────────────────────────────────────────────────
+      # The runner holds no `.pem` and port 22 stays closed to the internet.
+      # Every command is an auditable SSM API call, and the instance pulls
+      # from ECR with its OWN instance-profile role — the runner never has to
+      # hand it a credential.
+      #
+      # `deploy.sh` lives in the repository and is invoked BY TAG, so what
+      # runs on the box is reviewable in git rather than embedded in a
+      # workflow string.
+      # ── THE CONFIG BUNDLE ────────────────────────────────────────────────
+      # The compose files, the Caddyfile and the deploy scripts, from THIS
+      # commit, shipped inside the command. ~18 KB base64 against SSM's ~100 KB
+      # parameter budget.
+      #
+      # The alternative — `git fetch && git checkout` on the instance — needs a
+      # clone, a credential for a private repository, and a network path to
+      # GitHub, and it lets the box run a compose file from a different commit
+      # than the images it is deploying. None of that is worth keeping.
+      #
+      # Application code is NOT in here. That arrives only as a signed,
+      # scanned, SHA-tagged ECR image.
+      - name: Build the config bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          tar -czf bundle.tgz \
+            docker-compose.yml docker-compose.ec2.yml \
+            docker/Caddyfile deploy/deploy.sh deploy/render-env.sh
+          echo "b64=$(base64 -w0 bundle.tgz)" >> "$GITHUB_OUTPUT"
+          echo "bundle: $(stat -c%s bundle.tgz) bytes"
+
+      - name: Deploy over SSM
+        id: ssm
+        env:
+          INSTANCE: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          CMD=$(cat <<EOF
+          set -euo pipefail
+          mkdir -p /opt/curatix
+          cd /opt/curatix
+          # Unpack over the previous bundle. Only these six paths are touched;
+          # .env, .deployed and the Caddy volumes are never in the archive.
+          echo '${{ steps.bundle.outputs.b64 }}' | base64 -d | tar -xzf - -C /opt/curatix
+          export BACKEND_IMAGE='${{ needs.publish.outputs.backend }}'
+          export FRONTEND_IMAGE='${{ needs.publish.outputs.frontend }}'
+          export DEPLOY_SHA='${{ needs.resolve.outputs.sha }}'
+          export AWS_REGION='${{ env.AWS_REGION }}'
+          bash deploy/deploy.sh
+          EOF
+          )
+          # `--parameters` as JSON, not the `commands=` shorthand. The
+          # shorthand SPLITS ITS VALUE ON COMMAS into separate list elements,
+          # so a command containing one would be torn into fragments that each
+          # run as their own line — and the base64 bundle above is exactly the
+          # kind of value that would hit it.
+          jq -n --arg script "$CMD" '{commands: [$script], executionTimeout: ["3000"]}' > /tmp/ssm-params.json
+          ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE" \
+            --document-name "AWS-RunShellScript" \
+            --comment "deploy ${{ needs.resolve.outputs.short }}" \
+            --parameters file:///tmp/ssm-params.json \
+            --timeout-seconds 600 \
+            --query 'Command.CommandId' --output text)
+          echo "command_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command $ID dispatched to $INSTANCE"
+
+          # ── THE POLL MUST OUTLAST THE COMMAND ────────────────────────────
+          # `--timeout-seconds` bounds DELIVERY; `executionTimeout` (3000s
+          # above) bounds the run. If this loop gave up first, the workflow
+          # would report failure and `rollback` would send a SECOND SSM
+          # command while the first was still running `docker compose up` —
+          # two deployments racing on one host. 3300s > 3000s by construction.
+          ST=Pending
+          for _ in $(seq 1 330); do
+            ST=$(aws ssm get-command-invocation --command-id "$ID" \
+                 --instance-id "$INSTANCE" \
+                 --query Status --output text 2>/dev/null || echo Pending)
+            case "$ST" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut) echo "::error::SSM deploy $ST"; break ;;
+            esac
+            sleep 10
+          done
+
+          echo "----- deploy output from the instance -----"
+          aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+            --query StandardOutputContent --output text || true
+          if [ "$ST" != "Success" ]; then
+            echo "----- stderr -----"
+            aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+              --query StandardErrorContent --output text || true
+          fi
+          test "$ST" = "Success"
+
+      # ── 5. HEALTH + SMOKE, FROM OUTSIDE ─────────────────────────────────
+      # Checked from the runner, over the public internet, through Caddy —
+      # the path a customer uses. A check run on the box would pass while DNS,
+      # TLS or the proxy was broken.
+      #
+      # Read-only: no booking is created, no payment is attempted. The
+      # application has no dedicated write-safe test endpoint, and inventing
+      # one for a smoke test would be a real endpoint with real side effects.
+      - name: Smoke tests
+        id: smoke
+        run: |
+          set -euo pipefail
+          BASE=https://fastride.xyz
+          fail() { echo "::error::$1"; exit 1; }
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$BASE/health/") || fail "health unreachable"
+          [ "$code" = "200" ] || fail "health returned $code"
+
+          curl -sS --max-time 20 "$BASE/health/" | grep -q '"status": *"ok"' || fail "health reports degraded"
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 25 "$BASE/") || fail "frontend unreachable"
+          [ "$code" = "200" ] || fail "frontend returned $code"
+
+          # API routing THROUGH Caddy. A public, read-only endpoint.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$BASE/api/v1/events") || fail "api unreachable"
+          [ "$code" = "200" ] || fail "api returned $code"
+
+          # TLS is genuinely terminated, not a redirect loop.
+          curl -sS -I --max-time 20 "$BASE/" | grep -qi '^HTTP/' || fail "no HTTP response over TLS"
+          echo "smoke: health ok, frontend ok, api-through-caddy ok"
+
+      - name: Record what is running
+        if: always()
+        run: |
+          {
+            echo "## Production"
+            echo "- commit: \`${{ needs.resolve.outputs.sha }}\`"
+            echo "- backend image: \`${{ needs.publish.outputs.backend }}\`"
+            echo "- frontend image: \`${{ needs.publish.outputs.frontend }}\`"
+            echo "- smoke: ${{ steps.smoke.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 6. ROLLBACK ─────────────────────────────────────────────────────────
+  # Fires only when `deploy` failed. It redeploys the PREVIOUS successful
+  # commit's images — code only.
+  #
+  # THE DATABASE IS NOT ROLLED BACK, EVER, AND THAT IS DELIBERATE.
+  # Migrations here are additive and backward-compatible: the previous release
+  # runs against the newer schema because it simply ignores the columns it does
+  # not know about. Reversing a migration to match old code destroys data the
+  # new code has already written — `kind` is the live example: dropping it
+  # would make every marketplace row indistinguishable from an enquiry.
+  # Forward-only, always. See DEPLOY_EC2.md.
+  rollback:
+    needs: [resolve, deploy]
+    if: failure() && needs.deploy.result == 'failure'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      # ── THE ROLLBACK TARGET COMES FROM THE INSTANCE, NOT FROM GIT ────────
+      #
+      # This used to be `git rev-parse <sha>^` — the parent commit. That is
+      # only the last-known-good release when EVERY commit deploys. After two
+      # failed deploys in a row, or a `workflow_dispatch` of an older SHA, the
+      # parent is something that was never in production, and rolling back to
+      # it turns an outage into a longer and more confusing one.
+      #
+      # `deploy.sh` writes `/opt/curatix/.deployed` only AFTER every health
+      # check has passed, and moves the previous one to `.deployed.prev`. That
+      # file is therefore the only record of "the last version that actually
+      # worked", and it lives on the machine that would know.
+      - id: prev
+        env:
+          INSTANCE: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          jq -n '{commands: ["cat /opt/curatix/.deployed.prev 2>/dev/null || cat /opt/curatix/.deployed 2>/dev/null || echo NONE"]}' > /tmp/read.json
+          ID=$(aws ssm send-command --instance-ids "$INSTANCE" \
+                 --document-name "AWS-RunShellScript" --comment "read rollback target" \
+                 --parameters file:///tmp/read.json \
+                 --query 'Command.CommandId' --output text)
+          for _ in $(seq 1 30); do
+            ST=$(aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+                 --query Status --output text 2>/dev/null || echo Pending)
+            case "$ST" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 5
+          done
+          OUT=$(aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+                --query StandardOutputContent --output text || echo NONE)
+
+          PREV=$(printf '%s\n' "$OUT" | sed -n 's/^DEPLOYED_SHA=//p' | head -1)
+          if [ -z "$PREV" ]; then
+            echo "::error::No previous successful deployment is recorded on the instance."
+            echo "::error::This is expected on a FIRST deploy — there is nothing to roll back to."
+            echo "::error::Production is serving whatever the failed deploy left. Recover by hand: DEPLOY_EC2.md section 7."
+            exit 1
+          fi
+          if [ "$PREV" = "${{ needs.resolve.outputs.sha }}" ]; then
+            echo "::error::The recorded previous deployment is the same SHA that just failed. Nothing to roll back to."
+            exit 1
+          fi
+          echo "sha=$PREV" >> "$GITHUB_OUTPUT"
+          echo "::warning::Rolling production back to $PREV (code only; the schema stays forward)"
+
+      # BOTH images, not just the backend. Rolling back to a pair where only
+      # one half exists gets as far as stopping the running containers before
+      # failing on the missing pull — an outage caused by the recovery.
+      - name: Both previous images are still in ECR
+        run: |
+          set -euo pipefail
+          P="${{ steps.prev.outputs.sha }}"
+          for repo in "${{ env.ECR_BACKEND }}" "${{ env.ECR_FRONTEND }}"; do
+            aws ecr describe-images --repository-name "$repo" --image-ids imageTag="$P" >/dev/null \
+              || { echo "::error::$repo:$P is not in ECR — there is nothing to roll back to"; exit 1; }
+          done
+          echo "both images for $P are present"
+
+      # The config bundle from the SAME commit as those images. The failed
+      # deploy may have changed a compose file or the Caddyfile, and old images
+      # against a new topology is a third state that was never tested.
+      - name: Build the previous commit's config bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          P="${{ steps.prev.outputs.sha }}"
+          git fetch --quiet origin "$P" 2>/dev/null || true
+          git cat-file -e "${P}^{commit}" 2>/dev/null \
+            || { echo "::error::commit $P is not in this checkout — cannot rebuild its configuration"; exit 1; }
+          rm -rf /tmp/prev && mkdir -p /tmp/prev
+          git archive "$P" docker-compose.yml docker-compose.ec2.yml \
+                           docker/Caddyfile deploy/deploy.sh deploy/render-env.sh \
+            | tar -xf - -C /tmp/prev
+          tar -czf bundle.tgz -C /tmp/prev .
+          echo "b64=$(base64 -w0 bundle.tgz)" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy the previous release
+        env:
+          INSTANCE: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          R="${{ steps.ecr.outputs.registry }}"
+          P="${{ steps.prev.outputs.sha }}"
+          CMD=$(cat <<EOF
+          set -euo pipefail
+          cd /opt/curatix
+          echo '${{ steps.bundle.outputs.b64 }}' | base64 -d | tar -xzf - -C /opt/curatix
+          export BACKEND_IMAGE='$R/${{ env.ECR_BACKEND }}:$P'
+          export FRONTEND_IMAGE='$R/${{ env.ECR_FRONTEND }}:$P'
+          export DEPLOY_SHA='$P'
+          export AWS_REGION='${{ env.AWS_REGION }}'
+          # THE SCHEMA IS NOT ROLLED BACK. The migrations are additive, so the
+          # previous release runs against the newer schema by ignoring what it
+          # does not know about. Reversing 0004 would drop \`kind\` and make
+          # every marketplace row indistinguishable from an operator enquiry —
+          # data loss, not a rollback.
+          export SKIP_MIGRATIONS=1
+          bash deploy/deploy.sh
+          EOF
+          )
+          jq -n --arg script "$CMD" '{commands: [$script], executionTimeout: ["3000"]}' > /tmp/ssm-rollback.json
+          ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE" \
+            --document-name "AWS-RunShellScript" \
+            --comment "rollback to $P" \
+            --parameters file:///tmp/ssm-rollback.json \
+            --timeout-seconds 600 \
+            --query 'Command.CommandId' --output text)
+
+          # ── WAIT FOR IT ──────────────────────────────────────────────
+          # Dispatching and reporting success is worse than not rolling back
+          # at all: the workflow would say "rolled back" while production sat
+          # broken, and the next person would start looking somewhere else.
+          ST=Pending
+          for _ in $(seq 1 330); do
+            ST=$(aws ssm get-command-invocation --command-id "$ID" \
+                 --instance-id "$INSTANCE" --query Status --output text 2>/dev/null || echo Pending)
+            case "$ST" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+
+          echo "----- rollback output from the instance -----"
+          aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+            --query StandardOutputContent --output text || true
+          if [ "$ST" != "Success" ]; then
+            echo "----- stderr -----"
+            aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+              --query StandardErrorContent --output text || true
+            echo "::error::ROLLBACK FAILED ($ST). Production is serving a failed deploy."
+            echo "::error::Recover by hand — DEPLOY_EC2.md section 7."
+            exit 1
+          fi
+          echo "::warning::Production rolled back to $P"
+          {
+            echo "## ⚠️ Rolled back"
+            echo "- production is now running \`$P\`"
+            echo "- the schema was NOT reverted (forward-only)"
+          } >> "$GITHUB_STEP_SUMMARY"
