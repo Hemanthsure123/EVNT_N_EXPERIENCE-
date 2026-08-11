@@ -3,13 +3,19 @@ name: frontend
 on:
   push:
     branches: [main]
-    paths: ['frontend/**', '.github/workflows/frontend.yml']
   pull_request:
     paths: ['frontend/**', '.github/workflows/frontend.yml']
 
 defaults:
   run:
     working-directory: frontend
+
+env:
+  NEXT_PUBLIC_API_BASE_URL: https://ci.invalid/api
+  NEXT_PUBLIC_SITE_URL: https://ci.invalid
+  NEXT_PUBLIC_MEDIA_BASE_URL: https://ci.invalid
+  NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_ci_key
+  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ci_google_maps_key
 
 jobs:
   quality:
