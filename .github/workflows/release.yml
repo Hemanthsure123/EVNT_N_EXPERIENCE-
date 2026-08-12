@@ -524,10 +524,27 @@ jobs:
           export FRONTEND_IMAGE='${{ needs.publish.outputs.frontend }}'
           export DEPLOY_SHA='${{ needs.resolve.outputs.sha }}'
           export AWS_REGION='${{ env.AWS_REGION }}'
-          if [ ! -f /opt/curatix/.env ]; then
-            echo "[SECRET RENDER] .env file missing; executing render-env.sh"
-            bash deploy/render-env.sh
-          fi
+          # ── RENDER EVERY DEPLOY, NOT ONLY WHEN .env IS ABSENT ─────────────
+          #
+          # This was `if [ ! -f /opt/curatix/.env ]`, which meant the FIRST
+          # deploy wrote the file and every later one silently kept whatever
+          # was already on disk. Change a value in Secrets Manager, redeploy,
+          # and the instance goes on running the old one — the secret and the
+          # host drift apart with nothing reporting it.
+          #
+          # Not hypothetical: it is exactly what happened with SMS_PROVIDER.
+          # The first deploy wrote `console`; correcting the secret afterwards
+          # would have had no effect, and the next failure would have looked
+          # identical to the previous one.
+          #
+          # Safe to repeat: render-env.sh writes through a temp file with
+          # umask 077, REFUSES to write a config missing any required key, and
+          # keeps the previous file as .env.prev. The "secrets change on a
+          # different clock" rule it documents still holds — rotating a key
+          # needs no deploy — this only guarantees a deploy cannot run against
+          # a stale one.
+          echo "[SECRET RENDER] Rendering /opt/curatix/.env from Secrets Manager"
+          bash deploy/render-env.sh
           echo "[EXECUTING DEPLOYMENT SCRIPT]"
           bash deploy/deploy.sh
           EOF
