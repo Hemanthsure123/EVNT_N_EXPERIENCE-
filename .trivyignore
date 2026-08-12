@@ -1,0 +1,6 @@
+# Trivy scanner ignores for template files and test fixtures
+.env.example
+.env.oci.example
+.env.production.example
+.env.staging.example
+.env.tunnel.example
