@@ -314,7 +314,28 @@ STORAGE_BACKEND = env.str("STORAGE_BACKEND", default="local")
 QUEUE_BACKEND = env.str("QUEUE_BACKEND", default="local")
 EVENT_BUS_BACKEND = env.str("EVENT_BUS_BACKEND", default="inprocess")
 EMAIL_PROVIDER = env.str("EMAIL_PROVIDER", default="console")
-SMS_PROVIDER = env.str("SMS_PROVIDER", default="console")
+# ── AN OMITTED SETTING MUST NOT SELECT A FAKE ────────────────────────────
+#
+# This defaulted to `console`, and that default is only ever reached by an
+# environment that does NOT set the variable — every dev, example and CI env
+# sets it explicitly. In other words the default applied to exactly one place:
+# production, where `console` is the worst possible value. It ACCEPTS every
+# message, logs it, returns a plausible provider reference, and so
+# `NotificationLog` rows read `sent` while no customer receives an OTP.
+#
+# `core/preflight` catches it and refuses to boot, which is how the first
+# production deploy of this platform failed — the secret simply had no
+# SMS_PROVIDER key, so a dev fake was selected by omission.
+#
+# `disabled` is the honest default: the adapter reports it cannot deliver and
+# `NotificationService.notify` skips SMS cleanly rather than claiming a row it
+# can never send. Turning SMS ON is now a deliberate act (`http` plus
+# credentials), and turning the DEV FAKE on is also deliberate (`console`,
+# which every .env.example already sets). Nothing is selected by accident.
+#
+# Same rule the Web Push port follows: unconfigured disables itself rather
+# than pretending.
+SMS_PROVIDER = env.str("SMS_PROVIDER", default="disabled")
 CACHE_BACKEND = env.str("CACHE_BACKEND", default="redis")
 
 REDIS_URL = env.str("REDIS_URL", default="redis://localhost:6379/0")
