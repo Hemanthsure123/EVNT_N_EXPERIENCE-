@@ -19,7 +19,7 @@ from core.adapters.local.console_sms import ConsoleSmsAdapter
 from core.adapters.local.disabled_sms import DisabledSmsAdapter, SmsDisabledError
 
 from ..models import NotificationLog, NotificationType
-from .conftest import RecordingEmail, make_service
+from .conftest import InlineQueue, RecordingEmail, make_service
 
 pytestmark = pytest.mark.django_db
 
@@ -56,8 +56,14 @@ def test_email_still_sends_while_sms_is_disabled():
     """The reason skipping is safe: SMS is never the only channel for anything
     that matters. A booking confirmation is an email AND an SMS, and the email
     carries the ticket."""
+    # InlineQueue, not the default RecordingQueue: `notify` only ENQUEUES a
+    # dispatch, so with a queue that merely records, nothing is ever sent and
+    # `email.sent` stays empty for a reason that has nothing to do with SMS.
+    # This is the same wiring as the `inline_service` fixture.
     email = RecordingEmail()
-    service = make_service(email=email, sms=DisabledSmsAdapter())
+    queue = InlineQueue()
+    service = make_service(email=email, sms=DisabledSmsAdapter(), queue=queue)
+    queue.service = service
 
     log = service.notify(
         notification_type=NotificationType.WELCOME,

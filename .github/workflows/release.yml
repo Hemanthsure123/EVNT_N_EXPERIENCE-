@@ -112,24 +112,22 @@ jobs:
   security:
     uses: ./.github/workflows/security.yml
 
-  # ── RUNS, REPORTS, DOES NOT GATE (TEMPORARY) ────────────────────────────
+  # ── E2E IS NOT HERE, AND THAT IS THE POINT ──────────────────────────────
   #
-  # Deliberately absent from `resolve`'s `needs:`. This suite has never passed
-  # — 33 runs, 0 successes — because it is STALE, not flaky: 38 of its 92
-  # specs assert a home page replaced in c983c09, including `<HomeHero>`,
-  # which is now imported nowhere.
+  # `frontend-e2e.yml` runs on its own `push` trigger instead of as a stage of
+  # this pipeline. It was a `uses:` stage, and that had a consequence nobody
+  # would predict from reading it: a workflow run does not finish until EVERY
+  # job finishes, so a ~20-minute suite that gates NOTHING held this workflow's
+  # `production-deploy` concurrency lock for twenty minutes after the deploy
+  # decision was already made, and the next push queued behind it.
   #
-  # It still runs on every push and every frontend PR, and it still goes RED,
-  # which is the point: the state stays visible instead of being hidden behind
-  # `continue-on-error` or a deleted spec. What it does not do, until the specs
-  # are re-synced to the shipped UI, is block a deploy on a mismatch between
-  # the tests and a UI that was intentionally changed.
+  # A non-blocking suite that delays every deployment is not non-blocking. So
+  # it is a sibling workflow now: same commit, same visibility, still red when
+  # it fails, and structurally unable to slow a release down.
   #
-  # This is time-boxed, not open-ended: a test in
-  # backend/core/tests/test_deployment_topology.py fails once the recorded date
-  # passes, so the exception cannot quietly outlive its justification.
-  frontend-e2e:
-    uses: ./.github/workflows/frontend-e2e.yml
+  # This is still time-boxed — see
+  # backend/core/tests/test_deployment_topology.py, which fails once the
+  # recorded date passes so the exception cannot outlive its justification.
 
   # ── STAGE 2: RESOLVE ────────────────────────────────────────────────────
   #
@@ -162,7 +160,7 @@ jobs:
   # because the job that actually failed is already red and a second red tick
   # for the same failure only obscures which one to open.
   gate-report:
-    needs: [ci, frontend, security, frontend-e2e]
+    needs: [ci, frontend, security]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -171,10 +169,10 @@ jobs:
           CI_R: ${{ needs.ci.result }}
           FE_R: ${{ needs.frontend.result }}
           SEC_R: ${{ needs.security.result }}
-          # Bracket form: a hyphen in a job id is ambiguous with subtraction in
-          # the expression grammar, and `needs.frontend-e2e.result` is the kind
-          # of thing that evaluates to empty rather than failing loudly.
-          E2E_R: ${{ needs['frontend-e2e'].result }}
+          # E2E is a SIBLING workflow now, not a job here, so there is no
+          # result to read — and deliberately so: reading it would mean waiting
+          # for it, which is what used to hold the deploy lock for 20 minutes.
+          E2E_R: "separate workflow (frontend-e2e), non-blocking"
         run: |
           set -euo pipefail
           verdict() { [ "$1" = "success" ] && echo PASS || echo "FAIL ($1)"; }

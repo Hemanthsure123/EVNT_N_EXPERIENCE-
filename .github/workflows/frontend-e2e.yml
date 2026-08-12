@@ -25,10 +25,33 @@ name: frontend-e2e
 # the date in it passes, which puts the decision back in front of a human
 # instead of letting "temporary" become permanent. Re-syncing the specs is
 # tracked in frontend/BACKLOG.md.
+# ── TRIGGERED DIRECTLY, NEVER CALLED BY release.yml ───────────────────────
+#
+# This ran as a `uses:` stage inside release.yml, and that was wrong for a
+# suite which deliberately gates nothing. A workflow run does not finish until
+# EVERY job in it finishes, so this ~20-minute suite held release's
+# `production-deploy` concurrency lock long after the deploy decision was
+# made — and the NEXT push then queued behind it. A non-blocking suite was
+# delaying every deployment by twenty minutes, which is the opposite of
+# non-blocking.
+#
+# Running on `push` instead keeps everything that mattered — it still executes
+# on every commit to main, still reports, still goes red — while making it
+# structurally incapable of slowing a release down.
 on:
-  workflow_call:
+  push:
+    branches: [main]
   pull_request:
     paths: ['frontend/**', '.github/workflows/frontend-e2e.yml']
+
+# Its own group, and cancel-in-progress is TRUE here precisely because it
+# gates nothing: the only interesting answer is the newest commit's, so an
+# older in-flight run is worth cancelling rather than queueing. release.yml
+# uses the opposite setting for the opposite reason — deploys must not be
+# cancelled halfway.
+concurrency:
+  group: frontend-e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:

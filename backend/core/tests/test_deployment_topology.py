@@ -957,27 +957,39 @@ class TestReleaseWorkflow:
         how a skipped test suite becomes permanent, so this fails once the date
         passes, putting the decision back in front of a person.
         """
-        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
-        jobs = workflow["jobs"]
+        release = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        e2e_path = REPO_ROOT / ".github" / "workflows" / "frontend-e2e.yml"
+        jobs = release["jobs"]
 
-        assert "frontend-e2e" in jobs, (
-            "the E2E suite must still RUN in the pipeline — if it is not worth "
-            "running it should be deleted deliberately, not dropped silently"
+        # It must still RUN. If it is not worth running it should be deleted
+        # deliberately, not left to rot as a workflow nothing triggers.
+        assert e2e_path.exists(), "the E2E suite must still exist"
+        e2e = _load(e2e_path)
+        triggers = e2e.get("on") or e2e.get(True) or {}
+        assert "push" in triggers, (
+            "frontend-e2e must run on push. A suite that gates nothing AND runs "
+            "nowhere is a deleted suite with extra steps."
         )
-        assert jobs["frontend-e2e"].get("uses", "").endswith("frontend-e2e.yml")
         assert "continue-on-error" not in _code_only(
-            (REPO_ROOT / ".github" / "workflows" / "frontend-e2e.yml").read_text(encoding="utf-8")
+            e2e_path.read_text(encoding="utf-8")
         ), "the suite must be allowed to go RED; continue-on-error hides the state"
 
-        def requires(name: str) -> set[str]:
-            needs = jobs[name].get("needs") or []
-            needs = [needs] if isinstance(needs, str) else list(needs)
-            return set(needs).union(*(requires(n) for n in needs)) if needs else set()
-
-        assert "frontend-e2e" not in requires("deploy"), (
-            "frontend-e2e is back in deploy's dependency graph — if the specs "
-            "have been re-synced, delete this test rather than editing it"
+        # ── AND IT MUST NOT BE ABLE TO DELAY A DEPLOY ──────────────────────
+        #
+        # It was a `uses:` stage of release.yml. A workflow run does not finish
+        # until every job in it finishes, so this ~20-minute suite held the
+        # `production-deploy` concurrency lock long after the deploy decision
+        # was made, and the next push queued behind it. A non-blocking suite
+        # that delays every deployment by twenty minutes is not non-blocking.
+        assert "frontend-e2e" not in jobs, (
+            "frontend-e2e is a job in release.yml again. Even excluded from "
+            "`needs:`, its runtime holds this workflow's concurrency group and "
+            "stalls the next deploy. It belongs in its own workflow."
         )
+        for name, job in jobs.items():
+            assert not str(job.get("uses", "")).endswith(
+                "frontend-e2e.yml"
+            ), f"job '{name}' calls frontend-e2e.yml — see above"
 
         assert date.today() <= self.E2E_EXCEPTION_EXPIRES, (
             f"The frontend E2E deploy-gate exception expired on "
