@@ -145,21 +145,43 @@ jobs:
           echo "Runner OS: ${{ runner.os }}"
           echo "Runner Arch: ${{ runner.arch }}"
           echo "CWD: $(pwd)"
-          echo "Trivy action tag: aquasecurity/trivy-action@v0.29.0"
+          echo "Trivy action tag: aquasecurity/trivy-action@v0.33.1"
           echo "Scan type: fs"
           echo "Scan ref: ."
           echo "Severity threshold: CRITICAL,HIGH"
           echo "Ignore unfixed: true"
+          echo "Ignore file: .trivyignore.yaml (per-CVE, justified, expiring)"
           echo "Exit code: 1"
           echo "::endgroup::"
           echo "=== SECURITY STAGE: FILESYSTEM SCAN ==="
 
+      # ── WHY THE VERSION MATTERS MORE THAN IT LOOKS ──────────────────────
+      #
+      # This was pinned to v0.29.0, and that pin is what broke the job — not
+      # any finding. trivy-action is a COMPOSITE action whose first step is
+      # `uses: aquasecurity/setup-trivy@v0.2.2`, and upstream deleted the
+      # v0.2.1/v0.2.2 tags from that repository. GitHub resolves nested action
+      # references during "Set up job", so the job died there in 4 seconds,
+      # before checkout, before Trivy existed, with no scan output at all —
+      # which is why a passing local scan proved nothing about it.
+      #
+      # v0.31.0 onwards pin setup-trivy by COMMIT SHA, which cannot be
+      # deleted or moved. Verified resolvable:
+      #   v0.33.1 -> setup-trivy@e6c2c5e321ed9123bda567646e2f96565e34abe1
+      # Do not "simplify" this back to a version below v0.31.0, and do not use
+      # @master — that reintroduces an unpinned third party on the security
+      # gate.
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: fs
           scan-ref: .
+          # Path exclusion belongs here, NOT in the ignore file: these are the
+          # env TEMPLATES, whose placeholder values trip the secret scanner.
           skip-files: ".env.example,.env.oci.example,.env.production.example,.env.staging.example,.env.tunnel.example,render.yaml"
+          # Finding exclusion belongs here: one id per entry, each with a
+          # justification and an `expired_at` Trivy enforces. See the file.
+          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

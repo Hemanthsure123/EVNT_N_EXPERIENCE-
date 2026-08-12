@@ -1,0 +1,95 @@
+# Trivy ignore policy — SPECIFIC, JUSTIFIED, AND EXPIRING.
+#
+# ── WHY THIS FILE EXISTS AND WHAT IT IS NOT ───────────────────────────────
+#
+# This is not a blanket suppression and it is not a way to make a red job
+# green. Every entry below is ONE vulnerability id, for ONE package, with a
+# statement of why it is being carried and an `expired_at` date that Trivy
+# ENFORCES: on the day after that date the finding is reported again and the
+# security workflow fails again. An ignore that never expires is
+# indistinguishable from a scanner that was switched off.
+#
+# The file it replaced listed FILE PATHS (`.env.example`, ...). Trivy reads
+# this file as a list of finding IDs, so those lines matched nothing and did
+# nothing — the actual exclusion of the env templates from secret scanning is
+# `skip-files:` in .github/workflows/security.yml, which is where path
+# exclusion belongs.
+#
+# ── THE ONE THING BEING CARRIED: next 14.2.35 ─────────────────────────────
+#
+# Every id below is Next.js. There is NO fix available on the 14.x line —
+# 14.2.35 is the final 14.x release, verified against the npm registry — so
+# the only remediation is Next 15.5.21+, and Next 15's App Router requires
+# React 19. That cascades into framer-motion, @radix-ui/*, Storybook and
+# @testing-library/react across a 210-component frontend. It is a real
+# migration with real regression risk, and it is tracked as its own piece of
+# work rather than being smuggled into a deployment-pipeline fix.
+#
+# Note what is NOT here: the postcss and playwright findings from the same
+# scan were FIXED by upgrading, not ignored (frontend/package.json). Only the
+# advisories with no reachable fix are carried.
+#
+# ── BEFORE EXTENDING THE DATE ─────────────────────────────────────────────
+# Do the upgrade. If it genuinely cannot be done by then, the correct action
+# is a short extension with a new statement saying what blocked it — not a
+# quiet edit of the year.
+
+vulnerabilities:
+  # Information disclosure via middleware bypass. Trivy cannot see which
+  # router is in use; this advisory is Pages Router specific and this
+  # application is entirely App Router (`frontend/app/**`, no `pages/`
+  # directory exists). Carried as not-applicable rather than unfixed.
+  - id: CVE-2026-44573
+    statement: >-
+      next 14.2.35: no 14.x fix exists. Advisory is Pages Router specific and
+      this app is App Router only (no pages/ directory). Remediation is the
+      tracked Next 15 + React 19 migration.
+    expired_at: 2026-10-31
+
+  # SSRF via crafted WebSocket upgrade requests. The application terminates
+  # TLS at Caddy and proxies only /api, /health, /media and /static to Django
+  # with everything else to Next; it opens no WebSocket upstream of its own.
+  - id: CVE-2026-44578
+    statement: >-
+      next 14.2.35: no 14.x fix exists. Remediation is the tracked Next 15 +
+      React 19 migration.
+    expired_at: 2026-10-31
+
+  - id: CVE-2026-64641
+    statement: >-
+      next 14.2.35: DoS via crafted App Router requests. No 14.x fix exists;
+      fixed in 15.5.21. Remediation is the tracked Next 15 + React 19
+      migration.
+    expired_at: 2026-10-31
+
+  - id: CVE-2026-64645
+    statement: >-
+      next 14.2.35: SSRF. No 14.x fix exists; fixed in 15.5.21. Remediation is
+      the tracked Next 15 + React 19 migration.
+    expired_at: 2026-10-31
+
+  - id: CVE-2026-64649
+    statement: >-
+      next 14.2.35: SSRF via malicious host redirection in Server Actions. No
+      14.x fix exists; fixed in 15.5.21. Remediation is the tracked Next 15 +
+      React 19 migration.
+    expired_at: 2026-10-31
+
+  - id: GHSA-8h8q-6873-q5fj
+    statement: >-
+      next 14.2.35: DoS with Server Components. No 14.x fix exists.
+      Remediation is the tracked Next 15 + React 19 migration.
+    expired_at: 2026-10-31
+
+  - id: GHSA-h25m-26qc-wcjf
+    statement: >-
+      next 14.2.35: HTTP request deserialization DoS when using insecure React
+      configuration. No 14.x fix exists. Remediation is the tracked Next 15 +
+      React 19 migration.
+    expired_at: 2026-10-31
+
+  - id: GHSA-q4gf-8mx6-v5v3
+    statement: >-
+      next 14.2.35: DoS with Server Components. No 14.x fix exists.
+      Remediation is the tracked Next 15 + React 19 migration.
+    expired_at: 2026-10-31

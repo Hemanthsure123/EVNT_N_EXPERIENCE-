@@ -312,6 +312,14 @@ jobs:
     needs: [resolve, publish]
     runs-on: ubuntu-latest
     steps:
+      # Needed for `.trivyignore.yaml`. Without a checkout the ignore file is
+      # absent and the frontend image fails on the same carried next 14.2.35
+      # advisories the filesystem scan already accounts for — the image
+      # contains that dependency tree, so both scans see them.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
       - name: Environment Diagnostics
         run: |
           echo "::group::Environment Diagnostics"
@@ -333,19 +341,26 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
+      # Pinned, not @master: an unpinned third-party action on the gate that
+      # decides what reaches production is exactly the dependency you do not
+      # want moving under you. v0.33.1 pins its own nested setup-trivy by
+      # commit SHA — see the note in .github/workflows/security.yml for why
+      # that specifically matters here.
       - name: Trivy — backend image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ needs.publish.outputs.backend }}
+          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
           format: table
 
       - name: Trivy — frontend image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ needs.publish.outputs.frontend }}
+          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

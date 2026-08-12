@@ -57,7 +57,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.10.0",
-    "@playwright/test": "1.47.2",
+    "@playwright/test": "1.55.1",
     "@storybook/addon-a11y": "8.3.2",
     "@storybook/addon-essentials": "8.3.2",
     "@storybook/blocks": "8.3.2",
@@ -82,7 +82,7 @@
     "eslint-plugin-storybook": "0.9.0",
     "jsdom": "25.0.1",
     "openapi-typescript": "7.4.1",
-    "postcss": "8.4.47",
+    "postcss": "8.5.18",
     "prettier": "3.3.3",
     "prettier-plugin-tailwindcss": "0.6.8",
     "storybook": "8.3.2",
@@ -91,5 +91,8 @@
     "tailwindcss": "3.4.13",
     "typescript": "5.6.2",
     "vitest": "2.1.1"
+  },
+  "overrides": {
+    "postcss": "8.5.18"
   }
 }
