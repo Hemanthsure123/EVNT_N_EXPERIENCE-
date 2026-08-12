@@ -1,0 +1,141 @@
+name: operator
+
+# ── GRANTING CONSOLE ACCESS, AS AN EXPLICIT AND AUDITED ACT ───────────────
+#
+# `core/management/commands/ensure_admin.py` exists because granting operator
+# access must be deliberate. Its docstring is explicit that `PLATFORM_ADMIN_
+# EMAILS` is NOT wired to `is_staff`, precisely so that adding somebody to a
+# notification list cannot hand them the console as a side effect nobody
+# reviewed. This workflow keeps that property: the address is TYPED IN by a
+# person at dispatch time, never derived from a config value, and the run
+# record is the audit trail.
+#
+# It is deliberately NOT part of release.yml. A deploy must not silently
+# promote accounts, and this must be runnable without shipping a commit.
+#
+# The command is idempotent by design — re-running it on an existing account
+# reports what it found and changes nothing else — so "I am not sure whether
+# this was already run" is answered by running it again.
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Email address of the account to create or promote"
+        required: true
+        type: string
+      superuser:
+        description: "Also grant Django-admin superuser (broader than the console)"
+        required: false
+        default: false
+        type: boolean
+      organizer:
+        description: "Also mark as an organizer, so the account can list events"
+        required: false
+        default: false
+        type: boolean
+
+# Its own group: this must never queue behind, or be queued behind, a deploy.
+concurrency:
+  group: operator-admin
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ensure-admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Grant operator access over SSM
+        env:
+          INSTANCE: ${{ vars.EC2_INSTANCE_ID }}
+          EMAIL: ${{ inputs.email }}
+          SUPERUSER: ${{ inputs.superuser }}
+          ORGANIZER: ${{ inputs.organizer }}
+        run: |
+          set -euo pipefail
+
+          # Validated HERE rather than trusted into a remote shell. The value
+          # is interpolated into a script that runs as root on the instance, so
+          # anything outside this character class is refused rather than
+          # escaped — a deny-list would be the wrong shape for that risk.
+          if ! printf '%s' "$EMAIL" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'; then
+            echo "::error::'$EMAIL' is not a plain email address; refusing to pass it to a remote shell."
+            exit 1
+          fi
+
+          FLAGS=""
+          [ "$SUPERUSER" = "true" ] && FLAGS="$FLAGS --superuser"
+          [ "$ORGANIZER" = "true" ] && FLAGS="$FLAGS --organizer"
+
+          echo "[OPERATOR] account : $EMAIL"
+          echo "[OPERATOR] flags   : ${FLAGS:-(console access only)}"
+
+          # `exec` on the RUNNING web container, not `run`: it reuses the exact
+          # image and .env already serving traffic, so this cannot succeed
+          # against a different configuration than the one in production.
+          #
+          # No --password. The command sets an unusable random secret instead,
+          # which is what you want for an operator who signs in with Google:
+          # there is no password to guess and none to leak.
+          CMD=$(cat <<EOF
+          set -euo pipefail
+          cd /opt/curatix
+          docker compose -f docker-compose.yml -f docker-compose.ec2.yml \
+            exec -T web python manage.py ensure_admin --email '$EMAIL'$FLAGS
+          EOF
+          )
+          jq -n --arg script "$CMD" '{commands: [$script], executionTimeout: ["600"]}' > /tmp/op.json
+
+          ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE" \
+            --document-name "AWS-RunShellScript" \
+            --comment "ensure_admin $EMAIL" \
+            --parameters file:///tmp/op.json \
+            --query 'Command.CommandId' --output text)
+          echo "[OPERATOR] SSM command: $ID"
+
+          ST=Pending
+          for _ in $(seq 1 60); do
+            ST=$(aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+                 --query Status --output text 2>/dev/null || echo Pending)
+            case "$ST" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 5
+          done
+
+          echo "===== OUTPUT FROM EC2 ====="
+          aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+            --query StandardOutputContent --output text || true
+          if [ "$ST" != "Success" ]; then
+            echo "===== STDERR ====="
+            aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE" \
+              --query StandardErrorContent --output text || true
+          fi
+
+          echo "[OPERATOR] status: $ST"
+          test "$ST" = "Success"
+
+      - name: What this granted
+        if: success()
+        run: |
+          {
+            echo "### Operator access granted"
+            echo ""
+            echo "- account: \`${{ inputs.email }}\`"
+            echo "- console (\`is_staff\`): yes — this is what /admin checks"
+            echo "- Django superuser: ${{ inputs.superuser }}"
+            echo "- organizer: ${{ inputs.organizer }}"
+            echo ""
+            echo "Sign in at https://fastride.xyz/sign-in. The account has NO usable"
+            echo "password unless one was set previously — use Google sign-in, or run"
+            echo "a password reset."
+          } >> "$GITHUB_STEP_SUMMARY"
