@@ -173,17 +173,33 @@ jobs:
       # Do not "simplify" this back to a version below v0.31.0, and do not use
       # @master — that reintroduces an unpinned third party on the security
       # gate.
+      # ── WHY TRIVY_IGNOREFILE AND NOT THE `trivyignores:` INPUT ──────────
+      #
+      # Trivy picks the ignore file's FORMAT from its EXTENSION: `.yaml`/`.yml`
+      # is the structured format (per-finding `statement` + an `expired_at`
+      # Trivy enforces), anything else is a flat list of ids.
+      #
+      # The action's `trivyignores:` input cannot carry that. entrypoint.sh
+      # does `cat` of each file into `./trivyignores` — no extension — and
+      # exports TRIVY_IGNOREFILE to it. Our YAML then gets parsed as a flat id
+      # list, every line becomes a nonsense id, nothing is ignored, and the
+      # scan fails on the carried advisories. Reproduced exactly: copying the
+      # file to an extensionless name reports all 8 again and exits 1.
+      #
+      # Setting the env var directly keeps the extension. It is safe from the
+      # action: it only writes TRIVY_* vars for inputs the caller passed, and
+      # it only touches TRIVY_IGNOREFILE when `trivyignores` is set — which it
+      # no longer is. Verified: exit 0 with the env var, 1 without it.
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.33.1
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
         with:
           scan-type: fs
           scan-ref: .
           # Path exclusion belongs here, NOT in the ignore file: these are the
           # env TEMPLATES, whose placeholder values trip the secret scanner.
           skip-files: ".env.example,.env.oci.example,.env.production.example,.env.staging.example,.env.tunnel.example,render.yaml"
-          # Finding exclusion belongs here: one id per entry, each with a
-          # justification and an `expired_at` Trivy enforces. See the file.
-          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

@@ -265,11 +265,16 @@ jobs:
       # want moving under you. v0.33.1 pins its own nested setup-trivy by
       # commit SHA — see the note in .github/workflows/security.yml for why
       # that specifically matters here.
+      # `TRIVY_IGNOREFILE` rather than the `trivyignores:` input — the action
+      # copies that input to an extensionless `./trivyignores`, which makes
+      # Trivy read the YAML as a flat id list. See the long note in
+      # .github/workflows/security.yml.
       - name: Trivy — backend image
         uses: aquasecurity/trivy-action@v0.33.1
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
         with:
           image-ref: ${{ needs.publish.outputs.backend }}
-          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -277,9 +282,10 @@ jobs:
 
       - name: Trivy — frontend image
         uses: aquasecurity/trivy-action@v0.33.1
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
         with:
           image-ref: ${{ needs.publish.outputs.frontend }}
-          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
