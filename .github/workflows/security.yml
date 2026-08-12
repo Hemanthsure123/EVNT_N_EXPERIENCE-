@@ -165,7 +165,6 @@ jobs:
           exit-code: "1"
           format: table
           hide-progress: true
-          scanners: vuln,secret
 
       - name: Trivy Scan Failure Diagnostics
         if: ${{ failure() }}
