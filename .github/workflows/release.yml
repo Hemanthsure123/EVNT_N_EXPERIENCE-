@@ -47,6 +47,55 @@ permissions:
   id-token: write
 
 jobs:
+  # ── WHAT IDENTITY THIS PIPELINE PRESENTS TO AWS ─────────────────────────
+  #
+  # `publish` failed at `configure-aws-credentials` after ~110s — that action's
+  # RETRY window, not a fast input error, so STS was reached and it DENIED
+  # `sts:AssumeRoleWithWebIdentity`. A denial is a mismatch between the token's
+  # claims and the role's trust policy, and the job that hits it cannot show
+  # you the claims it sent, so the failure names neither side of the mismatch.
+  #
+  # This runs with no `needs:`, so it answers that in well under a minute
+  # instead of after ten minutes of validation. It gates nothing — `publish`
+  # already enforces the real thing; this exists so the NEXT person sees the
+  # actual `sub` next to the policy that has to match it.
+  #
+  # It prints CLAIMS ONLY. The OIDC token itself is a bearer credential and is
+  # never echoed, written to a file, or exported — only the specific,
+  # non-secret fields below are read out of it.
+  aws-oidc-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - name: The subject this workflow presents to AWS
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                    "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
+                  | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')
+
+          # Decode the payload locally. Only the claims named here are printed;
+          # the token is consumed by this python process and never leaves it.
+          TOKEN="$TOKEN" python3 - <<'PY'
+          import base64, json, os
+
+          payload = os.environ["TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          print("=== OIDC claims presented to AWS STS ===")
+          for key in ("sub", "aud", "repository", "ref", "environment", "job_workflow_ref"):
+              if key in claims:
+                  print(f"  {key:18} {claims[key]}")
+          print()
+          print("The role's trust policy must allow BOTH subjects this pipeline uses:")
+          repo = claims.get("repository", "<repo>")
+          print(f'  "repo:{repo}:ref:refs/heads/main"        <- publish (no environment)')
+          print(f'  "repo:{repo}:environment:production"     <- deploy  (environment: production)')
+          print()
+          print("A policy scoped to only environment:production CANNOT admit publish,")
+          print("which necessarily runs before any environment exists.")
+          PY
+
   # ── STAGE 1: VALIDATION ─────────────────────────────────────────────────
   #
   # The three validation workflows, called for THIS commit. They are ordinary
