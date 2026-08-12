@@ -145,7 +145,7 @@ jobs:
           echo "Runner OS: ${{ runner.os }}"
           echo "Runner Arch: ${{ runner.arch }}"
           echo "CWD: $(pwd)"
-          echo "Trivy action tag: aquasecurity/trivy-action@master"
+          echo "Trivy action tag: aquasecurity/trivy-action@v0.29.0"
           echo "Scan type: fs"
           echo "Scan ref: ."
           echo "Severity threshold: CRITICAL,HIGH"
@@ -155,7 +155,7 @@ jobs:
           echo "=== SECURITY STAGE: FILESYSTEM SCAN ==="
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           scan-type: fs
           scan-ref: .
