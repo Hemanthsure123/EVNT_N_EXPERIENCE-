@@ -137,6 +137,33 @@ to leak and nothing to rotate.
 
    Scoping to the repository is not optional. A trust policy that matches `*`
    lets any GitHub repository in the world assume your deployment role.
+
+   **⚠ READ THE REAL `sub` BEFORE WRITING THIS — it may not be what the
+   documentation says.** GitHub now issues ID-SUFFIXED subjects on some
+   accounts, where the owner and repository carry their numeric ids:
+
+   ```
+   documented   repo:Hemanthsure123/EVNT_N_EXPERIENCE-:ref:refs/heads/main
+   actual       repo:Hemanthsure123@204320166/EVNT_N_EXPERIENCE-@1311306252:ref:refs/heads/main
+   ```
+
+   A policy written in the documented form matches nothing, and the only error
+   AWS returns is `Not authorized to perform sts:AssumeRoleWithWebIdentity` —
+   which names neither the presented subject nor the expected one. This cost
+   several days here. Confirm the account's format first:
+
+   ```bash
+   gh api repos/<owner>/<repo>/actions/oidc/customization/sub   # sub_claim_prefix
+   ```
+
+   The `aws-oidc-claims` job in `release.yml` prints the live `sub` in under a
+   minute for the same reason — it exists so this is never guesswork again.
+
+   **Two subjects are required, not one.** `publish` runs with no
+   `environment`, so it presents `…:ref:refs/heads/main`; `deploy` runs with
+   `environment: production`, so it presents `…:environment:production`. A
+   policy scoped only to the environment subject can never admit `publish`,
+   which must run first because it builds the images `deploy` ships.
 3. Attach permissions for: ECR push/pull, `ssm:SendCommand` **restricted to the
    one instance id and the `AWS-RunShellScript` document**, and
    `ssm:GetCommandInvocation`.
@@ -227,11 +254,19 @@ makes a misconfiguration invisible to a reviewer.
 | --- | --- | --- |
 | `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::…:role/curatix-github-deploy` | every AWS step |
 | `EC2_INSTANCE_ID` | `i-0abc…` | the SSM deploy step |
-| `NEXT_PUBLIC_API_BASE_URL` | `https://fastride.xyz/api` | the frontend build |
+| `NEXT_PUBLIC_API_BASE_URL` | `https://fastride.xyz` — **origin only, no `/api`** | the frontend build |
 | `NEXT_PUBLIC_SITE_URL` | `https://fastride.xyz` | the frontend build |
 | `NEXT_PUBLIC_MEDIA_BASE_URL` | the host serving uploads | the frontend build |
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_test_…` | the frontend build |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | the **browser** key | the frontend build |
+
+**`NEXT_PUBLIC_API_BASE_URL` is an ORIGIN, not an API path.** This table said
+`https://fastride.xyz/api` and production was configured from it, which is a
+failure that deploys GREEN: `lib/api/client.ts` builds
+``API_ROOT = `${API_BASE_URL}/api/v1` ``, so the browser requested
+`/api/api/v1/...` and got 404s on every page — while the release smoke test,
+which curls the literal path `/api/v1/events`, passed. Caddy routes `/api/*` to
+Django; the `/api` belongs to the ROUTE, not to this variable.
 
 The AWS region (`ap-south-1`) and the two ECR repository names are `env:` in
 `release.yml` rather than variables — they are part of the deployment's shape,
