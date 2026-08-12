@@ -300,11 +300,34 @@ jobs:
           echo "backend=$R/${{ env.ECR_BACKEND }}:$S"   >> "$GITHUB_OUTPUT"
           echo "frontend=$R/${{ env.ECR_FRONTEND }}:$S" >> "$GITHUB_OUTPUT"
 
+      # ── CHECKED WITH ecr:DescribeImages, NOT ecr:DescribeRepositories ────
+      #
+      # The deployment role is scoped to exactly what the pipeline needs, and
+      # `ecr:DescribeRepositories` is deliberately not in it. `describe-images`
+      # IS granted and answers the same question: it raises
+      # RepositoryNotFoundException when the repository is missing, which is
+      # the failure this step exists to catch. It is also the very call the
+      # next step makes, so a permission problem surfaces here with a clear
+      # message rather than inside a conditional that treats any error as
+      # "image absent, go build".
+      #
+      # The alternative was widening the role by one action. Not widening a
+      # production deployment role to power a diagnostic is the better trade.
       - name: Verify ECR Repositories Existence
         run: |
-          echo "Verifying ECR repositories existence in region ${{ env.AWS_REGION }}..."
-          aws ecr describe-repositories --repository-names "${{ env.ECR_BACKEND }}" "${{ env.ECR_FRONTEND }}" \
-            --query 'repositories[*].[repositoryName,repositoryUri]' --output table
+          set -euo pipefail
+          echo "Verifying ECR repositories in ${{ env.AWS_REGION }}..."
+          for repo in "${{ env.ECR_BACKEND }}" "${{ env.ECR_FRONTEND }}"; do
+            if aws ecr describe-images --repository-name "$repo" --max-items 1 >/dev/null 2>"/tmp/ecr-$repo.err"; then
+              echo "  [OK] $repo"
+            elif grep -q "ImageNotFound\|not found in the repository" "/tmp/ecr-$repo.err"; then
+              echo "  [OK] $repo (exists, currently empty)"
+            else
+              echo "::error::ECR repository '$repo' is not reachable in ${{ env.AWS_REGION }}"
+              sed 's/^/    /' "/tmp/ecr-$repo.err"
+              exit 1
+            fi
+          done
 
       - name: Are these images already in ECR?
         id: exists
