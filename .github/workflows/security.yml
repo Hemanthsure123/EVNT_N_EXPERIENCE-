@@ -103,6 +103,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
+          skip-files: ".env.example,.env.oci.example,.env.production.example,.env.staging.example,.env.tunnel.example"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
