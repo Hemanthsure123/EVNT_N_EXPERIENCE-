@@ -1462,3 +1462,45 @@ Implemented as one grouped query (`PerformerMediaRepository.all_media_for_many`)
 attached by the view (`_with_photos`), so a twenty-row owner list costs one
 photo query rather than twenty. Covered by five tests, one of them a query
 budget.
+
+---
+
+### 79. Re-sync the E2E specs to the shipped UI — BLOCKING A DEPLOY GATE
+
+`tests/e2e/*.spec.ts` describes a home page that no longer exists. The suite
+has **never passed in CI** — 33 runs, 0 successes — and that was masked by a
+separate configuration bug (the job built against `https://ci.invalid/api`, so
+every spec failed on DNS long before any assertion was reached, and the real
+mismatch was invisible).
+
+With the API base pointed at the fixture backend, the true state is
+**51 pass / 38 fail / 3 skipped**.
+
+The specs are STALE, not flaky. `app/(site)/page.tsx` was rewritten in
+`c983c09` to lead with `<Showcase>`; `tests/e2e/discovery.spec.ts` has not been
+touched since the earlier `30c162e`. So the specs still assert `<HomeHero>` — a
+component now imported **nowhere**:
+
+    expected  <h1>What do you feel like…   (HomeHero, orphaned)
+    actual    <h1>Happening soon           (Showcase)
+
+Roughly where the 38 sit: home ~4, deep search palette ~4, booking funnel ~6,
+event page ~11, carousel / featured island / sort dropdown ~9, axe ~4.
+
+Two things to be careful about while fixing this:
+
+- **The axe failures may be real.** They are the only ones that could be an
+  accessibility regression in the shipped UI rather than an outdated
+  assertion. Check those before assuming the spec is at fault.
+- **The fixture does not serve `GET /events/{id}/content`** (it 404s, while
+  detail and `ticket-types` both return 200). `fetchEventContentSafe` swallows
+  that correctly, so the page still renders — but any spec asserting gallery,
+  FAQs or running order is asserting against empty collections. Extend
+  `scripts/mock-api.mjs` rather than weakening the spec.
+
+**Until this is done, `frontend-e2e` runs but does not gate the deploy** —
+`.github/workflows/frontend-e2e.yml`, excluded from `resolve`'s `needs:` in
+`release.yml`. The exception is dated: `test_the_e2e_exception_is_real_visible_
+and_expiring` in `backend/core/tests/test_deployment_topology.py` fails after
+**2026-10-31**, which is deliberate. Put `frontend-e2e` back into `resolve`'s
+`needs:` and delete that test when the specs are green.

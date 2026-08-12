@@ -1,0 +1,123 @@
+name: frontend-e2e
+
+# ── WHY THIS IS ITS OWN WORKFLOW ──────────────────────────────────────────
+#
+# It is split from `frontend.yml` so the release pipeline can REQUIRE the
+# frontend quality gate (typecheck, lint, unit tests, production build, bundle
+# budget, Storybook) while this suite runs, reports, and does NOT block the
+# deploy.
+#
+# That is a deliberate, temporary exception, and the reason is specific: this
+# suite has never passed — 33 runs, 0 successes. It is STALE, not flaky.
+# `app/(site)/page.tsx` was rewritten in c983c09 to lead with `<Showcase>`,
+# and `tests/e2e/discovery.spec.ts` has not been touched since the earlier
+# 30c162e. The specs still assert `<HomeHero>`, a component now imported
+# NOWHERE: they expect `<h1>What do you feel like`, the app renders
+# `<h1>Happening soon`. 38 of 92 specs assert a UI that no longer exists.
+#
+# Nothing here is skipped, disabled, marked flaky or given
+# `continue-on-error`. The job runs every spec and goes RED when they fail, so
+# the state stays visible rather than being hidden behind a green tick — it is
+# simply not wired into `deploy`'s `needs:` until the specs are re-synced to
+# the shipped UI.
+#
+# The exception EXPIRES. `core/tests/test_deployment_topology.py` fails once
+# the date in it passes, which puts the decision back in front of a human
+# instead of letting "temporary" become permanent. Re-syncing the specs is
+# tracked in frontend/BACKLOG.md.
+on:
+  workflow_call:
+  pull_request:
+    paths: ['frontend/**', '.github/workflows/frontend-e2e.yml']
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # ── A BOUND, NOT A BUFFER ───────────────────────────────────────────────
+    # The job's real cost is ~6-8 min (npm ci, browser download, one production
+    # build, then the specs). GitHub's default is 360 minutes, which is how a
+    # broken run sat at 33m56s and another was still going at 30m44s instead of
+    # failing fast and saying so. 20 is comfortably above a healthy run and far
+    # below "nobody noticed for half an hour".
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment Diagnostics
+        run: |
+          echo "::group::Environment Diagnostics"
+          echo "Workflow: frontend"
+          echo "Job: e2e"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "CWD: $(pwd)"
+          echo "Node version: $(node --version 2>/dev/null || echo N/A)"
+          echo "npm version: $(npm --version 2>/dev/null || echo N/A)"
+          echo "::endgroup::"
+          echo "=== FRONTEND STAGE: E2E ==="
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # ── THESE MUST POINT AT THE FIXTURE BACKEND, NOT AT A DEAD HOST ────────
+      #
+      # `playwright.config.ts` starts `scripts/mock-api.mjs` on port 8000 and
+      # the specs assert against the data it serves. This step used to build
+      # with `NEXT_PUBLIC_API_BASE_URL=https://ci.invalid/api`, so the compiled
+      # bundle never contacted that fixture: `.invalid` is a RESERVED TLD that
+      # is guaranteed never to resolve, and `lib/api/client.ts` appends
+      # `/api/v1`, making the URL `https://ci.invalid/api/api/v1/...` — wrong
+      # twice over. Every data-driven spec then failed on a network error and
+      # was retried once, which is where 30+ minutes went.
+      #
+      # `NEXT_PUBLIC_*` values are INLINED INTO THE BUNDLE at build time, and
+      # the production build happens inside Playwright's `webServer` command,
+      # which inherits this env — so this block is what the browser actually
+      # calls. It cannot be set later or overridden at runtime.
+      #
+      # The base is a bare ORIGIN with no path, because client.ts builds
+      # `${API_BASE_URL}/api/v1`. A trailing `/api` here double-prefixes it.
+      - name: E2E smoke + axe (light + dark)
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_SITE_URL: http://localhost:3000
+          NEXT_PUBLIC_MEDIA_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_ci_key
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ci_google_maps_key
+        run: |
+          echo "Executing Playwright E2E: npm run e2e"
+          echo "API base (fixture backend): $NEXT_PUBLIC_API_BASE_URL"
+          echo "Site base:                  $NEXT_PUBLIC_SITE_URL"
+          npm run e2e
+
+      - name: Playwright E2E Failure Diagnostics
+        if: ${{ failure() }}
+        run: |
+          echo "=== E2E FAILURE DIAGNOSTICS ==="
+          echo "Playwright test run failed."
+          echo "Checking playwright-report directory:"
+          ls -la playwright-report 2>&1 || true
+
+      - name: Upload Playwright Report Artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

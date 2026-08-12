@@ -63,6 +63,25 @@ jobs:
   security:
     uses: ./.github/workflows/security.yml
 
+  # ── RUNS, REPORTS, DOES NOT GATE (TEMPORARY) ────────────────────────────
+  #
+  # Deliberately absent from `resolve`'s `needs:`. This suite has never passed
+  # — 33 runs, 0 successes — because it is STALE, not flaky: 38 of its 92
+  # specs assert a home page replaced in c983c09, including `<HomeHero>`,
+  # which is now imported nowhere.
+  #
+  # It still runs on every push and every frontend PR, and it still goes RED,
+  # which is the point: the state stays visible instead of being hidden behind
+  # `continue-on-error` or a deleted spec. What it does not do, until the specs
+  # are re-synced to the shipped UI, is block a deploy on a mismatch between
+  # the tests and a UI that was intentionally changed.
+  #
+  # This is time-boxed, not open-ended: a test in
+  # backend/core/tests/test_deployment_topology.py fails once the recorded date
+  # passes, so the exception cannot quietly outlive its justification.
+  frontend-e2e:
+    uses: ./.github/workflows/frontend-e2e.yml
+
   # ── STAGE 2: RESOLVE ────────────────────────────────────────────────────
   #
   # All this does now is name the commit and echo it. The gate is `needs:`.

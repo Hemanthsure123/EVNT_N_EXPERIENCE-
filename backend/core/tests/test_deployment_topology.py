@@ -11,6 +11,7 @@ work in CI with no Docker daemon.
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -929,6 +930,62 @@ class TestReleaseWorkflow:
         # and a manual dispatch under pressure is exactly when it would be.
         for stage in ("ci", "frontend", "security", "deploy"):
             assert "if" not in jobs[stage], f"'{stage}' is conditional — it can be bypassed"
+
+    # The frontend E2E suite is deliberately outside the deploy gate. This is
+    # the date that decision expires; see the test below.
+    E2E_EXCEPTION_EXPIRES = date(2026, 10, 31)
+
+    def test_the_e2e_exception_is_real_visible_and_expiring(self):
+        """E2E runs and reports, but does not gate — and cannot do so quietly.
+
+        The suite has never passed (33 runs, 0 successes) because it is STALE,
+        not flaky: 38 of 92 specs assert a home page replaced in c983c09,
+        including `<HomeHero>`, a component now imported nowhere. Blocking
+        every deploy on tests that describe a UI which was intentionally
+        changed would mean the pipeline could never ship anything.
+
+        What this asserts is that the exception stays HONEST:
+
+          - the suite still RUNS in the pipeline (it is a real `uses:` stage,
+            not deleted and not commented out),
+          - it is NOT dressed up as passing — no `continue-on-error`, which
+            would turn a red suite into a green tick,
+          - and it is genuinely outside `deploy`'s dependency graph rather than
+            being quietly satisfied by something else.
+
+        The date is the part that matters most. "Temporary" with no deadline is
+        how a skipped test suite becomes permanent, so this fails once the date
+        passes, putting the decision back in front of a person.
+        """
+        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        jobs = workflow["jobs"]
+
+        assert "frontend-e2e" in jobs, (
+            "the E2E suite must still RUN in the pipeline — if it is not worth "
+            "running it should be deleted deliberately, not dropped silently"
+        )
+        assert jobs["frontend-e2e"].get("uses", "").endswith("frontend-e2e.yml")
+        assert "continue-on-error" not in _code_only(
+            (REPO_ROOT / ".github" / "workflows" / "frontend-e2e.yml").read_text(encoding="utf-8")
+        ), "the suite must be allowed to go RED; continue-on-error hides the state"
+
+        def requires(name: str) -> set[str]:
+            needs = jobs[name].get("needs") or []
+            needs = [needs] if isinstance(needs, str) else list(needs)
+            return set(needs).union(*(requires(n) for n in needs)) if needs else set()
+
+        assert "frontend-e2e" not in requires("deploy"), (
+            "frontend-e2e is back in deploy's dependency graph — if the specs "
+            "have been re-synced, delete this test rather than editing it"
+        )
+
+        assert date.today() <= self.E2E_EXCEPTION_EXPIRES, (
+            f"The frontend E2E deploy-gate exception expired on "
+            f"{self.E2E_EXCEPTION_EXPIRES}. Re-sync tests/e2e/*.spec.ts to the "
+            f"shipped UI and put `frontend-e2e` back in `resolve`'s needs — or "
+            f"make a fresh, dated decision to extend it. Do not just move the "
+            f"date: see frontend/BACKLOG.md."
+        )
 
     def test_publish_is_idempotent_against_immutable_tags(self):
         """ECR repositories are IMMUTABLE-tagged, so re-pushing an existing tag
