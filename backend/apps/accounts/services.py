@@ -888,11 +888,32 @@ class GoogleSignInService:
         return f"oauth:signin:handoff:{handoff}"
 
     def is_available(self) -> bool:
-        return self._oidc.is_configured()
+        """Whether a Google sign-in can actually COMPLETE, not merely start.
+
+        The redirect URI is part of the answer, and used not to be. This
+        method gated only on `is_configured()` — client id and secret — so a
+        deployment with those two set but `GOOGLE_OAUTH_SIGNIN_REDIRECT_URI`
+        left blank reported `available: true`, the frontend rendered the
+        button, and the user was sent to Google with an empty `redirect_uri`.
+
+        That failure is the worst one to hand somebody: Google refuses BEFORE
+        redirecting, so the browser gets a generic "Access blocked: this app's
+        request is invalid" page, our callback is never reached, and nothing
+        is logged here — there is no request to log. It is the exact failure
+        `manage.py show_google_oauth_setup` exists to pre-empt, so reporting
+        `available` in that state contradicts the rest of this design.
+
+        Configuring one of the three and not the others is the normal way this
+        gets set up, so the half-configured state is the likely one, not an
+        exotic one.
+        """
+        return self._oidc.is_configured() and bool(self._redirect_uri)
 
     def start(self, *, next_path: str = "", login_hint: str = "") -> str:
         """Return the URL to send the browser to."""
-        if not self._oidc.is_configured():
+        # Same condition as `is_available`, so the button and the endpoint can
+        # never disagree about whether this deployment can sign anyone in.
+        if not self.is_available():
             raise GoogleSignInUnavailableError()
 
         state = secrets.token_urlsafe(32)

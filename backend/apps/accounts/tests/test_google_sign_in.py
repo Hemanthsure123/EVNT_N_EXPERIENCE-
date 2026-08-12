@@ -99,6 +99,34 @@ class TestStartingTheFlow:
         assert build()[0].is_available() is True
         assert build(FakeGoogle(configured=False))[0].is_available() is False
 
+    def test_a_missing_redirect_uri_is_unavailable_not_a_broken_button(self):
+        """Client id and secret set, redirect URI blank — the likely half-way
+        state, because they are configured in three separate places.
+
+        This used to report `available: true`. The frontend then rendered the
+        button and sent the user to Google with an empty `redirect_uri`, and
+        Google refuses BEFORE redirecting: the browser gets a generic "Access
+        blocked: this app's request is invalid" page, our callback is never
+        reached, and nothing is logged here because there is no request to
+        log. Reporting unavailable is the honest answer, and it is the one
+        the rest of this module already gives.
+        """
+        users = UserRepository()
+        service = GoogleSignInService(
+            users=users,
+            oidc=FakeGoogle(),
+            cache=LocMemCacheAdapter(),
+            auth=AuthService(
+                users=users, email=ConsoleEmailAdapter(), task_queue=SyncTaskQueueAdapter()
+            ),
+            redirect_uri="",
+        )
+
+        assert service.is_available() is False
+        # And the endpoint must agree with the button, not merely hide it.
+        with pytest.raises(GoogleSignInUnavailableError):
+            service.start()
+
 
 class TestTheStateIsTheCredential:
     def test_an_unknown_state_is_refused(self):
