@@ -136,6 +136,29 @@ class TestFakeAdapters:
     def test_local_storage_is_refused_in_production(self):
         assert "vanish on the next restart" in _refuses(_Settings(STORAGE_BACKEND="local"))
 
+    def test_the_console_sms_adapter_is_refused_in_production(self):
+        assert "no OTP or booking SMS" in _refuses(_Settings(SMS_PROVIDER="console"))
+
+    def test_sms_deliberately_disabled_is_allowed_but_never_silent(self):
+        """`disabled` and `console` must not be treated alike.
+
+        `console` ACCEPTS every message and drops it, so the log reads `sent`
+        while no OTP arrives — that stays a hard refusal above. `disabled`
+        reports it cannot deliver, so `NotificationService.notify` skips the
+        send before claiming a row.
+
+        Allowing it matters because India's DLT registration takes weeks and a
+        platform can be ready to take money before it clears. Warning about it
+        matters just as much: losing SMS is a real reduction in service, and
+        whoever reads a boot log should see it stated rather than find out
+        when a customer asks where their OTP went.
+        """
+        warnings = check_production_settings(_Settings(SMS_PROVIDER="disabled"), strict=True)
+        assert any("no OTP or booking SMS will be delivered" in w for w in warnings)
+        assert any(
+            "SMS_PROVIDER=http" in w for w in warnings
+        ), "the warning must say how to turn SMS back on"
+
     def test_fakes_are_a_warning_in_staging_not_a_refusal(self):
         # Exercising the booking funnel without moving money is what staging
         # is FOR, so this must not block a deploy there.

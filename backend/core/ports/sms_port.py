@@ -17,3 +17,20 @@ class SmsPort(ABC):
     @abstractmethod
     def send(self, *, to: str, message: str, dlt_template_id: str = "") -> str:
         """Send an SMS. Returns a provider message reference for tracing."""
+
+    def is_configured(self) -> bool:
+        """Whether this deployment can actually deliver an SMS.
+
+        Concrete, not abstract, and defaulting to True: every adapter that
+        exists to send something can send, and requiring each to say so would
+        be ceremony. Only `DisabledSmsAdapter` overrides it.
+
+        This mirrors `PushPort.is_configured()`, and for the same reason. India's
+        DLT regime means SMS cannot be switched on by pasting an API key — it
+        needs a registered entity and per-template approval, which takes weeks.
+        A deployment can therefore be legitimately complete and still have no
+        SMS, and the honest way to model that is a port that SAYS it cannot
+        deliver, so callers skip cleanly, rather than a fake that accepts every
+        message and drops it.
+        """
+        return True

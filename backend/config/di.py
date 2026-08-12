@@ -160,6 +160,13 @@ def sms_port() -> SmsPort:
         from core.adapters.local.console_sms import ConsoleSmsAdapter
 
         return ConsoleSmsAdapter()
+    if backend == "disabled":
+        # An explicit "this deployment does not send SMS", as opposed to
+        # `console`, which is a dev fake that production must never run. See
+        # the module docstring in core/adapters/local/disabled_sms.py.
+        from core.adapters.local.disabled_sms import DisabledSmsAdapter
+
+        return DisabledSmsAdapter()
     if backend == "http":
         from core.adapters.sms_provider.adapter import HttpSmsAdapter
 

@@ -439,6 +439,27 @@ def check_production_settings(
             message = f"{switch}={fake_value} is a local fake: {consequence}."
             (problems if strict else warnings).append(message)
 
+    # ── DELIBERATELY OFF IS NOT THE SAME AS ACCIDENTALLY FAKE ──────────────
+    #
+    # `SMS_PROVIDER=console` stays a hard refusal above: it ACCEPTS every
+    # message and drops it, so logs read `sent` while no OTP is delivered.
+    #
+    # `disabled` is the opposite — the adapter reports it cannot deliver, and
+    # `NotificationService.notify` skips SMS before claiming a log row. That is
+    # a legitimate way to launch: India's DLT registration takes weeks, and a
+    # platform can be ready to take money before it clears.
+    #
+    # It is a WARNING and not silence, because "no SMS" is a real reduction in
+    # service that whoever reads this output should see stated, every boot,
+    # rather than discovering it when a customer asks where their OTP went.
+    if str(getattr(settings, "SMS_PROVIDER", "")) == "disabled":
+        warnings.append(
+            "SMS_PROVIDER=disabled: no OTP or booking SMS will be delivered. "
+            "This is explicit, not a fake — email still sends tickets, receipts "
+            "and refund notices. Set SMS_PROVIDER=http with SMS_API_KEY, "
+            "SMS_SENDER_ID and SMS_DLT_ENTITY_ID to enable delivery."
+        )
+
     for (switch, real_value), required in _ADAPTER_CREDENTIALS.items():
         if str(getattr(settings, switch, "")) != real_value:
             continue

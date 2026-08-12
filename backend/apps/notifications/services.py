@@ -127,6 +127,26 @@ class NotificationService:
             )
             return None
 
+        # ── SMS THAT CANNOT BE DELIVERED IS NOT CLAIMED ────────────────────
+        #
+        # With SMS_PROVIDER=disabled the port reports it cannot deliver, and
+        # the message is skipped HERE — before a `NotificationLog` row is
+        # written. That ordering is the point: claiming the row first would
+        # leave a pending record that dispatch can only ever fail, so every
+        # undeliverable SMS would burn its retries and land in the dead-letter
+        # state, making a deliberate configuration look like an outage.
+        #
+        # Skipping is safe for the caller because SMS is never the only channel
+        # for anything that matters: a booking confirmation is an email AND an
+        # SMS, and the email still goes. The one capability genuinely lost is
+        # phone OTP, which has no backend wired in any case.
+        if channel == NotificationChannel.SMS and not self._sms.is_configured():
+            logger.info(
+                "notifications.skipped_sms_disabled",
+                extra={"type": notification_type, "dedupe_key": dedupe_key},
+            )
+            return None
+
         existing = self._logs.get_by_dedupe_key(dedupe_key)
         if existing is not None:
             return existing  # already claimed/sent/failed — never send twice
