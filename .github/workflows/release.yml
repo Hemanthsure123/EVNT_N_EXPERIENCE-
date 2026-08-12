@@ -1,16 +1,36 @@
 name: release
 
+# ── ONE PIPELINE, ONE COMMIT ──────────────────────────────────────────────
+#
+# This workflow IS the pipeline. It runs the three validation workflows as
+# stages via `uses:`, and every later stage depends on them through `needs:`.
+#
+# What this replaces: release used to be triggered by CI *finishing*
+# (`workflow_run`) and then ask the GitHub API whether Security and Frontend
+# had passed for the same SHA, polling each for up to 60 x 10s. Two things
+# were wrong with that, and both were fatal:
+#
+#   1. It was a race. Frontend E2E ran ~34 minutes; the poll gave up at 600s.
+#      Every observed release failure was 10m28s — 600s of waiting plus
+#      overhead — reporting a "timeout" conclusion for a job that was simply
+#      still running. The deploy decision depended on wall-clock luck.
+#   2. It could never have succeeded anyway. See the `resolve` job below.
+#
+# A called workflow always runs against the CALLER's commit, so exact-SHA
+# safety is structural rather than something to re-verify: there is no window
+# in which a sibling result for a different commit could be read, and no
+# "latest run for this SHA" lookup to get wrong.
+#
+# `workflow_dispatch` takes no SHA input. It used to accept an arbitrary
+# `image_sha`, which in this design would validate one commit and deploy a
+# different one — precisely the stale-result hazard being removed. To deploy
+# an older commit, dispatch this workflow FROM that ref; it is then validated
+# and deployed as one unit. To undo a bad deploy, the `rollback` job below
+# restores the previously recorded images.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      image_sha:
-        description: "Full 40-char commit SHA to deploy (defaults to this branch's HEAD)"
-        required: false
-        type: string
 
 concurrency:
   group: production-deploy
@@ -27,176 +47,75 @@ permissions:
   id-token: write
 
 jobs:
+  # ── STAGE 1: VALIDATION ─────────────────────────────────────────────────
+  #
+  # The three validation workflows, called for THIS commit. They are ordinary
+  # `needs:` dependencies, so nothing below can start until all three have
+  # genuinely succeeded — enforced by GitHub, not by a script asking politely.
+  # They run concurrently with each other; the pipeline is as slow as the
+  # slowest one, not the sum.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  frontend:
+    uses: ./.github/workflows/frontend.yml
+
+  security:
+    uses: ./.github/workflows/security.yml
+
+  # ── STAGE 2: RESOLVE ────────────────────────────────────────────────────
+  #
+  # All this does now is name the commit and echo it. The gate is `needs:`.
+  #
+  # What used to be here was a prerequisite check that could not pass. It read
+  # a helper's result with `C_CI=$(conclusion ci.yml)`, and a diagnostics
+  # change had added seven `echo` lines INSIDE that helper. Command
+  # substitution captures stdout, so `$C_CI` was never "success" — it was the
+  # whole transcript: "Workflow: ci.yml", "Latest matching run ID: ...", the
+  # status, the timestamps, and only then "success" on the final line.
+  # `[ "$C_CI" != "success" ]` was therefore true and the gate closed even when
+  # all three workflows were green. The diagnostics were written to stdout
+  # while the pre-existing progress lines correctly used `>&2`; that one
+  # detail is the whole bug, and it made the release unpassable rather than
+  # merely slow.
+  #
+  # The lesson generalises: a shell function whose RETURN VALUE is its stdout
+  # cannot also log to stdout. This job no longer has that shape, so it cannot
+  # regress into it.
   resolve:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+    needs: [ci, frontend, security]
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       short: ${{ steps.pick.outputs.short }}
     steps:
-      - name: Environment Diagnostics
-        run: |
-          echo "::group::Environment Diagnostics"
-          echo "Workflow: release"
-          echo "Job: resolve"
-          echo "Event: ${{ github.event_name }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit SHA: ${{ github.sha }}"
-          echo "Runner OS: ${{ runner.os }}"
-          echo "Runner Arch: ${{ runner.arch }}"
-          echo "CWD: $(pwd)"
-          echo "Git version: $(git --version 2>/dev/null || echo N/A)"
-          echo "GitHub CLI version: $(gh --version 2>/dev/null | head -1 || echo N/A)"
-          echo "jq version: $(jq --version 2>/dev/null || echo N/A)"
-          echo "::endgroup::"
-
       - id: pick
         run: |
-          SHA="${{ inputs.image_sha || github.event.workflow_run.head_sha || github.sha }}"
+          set -euo pipefail
+          SHA="${{ github.sha }}"
           if [ ${#SHA} -ne 40 ]; then
             echo "::error::Refusing a non-40-char SHA ('$SHA'). Deployment tags must be the full immutable commit id."
             exit 1
           fi
-          echo "sha=$SHA"            >> "$GITHUB_OUTPUT"
-          echo "short=${SHA:0:7}"    >> "$GITHUB_OUTPUT"
-          echo "### Deploying \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha=$SHA"         >> "$GITHUB_OUTPUT"
+          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.pick.outputs.sha }}
-          fetch-depth: 0
-
-      - name: Every other required workflow passed for this SHA
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.pick.outputs.sha }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/release-report
-
-          echo "=== RELEASE RESOLUTION START ==="
-          echo "Target SHA: $SHA"
-          echo "Event: ${{ github.event_name }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Repository: $REPO"
-          echo ""
-
-          blocked=0
-          C_CI="missing"
-          C_SEC="missing"
-          C_FE="missing"
-          REASON=""
-
-          conclusion() {
-            local wf="$1"
-            local attempt
-            echo "Workflow: $wf"
-            for attempt in $(seq 1 60); do
-              res=$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&per_page=1" \
-                --jq '.workflow_runs[0] | {id: (.id // "N/A"), status: (.status // "missing"), conclusion: (.conclusion // "missing"), created_at: (.created_at // "N/A"), updated_at: (.updated_at // "N/A"), head_sha: (.head_sha // "N/A")}' 2>/dev/null || echo '{"id":"N/A","status":"missing","conclusion":"missing","created_at":"N/A","updated_at":"N/A","head_sha":"N/A"}')
-
-              run_id=$(echo "$res" | jq -r '.id')
-              status=$(echo "$res" | jq -r '.status')
-              conc=$(echo "$res" | jq -r '.conclusion')
-              head_sha=$(echo "$res" | jq -r '.head_sha')
-              created_at=$(echo "$res" | jq -r '.created_at')
-              updated_at=$(echo "$res" | jq -r '.updated_at')
-
-              if [ "$status" = "completed" ]; then
-                echo "  Latest matching run ID: $run_id"
-                echo "  Matching SHA: $head_sha"
-                echo "  Run status: $status"
-                echo "  Run conclusion: $conc"
-                echo "  Created time: $created_at"
-                echo "  Updated time: $updated_at"
-                echo "$conc"
-                return 0
-              fi
-
-              if [ "$attempt" -lt 60 ]; then
-                echo "  $wf status is '$status' (attempt $attempt/60)... waiting 10s" >&2
-                sleep 10
-              fi
-            done
-            echo "${conc:-timeout}"
-          }
-
-          echo "Evaluating CI..."
-          C_CI=$(conclusion ci.yml)
-          echo "  ci.yml conclusion: $C_CI"
-          if [ "$C_CI" != "success" ]; then
-            echo "::error::ci.yml concluded '$C_CI' for $SHA — refusing to deploy an unverified commit"
-            blocked=1
-            REASON="$REASON [CI $C_CI]"
-          fi
-
-          echo "Evaluating Security..."
-          C_SEC=$(conclusion security.yml)
-          echo "  security.yml conclusion: $C_SEC"
-          if [ "$C_SEC" != "success" ]; then
-            echo "::error::security.yml concluded '$C_SEC' for $SHA"
-            blocked=1
-            REASON="$REASON [Security $C_SEC]"
-          fi
-
-          echo "Evaluating Frontend..."
-          C_FE=$(conclusion frontend.yml)
-          echo "  frontend.yml conclusion: $C_FE"
-          if [ "$C_FE" = "success" ]; then
-            :
-          elif [ "$C_FE" != "missing" ]; then
-            echo "::error::frontend.yml concluded '$C_FE' for $SHA"
-            blocked=1
-            REASON="$REASON [Frontend $C_FE]"
-          else
-            LAST=$(gh api "repos/$REPO/actions/workflows/frontend.yml/runs?branch=main&status=success&per_page=1" \
-                     --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || echo "")
-            if [ -z "$LAST" ]; then
-              echo "::error::frontend.yml has never passed on main — nothing verifies the frontend"
-              blocked=1
-              REASON="$REASON [Frontend never passed]"
-            elif git diff --name-only "$LAST" "$SHA" -- frontend/ | grep -q .; then
-              echo "::error::frontend/ changed since last green frontend run ($LAST) but frontend.yml did not run for $SHA"
-              git diff --name-only "$LAST" "$SHA" -- frontend/ | head -20
-              blocked=1
-              REASON="$REASON [Frontend changed since last green run $LAST]"
-            else
-              echo "  frontend/ unchanged since green run ${LAST:0:7} — last result applies"
-              C_FE="unchanged_pass"
-            fi
-          fi
-
-          GATE_STATUS="OPEN"
-          if [ "$blocked" = "1" ]; then
-            GATE_STATUS="CLOSED"
-          else
-            REASON="All prerequisite workflows passed or verified clean."
-          fi
-
-          cat <<'REPORT' | tee /tmp/release-report/resolution.txt
-          ----------------------------------------
-          PREREQUISITE WORKFLOW RESOLUTION SUMMARY
-          ----------------------------------------
-          REPORT
-          echo "CI:          $C_CI" | tee -a /tmp/release-report/resolution.txt
-          echo "Frontend:    $C_FE" | tee -a /tmp/release-report/resolution.txt
-          echo "Security:    $C_SEC" | tee -a /tmp/release-report/resolution.txt
-          echo "Release Gate: $GATE_STATUS" | tee -a /tmp/release-report/resolution.txt
-          echo "Reason:      $REASON" | tee -a /tmp/release-report/resolution.txt
-          echo "----------------------------------------" | tee -a /tmp/release-report/resolution.txt
-
-          [ "$blocked" = "0" ] || exit 1
-
-      - name: Upload Release Resolution Artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-resolution-report
-          path: /tmp/release-report/resolution.txt
-          retention-days: 7
+          echo "=== RELEASE GATE ==="
+          echo "Commit:   $SHA"
+          echo "Event:    ${{ github.event_name }}"
+          echo "CI:       ${{ needs.ci.result }}"
+          echo "Frontend: ${{ needs.frontend.result }}"
+          echo "Security: ${{ needs.security.result }}"
+          echo "Gate:     OPEN (all validation stages succeeded for this commit)"
+          {
+            echo "### Deploying \`$SHA\`"
+            echo ""
+            echo "| stage | result |"
+            echo "| --- | --- |"
+            echo "| CI | ${{ needs.ci.result }} |"
+            echo "| Frontend | ${{ needs.frontend.result }} |"
+            echo "| Security | ${{ needs.security.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: resolve

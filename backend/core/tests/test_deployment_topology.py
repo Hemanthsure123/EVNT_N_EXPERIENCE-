@@ -874,12 +874,61 @@ class TestReleaseWorkflow:
         for forbidden in ("ssh-private-key", ".pem", "webfactory/ssh-agent"):
             assert forbidden not in self.body, f"{forbidden} must never appear"
 
-    def test_manual_dispatch_is_gated_on_ci_too(self):
-        """`workflow_dispatch` is the DOCUMENTED way to redeploy a known-good
-        SHA, so it is the path a human uses under pressure. It must not be the
-        lenient one — without this, a commit whose tests failed can be typed in
-        and shipped after approval."""
-        assert "conclusion ci.yml" in self.body
+    def test_deploy_transitively_requires_every_validation_workflow(self):
+        """Nothing reaches production without CI, frontend and security having
+        passed FOR THIS COMMIT.
+
+        This used to assert the string `conclusion ci.yml` — the release job
+        polled the GitHub API for its sibling workflows' results. That design
+        is gone, and it is worth recording why, because the string check
+        happily passed while the pipeline was incapable of deploying:
+
+          - The poll was a race. It waited 60 x 10s per workflow; frontend E2E
+            ran ~34 minutes, so release failed on a 600s timeout rather than on
+            a result.
+          - It could not have succeeded even when everything was green. The
+            helper returned its answer on stdout AND logged to stdout, so
+            `C_CI=$(conclusion ci.yml)` captured the whole transcript and was
+            never equal to `success`.
+
+        Both classes of bug are unreachable now: the validation workflows are
+        `uses:` stages and the dependency is GitHub's own `needs:` graph. So
+        this asserts the GRAPH, transitively — a direct-edge check would pass
+        if someone inserted a job between `resolve` and `deploy`.
+        """
+        workflow = _load(REPO_ROOT / ".github" / "workflows" / "release.yml")
+        jobs = workflow["jobs"]
+
+        def requires(name: str) -> set[str]:
+            needs = jobs[name].get("needs") or []
+            needs = [needs] if isinstance(needs, str) else list(needs)
+            return set(needs).union(*(requires(n) for n in needs)) if needs else set()
+
+        for stage in ("ci", "frontend", "security"):
+            assert stage in requires("deploy"), (
+                f"deploy does not depend on '{stage}' — production can ship a "
+                f"commit that stage never validated"
+            )
+            assert jobs[stage].get("uses", "").endswith(f"{stage}.yml"), (
+                f"'{stage}' must CALL the real workflow; a stub job named after "
+                f"it would satisfy the graph while validating nothing"
+            )
+
+        # A called workflow always runs on the caller's commit, so exact-SHA
+        # safety is structural — but only while dispatch cannot name a
+        # different one. An arbitrary SHA input would validate one commit and
+        # deploy another, which is the stale-result hazard this design removes.
+        triggers = workflow.get("on") or workflow.get(True) or {}
+        dispatch = (triggers or {}).get("workflow_dispatch") or {}
+        assert not (dispatch or {}).get("inputs"), (
+            "workflow_dispatch takes no inputs: a SHA typed in by hand would be "
+            "deployed while the validation stages ran against a different commit"
+        )
+
+        # No stage may be conditional. A gate that can be skipped is not a gate,
+        # and a manual dispatch under pressure is exactly when it would be.
+        for stage in ("ci", "frontend", "security", "deploy"):
+            assert "if" not in jobs[stage], f"'{stage}' is conditional — it can be bypassed"
 
     def test_publish_is_idempotent_against_immutable_tags(self):
         """ECR repositories are IMMUTABLE-tagged, so re-pushing an existing tag

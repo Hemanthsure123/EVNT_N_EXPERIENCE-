@@ -1,8 +1,21 @@
 name: CI
 
+# ── ON MAIN THIS IS CALLED, NOT TRIGGERED ─────────────────────────────────
+#
+# `push: [main]` is deliberately absent. On main this workflow runs as the
+# first stage of `release.yml`, which calls it with `uses:` — so the release
+# depends on it through GitHub's own `needs:` graph and cannot start until it
+# has actually passed for THIS commit.
+#
+# Before, release was triggered by this workflow finishing and then polled the
+# GitHub API asking whether its siblings had passed. That is a race by
+# construction, and it was losing: the poll gave up after 600s while the
+# frontend E2E job was still running, so release failed on a timeout rather
+# than on a result. `workflow_call` removes the question entirely.
+#
+# Pull requests still trigger it directly, unchanged.
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
 
 defaults:

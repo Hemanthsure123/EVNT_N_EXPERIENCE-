@@ -1,8 +1,10 @@
 name: security
 
+# On main this is a stage of `release.yml` (see the note in ci.yml). The
+# weekly schedule stays: a dependency advisory published after a commit merges
+# must still be found, and nothing pushes to main on a quiet week.
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
   schedule:
     - cron: "0 4 * * 1"

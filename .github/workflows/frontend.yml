@@ -1,8 +1,12 @@
 name: frontend
 
+# On main this is a stage of `release.yml` (see the note in ci.yml), where it
+# runs UNCONDITIONALLY — the paths filter below applies to pull requests only.
+# That filter is why release used to carry a "did frontend even run for this
+# SHA, and has frontend/ changed since the last green run?" branch; calling the
+# workflow directly means the answer is always "it ran, for this commit".
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
     paths: ['frontend/**', '.github/workflows/frontend.yml']
 
