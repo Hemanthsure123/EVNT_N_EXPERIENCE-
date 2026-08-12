@@ -62,7 +62,9 @@ def test_email_still_sends_while_sms_is_disabled():
     log = service.notify(
         notification_type=NotificationType.WELCOME,
         recipient="rider@example.com",
-        context={},
+        # The welcome template falls back to `email` when no name is given, so
+        # both keys are real context and not padding.
+        context={"name": "Rider", "email": "rider@example.com"},
         dedupe_key="welcome-while-sms-off:1",
     )
 
