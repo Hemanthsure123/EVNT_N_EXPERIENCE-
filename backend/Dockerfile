@@ -32,13 +32,41 @@ ARG INSTALL_EXTRAS="razorpay,push,observability,s3"
 
 COPY pyproject.toml ./
 # Build deps only for the pip resolve step, then dropped from the final layer.
+#
+# ── pip IS A BUILD TOOL, AND IT SHIPS ITS OWN CVEs ────────────────────────
+#
+# The last line of this RUN deletes pip. pip VENDORS its dependencies, and
+# `pip/_vendor/vendor.txt` pins:
+#
+#     msgpack==1.1.2       GHSA-6v7p-g79w-8964  (out-of-bounds read)
+#     setuptools==70.3.0   CVE-2025-47273       (path traversal)
+#
+# Trivy reads that file, so the image scan reported both as HIGH even though
+# the APPLICATION's copies are already patched — msgpack 1.2.1 and setuptools
+# 80.10.2 are installed below and appear in the very same scan. No dependency
+# constraint can fix this: those versions are frozen inside pip and only a new
+# pip release moves them.
+#
+# The container's entrypoint is gunicorn; it never installs anything, so pip is
+# unreachable code that exists only to supply findings. Same argument that
+# removed npm from the frontend runtime image.
+#
+# `pkg_resources` SURVIVES this and must: razorpay 1.4.2 imports it at module
+# scope. It comes from the real setuptools in site-packages, not from pip's
+# vendored copy — which is why the `<81` bound in pyproject.toml still matters.
+# The import check on the last line fails the BUILD if any of that is wrong,
+# rather than letting it surface as a 500 on the first checkout.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libpq-dev \
     && pip install --upgrade pip \
     && pip install -e ".[${INSTALL_EXTRAS}]" \
     && apt-get purge -y gcc libpq-dev \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/python3.12/site-packages/pip \
+              /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+              /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+    && python -c "import pkg_resources, razorpay, django; print('post-prune import check OK')"
 
 COPY . .
 

@@ -137,10 +137,32 @@ log "[7] Start containers"
 "${COMPOSE[@]}" up -d --remove-orphans >/dev/null 2>&1 || true
 
 # ── 8. Health checks ──────────────────────────────────────────────────────
+#
+# ── THE HOST HEADER IS NOT OPTIONAL ─────────────────────────────────────
+#
+# This probes the container on 127.0.0.1, but Django validates the Host header
+# against ALLOWED_HOSTS and answers 400 to anything not listed. A production
+# ALLOWED_HOSTS of `fastride.xyz` alone — the obvious way to write it — makes
+# every probe below fail, and the deploy then dies after 300 seconds with
+# "never became healthy" about an application that is running perfectly.
+#
+# So the probe presents the site's own domain, read from the .env that was
+# just rendered. `grep` rather than sourcing the file: it holds the database
+# password, the Razorpay secret and the signing keys, and none of that belongs
+# in this shell's environment just to learn a hostname.
+SITE_DOMAIN_VALUE=$(grep -m1 '^SITE_DOMAIN=' .env 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)
+if [ -n "$SITE_DOMAIN_VALUE" ]; then
+  HEALTH_HOST_ARGS=(-H "Host: $SITE_DOMAIN_VALUE")
+  log "  Probing as Host: $SITE_DOMAIN_VALUE"
+else
+  HEALTH_HOST_ARGS=()
+  log "  SITE_DOMAIN not readable from .env — probing without a Host header"
+fi
+
 log "[8] Health checks"
 healthy=0
 for i in $(seq 1 30); do
-  if "${COMPOSE[@]}" exec -T web curl -fsS http://127.0.0.1:8000/health/ >/dev/null 2>&1; then
+  if "${COMPOSE[@]}" exec -T web curl -fsS "${HEALTH_HOST_ARGS[@]}" http://127.0.0.1:8000/health/ >/dev/null 2>&1; then
     log "  Backend health check passed after $((i * 10))s"
     healthy=1
     break

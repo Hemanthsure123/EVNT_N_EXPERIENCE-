@@ -106,6 +106,12 @@ required_keys=(
     JWT_SIGNING_KEY TICKET_QR_SIGNING_KEY
     RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET
     SITE_DOMAIN NEXT_PUBLIC_API_BASE_URL NEXT_PUBLIC_SITE_URL
+    # `config/settings/prod.py` REFUSES to boot without this
+    # ("ALLOWED_HOSTS must be set explicitly in production"), so its absence is
+    # not a warning — it is a container that will not start. Listed here so the
+    # failure is one precise line from this script before anything is deployed,
+    # rather than a crash loop discovered from `docker compose logs`.
+    ALLOWED_HOSTS
 )
 
 missing_keys=()
