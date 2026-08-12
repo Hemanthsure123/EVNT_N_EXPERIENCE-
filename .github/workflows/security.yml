@@ -103,9 +103,8 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          ignore-unfixed: true
-          trivyignore: .trivyignore
           severity: CRITICAL,HIGH
+          ignore-unfixed: true
           exit-code: "1"
           format: table
           hide-progress: true
