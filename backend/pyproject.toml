@@ -4,7 +4,25 @@ version = "0.1.0"
 description = "Event & Experience Platform - backend (Django + DRF, hexagonal architecture)"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-  "Django>=5.0,<5.1",
+  # ── 5.1, NOT 5.0 — CVE-2025-64459 IS A SQL INJECTION ──────────────────
+  #
+  # 5.0 is END OF LIFE, so 5.0.14 is the last 5.0 release and no patch for it
+  # exists or ever will. The image scan found three advisories on it:
+  #
+  #   CVE-2025-64459  CRITICAL  SQL injection via crafted `_connector` kwarg
+  #   CVE-2025-57833  HIGH      SQL injection in FilteredRelation
+  #   CVE-2025-64458  HIGH      DoS (Windows-only; not this deployment)
+  #
+  # Fixed in 4.2.26 / 5.1.14 / 5.2.8. 4.2 is backwards, and 5.2 drags
+  # django-stubs to 5.2 and mypy past the range below, so 5.1 is the smallest
+  # move that removes a SQL injection from a platform that takes payments.
+  "Django>=5.1.14,<5.2",
+  # Transitive, via CacheControl's `msgpack>=0.5.2,<2.0.0`. That range is wide
+  # enough that pip leaves an already-present 1.1.2 in place, which is how the
+  # image shipped it with GHSA-6v7p-g79w-8964 (out-of-bounds read). A floor is
+  # the only thing that moves it; the constraint belongs here rather than in a
+  # scanner ignore, because there IS a fix.
+  "msgpack>=1.2.1",
   "djangorestframework>=3.15,<3.16",
   "django-environ>=0.11,<0.12",
   "djangorestframework-simplejwt>=5.3,<5.4",
@@ -47,8 +65,12 @@ dev = [
   # cannot be silenced with `# type: ignore`. The open range meant a fresh
   # `pip install` picked up 1.20 and broke the gate on code nobody had
   # touched. Raise this together with django-stubs, never on its own.
-  "mypy>=1.11,<1.12",
-  "django-stubs>=5.0,<5.1",
+  # Raised WITH django-stubs, exactly as the note above insists. django-stubs
+  # 5.1 declares `mypy>=1.12,<1.16` as its compatible range, and the upper
+  # bound here stays well below the 1.20 that breaks `.values()` with an
+  # INTERNAL ERROR — the failure the note above was written about.
+  "mypy>=1.13,<1.16",
+  "django-stubs>=5.1.3,<5.2",
   "djangorestframework-stubs>=3.15,<3.16",
   "pytest>=8.3,<9.0",
   "pytest-django>=4.9,<4.10",
@@ -102,7 +124,12 @@ razorpay = [
   # The forward fix is razorpay 2.x, which drops pkg_resources. That is a MAJOR
   # version bump on the payments SDK and belongs in its own change with its own
   # test run, not as a side effect of a packaging fix.
-  "setuptools>=68,<81",
+  # The LOWER bound is CVE-2025-47273 (path traversal), fixed in 78.1.1. It had
+  # to be raised because `>=68` was satisfied by the 70.3.0 already present in
+  # the base image, so pip had no reason to upgrade it and the image shipped
+  # vulnerable. The UPPER bound is still 81 for the pkg_resources reason above;
+  # 78.1.1 sits inside it, so both constraints hold at once.
+  "setuptools>=78.1.1,<81",
 ]
 
 [build-system]

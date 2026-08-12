@@ -50,6 +50,22 @@ ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
 
 RUN npm run build
 
+# ── BUILD TOOLS MUST NOT REACH THE RUNTIME IMAGE ──────────────────────────
+#
+# Next's output tracing pulled `esbuild` into `.next/standalone/node_modules`.
+# esbuild is a BUILD-time bundler and a Go binary, so the runtime image carried
+# Go's stdlib — and with it 16 advisories, one CRITICAL, none of which have
+# anything to do with running this server. It was the single largest source of
+# findings in the image scan.
+#
+# Verified before removing, rather than assumed: `server.js` contains no
+# reference to esbuild, and the standalone server was started with these
+# directories moved aside and served both `/` and `/events` with HTTP 200.
+# A Next standalone server does not bundle anything at runtime; it only serves
+# what was already compiled.
+RUN rm -rf .next/standalone/node_modules/esbuild \
+           .next/standalone/node_modules/@esbuild
+
 # ── runner: the traced server and nothing else ────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -61,6 +77,29 @@ ENV NODE_ENV=production \
 # A non-root user, because this process is reachable from the internet and has
 # no reason to be able to write to its own image.
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+
+# ── A RUNTIME IMAGE HAS NO BUSINESS SHIPPING A PACKAGE MANAGER ────────────
+#
+# Every one of the 19 Node.js advisories in the image scan — tar, minimatch,
+# glob, cross-spawn, brace-expansion, sigstore, ip-address — came from npm's
+# OWN bundled dependencies inside the base image, not from this application.
+# The container's entrypoint is `node server.js`; npm is never invoked, so the
+# whole tree is unreachable code that only supplies CVEs and a scanner backlog
+# somebody has to triage forever.
+#
+# Deleting it fixes all 19 at once, permanently and independently of whichever
+# npm the base image happens to ship, and removes an arbitrary-code-execution
+# tool from a container exposed to the internet. It also makes the image
+# smaller. `corepack` goes for the same reason.
+#
+# `apk upgrade` is the OS half: libcrypto3/libssl3 in the base layer were
+# behind on CVE-2026-45447. Node's TLS is statically linked against its own
+# OpenSSL, so this patches the system copy the rest of the image links to.
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
+    node --version
 
 # `public` and the static chunks are NOT included in the traced output — the
 # standalone server expects to find them beside it, and a missing `.next/static`
