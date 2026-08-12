@@ -421,6 +421,9 @@ jobs:
           export FRONTEND_IMAGE='${{ needs.publish.outputs.frontend }}'
           export DEPLOY_SHA='${{ needs.resolve.outputs.sha }}'
           export AWS_REGION='${{ env.AWS_REGION }}'
+          if [ ! -f /opt/curatix/.env ]; then
+            bash deploy/render-env.sh
+          fi
           bash deploy/deploy.sh
           EOF
           )
