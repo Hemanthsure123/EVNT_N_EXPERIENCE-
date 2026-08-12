@@ -49,6 +49,15 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     trace: 'on-first-retry',
+    // ── EVIDENCE IS RETAINED WHILE THE SUITE IS NON-BLOCKING ──────────────
+    // The suite currently runs without gating the deploy (see
+    // .github/workflows/frontend-e2e.yml). A suite that does not gate anything
+    // is one nobody looks at, and a failure with no artefact is one nobody can
+    // diagnose later — so a failing test keeps a screenshot and a video as well
+    // as the trace it already kept on retry. `only-on-failure`/`retain-on-failure`
+    // rather than `on`, so a green run stays cheap and the report stays small.
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [

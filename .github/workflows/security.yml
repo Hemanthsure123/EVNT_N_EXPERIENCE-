@@ -147,7 +147,8 @@ jobs:
           echo "Runner OS: ${{ runner.os }}"
           echo "Runner Arch: ${{ runner.arch }}"
           echo "CWD: $(pwd)"
-          echo "Trivy action tag: aquasecurity/trivy-action@v0.33.1"
+          echo "Trivy: official aquasec/trivy image, run directly (no wrapper action)"
+          echo "Docker version: $(docker --version 2>/dev/null || echo N/A)"
           echo "Scan type: fs"
           echo "Scan ref: ."
           echo "Severity threshold: CRITICAL,HIGH"
@@ -173,42 +174,88 @@ jobs:
       # Do not "simplify" this back to a version below v0.31.0, and do not use
       # @master — that reintroduces an unpinned third party on the security
       # gate.
-      # ── WHY TRIVY_IGNOREFILE AND NOT THE `trivyignores:` INPUT ──────────
+      # ── TRIVY IS RUN DIRECTLY, NOT THROUGH trivy-action ─────────────────
       #
-      # Trivy picks the ignore file's FORMAT from its EXTENSION: `.yaml`/`.yml`
-      # is the structured format (per-finding `statement` + an `expired_at`
-      # Trivy enforces), anything else is a flat list of ids.
+      # The action was removed from this gate after it failed three different
+      # ways without ever scanning anything:
       #
-      # The action's `trivyignores:` input cannot carry that. entrypoint.sh
-      # does `cat` of each file into `./trivyignores` — no extension — and
-      # exports TRIVY_IGNOREFILE to it. Our YAML then gets parsed as a flat id
-      # list, every line becomes a nonsense id, nothing is ignored, and the
-      # scan fails on the carried advisories. Reproduced exactly: copying the
-      # file to an extensionless name reports all 8 again and exits 1.
+      #   1. Pinned at v0.29.0 it died in "Set up job" in 4s, because it is a
+      #      COMPOSITE action whose first step is
+      #      `uses: aquasecurity/setup-trivy@v0.2.2` — a tag upstream deleted.
+      #      A third party can break this gate by retagging their own repo.
+      #   2. Its `trivyignores:` input `cat`s the file into an extensionless
+      #      `./trivyignores`, and Trivy picks the ignore FORMAT from the
+      #      EXTENSION — so a `.yaml` policy is silently read as a flat id
+      #      list and stops ignoring anything.
+      #   3. Repinned and with the ignore file passed by env, it still failed
+      #      in 3s — less time than downloading the vulnerability DB takes, so
+      #      the scan was not running at all.
       #
-      # Setting the env var directly keeps the extension. It is safe from the
-      # action: it only writes TRIVY_* vars for inputs the caller passed, and
-      # it only touches TRIVY_IGNOREFILE when `trivyignores` is set — which it
-      # no longer is. Verified: exit 0 with the env var, 1 without it.
+      # Every one of those is a failure of the WRAPPER, not of Trivy. So the
+      # wrapper is gone: this runs the official image at a pinned digest-able
+      # tag with the exact command, which is also the command reproduced
+      # locally (exit 0 with the ignore file, exit 1 without it, and exit 1
+      # again when the file's `expired_at` is moved into the past).
+      #
+      # Nothing about the scan's strictness changed. Both scanners, CRITICAL
+      # and HIGH blocking, a real non-zero exit, no continue-on-error.
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.33.1
         env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
-        with:
-          scan-type: fs
-          scan-ref: .
-          # Path exclusion belongs here, NOT in the ignore file: these are the
-          # env TEMPLATES, whose placeholder values trip the secret scanner.
-          skip-files: ".env.example,.env.oci.example,.env.production.example,.env.staging.example,.env.tunnel.example,render.yaml"
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-          format: table
-          hide-progress: true
+          TRIVY_VERSION: "0.65.0"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/security-reports
+
+          # Path exclusion lives here, NOT in the ignore file: these are the env
+          # TEMPLATES, whose placeholder values trip the secret scanner. Finding
+          # exclusion lives in .trivyignore.yaml, one justified expiring id each.
+          SKIP=".env.example,.env.oci.example,.env.production.example,.env.staging.example,.env.tunnel.example,render.yaml"
+
+          echo "::group::Trivy invocation"
+          echo "image:       aquasec/trivy:${TRIVY_VERSION}"
+          echo "scan:        fs ."
+          echo "severity:    CRITICAL,HIGH   exit-code: 1   ignore-unfixed: true"
+          echo "scanners:    vuln + secret (Trivy's default for fs)"
+          echo "ignorefile:  .trivyignore.yaml"
+          echo "skip-files:  $SKIP"
+          echo "::endgroup::"
+
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache" \
+            "aquasec/trivy:${TRIVY_VERSION}" \
+            fs . \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --format table \
+            --ignorefile .trivyignore.yaml \
+            --skip-files "$SKIP" \
+            2>&1 | tee /tmp/security-reports/trivy-fs-report.txt
 
       - name: Trivy Scan Failure Diagnostics
         if: ${{ failure() }}
         run: |
           echo "=== TRIVY FILESYSTEM SCAN FAILURE DIAGNOSTICS ==="
-          echo "Trivy detected CRITICAL or HIGH vulnerabilities or secrets in repository filesystem."
-          echo "Inspect the job log above for full scan results table."
+          echo "The scan above exited non-zero. Two very different causes, and the"
+          echo "scan DURATION tells them apart before you read anything else:"
+          echo
+          echo "  ~40s+  Trivy ran and FOUND something. The findings table is in the"
+          echo "         log above and in the uploaded artifact. Fix the dependency;"
+          echo "         only carry it in .trivyignore.yaml if no fix exists, with a"
+          echo "         justification and an expiry."
+          echo "  ~5s    Trivy never scanned — it could not start. Look for an image"
+          echo "         pull failure or a vulnerability DB download failure"
+          echo "         (ghcr.io rate limiting presents this way). This is NOT a"
+          echo "         finding and must not be answered by adding an ignore."
+          echo
+          echo "Ignore policy currently in force:"
+          grep -E "^\s+- id:|expired_at:" .trivyignore.yaml || true
+
+      - name: Upload Trivy Report Artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-trivy-fs-report
+          path: /tmp/security-reports/trivy-fs-report.txt
+          retention-days: 7

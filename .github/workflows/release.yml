@@ -101,6 +101,75 @@ jobs:
   # The lesson generalises: a shell function whose RETURN VALUE is its stdout
   # cannot also log to stdout. This job no longer has that shape, so it cannot
   # regress into it.
+  # ── THE GATE, REPORTED WHETHER IT OPENS OR NOT ──────────────────────────
+  #
+  # `resolve` below is SKIPPED when a prerequisite fails — that is what makes
+  # it a gate, but it also means it can never explain a refusal. This job runs
+  # `always()` purely to say what happened and why, in one place, instead of
+  # leaving somebody to infer it from which jobs are grey.
+  #
+  # It decides nothing. It cannot open the gate and it cannot close it; deploy
+  # depends on `resolve`, not on this. It exits 0 even when the gate is closed,
+  # because the job that actually failed is already red and a second red tick
+  # for the same failure only obscures which one to open.
+  gate-report:
+    needs: [ci, frontend, security, frontend-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release gate
+        env:
+          CI_R: ${{ needs.ci.result }}
+          FE_R: ${{ needs.frontend.result }}
+          SEC_R: ${{ needs.security.result }}
+          # Bracket form: a hyphen in a job id is ambiguous with subtraction in
+          # the expression grammar, and `needs.frontend-e2e.result` is the kind
+          # of thing that evaluates to empty rather than failing loudly.
+          E2E_R: ${{ needs['frontend-e2e'].result }}
+        run: |
+          set -euo pipefail
+          verdict() { [ "$1" = "success" ] && echo PASS || echo "FAIL ($1)"; }
+
+          echo "=================================================="
+          echo " RELEASE GATE — ${{ github.sha }}"
+          echo "=================================================="
+          echo " CI (backend, images, compose) : $(verdict "$CI_R")"
+          echo " Frontend quality              : $(verdict "$FE_R")"
+          echo " Security                      : $(verdict "$SEC_R")"
+          echo " Frontend E2E                  : $E2E_R  — NON-BLOCKING TEMPORARY"
+          echo "--------------------------------------------------"
+
+          R=/tmp/gate-reasons.txt
+          : > "$R"
+          [ "$CI_R" = "success" ]  || echo "   - CI concluded '$CI_R'. Backend tests, both Docker images and compose must pass." >> "$R"
+          [ "$FE_R" = "success" ]  || echo "   - Frontend quality concluded '$FE_R'. Typecheck, lint, CSS lint, unit tests, production build and the bundle budget must pass." >> "$R"
+          [ "$SEC_R" = "success" ] || echo "   - Security concluded '$SEC_R'. pip-audit, npm audit and the Trivy filesystem scan must pass. Check the scan DURATION first: a few seconds means Trivy could not start, which is not a finding and must not be answered with an ignore entry." >> "$R"
+
+          if [ -s "$R" ]; then
+            echo " Release gate: CLOSED"
+            echo " Reason:"
+            cat "$R"
+            echo
+            echo " Note: E2E is deliberately NOT a reason. It is a temporary"
+            echo " exception for initial production infrastructure validation"
+            echo " (frontend/BACKLOG.md item 79) and cannot close this gate."
+          else
+            echo " Release gate: OPEN"
+            echo " All blocking prerequisites passed for this exact commit."
+          fi
+          echo "=================================================="
+
+          {
+            echo "### Release gate: $([ -s "$R" ] && echo CLOSED || echo OPEN)"
+            echo ""
+            echo "| stage | blocking | result |"
+            echo "| --- | --- | --- |"
+            echo "| CI | yes | $CI_R |"
+            echo "| Frontend quality | yes | $FE_R |"
+            echo "| Security | yes | $SEC_R |"
+            echo "| Frontend E2E | **no — temporary** | $E2E_R |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   resolve:
     needs: [ci, frontend, security]
     runs-on: ubuntu-latest
@@ -125,7 +194,8 @@ jobs:
           echo "CI:       ${{ needs.ci.result }}"
           echo "Frontend: ${{ needs.frontend.result }}"
           echo "Security: ${{ needs.security.result }}"
-          echo "Gate:     OPEN (all validation stages succeeded for this commit)"
+          echo "E2E:      NON-BLOCKING TEMPORARY (see gate-report / BACKLOG 79)"
+          echo "Gate:     OPEN (all BLOCKING validation stages succeeded for this commit)"
           {
             echo "### Deploying \`$SHA\`"
             echo ""
@@ -284,31 +354,45 @@ jobs:
       # want moving under you. v0.33.1 pins its own nested setup-trivy by
       # commit SHA — see the note in .github/workflows/security.yml for why
       # that specifically matters here.
-      # `TRIVY_IGNOREFILE` rather than the `trivyignores:` input — the action
-      # copies that input to an extensionless `./trivyignores`, which makes
-      # Trivy read the YAML as a flat id list. See the long note in
-      # .github/workflows/security.yml.
-      - name: Trivy — backend image
-        uses: aquasecurity/trivy-action@v0.33.1
+      # Trivy is run directly here for the same reasons as the filesystem scan
+      # — see the long note in .github/workflows/security.yml. Both images are
+      # scanned in ONE step so that a failure on the backend still reports the
+      # frontend: two steps would stop at the first, and knowing only half of
+      # what is wrong with a release is how you fix it twice.
+      #
+      # `--image-src docker` scans the image already pulled onto the runner,
+      # so Trivy uses the daemon's ECR credentials from the login above rather
+      # than needing its own registry auth.
+      - name: Trivy — published images
         env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
-        with:
-          image-ref: ${{ needs.publish.outputs.backend }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-          format: table
-
-      - name: Trivy — frontend image
-        uses: aquasecurity/trivy-action@v0.33.1
-        env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
-        with:
-          image-ref: ${{ needs.publish.outputs.frontend }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-          format: table
+          TRIVY_VERSION: "0.65.0"
+          BACKEND: ${{ needs.publish.outputs.backend }}
+          FRONTEND: ${{ needs.publish.outputs.frontend }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for image in "$BACKEND" "$FRONTEND"; do
+            echo "::group::Trivy image scan — $image"
+            docker pull -q "$image"
+            if docker run --rm \
+                 -v /var/run/docker.sock:/var/run/docker.sock \
+                 -v "$PWD:/work" -w /work \
+                 -v "$RUNNER_TEMP/trivy-cache:/root/.cache" \
+                 "aquasec/trivy:${TRIVY_VERSION}" \
+                 image --image-src docker "$image" \
+                 --severity CRITICAL,HIGH \
+                 --ignore-unfixed \
+                 --exit-code 1 \
+                 --format table \
+                 --ignorefile .trivyignore.yaml; then
+              echo "clean: $image"
+            else
+              echo "::error::CRITICAL/HIGH findings in $image"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
 
   deploy:
     needs: [resolve, publish, scan-image]

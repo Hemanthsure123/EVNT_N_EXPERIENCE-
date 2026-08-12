@@ -110,14 +110,38 @@ jobs:
         if: ${{ failure() }}
         run: |
           echo "=== E2E FAILURE DIAGNOSTICS ==="
-          echo "Playwright test run failed."
-          echo "Checking playwright-report directory:"
-          ls -la playwright-report 2>&1 || true
+          echo "This suite is currently NON-BLOCKING — a temporary exception for"
+          echo "initial production infrastructure validation. It does not gate the"
+          echo "deploy, and that is why the evidence below is kept: nothing else"
+          echo "will stop a release to make somebody look at it."
+          echo
+          echo "Known state: the specs are STALE, not flaky. app/(site)/page.tsx was"
+          echo "rewritten in c983c09 to lead with <Showcase>; the specs still assert"
+          echo "<HomeHero>, which is imported nowhere. 38 of 92 fail for that reason."
+          echo "See frontend/BACKLOG.md item 79 before assuming a new regression."
+          echo
+          echo "playwright-report:"; ls -la playwright-report 2>&1 || true
+          echo "test-results (traces, screenshots, videos):"; ls -la test-results 2>&1 || true
 
+      # ── UPLOADED ALWAYS, NOT ONLY ON FAILURE ────────────────────────────
+      # `if: failure()` was enough while the suite gated the pipeline. It no
+      # longer does, so a run that ends any other way — cancelled, timed out at
+      # the 20-minute bound, or newly PASSING — would leave nothing behind to
+      # compare against. The report is the only record of what this suite did.
       - name: Upload Playwright Report Artifact
-        if: ${{ failure() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+
+      # Traces, screenshots and videos live here, not in the HTML report.
+      - name: Upload Playwright Traces, Screenshots and Videos
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
