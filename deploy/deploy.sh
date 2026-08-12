@@ -148,7 +148,7 @@ for i in $(seq 1 30); do
   sleep 10
 done
 if [ "$healthy" != "1" ]; then
-  die "Backend health check failed" 7
+  die "http://127.0.0.1:8000/health/ never became healthy after 300s" 7
 fi
 
 for svc in web worker scheduler frontend caddy; do
@@ -165,7 +165,7 @@ for svc in web worker scheduler frontend; do
   [ -n "$cid" ] || continue
   n=$(docker inspect --format '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)
   if [ "${n:-0}" -gt 3 ]; then
-    die "Crash loop: $svc has restarted $n times" 9
+    die "crash loop: $svc has restarted $n times in 15s" 9
   fi
 done
 
