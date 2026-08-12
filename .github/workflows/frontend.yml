@@ -15,45 +15,130 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Environment Diagnostics
+        run: |
+          echo "::group::Environment Diagnostics"
+          echo "Workflow: frontend"
+          echo "Job: quality"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "CWD: $(pwd)"
+          echo "Node version: $(node --version 2>/dev/null || echo N/A)"
+          echo "npm version: $(npm --version 2>/dev/null || echo N/A)"
+          echo "::endgroup::"
+          echo "=== FRONTEND STAGE: QUALITY ==="
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+
+      - name: Install Node dependencies
+        run: |
+          echo "Executing: npm ci"
+          npm ci
+
       - name: Typecheck
-        run: npm run typecheck
+        run: |
+          echo "Executing: npm run typecheck"
+          npm run typecheck
+
       - name: Lint (JS/TS incl. no-raw-values rule)
-        run: npm run lint
+        run: |
+          echo "Executing: npm run lint"
+          npm run lint
+
       - name: Lint (CSS incl. color-no-hex)
-        run: npm run lint:css
+        run: |
+          echo "Executing: npm run lint:css"
+          npm run lint:css
+
       - name: Unit + component tests
-        run: npm run test -- --pool=forks
-      - name: Build
+        run: |
+          echo "Executing: npm run test -- --pool=forks"
+          npm run test -- --pool=forks
+
+      - name: Build Next.js Application
         env:
           NEXT_PUBLIC_API_BASE_URL: https://ci.invalid/api
           NEXT_PUBLIC_SITE_URL: https://ci.invalid
           NEXT_PUBLIC_MEDIA_BASE_URL: https://ci.invalid
           NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_ci_key
           NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ci_google_maps_key
-        run: npm run build
+        run: |
+          echo "=== NEXT.JS BUILD ==="
+          echo "Command: npm run build"
+          echo "Environment variable names present: NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_SITE_URL, NEXT_PUBLIC_MEDIA_BASE_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID, NEXT_PUBLIC_GOOGLE_MAPS_API_KEY"
+          npm run build
+
+      - name: Build Failure Diagnostics
+        if: ${{ failure() }}
+        run: |
+          mkdir -p /tmp/frontend-diagnostics
+          echo "=== NEXT.JS BUILD FAILURE DIAGNOSTICS ===" > /tmp/frontend-diagnostics/build-report.txt
+          echo "CWD: $(pwd)" >> /tmp/frontend-diagnostics/build-report.txt
+          echo "Checking .next directory:" >> /tmp/frontend-diagnostics/build-report.txt
+          ls -la .next >> /tmp/frontend-diagnostics/build-report.txt 2>&1 || true
+          cat /tmp/frontend-diagnostics/build-report.txt
+
       - name: Bundle-size budget
-        run: npm run check:bundle
+        run: |
+          echo "=== BUNDLE SIZE CHECK ==="
+          echo "Configured Budget: 220 KB"
+          echo "Executing: npm run check:bundle"
+          npm run check:bundle
+
       - name: Build Storybook
-        run: npm run build-storybook
+        run: |
+          echo "Executing: npm run build-storybook"
+          npm run build-storybook
+
+      - name: Upload Quality Diagnostics Artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-quality-diagnostics
+          path: /tmp/frontend-diagnostics/
+          retention-days: 7
 
   e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Environment Diagnostics
+        run: |
+          echo "::group::Environment Diagnostics"
+          echo "Workflow: frontend"
+          echo "Job: e2e"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "CWD: $(pwd)"
+          echo "Node version: $(node --version 2>/dev/null || echo N/A)"
+          echo "npm version: $(npm --version 2>/dev/null || echo N/A)"
+          echo "::endgroup::"
+          echo "=== FRONTEND STAGE: E2E ==="
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
+
       - name: E2E smoke + axe (light + dark)
         env:
           NEXT_PUBLIC_API_BASE_URL: https://ci.invalid/api
@@ -61,4 +146,23 @@ jobs:
           NEXT_PUBLIC_MEDIA_BASE_URL: https://ci.invalid
           NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_ci_key
           NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ci_google_maps_key
-        run: npm run e2e
+        run: |
+          echo "Executing Playwright E2E: npm run e2e"
+          echo "Environment variable names present: NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_SITE_URL, NEXT_PUBLIC_MEDIA_BASE_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID, NEXT_PUBLIC_GOOGLE_MAPS_API_KEY"
+          npm run e2e
+
+      - name: Playwright E2E Failure Diagnostics
+        if: ${{ failure() }}
+        run: |
+          echo "=== E2E FAILURE DIAGNOSTICS ==="
+          echo "Playwright test run failed."
+          echo "Checking playwright-report directory:"
+          ls -la playwright-report 2>&1 || true
+
+      - name: Upload Playwright Report Artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

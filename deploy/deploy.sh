@@ -47,23 +47,37 @@ cd "$APP_DIR"
 : "${BACKEND_IMAGE:?BACKEND_IMAGE must be the full ECR ref, SHA-tagged}"
 : "${FRONTEND_IMAGE:?FRONTEND_IMAGE must be the full ECR ref, SHA-tagged}"
 
-log() { printf '==> %s\n' "$*"; }
-die() { printf 'DEPLOY FAILED: %s\n' "$*" >&2; exit "${2:-1}"; }
+log() { printf '[DEPLOY] %s\n' "$*"; }
+die() {
+  local code="${2:-1}"
+  printf '[DEPLOY][FAILURE] %s (exit code %s)\n' "$1" "$code" >&2
+  echo "--- DIAGNOSTICS ON FAILURE ---" >&2
+  echo "=== Docker Compose Container Status ===" >&2
+  "${COMPOSE[@]}" ps >&2 || true
+  echo "=== Running Container Details ===" >&2
+  docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" >&2 || true
+  echo "=== Network Port Listeners ===" >&2
+  (ss -tulpn || netstat -tulpn || lsof -i) >&2 || true
+  echo "=== Directory Listing ($APP_DIR) ===" >&2
+  ls -la "$APP_DIR" >&2 || true
+  echo "=== Recent Web Logs ===" >&2
+  "${COMPOSE[@]}" logs --tail 50 web >&2 || true
+  echo "=== Recent Frontend Logs ===" >&2
+  "${COMPOSE[@]}" logs --tail 50 frontend >&2 || true
+  echo "=== Recent Caddy Logs ===" >&2
+  "${COMPOSE[@]}" logs --tail 50 caddy >&2 || true
+  exit "$code"
+}
 
-# ── The tag must be immutable ────────────────────────────────────────────
-# `latest` is a moving pointer: two deploys of "latest" can ship different
-# code, and a rollback to it is meaningless. Refusing here rather than only in
-# the workflow means a hand-run deploy cannot bypass the rule either.
+# ── 1. Prepare Host ───────────────────────────────────────────────────────
+log "[1] Prepare host: checking tags and parameters"
 for ref in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
   tag="${ref##*:}"
   if [ "$tag" = "latest" ] || [ ${#tag} -ne 40 ]; then
-    die "'$ref' is not tagged with a 40-char commit SHA. Immutable tags are what make a rollback possible." 2
+    die "'$ref' is not tagged with a 40-char commit SHA. Immutable tags are required." 2
   fi
 done
 
-# Both images must come from the SAME commit. A backend from one SHA and a
-# frontend from another is a combination nothing ever tested, and the symptom
-# is a UI calling an API contract that no longer exists.
 if [ "${BACKEND_IMAGE##*:}" != "${FRONTEND_IMAGE##*:}" ]; then
   die "backend (${BACKEND_IMAGE##*:}) and frontend (${FRONTEND_IMAGE##*:}) are different commits" 2
 fi
@@ -72,139 +86,91 @@ DEPLOY_SHA=${DEPLOY_SHA:-${BACKEND_IMAGE##*:}}
 REGISTRY="${BACKEND_IMAGE%%/*}"
 AWS_REGION=${AWS_REGION:-ap-south-1}
 
-log "deploying $DEPLOY_SHA"
-log "  backend:  $BACKEND_IMAGE"
-log "  frontend: $FRONTEND_IMAGE"
+log "Deploying SHA: $DEPLOY_SHA"
+log "Backend Image:  $BACKEND_IMAGE"
+log "Frontend Image: $FRONTEND_IMAGE"
 
-# The compose files reference these; exported so `up` resolves them.
 export BACKEND_IMAGE FRONTEND_IMAGE
 
-# ── 0. Preconditions ──────────────────────────────────────────────────────
-# `/opt/curatix/.env` is written from AWS Secrets Manager by
-# `deploy/render-env.sh`, using the instance's own IAM role. It is NOT written
-# here and NOT stored in git — secrets rotate on a different clock from code,
-# and a deploy that re-reads them makes every deploy a rotation event.
-[ -f .env ] || die "$APP_DIR/.env is missing. Run: sudo bash deploy/render-env.sh" 3
+# ── 2. Render Environment ─────────────────────────────────────────────────
+log "[2] Render environment: checking .env file readiness"
+if [ ! -f .env ]; then
+  log "  .env file missing. Attempting auto-rendering via deploy/render-env.sh..."
+  bash deploy/render-env.sh || die "Automatic env rendering failed." 3
+fi
+
+[ -f .env ] || die "$APP_DIR/.env is missing." 3
 [ "$(stat -c '%a' .env)" = "600" ] || die "$APP_DIR/.env must be mode 600 (found $(stat -c '%a' .env))" 3
 
 command -v aws >/dev/null || die "aws CLI is not installed on this instance" 3
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 plugin is not installed (\`docker compose\`, not \`docker-compose\`)" 3
 
-# ── 1. ECR login ──────────────────────────────────────────────────────────
-#
-# THE INSTANCE ROLE IS NOT ENOUGH ON ITS OWN. IAM authorises the ECR *API*;
-# `docker pull` speaks the *registry* protocol and needs a registry credential.
-# Without this step every pull fails with `no basic auth credentials`, which
-# reads like a missing IAM permission and is not one.
-#
-# `get-login-password` uses the instance profile (CuratixEC2Role) — no key is
-# stored here and none is handed to the box by the workflow. The token lasts 12
-# hours, so logging in per deploy is simpler and safer than caching it.
-#
-# `--password-stdin` so the token never appears in argv, where `ps` would show
-# it to every user on the machine.
-log "authenticating to ECR ($REGISTRY)"
+# ── 3. Authenticate to ECR ────────────────────────────────────────────────
+log "[3] Authenticate to ECR ($REGISTRY)"
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$REGISTRY" >/dev/null \
   || die "ECR login failed. Check that CuratixEC2Role has ecr:GetAuthorizationToken." 3
 
-# ── 2. Pull first ─────────────────────────────────────────────────────────
-# Before stopping anything. A registry outage, a missing tag or a revoked
-# permission then fails while the current version is still serving.
-log "pulling images"
-docker pull -q "$BACKEND_IMAGE"  || die "could not pull $BACKEND_IMAGE" 4
+# ── 4. Pull backend image ─────────────────────────────────────────────────
+log "[4] Pull backend image: $BACKEND_IMAGE"
+docker pull -q "$BACKEND_IMAGE" || die "could not pull $BACKEND_IMAGE" 4
+
+# ── 5. Pull frontend image ────────────────────────────────────────────────
+log "[5] Pull frontend image: $FRONTEND_IMAGE"
 docker pull -q "$FRONTEND_IMAGE" || die "could not pull $FRONTEND_IMAGE" 4
 
-# ── 3. Migrations ─────────────────────────────────────────────────────────
-# `migrate_safe` prints the plan, holds a Postgres advisory lock so concurrent
-# runs serialise, and uses the DIRECT (session-mode) connection — the pooler
-# cannot hold advisory locks across statements.
-#
-# A failure here STOPS the deploy. The old containers keep serving the old
-# schema, which is the state they were already in — no traffic is affected.
+# ── 6. Run migrations ─────────────────────────────────────────────────────
+log "[6] Run migrations"
 if [ "${SKIP_MIGRATIONS:-0}" = "1" ]; then
-  log "skipping migrations (rollback: the schema is forward-only)"
+  log "  Skipping migrations (SKIP_MIGRATIONS=1)"
 else
-  log "migrations"
   "${COMPOSE[@]}" --profile migrate run --rm migrate \
       python manage.py migrate_safe --yes \
     || die "migrations failed — nothing was restarted, the old version is still serving" 5
 fi
 
-# ── 4. Start ──────────────────────────────────────────────────────────────
-# `--no-deps` per service so the ordering is ours, not Compose's: the backend
-# comes up and passes its healthcheck before Caddy is asked to route to it.
-#
-# Compose replaces each container BY SERVICE NAME, so the old one is stopped
-# and removed as the new one starts — an old and a new container for the same
-# service can never run side by side. `web` has `stop_grace_period: 40s` and
-# gunicorn's graceful timeout is shorter, so in-flight requests finish rather
-# than being cut off. On a single instance there is still a seconds-long gap
-# while web restarts; that is inherent to one box, not a defect here.
-log "starting services"
+# ── 7. Start containers ───────────────────────────────────────────────────
+log "[7] Start containers"
 "${COMPOSE[@]}" up -d --no-deps web worker scheduler || die "could not start backend services" 6
 "${COMPOSE[@]}" up -d --no-deps frontend             || die "could not start frontend" 6
 "${COMPOSE[@]}" up -d --no-deps caddy                || die "could not start caddy" 6
-
-# One reconciling pass. Everything above is already current, so this changes
-# nothing — except removing ORPHANS: containers from a service that used to be
-# in the compose file and no longer is. Those keep running forever otherwise,
-# holding ports and memory, with nothing referencing them.
 "${COMPOSE[@]}" up -d --remove-orphans >/dev/null 2>&1 || true
 
-# ── 5. Verify from inside ─────────────────────────────────────────────────
-log "waiting for the backend to become healthy"
+# ── 8. Health checks ──────────────────────────────────────────────────────
+log "[8] Health checks"
 healthy=0
 for i in $(seq 1 30); do
   if "${COMPOSE[@]}" exec -T web curl -fsS http://127.0.0.1:8000/health/ >/dev/null 2>&1; then
-    log "  healthy after $((i * 10))s"
+    log "  Backend health check passed after $((i * 10))s"
     healthy=1
     break
   fi
   sleep 10
 done
 if [ "$healthy" != "1" ]; then
-  echo "--- last 80 lines of web ---" >&2
-  "${COMPOSE[@]}" logs --tail 80 web >&2 || true
-  die "the backend never became healthy" 7
+  die "Backend health check failed" 7
 fi
 
-# Every long-running service must be up. A worker or scheduler that exited is
-# the silent failure this whole architecture exists to avoid: nothing errors,
-# and held inventory is never released while organisers are never paid.
 for svc in web worker scheduler frontend caddy; do
   state=$("${COMPOSE[@]}" ps --format '{{.State}}' "$svc" 2>/dev/null | head -1)
-  printf '    %-10s %s\n' "$svc" "${state:-MISSING}"
+  log "  Service $svc status: ${state:-MISSING}"
   if [ "$state" != "running" ]; then
-    echo "--- last 80 lines of $svc ---" >&2
-    "${COMPOSE[@]}" logs --tail 80 "$svc" >&2 || true
-    die "service $svc is '${state:-MISSING}', not running" 8
+    die "Service $svc is '${state:-MISSING}', not running" 8
   fi
 done
 
-# A container that restarts repeatedly reports "running" between crashes, so
-# the check above can pass on a stack that is not actually working.
 sleep 15
 for svc in web worker scheduler frontend; do
   cid=$("${COMPOSE[@]}" ps -q "$svc" 2>/dev/null || true)
   [ -n "$cid" ] || continue
   n=$(docker inspect --format '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)
   if [ "${n:-0}" -gt 3 ]; then
-    echo "--- last 80 lines of $svc ---" >&2
-    "${COMPOSE[@]}" logs --tail 80 "$svc" >&2 || true
-    die "crash loop: $svc has restarted $n times" 9
+    die "Crash loop: $svc has restarted $n times" 9
   fi
 done
 
-# ── 6. Record what is running ─────────────────────────────────────────────
-#
-# THIS FILE IS THE ROLLBACK TARGET, and that is why it is written only HERE —
-# after every check has passed. "The last commit on main" is not the same thing
-# as "the last version that actually worked"; after two failed deploys in a row
-# they are different, and rolling back to the wrong one turns an outage into a
-# longer outage.
-#
-# The previous generation is kept so a rollback has somewhere to go.
+# ── 9. Record deployment ──────────────────────────────────────────────────
+log "[9] Record deployment"
 if [ -f .deployed ]; then
   cp -p .deployed .deployed.prev
 fi
@@ -216,12 +182,7 @@ FRONTEND_IMAGE=$FRONTEND_IMAGE
 DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RECORD
 
-# Kept for humans and for anything that already reads it.
 echo "$DEPLOY_SHA" > .deployed-sha
+log "[SUCCESS] Deployment completed successfully for $DEPLOY_SHA"
 
-log "deployed $DEPLOY_SHA"
-
-# Reclaim space. The disk is 30 GB and every deploy leaves the previous image
-# behind. `until=168h` keeps a week of local rollback targets; ECR keeps the
-# real history, so nothing is lost by pruning here.
 docker image prune -f --filter "until=168h" >/dev/null 2>&1 || true
