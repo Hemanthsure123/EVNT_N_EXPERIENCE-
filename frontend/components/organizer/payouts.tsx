@@ -110,30 +110,6 @@ export function Payouts() {
         />
       </div>
 
-      <Panel title="How and when you get paid">
-        <ol className="flex flex-col gap-stack p-card">
-          <Step
-            n={1}
-            title="A ticket is paid for"
-            body="Your share is transferred to your linked account and held by the payment provider until release."
-          />
-          <Step
-            n={2}
-            title="The event happens"
-            body="Nothing releases while an event could still be refunded."
-          />
-          <Step
-            n={3}
-            title="The refund window closes"
-            body="Once the event has ended and the refund window has passed, the payout becomes releasable."
-          />
-          <Step
-            n={4}
-            title="The transfer is released"
-            body="Your net is recomputed from actual paid and refunded payments, then released once. A failed release is retried and stays owed."
-          />
-        </ol>
-      </Panel>
 
       <Panel title="Settlements" subtitle="One per event" className="overflow-hidden">
         {query.isError ? (
@@ -300,6 +276,43 @@ function Card({
         </p>
       )}
       <p className="truncate text-caption text-muted-foreground">{note}</p>
+      {/* ── REFERENCE, BELOW THE MONEY ───────────────────────────────────
+          These four steps were the first thing on the page, above the
+          settlements themselves — an organizer opening Payouts to see whether
+          they had been paid read an explanation of the payout lifecycle
+          first. The content is worth keeping: "why has this not arrived yet"
+          is the question this screen generates, and the answer (it releases
+          after the event AND its refund window) is not guessable from a
+          status chip.
+          So it moved below the data and starts closed. Open once, understood
+          forever; the rows are what the page is for. */}
+      <details className="group rounded-xl border border-border bg-surface shadow-sm">
+        <summary className="cursor-pointer list-none p-card text-label marker:hidden">
+          How and when you get paid
+        </summary>
+        <ol className="flex flex-col gap-stack px-card pb-card">
+          <Step
+            n={1}
+            title="A ticket is paid for"
+            body="Your share is transferred to your linked account and held by the payment provider until release."
+          />
+          <Step
+            n={2}
+            title="The event happens"
+            body="Nothing releases while an event could still be refunded."
+          />
+          <Step
+            n={3}
+            title="The refund window closes"
+            body="Once the event has ended and the refund window has passed, the payout becomes releasable."
+          />
+          <Step
+            n={4}
+            title="The transfer is released"
+            body="Your net is recomputed from actual paid and refunded payments, then released once. A failed release is retried and stays owed."
+          />
+        </ol>
+      </details>
     </div>
   );
 }
