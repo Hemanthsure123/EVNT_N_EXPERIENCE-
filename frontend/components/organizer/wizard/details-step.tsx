@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 import {
-  ACCESSIBILITY_MAX,
   AGE_RESTRICTION_MAX,
   DURATION_MAX_MINUTES,
   LANGUAGE_MAX,
@@ -77,7 +76,6 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Details"
-        blurb="The practical questions people ask before they buy. Anything left blank is omitted from the event page."
       />
 
       <TextField
@@ -88,7 +86,6 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
         placeholder="Four stages, twelve artists, one night on the Mumbai waterfront."
         max={SHORT_DESCRIPTION_MAX}
         error={errorFor(issues, 'shortDescription')}
-        hint="Used in search results and link previews when you have not written separate SEO copy."
       />
 
       <div className="flex flex-col gap-1.5">
@@ -125,7 +122,6 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
           placeholder="Hindi, English"
           max={LANGUAGE_MAX}
           error={errorFor(issues, 'language')}
-          hint="Only worth filling in when it decides whether someone can follow along."
         />
         <Chips
           label="Common languages"
@@ -144,7 +140,6 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
           placeholder="18+"
           max={AGE_RESTRICTION_MAX}
           error={errorFor(issues, 'ageRestriction')}
-          hint="Shown on the event page. Leave blank if you have no age policy."
         />
         <Chips
           label="Common policies"
@@ -162,12 +157,10 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
         placeholder="Step-free access from Gate 2. Accessible viewing platform beside the sound desk. Assistance dogs welcome. Accessible toilets on the concourse."
         rows={4}
         error={errorFor(issues, 'accessibilityNotes')}
-        hint={`What is genuinely available, in your own words — up to ${ACCESSIBILITY_MAX} characters. Someone is deciding whether they can attend at all, so an honest “no step-free access” is far more use than silence.`}
       />
 
       <Section
         title="Event policies"
-        blurb="Your own rules — entry, prohibited items, refunds."
       >
         {/* LOCAL, unlike the FAQs below: `policies` is a column on the event
             written by the same PATCH as everything else on this step, so it
@@ -178,7 +171,6 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
 
       <Section
         title="Frequently asked questions"
-        blurb="Answered here, not in your inbox on the day."
       >
         {draft.eventId ? (
           <FaqBuilder eventId={draft.eventId} />

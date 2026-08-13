@@ -314,11 +314,23 @@ export function fieldMessageId(id: string, error?: string): string {
   return error ? `${id}-error` : `${id}-hint`;
 }
 
-export function StepHeader({ title, blurb }: { title: string; blurb: string }) {
+/**
+ * A step's title, and nothing else.
+ *
+ * This used to take a `blurb` and render a paragraph under every heading —
+ * "What people see first when browsing", "Where it happens. The city is what
+ * people filter and search by". Thirteen of them across the wizard, restating
+ * what the fields beneath already said.
+ *
+ * Prose under a heading is what a form reaches for when its labels, grouping
+ * and order are not carrying their weight. The fix is the labels, grouping and
+ * order — so the prop is gone rather than optional, and the compiler found
+ * every call site.
+ */
+export function StepHeader({ title }: { title: string }) {
   return (
     <header className="flex flex-col gap-1.5">
       <h1 className="text-h3">{title}</h1>
-      <p className="max-w-prose text-body-sm text-muted-foreground">{blurb}</p>
     </header>
   );
 }
@@ -408,13 +420,11 @@ export function NeedsSavedDraft({
  */
 export function Section({
   title,
-  blurb,
   count,
   children,
   defaultOpen = true,
 }: {
   title: string;
-  blurb?: string;
   count?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
@@ -424,7 +434,6 @@ export function Section({
       <summary className="flex min-h-control cursor-pointer list-none items-center gap-3 rounded-xl px-card py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <span className="min-w-0 flex-1">
           <span className="block text-body-sm font-semibold">{title}</span>
-          {blurb ? <span className="block text-caption text-muted-foreground">{blurb}</span> : null}
         </span>
         {count ? (
           <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{count}</span>

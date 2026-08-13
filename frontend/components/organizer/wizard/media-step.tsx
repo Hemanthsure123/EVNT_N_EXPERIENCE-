@@ -328,7 +328,6 @@ export function MediaStep({
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Media"
-        blurb="One cover image for the card and the link preview, then a gallery for the event page. Both work before the draft is saved — pick photos now and they upload themselves. Every image needs alt text: it is what a screen reader reads out, and the server requires it."
       />
 
       {/* THE COVER AND THE GALLERY ARE DIFFERENT THINGS, so they are different
@@ -339,7 +338,6 @@ export function MediaStep({
           nine photos still has no card image. */}
       <Section
         title="Cover image"
-        blurb="Shown on cards, in search results and in every shared link."
         count={draft.posterUrl ? 'Set' : 'Not set'}
       >
         <CoverUploader draft={draft} onPoster={onPoster} posterFile={posterFile} />
@@ -624,7 +622,6 @@ export function MediaStep({
       {eventId ? (
         <Section
           title="Trailer"
-          blurb="A YouTube or Vimeo link. It plays in its own section on the event page, below the description."
           count={media.some((item) => item.kind === 'video') ? 'Added' : 'None'}
         >
           <VideoLink eventId={eventId} media={media} />

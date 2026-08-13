@@ -11,7 +11,6 @@ import {
   Plus,
   Ticket,
   Trash2,
-  X,
 } from 'lucide-react';
 import type { EventSlot } from '@/lib/api/event-content';
 import { formatMoney } from '@/lib/discovery/format';
@@ -354,7 +353,6 @@ export function TicketBuilder({
                     />
                   </div>
 
-                  <PerkEditor tier={tier} onChange={(perks) => patch(tier.key, { perks })} />
 
                   <PhaseEditor tier={tier} onChange={(phases) => patch(tier.key, { phases })} />
 
@@ -523,21 +521,21 @@ function PhaseEditor({
         get one cheap seat and two at the next price. Both assumptions are wrong,
         and both cost them money.
       */}
+      {/* ── THE ONE FACT THAT COSTS MONEY IF MISREAD ──────────────────────
+          Three paragraphs stood here explaining phase ordering, the cumulative
+          cap and whole-order pricing. They went, per the brief — but not the
+          cap semantics, which are the one thing no label can imply and the one
+          thing an organizer loses money by assuming: "Seat cap: 100" reads as
+          "100 seats at this price" and actually means "the first 100 seats
+          sold or held". A wrong guess there misprices the tier.
+          So it is a short line beside the field it qualifies, not prose above
+          the section — which is what "tooltips only where genuinely necessary"
+          means in practice. */}
       <div className="flex flex-col gap-1 text-caption text-muted-foreground">
-        <p>Phases apply top to bottom — the first one still open prices the ticket.</p>
         <p>
-          <strong className="font-medium text-foreground">The seat cap is cumulative.</strong> It
-          counts every seat of this ticket already sold or held, so 100 means &ldquo;the first 100
-          seats&rdquo;, not &ldquo;100 seats at this price&rdquo;. A later phase&apos;s cap has to
-          be higher than the one before it to do anything.
-        </p>
-        <p>
-          <strong className="font-medium text-foreground">
-            An order that would cross the cap pays the next phase&apos;s price
-          </strong>{' '}
-          — for the whole order, never split across two prices. With 1 seat left inside the cap, a
-          3-ticket order is billed 3 at the next price. Buyers are shown how many are left at the
-          current price, so this is visible before they choose.
+          Caps are <strong className="font-medium text-foreground">cumulative</strong> — the first
+          N seats sold or held, not N seats at this price. An order crossing a cap pays the next
+          phase&apos;s price in full.
         </p>
         {atLimit ? <p>That is the limit of {MAX_PHASES} phases.</p> : null}
       </div>
@@ -727,91 +725,3 @@ function sessionLabel(session: EventSlot): string {
 
 /** `MAX_PERKS` in `apps/ticketing/schemas.py`, mirrored so the studio refuses
  *  what the server would rather than surfacing a 400 after a save. */
-const MAX_PERKS = 8;
-
-/**
- * What is included with this tier.
- *
- * ── ONE INPUT, NOT A REPEATER ─────────────────────────────────────────────
- *
- * Perks are two or three words each ("Early entry", "Dedicated bar"), so a row
- * with its own label and delete button per perk is more chrome than content.
- * Type and press Enter; the chips below are the list, and each removes itself.
- *
- * ── BLANK AND DUPLICATE ENTRIES ARE DROPPED AT THE BOUNDARY ───────────────
- *
- * Not here. An organiser mid-typing must not have a row vanish under them, and
- * the server drops them anyway — so this only refuses what would be visibly
- * wrong: a perk that is already in the list.
- */
-function PerkEditor({
-  tier,
-  onChange,
-}: {
-  tier: DraftTier;
-  onChange: (perks: string[]) => void;
-}) {
-  const [draft, setDraft] = React.useState('');
-  const atCap = tier.perks.length >= MAX_PERKS;
-
-  const add = () => {
-    const value = draft.trim();
-    if (!value || atCap || tier.perks.includes(value)) return;
-    onChange([...tier.perks, value]);
-    setDraft('');
-  };
-
-  return (
-    <div className="mt-stack-lg flex flex-col gap-stack">
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={`${tier.key}-perk`} className="text-body-sm font-medium">
-          What is included <span className="font-normal text-muted-foreground">— optional</span>
-        </label>
-        <div className="flex gap-2">
-          <Input
-            id={`${tier.key}-perk`}
-            value={draft}
-            maxLength={60}
-            disabled={atCap}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                // The form around this submits the whole wizard step; Enter in
-                // a perk field must add a perk, not save the draft.
-                event.preventDefault();
-                add();
-              }
-            }}
-            placeholder="Early entry"
-          />
-          <Button variant="outline" onClick={add} disabled={!draft.trim() || atCap}>
-            Add
-          </Button>
-        </div>
-        <p className="text-caption text-muted-foreground">
-          {atCap
-            ? `That is the limit of ${MAX_PERKS}. Past this it is a brochure.`
-            : 'Short phrases. They render as ticks beside the price, so a buyer comparing two tiers sees the difference.'}
-        </p>
-      </div>
-
-      {tier.perks.length ? (
-        <ul className="flex flex-wrap gap-2">
-          {tier.perks.map((perk) => (
-            <li key={perk}>
-              <button
-                type="button"
-                onClick={() => onChange(tier.perks.filter((entry) => entry !== perk))}
-                aria-label={`Remove ${perk}`}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface py-1 pl-3 pr-2 text-caption text-foreground transition-colors hover:border-destructive hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {perk}
-                <X className="size-3" aria-hidden />
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}

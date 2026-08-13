@@ -73,7 +73,6 @@ export function BasicsStep({
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Basics"
-        blurb="What people see first when browsing."
       />
 
       {organizations.length > 1 ? (
@@ -105,7 +104,6 @@ export function BasicsStep({
         placeholder="Sunburn Arena ft. Martin Garrix"
         max={TITLE_MAX}
         error={errorFor(issues, 'title')}
-        hint="Include the artist or headline act — it is what people search for."
         autoFocus
       />
 
@@ -116,12 +114,10 @@ export function BasicsStep({
         onChange={(description) => update({ description })}
         placeholder="What happens, who is playing, what is included, and anything an attendee needs to know before buying."
         softMax={DESCRIPTION_SOFT_MAX}
-        hint="Shown on the event page and in link previews. Plain text."
       />
 
       <Section
         title="Category"
-        blurb="Which tile this appears under when somebody browses."
       >
         <CategoryPicker value={draft.category} onChange={(category) => update({ category })} />
       </Section>
@@ -187,7 +183,6 @@ export function VenueStep({ draft, update, issues }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Venue"
-        blurb="Where it happens. The city is what people filter and search by."
       />
 
       <FieldFrame
@@ -195,7 +190,6 @@ export function VenueStep({ draft, update, issues }: StepProps) {
         label="Venue"
         count={{ used: draft.venue.length, max: VENUE_MAX }}
         error={venueError}
-        hint="The building or ground, as an attendee would say it. Pick a suggestion and the event page gets a map."
       >
         <VenueAutocomplete
           id="event-venue"
@@ -216,7 +210,6 @@ export function VenueStep({ draft, update, issues }: StepProps) {
           placeholder="Mumbai"
           max={CITY_MAX}
           error={errorFor(issues, 'city')}
-          hint="Match one of the cities below and your event appears in that city's landing page."
         />
         <ul className="flex flex-wrap gap-1.5">
           {POPULAR_CITIES.slice(0, 8).map((city) => (
@@ -384,7 +377,6 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Schedule"
-        blurb="When it starts and ends, in your device's timezone."
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -440,7 +432,6 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
 
       <Section
         title="Sessions"
-        blurb="Only for an event that runs more than once — a 6pm and a 9pm show, or the same play across a weekend."
       >
         {draft.eventId ? (
           <SessionsEditor eventId={draft.eventId} startsAtLocal={draft.startsAt} />
@@ -456,7 +447,6 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
 
       <Section
         title="Running order"
-        blurb="Doors, support, headline, curfew."
       >
         {draft.eventId ? (
           <RunningOrder eventId={draft.eventId} startsAtLocal={draft.startsAt} />

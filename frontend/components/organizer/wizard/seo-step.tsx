@@ -65,7 +65,6 @@ export function SeoStep({ draft, update, issues }: Props) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Search appearance"
-        blurb="What a search engine and a shared link show. Both boxes are optional — left empty, the page falls back to your title and summary, which is what the preview below is showing you."
       />
 
       <TextField
