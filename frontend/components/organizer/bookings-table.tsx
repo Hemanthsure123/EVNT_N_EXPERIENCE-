@@ -6,7 +6,9 @@ import { Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatMoney } from '@/lib/discovery/format';
 import type { BookingStatus, OrganizerBooking } from '@/lib/api/organizer';
-import { useOrganizerBookings } from '@/lib/organizer/queries';
+import { useOrganizerBookings,
+  useEventRows,
+} from '@/lib/organizer/queries';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { EmptyState, ErrorState } from './primitives';
 import {
@@ -121,6 +123,24 @@ export function BookingsTable() {
     rowId: (row) => row.id,
   });
 
+  // ── THE EVENT FILTER'S OPTIONS ─────────────────────────────────────────
+  //
+  // `event_id` was already in the filter state, already sent to the API and
+  // already had a clear-chip — but nothing could SET it. It was reachable only
+  // by editing the URL or by arriving from an event's own page, so an
+  // organizer looking at every booking had no way to narrow to one event, and
+  // the chip was an affordance for a filter that appeared from nowhere.
+  //
+  // The list is the organizer's own events, newest first, unfiltered by
+  // status: bookings exist for finished and archived events too, and omitting
+  // them would make their rows unreachable through the very control meant to
+  // find them.
+  const eventOptions = useEventRows({});
+  const events = React.useMemo(
+    () => eventOptions.data?.pages.flatMap((page) => page.data) ?? [],
+    [eventOptions.data],
+  );
+
   const chips = [
     values.q && { key: 'q', label: `“${values.q}”`, onClear: () => set({ q: '' }) },
     values.status && {
@@ -130,9 +150,13 @@ export function BookingsTable() {
     },
     values.event_id && {
       key: 'event',
-      // The id is not a label, and the title is not on this payload — so the
-      // chip says what the filter DOES rather than showing a uuid.
-      label: 'One event',
+      // Now that the picker loads the organizer's events, the title IS
+      // available and the chip can name the event instead of saying "One
+      // event" — an active filter should say which one. It falls back to the
+      // old wording while the list is still loading, or when the filter
+      // arrived by URL for an event outside the first page, so the chip is
+      // never a bare uuid.
+      label: events.find((event) => event.id === values.event_id)?.title ?? 'One event',
       onClear: () => set({ event_id: '' }),
     },
     (values.preset || values.from || values.to) && {
@@ -172,6 +196,16 @@ export function BookingsTable() {
           onChange={(status) => set({ status })}
           options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
           label="Filter by status"
+        />
+
+        <SelectFilter
+          value={values.event_id}
+          onChange={(event_id) => set({ event_id })}
+          options={[
+            { value: '', label: 'All events' },
+            ...events.map((event) => ({ value: event.id, label: event.title })),
+          ]}
+          label="Filter by event"
         />
 
         <DateRangeFilter
