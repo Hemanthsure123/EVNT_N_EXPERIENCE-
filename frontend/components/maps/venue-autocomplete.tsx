@@ -260,10 +260,30 @@ export function VenueAutocomplete({
         </ul>
       ) : null}
 
-      {/* States that change what the organizer should expect, each said once. */}
-      {!mapsAvailable && !config.isPending ? (
+      {/* States that change what the organizer should expect, each said once.
+          ── TWO CAUSES, TWO MESSAGES ────────────────────────────────────────
+          `available === true` was false in two unrelated situations and said
+          the same sentence for both: the endpoint answering `available: false`
+          because this deployment holds no server key, and the request never
+          arriving at all. The first is permanent and the organizer should just
+          type the address; the second is a blip worth retrying, and telling
+          somebody a working feature is "unavailable" trains them to stop
+          trying it. `config.isError` separates them. */}
+      {config.isError ? (
         <p className="text-caption text-muted-foreground">
-          Venue search is unavailable. Type the venue name and city instead.
+          Could not reach venue search.{' '}
+          <button
+            type="button"
+            onClick={() => void config.refetch()}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Try again
+          </button>
+          , or type the venue and city.
+        </p>
+      ) : !mapsAvailable && !config.isPending ? (
+        <p className="text-caption text-muted-foreground">
+          Venue search is off for this site. Type the venue name and city.
         </p>
       ) : pinned ? (
         <p className="text-caption text-success-subtle-foreground">
