@@ -159,6 +159,60 @@ class TestFakeAdapters:
             "SMS_PROVIDER=http" in w for w in warnings
         ), "the warning must say how to turn SMS back on"
 
+    def test_supabase_storage_without_a_region_warns_and_names_the_setting(self):
+        """`S3_REGION` defaults to `auto`, which is right for R2 and wrong for
+        Supabase — its S3 gateway validates the SigV4 credential scope against
+        the project's region.
+
+        Nothing catches this at boot: the adapter constructs fine and the
+        health check never touches storage, so the first symptom is an
+        organizer's upload failing in production while every page still
+        renders. That is what happened here, with the secret carrying
+        `S3_REGION_NAME` — a key this codebase never reads — so the real
+        setting fell through to its default.
+        """
+        warnings = check_production_settings(
+            _Settings(
+                STORAGE_BACKEND="s3",
+                S3_ENDPOINT_URL="https://ref.supabase.co/storage/v1/s3",
+                S3_REGION="auto",
+                S3_BUCKET_NAME="uploads",
+                S3_ACCESS_KEY_ID="k",
+                S3_SECRET_ACCESS_KEY="s",
+            ),
+            strict=True,
+        )
+        assert any("SignatureDoesNotMatch" in w for w in warnings)
+        assert any("not S3_REGION_NAME" in w for w in warnings), (
+            "the warning must name the setting, because the failure is a typo "
+            "that reads as correct"
+        )
+
+    def test_a_real_region_or_a_non_supabase_endpoint_is_silent(self):
+        """`auto` is CORRECT for Cloudflare R2, so the warning must not fire
+        for every S3-compatible provider."""
+        configured = _Settings(
+            STORAGE_BACKEND="s3",
+            S3_ENDPOINT_URL="https://ref.supabase.co/storage/v1/s3",
+            S3_REGION="ap-south-1",
+            S3_BUCKET_NAME="uploads",
+            S3_ACCESS_KEY_ID="k",
+            S3_SECRET_ACCESS_KEY="s",
+        )
+        r2 = _Settings(
+            STORAGE_BACKEND="s3",
+            S3_ENDPOINT_URL="https://account.r2.cloudflarestorage.com",
+            S3_REGION="auto",
+            S3_BUCKET_NAME="uploads",
+            S3_ACCESS_KEY_ID="k",
+            S3_SECRET_ACCESS_KEY="s",
+        )
+        for settings in (configured, r2):
+            assert not any(
+                "SignatureDoesNotMatch" in w
+                for w in check_production_settings(settings, strict=True)
+            )
+
     def test_fakes_are_a_warning_in_staging_not_a_refusal(self):
         # Exercising the booking funnel without moving money is what staging
         # is FOR, so this must not block a deploy there.

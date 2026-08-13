@@ -72,7 +72,7 @@ class S3StorageAdapter(StoragePort):
         # the bucket rather than the bucket itself — serving public assets
         # straight from the origin means paying egress on every view.
         self._public_base_url = (
-            public_base_url or f"{endpoint_url.rstrip('/')}/{bucket_name}"
+            public_base_url or self._derive_public_base(endpoint_url, bucket_name)
         ).rstrip("/")
 
         self._client = boto3.client(
@@ -110,6 +110,40 @@ class S3StorageAdapter(StoragePort):
                 retries={"total_max_attempts": 3, "mode": "standard"},
             ),
         )
+
+    # Supabase serves the S3 PROTOCOL and PUBLIC OBJECTS from two different
+    # paths on the same host, and only one of them is fetchable by a browser.
+    _SUPABASE_S3_SUFFIX = "/storage/v1/s3"
+
+    @classmethod
+    def _derive_public_base(cls, endpoint_url: str, bucket_name: str) -> str:
+        """Where a BROWSER can fetch these objects, when no CDN is configured.
+
+        This used to be `f"{endpoint}/{bucket}"` unconditionally, and for
+        Supabase — the provider this adapter's own error message names — that
+        produces a URL nothing can read:
+
+            https://<ref>.supabase.co/storage/v1/s3/<bucket>/<key>
+
+        `/storage/v1/s3` is the S3 PROTOCOL endpoint. It expects SigV4-signed
+        requests, so an unauthenticated browser GET is rejected. Public objects
+        live somewhere else entirely:
+
+            https://<ref>.supabase.co/storage/v1/object/public/<bucket>/<key>
+
+        The upload itself succeeds, which is what makes the old behaviour
+        expensive to diagnose: the bytes are in the bucket, the row records a
+        URL, and every image is simply broken with nothing failing.
+
+        Only the blank-`S3_PUBLIC_BASE_URL` fallback changes. An explicitly
+        configured CDN still wins, and a non-Supabase endpoint still gets
+        `{endpoint}/{bucket}`, which is correct for R2, MinIO and AWS.
+        """
+        base = endpoint_url.rstrip("/")
+        if base.endswith(cls._SUPABASE_S3_SUFFIX):
+            root = base[: -len(cls._SUPABASE_S3_SUFFIX)]
+            return f"{root}/storage/v1/object/public/{bucket_name}"
+        return f"{base}/{bucket_name}"
 
     def upload(self, *, path: str, content: bytes, content_type: str) -> str:
         key = path.lstrip("/")

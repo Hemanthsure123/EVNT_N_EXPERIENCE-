@@ -225,12 +225,42 @@ class TestPublicUrl:
         url = adapter.upload(path="p.jpg", content=b"x", content_type="image/jpeg")
         assert url == "https://cdn.example/p.jpg"
 
-    def test_without_one_it_falls_back_to_the_endpoint_and_bucket(self, recording):
-        """Works, and is neither cached nor cheap — documented as such rather
-        than left to fail."""
+    def test_a_supabase_endpoint_falls_back_to_its_PUBLIC_object_path(self, recording):
+        """The S3 endpoint is not a readable URL, and this used to return it.
+
+        `/storage/v1/s3` speaks the S3 protocol and requires a SigV4 signature,
+        so an unauthenticated browser GET is rejected. Public objects are served
+        from `/storage/v1/object/public/<bucket>/<key>` instead.
+
+        This is the expensive kind of wrong: `put_object` succeeds, the bytes
+        are really in the bucket, the row stores a URL, and every image is
+        simply broken with nothing having failed. The previous version of this
+        test asserted the S3-protocol URL and called it "works".
+        """
         adapter, _ = recording
         url = adapter.upload(path="p.jpg", content=b"x", content_type="image/jpeg")
-        assert url == "https://ref.supabase.co/storage/v1/s3/curatix-uploads/p.jpg"
+        assert url == "https://ref.supabase.co/storage/v1/object/public/curatix-uploads/p.jpg"
+
+    def test_a_non_supabase_endpoint_keeps_the_plain_bucket_path(self):
+        """R2, MinIO and AWS serve objects from `{endpoint}/{bucket}/{key}`, so
+        the derivation must not fire for them."""
+        adapter = make_adapter(endpoint_url="https://account.r2.cloudflarestorage.com")
+        adapter._client = _Recorder()
+
+        url = adapter.upload(path="p.jpg", content=b"x", content_type="image/jpeg")
+        assert url == "https://account.r2.cloudflarestorage.com/curatix-uploads/p.jpg"
+
+    def test_a_configured_cdn_still_wins_over_the_supabase_derivation(self):
+        """The derivation is a fallback, not a policy. Somebody who put a CDN
+        in front of the bucket must keep getting the CDN."""
+        adapter = make_adapter(
+            endpoint_url="https://ref.supabase.co/storage/v1/s3",
+            public_base_url="https://cdn.example/bucket",
+        )
+        adapter._client = _Recorder()
+
+        url = adapter.upload(path="p.jpg", content=b"x", content_type="image/jpeg")
+        assert url == "https://cdn.example/bucket/p.jpg"
 
 
 @needs_boto3

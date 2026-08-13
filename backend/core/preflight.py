@@ -452,6 +452,32 @@ def check_production_settings(
     # It is a WARNING and not silence, because "no SMS" is a real reduction in
     # service that whoever reads this output should see stated, every boot,
     # rather than discovering it when a customer asks where their OTP went.
+    # ── SUPABASE STORAGE NEEDS A REAL REGION, AND FAILS LATE WITHOUT ONE ───
+    #
+    # `S3_REGION` defaults to `auto`, which is correct for Cloudflare R2 and
+    # wrong for Supabase: its S3 gateway validates the SigV4 credential scope
+    # against the project's actual region and rejects a mismatch. Nothing
+    # notices at boot — the adapter constructs fine and the health check does
+    # not touch storage — so the first symptom is an organizer's image upload
+    # failing in production while every other page works.
+    #
+    # A WARNING and not a refusal, on purpose. Storage is not on the request
+    # path for any page that currently renders, so refusing to boot would
+    # convert a broken upload button into a site-wide outage — a strictly
+    # worse failure than the one being reported.
+    if str(getattr(settings, "STORAGE_BACKEND", "")) == "s3":
+        endpoint = str(getattr(settings, "S3_ENDPOINT_URL", ""))
+        region = str(getattr(settings, "S3_REGION", "")).strip()
+        if endpoint.rstrip("/").endswith("/storage/v1/s3") and region in ("", "auto"):
+            warnings.append(
+                f"S3_REGION={region or '(unset)'} with a Supabase storage endpoint. "
+                "Supabase validates the SigV4 credential scope against the project's "
+                "region, so uploads will fail with SignatureDoesNotMatch while every "
+                "other page keeps working. Set S3_REGION to the project's region "
+                "(Supabase dashboard -> Project Settings -> General). Note the name: "
+                "the setting is S3_REGION, not S3_REGION_NAME."
+            )
+
     if str(getattr(settings, "SMS_PROVIDER", "")) == "disabled":
         warnings.append(
             "SMS_PROVIDER=disabled: no OTP or booking SMS will be delivered. "
