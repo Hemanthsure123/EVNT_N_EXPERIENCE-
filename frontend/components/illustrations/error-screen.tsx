@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { isChunkLoadError, shouldAttemptChunkReload } from '@/lib/chunk-recovery';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -137,4 +138,35 @@ export function useLoggedError(error: unknown) {
     // eslint-disable-next-line no-console
     console.error(error);
   }, [error]);
+}
+
+/**
+ * Recover from a stale-build chunk failure, and from nothing else.
+ *
+ * Returns `true` while a reload is in flight, so a boundary can hold its
+ * current frame rather than flashing an error screen the user is about to lose
+ * anyway — the alternative is a visible error for ~200ms on every recovery,
+ * which reads as a fault rather than a fix.
+ *
+ * The narrowness is the point, and both halves of it live in
+ * `lib/chunk-recovery.ts` under test: it fires only for a missing script chunk
+ * (never an API error, never a render bug), and only once per window, so it can
+ * never become the reload loop that "retry on error" usually degrades into.
+ */
+export function useChunkRecovery(error: unknown): boolean {
+  const [recovering, setRecovering] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!isChunkLoadError(error)) return;
+    if (!shouldAttemptChunkReload(window.sessionStorage, Date.now())) return;
+
+    setRecovering(true);
+    // `location.reload()` would re-request the SAME document, which on a
+    // browser holding it in bfcache is the stale one that failed. Replacing
+    // the href re-resolves it against the server.
+    window.location.replace(window.location.href);
+  }, [error]);
+
+  return recovering;
 }

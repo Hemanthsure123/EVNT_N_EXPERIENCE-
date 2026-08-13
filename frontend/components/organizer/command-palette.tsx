@@ -185,8 +185,14 @@ export function OrganizerPalette({
   // These two take no `q`, so the first page is fetched once and matched
   // locally — see the note at the top of the file. Keyed WITHOUT the term, so
   // typing does not refetch a list that cannot narrow.
+  // Keyed under `palette`, NOT the bare `['organizer','settlements']`, for the
+  // reason spelled out in lib/organizer/attention.ts: that key belongs to an
+  // infinite query, and a plain `useQuery` sharing it writes a `{data, meta}`
+  // shape that makes the infinite observer throw `pages.length of undefined`
+  // during render. Opening the palette must not be able to break the payouts
+  // screen behind it.
   const settlements = useQuery({
-    queryKey: ['organizer', 'settlements'],
+    queryKey: ['organizer', 'palette', 'settlements'],
     queryFn: () => fetchSettlements(),
     enabled: open,
     staleTime: 60_000,

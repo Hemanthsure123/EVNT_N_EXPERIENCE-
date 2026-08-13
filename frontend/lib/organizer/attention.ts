@@ -62,31 +62,71 @@ const SEVERITY_ORDER: Record<AttentionSeverity, number> = {
 /** A small first page is enough — this is a triage list, not a report. */
 const PAGE = 20;
 
+/**
+ * ── WHY THESE KEYS CARRY AN `attention` SEGMENT ──────────────────────────
+ *
+ * They used to be `['organizer','settlements']`, `['organizer','refunds','']`
+ * and `['organizer','event-rows',{status}]` — byte-identical to the keys the
+ * TABLE hooks in `queries.ts` use. That was the cause of the intermittent
+ * "This screen didn't load" on /dashboard, and it is worth stating exactly,
+ * because the collision looks harmless.
+ *
+ * The panel reads these with a PLAIN `useQuery`, which caches `{data, meta}`.
+ * The tables read the same keys with `useInfiniteQuery`, which caches
+ * `{pages, pageParams}`. One cache entry, two incompatible shapes — and the
+ * winner is decided by whichever observer's fetch lands first, because
+ * TanStack de-dupes the second onto the in-flight promise and keeps the
+ * INITIATOR's behavior.
+ *
+ * The failure is asymmetric, which is what made it intermittent rather than
+ * constant:
+ *
+ *   plain first  -> InfiniteQueryObserver reads `pages.length` of undefined
+ *                   and throws a TypeError. It throws while CONSTRUCTING the
+ *                   observer, during render, so it happens on the
+ *                   `useSettlements()` line itself — before `query.isError`
+ *                   exists to guard it. Nothing downstream can catch it, and
+ *                   the route error boundary draws the error screen.
+ *   infinite 1st -> no throw; the panel silently reads `[]` and an organizer
+ *                   is told nothing needs attention when something does.
+ *
+ * On a cold load the sidebar renders before `<main>`, so the plain observer
+ * usually won and the page usually broke; arriving from /dashboard/payouts, or
+ * pressing a retry, flipped it — hence "works after refreshing a few times".
+ *
+ * The same collision reached /dashboard/events, /refunds and /payouts, because
+ * the sidebar's attention dot keeps these mounted on every organizer route.
+ *
+ * Namespacing is the whole fix. Invalidation still works: it targets the
+ * `['organizer']` prefix, which these remain under.
+ */
+const ATTENTION = ['organizer', 'attention'] as const;
+
 export function useAttention() {
   const results = useQueries({
     queries: [
       {
-        queryKey: ['organizer', 'event-rows', { status: 'rejected' }],
+        queryKey: [...ATTENTION, 'event-rows', { status: 'rejected' }],
         queryFn: () => fetchEventRows({ status: 'rejected' }),
         staleTime: 30_000,
       },
       {
-        queryKey: ['organizer', 'event-rows', { status: 'draft' }],
+        queryKey: [...ATTENTION, 'event-rows', { status: 'draft' }],
         queryFn: () => fetchEventRows({ status: 'draft' }),
         staleTime: 30_000,
       },
       {
-        queryKey: ['organizer', 'event-rows', { status: 'pending_review' }],
+        queryKey: [...ATTENTION, 'event-rows', { status: 'pending_review' }],
         queryFn: () => fetchEventRows({ status: 'pending_review' }),
         staleTime: 30_000,
       },
       {
-        queryKey: ['organizer', 'settlements'],
+        queryKey: [...ATTENTION, 'settlements'],
         queryFn: () => fetchSettlements(),
         staleTime: 30_000,
       },
       {
-        queryKey: ['organizer', 'refunds', ''],
+        queryKey: [...ATTENTION, 'refunds', ''],
         queryFn: () => fetchOrganizerRefunds(),
         staleTime: 30_000,
       },

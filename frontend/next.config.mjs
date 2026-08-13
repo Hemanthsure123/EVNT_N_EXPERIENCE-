@@ -99,6 +99,60 @@ const nextConfig = {
         source: '/:all*(woff2|woff|ttf|otf)',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       },
+
+      // ── AUTHENTICATED SHELLS ARE NEVER SHARED-CACHEABLE ─────────────────
+      //
+      // These routes fetch everything client-side with the caller's token, so
+      // Next found no dynamic API during the build, prerendered them, and
+      // stamped them with its static default:
+      //
+      //     Cache-Control: s-maxage=31536000, stale-while-revalidate
+      //
+      // A ONE-YEAR shared-cache lifetime on /dashboard and /admin. Two
+      // separate faults, and the second is what organizers actually hit.
+      //
+      // 1. It contradicts the rule this platform states for every private
+      //    response — "a shared/CDN cache must never serve one user's cached
+      //    response to another". Cloudflare happens to mark these DYNAMIC and
+      //    declines to cache them, which is luck, not design: the header is an
+      //    instruction to every shared cache in the path.
+      //
+      // 2. The prerendered HTML names the CHUNK HASHES of the build that
+      //    produced it. Hold it across a deploy — a browser back/forward, a
+      //    proxy, anything honouring a year — and those chunks are gone from
+      //    the new image. The client throws a ChunkLoadError mid-render, the
+      //    organizer error boundary catches it, and the screen becomes "This
+      //    screen didn't load". Reloading eventually fetches HTML matching the
+      //    running build, which is exactly why refreshing "fixes" it and why
+      //    it appears intermittently rather than always.
+      //
+      // `no-store` rather than a short max-age: the correct lifetime for a
+      // document whose script references only exist in the build currently
+      // deployed is zero. These shells are a skeleton plus a script tag, so
+      // there is no meaningful paint cost to giving up their cache entry.
+      //
+      // The route groups — (organizer), (admin), (performer) — are erased from
+      // the URL, so the paths are matched literally here.
+      {
+        source: '/dashboard/:path*',
+        headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+      },
+      { source: '/dashboard', headers: [{ key: 'Cache-Control', value: 'private, no-store' }] },
+      {
+        source: '/admin/:path*',
+        headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+      },
+      { source: '/admin', headers: [{ key: 'Cache-Control', value: 'private, no-store' }] },
+      {
+        source: '/studio/:path*',
+        headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+      },
+      { source: '/studio', headers: [{ key: 'Cache-Control', value: 'private, no-store' }] },
+      {
+        source: '/account/:path*',
+        headers: [{ key: 'Cache-Control', value: 'private, no-store' }],
+      },
+      { source: '/account', headers: [{ key: 'Cache-Control', value: 'private, no-store' }] },
     ];
   },
 };

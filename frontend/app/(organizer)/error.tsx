@@ -1,7 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { ErrorScreen, useLoggedError } from '@/components/illustrations/error-screen';
+import {
+  ErrorScreen,
+  useChunkRecovery,
+  useLoggedError,
+} from '@/components/illustrations/error-screen';
 import { SceneError } from '@/components/illustrations/scenes';
 
 /**
@@ -29,6 +33,13 @@ export default function OrganizerError({
   reset: () => void;
 }) {
   useLoggedError(error);
+
+  // A deploy-stale script chunk is the one failure here that no retry button
+  // can fix — the code this document names is gone — and it is what produced
+  // the "works after refreshing a few times" reports. Recovering silently is
+  // right for exactly that case; everything else still gets the screen below,
+  // because an error somebody could report is worth showing.
+  if (useChunkRecovery(error)) return null;
 
   return (
     <ErrorScreen
