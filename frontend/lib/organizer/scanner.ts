@@ -19,9 +19,9 @@ import * as React from 'react';
  * than a button that opens a black rectangle. A silently broken camera at a
  * queue is worse than an honest absence.
  *
- * BACKLOG "Bundled QR decoder" covers shipping a library behind a dynamic
- * import for the browsers without it — dynamic, so the cost falls only on the
- * people who need it.
+ * That bundled decoder now EXISTS — `jsqr`, behind a dynamic import, loaded
+ * only where the native detector is absent, so the cost falls solely on the
+ * browsers that need it. See `fallbackDecoder` below.
  *
  * ── THE DECODER NEVER DECIDES ANYTHING ────────────────────────────────────
  *
@@ -41,8 +41,93 @@ function detectorCtor(): BarcodeDetectorCtor | null {
   return typeof candidate === 'function' ? candidate : null;
 }
 
+/** Turns a video frame into a QR string, however this browser can. */
+type FrameDecoder = { decode: (video: HTMLVideoElement) => Promise<string | null> };
+
+/**
+ * The native path. Free, and what Chrome and Edge take.
+ */
+function nativeDecoder(): FrameDecoder | null {
+  const Ctor = detectorCtor();
+  if (!Ctor) return null;
+  const detector = new Ctor({ formats: ['qr_code'] });
+  return {
+    decode: async (video) => {
+      const codes = await detector.detect(video);
+      return codes[0]?.rawValue?.trim() || null;
+    },
+  };
+}
+
+/**
+ * The fallback, for Safari and Firefox — which is to say for iPhones, and so
+ * for a large share of the people actually standing on a door.
+ *
+ * ── IT IS A DYNAMIC IMPORT, AND THAT IS THE POINT ─────────────────────────
+ *
+ * `jsqr` is only fetched when the native detector is absent, so a Chrome
+ * steward downloads none of it. It was chosen over the alternatives on ONE
+ * property above all: it has zero dependencies. A decoder with a transitive
+ * tree is a decoder that can fail the release's image scan months later for a
+ * reason nobody connects to check-in. Verified before adding — the npm audit
+ * totals were identical before and after.
+ *
+ * ── WHY THE FRAME IS SHRUNK ───────────────────────────────────────────────
+ *
+ * Native detection is done by the browser off the main thread; this runs in
+ * JS on it. A full 1080p frame is two million pixels to scan per attempt,
+ * which on a mid-range phone drops the video to a slideshow — and a scanner
+ * that stutters gets pointed at the code for longer, not less. Downscaling to
+ * 640px wide keeps a QR code from a normal scanning distance well above the
+ * ~3px-per-module the decoder needs, and costs about a tenth of the work.
+ */
+async function fallbackDecoder(): Promise<FrameDecoder | null> {
+  try {
+    const { default: jsQR } = await import('jsqr');
+    const canvas = document.createElement('canvas');
+    // `willReadFrequently` — without it browsers keep the canvas on the GPU
+    // and every `getImageData` pays a readback stall.
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+
+    return {
+      decode: async (video) => {
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        if (!width || !height) return null;
+
+        const scale = Math.min(1, 640 / width);
+        canvas.width = Math.round(width * scale);
+        canvas.height = Math.round(height * scale);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const image = context.getImageData(0, 0, canvas.width, canvas.height);
+        const found = jsQR(image.data, image.width, image.height, {
+          // The camera feed is not inverted; skipping the second pass halves
+          // the work per frame.
+          inversionAttempts: 'dontInvert',
+        });
+        return found?.data?.trim() || null;
+      },
+    };
+  } catch {
+    // A failed chunk fetch must not take the scanner down — the typed field
+    // below it still admits people.
+    return null;
+  }
+}
+
+/**
+ * Support is now about the CAMERA, not the decoder.
+ *
+ * This used to require `BarcodeDetector`, so Safari and Firefox were told to
+ * use a handheld reader or type the code — which is the manual entry a gate
+ * cannot afford at the door. With a fallback decoder, any browser that can
+ * open a camera can scan.
+ */
 export function isScannerSupported(): boolean {
-  return Boolean(detectorCtor()) && Boolean(navigator?.mediaDevices?.getUserMedia);
+  if (typeof window === 'undefined') return false;
+  return Boolean(navigator?.mediaDevices?.getUserMedia);
 }
 
 export type ScannerState = 'idle' | 'starting' | 'running' | 'denied' | 'unsupported' | 'error';
@@ -94,8 +179,7 @@ export function useCameraScanner({
   }, []);
 
   const start = React.useCallback(async () => {
-    const Ctor = detectorCtor();
-    if (!Ctor || !navigator.mediaDevices?.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       setState('unsupported');
       return;
     }
@@ -124,7 +208,17 @@ export function useCameraScanner({
       video.muted = true;
       await video.play();
 
-      const detector = new Ctor({ formats: ['qr_code'] });
+      // Native if the browser has it, otherwise the lazily-imported decoder.
+      // Resolved AFTER the camera is up so the import overlaps with the
+      // permission prompt rather than delaying it.
+      const decoder = nativeDecoder() ?? (await fallbackDecoder());
+      if (!decoder) {
+        stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        setState('error');
+        setMessage('The QR reader could not be loaded. Use a handheld scanner or type the code.');
+        return;
+      }
       setState('running');
 
       const tick = async () => {
@@ -134,8 +228,7 @@ export function useCameraScanner({
         // detector throws rather than returning nothing.
         if (element.readyState >= 2) {
           try {
-            const codes = await detector.detect(element);
-            const value = codes[0]?.rawValue?.trim();
+            const value = await decoder.decode(element);
             if (value) {
               const now = Date.now();
               const last = lastRef.current;

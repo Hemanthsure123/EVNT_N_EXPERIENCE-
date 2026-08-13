@@ -464,9 +464,12 @@ function CameraPanel({
       // messages worth showing: the reader can act on it — switch browser, or
       // use the field below. What it must NOT do is explain our plans, which
       // is what the sentence about a bundled decoder library was doing.
+      // Reached only when the browser cannot open a camera at all — a desktop
+      // with none, or an insecure origin. The DECODER is no longer a reason to
+      // be here: browsers without `BarcodeDetector` load one, so Safari and
+      // Firefox scan like everything else.
       <p className="rounded-xl border border-dashed border-border p-card text-caption text-muted-foreground">
-        Camera scanning works in Chrome and Edge. On this browser, use a handheld reader or type
-        the code into the field below.
+        No camera available on this device. Use a handheld reader, or type the code below.
       </p>
     );
   }
