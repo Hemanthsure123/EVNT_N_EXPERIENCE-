@@ -19,7 +19,6 @@ import { useEventRows, useSettlements } from '@/lib/organizer/queries';
 import { owedTotal } from '@/lib/organizer/attention';
 import type { EventRow } from '@/lib/api/organizer';
 import { EmptyState, ErrorState, Panel, Skeleton } from './primitives';
-import { AttentionPanel } from './attention-panel';
 import { ActivityFeed } from './activity-feed';
 import { KpiStrip } from './kpi-strip';
 import { StatusBadge } from './status-badge';
@@ -63,18 +62,31 @@ import { cn } from '@/lib/utils/cn';
  */
 export function DashboardHome() {
   return (
-    <div className="flex flex-col gap-block">
-      <AttentionPanel limit={4} />
+    <div className="flex flex-col gap-block-lg">
+      {/* ── ONE LEAD, THEN SUPPORT ────────────────────────────────────────
+          The page used to open with a worklist that is empty most days, then
+          four sibling regions of equal weight — attention, today, upcoming,
+          money, activity — each in its own card. Five things shouting at the
+          same volume is the same as none of them shouting, and it is why the
+          screen read as a pile of boxes rather than an answer.
 
+          It now opens on TODAY, because that is the question an organizer
+          actually arrives with, and the numbers are the only thing on the page
+          that changes hour to hour. The worklist moved into the header bell,
+          where it costs nothing on a quiet day and is reachable from every
+          screen instead of just this one.
+
+          Everything below the fold is reference: what is coming, what is owed,
+          what just happened. Two columns on a wide screen, one on a narrow —
+          and the money column comes SECOND in the DOM so a phone gets
+          "what's next" before "what you're owed", which is the order somebody
+          checking between tasks needs them in. */}
       <section className="flex flex-col gap-stack">
-        <SectionHeading
-          title="Today"
-          hint="Compared with the same hours yesterday. A dash means yesterday was zero, not that today is."
-        />
+        <SectionHeading title="Today" />
         <KpiStrip />
       </section>
 
-      <div className="grid gap-block xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:gap-block-lg">
+      <div className="grid gap-block xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-block-lg">
         <div className="flex min-w-0 flex-col gap-block">
           <UpcomingEvents />
           <QuickActions />
@@ -85,11 +97,10 @@ export function DashboardHome() {
           <section className="flex flex-col gap-stack">
             <SectionHeading
               title="Activity"
-              hint="Bookings, refunds, admissions and payouts as they happen."
               href="/dashboard/activity"
               linkLabel="Full timeline"
             />
-            <ActivityFeed limit={8} />
+            <ActivityFeed limit={6} />
           </section>
         </div>
       </div>
@@ -156,7 +167,6 @@ function UpcomingEvents() {
     <section className="flex flex-col gap-stack">
       <SectionHeading
         title="Coming up"
-        hint="On sale now, soonest first."
         href="/dashboard/events"
         linkLabel="All events"
       />
@@ -286,7 +296,6 @@ function MoneyStrip() {
     <section className="flex flex-col gap-stack">
       <SectionHeading
         title="Money"
-        hint="Released after each event ends and its refund window closes."
         href="/dashboard/payouts"
         linkLabel="Payouts"
       />

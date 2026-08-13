@@ -22,6 +22,7 @@ import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib
 import { useSidebar } from '@/lib/organizer/use-sidebar';
 import { BrandMark } from '@/components/shell/brand-mark';
 import { cn } from '@/lib/utils/cn';
+import { NotificationBell } from './notification-bell';
 import { useAttentionBadge } from './attention-panel';
 import { OrganizerPalette } from './command-palette';
 
@@ -352,6 +353,8 @@ function TopBar({
 
       {/* THE one filled control in this bar. */}
       <Button asChild size="md" className="shrink-0 lg:h-control-sm">
+        <NotificationBell />
+
         <Link href="/dashboard/events/new" aria-label="Create event">
           <Plus className="size-4 shrink-0" aria-hidden />
           <span className="hidden sm:inline">Create event</span>
