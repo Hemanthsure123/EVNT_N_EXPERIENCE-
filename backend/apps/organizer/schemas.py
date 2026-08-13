@@ -245,3 +245,30 @@ class AudienceSerializer(serializers.Serializer):
     customers = serializers.IntegerField()
     repeat_customers = serializers.IntegerField()
     repeat_pct = serializers.FloatField(allow_null=True)
+
+
+class OrganizerReviewSerializer(serializers.Serializer):
+    """One published review on the organizer's own event.
+
+    The reviewer is named, not anonymised: they chose to publish this against
+    an event the organizer ran, and an organizer reading "somebody rated you 2"
+    with no way to tell repeat customers from first-timers cannot act on it.
+    The email is NOT here — naming is enough to recognise a regular, and an
+    address invites contact outside the platform, where no record of it exists.
+    """
+
+    id = serializers.UUIDField()
+    rating = serializers.IntegerField()
+    body = serializers.CharField(allow_blank=True)
+    verified_attendee = serializers.BooleanField()
+    created_at = serializers.DateTimeField()
+    event_id = serializers.UUIDField(source="event.id")
+    event_title = serializers.CharField(source="event.title")
+    reviewer_name = serializers.SerializerMethodField()
+
+    def get_reviewer_name(self, review) -> str:
+        # The FK is PROTECT, so a reviewer always exists — but `full_name` is
+        # `blank=True`, and somebody who never set one would otherwise render
+        # as an empty cell that reads like a rendering fault.
+        user = getattr(review, "user", None)
+        return (getattr(user, "full_name", "") or "").strip() or "A guest"

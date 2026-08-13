@@ -39,6 +39,7 @@ from apps.checkin.models import ScanLog, ScanResult
 from apps.events.models import Event, EventStatus
 from apps.organizations.models import Organization
 from apps.payments.models import Payment, PaymentStatus, Refund
+from apps.reviews.models import EventReview, ReviewStatus
 from apps.settlements.models import PayoutAttempt
 from apps.ticketing.models import TicketType
 
@@ -650,6 +651,52 @@ class OrganizerRepository:
         )
         if event_id:
             queryset = queryset.filter(payment__booking__event_id=event_id)
+        return queryset
+
+    def reviews(self, owner_id: UUID, *, event_id: UUID | None = None) -> QuerySet[EventReview]:
+        """Reviews left on this organizer's events.
+
+        ── PUBLISHED ONLY, AND THAT IS A DECISION ────────────────────────────
+
+        `ReviewStatus.HIDDEN` is a MODERATION outcome — an operator removed the
+        review from the public page. Showing it here would hand the organizer a
+        complaint the platform has already withdrawn, and one they cannot act
+        on: they have no control that could unhide it, and the reviewer has not
+        been told. Worse, an organizer who reads a hidden review is likely to
+        respond to it, which is the outcome moderation existed to prevent.
+
+        So this is the same set a visitor sees on the event page. An organizer
+        and their customer read the same reviews, which is also the only
+        version they can sensibly discuss.
+
+        ── NO OWNER-FACING WRITE ─────────────────────────────────────────────
+
+        Read-only, deliberately. Replies, disputes and takedown requests each
+        need a model that does not exist, and a button that silently does
+        nothing is worse than its absence.
+        """
+        queryset = (
+            EventReview.objects.filter(
+                event__organization__owner_id=owner_id,
+                event__deleted_at__isnull=True,
+                status=ReviewStatus.PUBLISHED,
+            )
+            .select_related("event", "user")
+            .only(
+                "id",
+                "rating",
+                "body",
+                "verified_attendee",
+                "created_at",
+                "event__id",
+                "event__title",
+                "user__id",
+                "user__full_name",
+            )
+            .order_by("-created_at", "-id")
+        )
+        if event_id:
+            queryset = queryset.filter(event_id=event_id)
         return queryset
 
     # ------------------------------------------------------------ activity

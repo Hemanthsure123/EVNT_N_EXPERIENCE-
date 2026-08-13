@@ -19,6 +19,7 @@ import {
   fetchOrganizerFeed,
   fetchOrganizerOverview,
   fetchOrganizerRefunds,
+  fetchOrganizerReviews,
   fetchOrganizerTimeseries,
   fetchSettlements,
   type BookingFilters,
@@ -91,6 +92,18 @@ export function useTimeseries(metric: SeriesMetric, days = 30, end?: string) {
     // The server caches this for 300s; asking again sooner cannot produce a
     // different answer.
     staleTime: 300_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useReviews(eventId?: string) {
+  return useInfiniteQuery({
+    queryKey: ['organizer', 'reviews', eventId ?? ''] as const,
+    queryFn: ({ pageParam }) =>
+      fetchOrganizerReviews({ event_id: eventId || undefined, cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => cursorFromNextLink(last.meta.next),
+    staleTime: 60_000,
     placeholderData: keepPreviousData,
   });
 }

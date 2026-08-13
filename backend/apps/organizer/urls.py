@@ -21,6 +21,7 @@ urlpatterns = [
     path("organizer/activity", api.ActivityView.as_view(), name="organizer-activity"),
     path("organizer/feed", api.ActivityFeedView.as_view(), name="organizer-feed"),
     path("organizer/refunds", api.RefundListView.as_view(), name="organizer-refunds"),
+    path("organizer/reviews", api.ReviewListView.as_view(), name="organizer-reviews"),
     path("organizer/audience", api.AudienceView.as_view(), name="organizer-audience"),
     path("organizer/event-rows", api.EventRowListView.as_view(), name="organizer-event-rows"),
     path("organizer/bookings", api.BookingListView.as_view(), name="organizer-bookings"),

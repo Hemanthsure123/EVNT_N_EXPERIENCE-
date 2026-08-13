@@ -6,6 +6,7 @@ import {
   MessageSquare,
   QrCode,
   Receipt,
+  Star,
   Ticket,
   Undo2,
   Users,
@@ -100,6 +101,12 @@ export const ORGANIZER_SECTIONS: OrganizerSection[] = [
     label: 'Refunds',
     icon: Undo2,
     hint: 'Money already returned, and why',
+  },
+  {
+    href: '/dashboard/reviews',
+    label: 'Reviews',
+    icon: Star,
+    hint: 'What attendees said about your events',
   },
   {
     href: '/dashboard/support',

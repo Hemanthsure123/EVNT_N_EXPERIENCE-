@@ -32,6 +32,7 @@ from .pagination import (
     OrganizerCustomerPagination,
     OrganizerEventRowPagination,
     OrganizerRefundPagination,
+    OrganizerReviewPagination,
 )
 from .permissions import IsOrganizer
 from .repositories import OrganizerRepository
@@ -46,6 +47,7 @@ from .schemas import (
     OrganizerBookingSerializer,
     OrganizerOverviewSerializer,
     OrganizerRefundSerializer,
+    OrganizerReviewSerializer,
     TimeseriesSerializer,
     UnifiedActivitySerializer,
 )
@@ -134,6 +136,30 @@ class TimeseriesView(OrganizerView):
             end_date=_date_param(request, "end"),
         )
         return _no_store(Response(TimeseriesSerializer(payload).data))
+
+
+class ReviewListView(OrganizerView):
+    """Reviews left on the caller's own events.
+
+    Published only — a hidden review is a moderation outcome the organizer
+    cannot act on and should not be answering. See the repository for why.
+    """
+
+    pagination_class = OrganizerReviewPagination
+
+    @extend_schema(
+        parameters=[OpenApiParameter("event_id", str)],
+        responses={200: OrganizerReviewSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        queryset = OrganizerRepository().reviews(
+            self.owner_id,
+            event_id=_uuid_param(request, "event_id"),
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = cast(list, OrganizerReviewSerializer(page or [], many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
 
 
 class BreakdownView(OrganizerView):

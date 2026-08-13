@@ -32,3 +32,10 @@ class OrganizerCustomerPagination(CursorPagination):
     #: exactly the same amount can straddle a page boundary and one of them
     #: disappears from the list entirely.
     ordering = ("-lifetime_value_minor", "email")
+
+
+class OrganizerReviewPagination(CursorPagination):
+    #: Matches `OrganizerRepository.reviews()`. Two keys: `created_at` alone is
+    #: not unique — two reviews written in the same second can straddle a page
+    #: boundary and one of them vanishes from the list.
+    ordering = ("-created_at", "-id")

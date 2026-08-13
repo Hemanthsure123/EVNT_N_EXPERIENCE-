@@ -396,3 +396,17 @@ export const fetchSettlements = (params: { cursor?: string } = {}) =>
 
 export const fetchEventSettlement = (eventId: string) =>
   api.get<OrganizerSettlement>(`/organizer/settlements/${encodeURIComponent(eventId)}`);
+
+export type OrganizerReview = {
+  id: string;
+  rating: number;
+  body: string;
+  verified_attendee: boolean;
+  created_at: string;
+  event_id: string;
+  event_title: string;
+  reviewer_name: string;
+};
+
+export const fetchOrganizerReviews = (params: { event_id?: string; cursor?: string } = {}) =>
+  api.get<Paginated<OrganizerReview>>(`/organizer/reviews${query(params)}`);
