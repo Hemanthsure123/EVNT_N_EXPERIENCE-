@@ -52,7 +52,8 @@ import { cursorFromNextLink } from '@/lib/api/events';
 
 const KEY = {
   overview: ['organizer', 'overview'] as const,
-  series: (metric: SeriesMetric, days: number) => ['organizer', 'series', metric, days] as const,
+  series: (metric: SeriesMetric, days: number, end?: string) =>
+    ['organizer', 'series', metric, days, end ?? 'now'] as const,
   breakdown: (by: BreakdownKind, limit: number) => ['organizer', 'breakdown', by, limit] as const,
   activity: (limit: number) => ['organizer', 'activity', limit] as const,
   audience: ['organizer', 'audience'] as const,
@@ -79,10 +80,14 @@ export function useOverview() {
   });
 }
 
-export function useTimeseries(metric: SeriesMetric, days = 30) {
+export function useTimeseries(metric: SeriesMetric, days = 30, end?: string) {
   return useQuery({
-    queryKey: KEY.series(metric, days),
-    queryFn: () => fetchOrganizerTimeseries(metric, days),
+    // `end` is part of the key — two windows of the same LENGTH are different
+    // data, and sharing an entry would draw one window's points under the
+    // other's dates. A plausible chart for the wrong days is worse than an
+    // error, because nobody questions it.
+    queryKey: KEY.series(metric, days, end),
+    queryFn: () => fetchOrganizerTimeseries(metric, days, end),
     // The server caches this for 300s; asking again sooner cannot produce a
     // different answer.
     staleTime: 300_000,

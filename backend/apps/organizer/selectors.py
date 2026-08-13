@@ -156,6 +156,7 @@ def get_timeseries(
     metric: str,
     days: int,
     *,
+    end_date: dt.date | None = None,
     repository: OrganizerRepository | None = None,
     cache: CachePort | None = None,
 ) -> dict[str, Any]:
@@ -165,18 +166,56 @@ def get_timeseries(
     draws a line that skips quiet days, silently turning a flat week into a
     climb. Filling the gaps here lets the chart stay dumb — and it is also what
     makes the KPI sparklines truthful.
+
+    ── WHY A LENGTH AND AN END, NOT A FROM AND A TO ─────────────────────────
+
+    A custom range arrives as two dates and is stored as `days` + `end_date`,
+    because the window LENGTH is what everything downstream already speaks:
+    the bound at `MAX_SERIES_DAYS`, the dense fill, the cache key, and the
+    `days` field in the response. Keeping a second representation alongside it
+    would mean two ways to express the same window and two places to get the
+    clamp wrong.
+
+    `end_date=None` keeps the previous behaviour exactly — a window ending
+    today — so every existing caller, the KPI sparklines included, is
+    unaffected and no cache entry changes shape.
     """
     repository = repository or OrganizerRepository()
     cache = cache or _default_cache()
     days = max(1, min(days, MAX_SERIES_DAYS))
     metric = metric if metric in SERIES_METRICS else "revenue"
 
-    key = f"organizer:{owner_id}:series:{metric}:{days}"
+    # A future end is clamped to today rather than refused: these params come
+    # from a date picker somebody can type into, the view is already scoped to
+    # the caller, and the worst a wrong value can do is show a window with no
+    # rows in it. Same reasoning as the organizer list filters, which treat a
+    # malformed date as absent instead of answering 400.
+    # BOTH bounds: `day_bounds` returns (start of today, start of TOMORROW), so
+    # the end bound's local date is tomorrow's. Deriving "today" from it moved
+    # every custom window forward by a day — caught by
+    # `test_a_future_end_is_clamped_to_today_not_refused`, which is the only
+    # assertion that compares a clamped window against the rolling one.
+    today_start, today_end = day_bounds()
+    if end_date is not None:
+        end_date = min(end_date, today_start.astimezone(PLATFORM_TZ).date())
+
+    # The cache key carries the end, or a marker for "today". Without it a
+    # custom window would be served the rolling window's cached points, which
+    # is the kind of bug that shows a plausible chart for the wrong dates.
+    key = (
+        f"organizer:{owner_id}:series:{metric}:{days}:{end_date.isoformat() if end_date else 'now'}"
+    )
     cached = cache.get(key)
     if cached is not None:
         return cached
 
-    _, end = day_bounds()
+    if end_date is None:
+        end = today_end
+    else:
+        # `day_bounds` works in PLATFORM_TZ, so the window has to end at that
+        # date's local midnight — not UTC's, which would shift every point by
+        # a day for half the year.
+        end = dt.datetime.combine(end_date + dt.timedelta(days=1), dt.time.min, tzinfo=PLATFORM_TZ)
     start = end - dt.timedelta(days=days)
     reader = {
         "revenue": repository.revenue_by_day,

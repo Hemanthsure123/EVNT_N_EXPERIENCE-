@@ -13,6 +13,7 @@ rules and reaches into no other module's writes.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import cast
 from uuid import UUID
 
@@ -65,6 +66,29 @@ _int_param = int_param
 _datetime_param = datetime_param
 
 
+def _date_param(request: Request, name: str) -> dt.date | None:
+    """A plain YYYY-MM-DD, or None.
+
+    Deliberately NOT `_datetime_param`: an analytics window is a calendar range
+    an organizer picked, not an instant. Parsing it as a datetime would drag a
+    timezone into a value that has none, and the selector already places the
+    boundary at the platform's local midnight.
+
+    A malformed value is treated as ABSENT rather than answered with a 400,
+    matching every other filter on these views — the response is already scoped
+    to the caller, a date picker emitting something odd is the common slip, and
+    a dashboard that errors because of it is worse than one showing the default
+    window.
+    """
+    raw = (request.query_params.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 _uuid_param = uuid_param
 
 
@@ -90,6 +114,15 @@ class TimeseriesView(OrganizerView):
         parameters=[
             OpenApiParameter("metric", str, description="revenue | bookings | tickets"),
             OpenApiParameter("days", int, description=f"1–{selectors.MAX_SERIES_DAYS}"),
+            OpenApiParameter(
+                "end",
+                str,
+                description=(
+                    "Optional YYYY-MM-DD. The window ENDS on this date instead of today, "
+                    "so a custom range is (end - days, end]. Omitted or malformed means "
+                    "today, which is the previous behaviour."
+                ),
+            ),
         ],
         responses={200: TimeseriesSerializer},
     )
@@ -98,6 +131,7 @@ class TimeseriesView(OrganizerView):
             self.owner_id,
             request.query_params.get("metric", "revenue"),
             _int_param(request, "days", selectors.DEFAULT_SERIES_DAYS),
+            end_date=_date_param(request, "end"),
         )
         return _no_store(Response(TimeseriesSerializer(payload).data))
 

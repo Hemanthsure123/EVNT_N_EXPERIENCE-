@@ -63,8 +63,33 @@ const METRICS: { id: SeriesMetric; label: string; money: boolean }[] = [
   { id: 'tickets', label: 'Tickets', money: false },
 ];
 
+/** Today in the platform's timezone (IST), as YYYY-MM-DD.
+ *
+ * The browser's own timezone is deliberately not consulted, for the reason the
+ * discovery calendar already documents: the events are in India, and at 20:00
+ * UTC a browser-local "today" is already tomorrow — which would offer a range
+ * ending on a date the server clamps away.
+ */
+function istToday(): string {
+  const ist = new Date(Date.now() + 5.5 * 60 * 60_000);
+  return ist.toISOString().slice(0, 10);
+}
+
+/** Whole days between two YYYY-MM-DD dates, inclusive of both ends. */
+function inclusiveDays(from: string, to: string): number {
+  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+  return Math.floor(ms / 86_400_000) + 1;
+}
+
 export function Analytics() {
   const [days, setDays] = React.useState<number>(30);
+  // A chosen range and a named window are separate state, exactly as the
+  // browse page keeps `when` apart from `dateFrom`/`dateTo`: a preset is a
+  // rolling window that means something different tomorrow, and that is the
+  // point of it. `range` non-null is what makes the custom one active.
+  const [range, setRange] = React.useState<{ from: string; to: string } | null>(null);
+  const effectiveDays = range ? Math.max(1, inclusiveDays(range.from, range.to)) : days;
+  const effectiveEnd = range?.to;
   const overview = useOverview();
   const audience = useAudience();
 
@@ -77,27 +102,85 @@ export function Analytics() {
           aria-label="Date range"
           className="ml-auto flex rounded-full border border-border bg-surface p-0.5"
         >
-          {RANGES.map((range) => (
+          {RANGES.map((preset) => (
             <Button
-              key={range.days}
+              key={preset.days}
               type="button"
               variant="ghost"
               size="sm"
               role="radio"
-              aria-checked={days === range.days}
-              onClick={() => setDays(range.days)}
+              aria-checked={!range && days === preset.days}
+              onClick={() => {
+                setDays(preset.days);
+                setRange(null);
+              }}
               className={cn(
                 'px-3',
                 // The applied filter wears the warm "you are here" pill, never
                 // a second filled action.
-                days === range.days
+                !range && days === preset.days
                   ? 'bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
                   : 'text-muted-foreground hover:text-foreground',
               )}
             >
-              {range.label}
+              {preset.label}
             </Button>
           ))}
+        </div>
+
+        {/* A chosen range, beside the named ones rather than hidden behind a
+            toggle: an organizer reconciling a payout or a month's takings
+            wants specific dates, and making them open a menu first is a step
+            for no reason. Two native date inputs — the platform's own picker
+            is keyboard-accessible, localised and understood, and a bespoke
+            calendar here would be a second, worse one to maintain. */}
+        <div className="flex items-center gap-2">
+          <label className="sr-only" htmlFor="analytics-from">
+            From
+          </label>
+          <input
+            id="analytics-from"
+            type="date"
+            max={range?.to ?? istToday()}
+            value={range?.from ?? ''}
+            onChange={(event) => {
+              const from = event.target.value;
+              if (!from) return setRange(null);
+              setRange({ from, to: range?.to && range.to >= from ? range.to : istToday() });
+            }}
+            className="h-control rounded-full border border-border bg-surface px-3 text-body-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <span aria-hidden className="text-caption text-muted-foreground">
+            to
+          </span>
+          <label className="sr-only" htmlFor="analytics-to">
+            To
+          </label>
+          <input
+            id="analytics-to"
+            type="date"
+            min={range?.from}
+            max={istToday()}
+            value={range?.to ?? ''}
+            onChange={(event) => {
+              const to = event.target.value;
+              if (!to || !range?.from) return;
+              setRange({ from: range.from, to });
+            }}
+            disabled={!range?.from}
+            className="h-control rounded-full border border-border bg-surface px-3 text-body-sm text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          {range ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setRange(null)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -146,7 +229,7 @@ export function Analytics() {
 
       <div className="grid gap-stack-lg xl:grid-cols-3">
         {METRICS.map((metric) => (
-          <Trend key={metric.id} metric={metric} days={days} />
+          <Trend key={metric.id} metric={metric} days={effectiveDays} end={effectiveEnd} />
         ))}
       </div>
 
@@ -210,13 +293,20 @@ function Kpi({
 function Trend({
   metric,
   days,
+  end,
 }: {
   metric: { id: SeriesMetric; label: string; money: boolean };
   days: number;
+  end?: string;
 }) {
-  const series = useTimeseries(metric.id, days);
+  const series = useTimeseries(metric.id, days, end);
   return (
-    <Panel title={metric.label} subtitle={`Last ${days} days`}>
+    <Panel
+      title={metric.label}
+      // Says WHICH window, not just how long. "Last 30 days" under a chart of
+      // a chosen range would be a caption contradicting the control above it.
+      subtitle={end ? `${days} days to ${end}` : `Last ${days} days`}
+    >
       <div className="p-card">
         {series.isError ? (
           <ErrorState onRetry={() => void series.refetch()} className="px-0 py-0" />

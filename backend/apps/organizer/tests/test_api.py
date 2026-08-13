@@ -127,6 +127,44 @@ class TestTimeseries:
         payload = auth(world.owner).get("/api/v1/organizer/timeseries?days=99999").json()
         assert payload["days"] == 365
 
+    def test_a_custom_window_ends_on_the_given_date(self, world: World) -> None:
+        """`end` moves the window; `days` still says how long it is.
+
+        Stored as a length plus an end rather than a from/to pair because the
+        length is what everything downstream already speaks — the clamp, the
+        dense fill, the cache key and the `days` field in this response.
+        """
+        payload = auth(world.owner).get("/api/v1/organizer/timeseries?days=3&end=2026-03-10").json()
+        assert payload["days"] == 3
+        assert [point["date"] for point in payload["points"]] == [
+            "2026-03-08",
+            "2026-03-09",
+            "2026-03-10",
+        ]
+
+    def test_a_custom_window_is_cached_apart_from_the_rolling_one(self, world: World) -> None:
+        """Both are `days=3`. Sharing a cache key would serve one window's
+        points for the other's dates — a plausible chart for the wrong days,
+        which is worse than an error because nobody would question it."""
+        rolling = auth(world.owner).get("/api/v1/organizer/timeseries?days=3").json()
+        custom = auth(world.owner).get("/api/v1/organizer/timeseries?days=3&end=2026-03-10").json()
+        assert rolling["points"] != custom["points"]
+
+    def test_a_future_end_is_clamped_to_today_not_refused(self, world: World) -> None:
+        """These arrive from a date picker somebody can type into, the view is
+        already scoped to the caller, and a dashboard that 400s because of a
+        stray date is worse than one showing the default window."""
+        future = auth(world.owner).get("/api/v1/organizer/timeseries?days=3&end=2099-01-01").json()
+        today = auth(world.owner).get("/api/v1/organizer/timeseries?days=3").json()
+        assert future["points"] == today["points"]
+
+    def test_a_malformed_end_is_treated_as_absent(self, world: World) -> None:
+        payload = (
+            auth(world.owner).get("/api/v1/organizer/timeseries?days=3&end=last-tuesday").json()
+        )
+        today = auth(world.owner).get("/api/v1/organizer/timeseries?days=3").json()
+        assert payload["points"] == today["points"]
+
 
 @pytest.mark.django_db
 class TestEventRows:

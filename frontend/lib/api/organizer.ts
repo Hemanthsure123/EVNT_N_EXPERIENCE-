@@ -281,8 +281,15 @@ export const fetchOrganizerRefunds = (params: { event_id?: string; cursor?: stri
 
 export const fetchOrganizerOverview = () => api.get<OrganizerOverview>('/organizer/overview');
 
-export const fetchOrganizerTimeseries = (metric: SeriesMetric, days = 30) =>
-  api.get<OrganizerTimeseries>(`/organizer/timeseries?metric=${metric}&days=${days}`);
+/**
+ * `end` is optional and omitted entirely when absent, so the rolling window
+ * keeps sending the exact request it always sent — same URL, same server cache
+ * entry. A custom range is (end - days, end].
+ */
+export const fetchOrganizerTimeseries = (metric: SeriesMetric, days = 30, end?: string) =>
+  api.get<OrganizerTimeseries>(
+    `/organizer/timeseries?metric=${metric}&days=${days}${end ? `&end=${end}` : ''}`,
+  );
 
 export const fetchOrganizerBreakdown = (by: BreakdownKind, limit = 8) =>
   api.get<OrganizerBreakdown>(`/organizer/breakdown?by=${by}&limit=${limit}`);
