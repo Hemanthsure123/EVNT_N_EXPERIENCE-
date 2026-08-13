@@ -298,7 +298,6 @@ export function TicketBuilder({
                       value={tier.description}
                       onChange={(value) => patch(tier.key, { description: value })}
                       placeholder="Standing, front of the barrier"
-                      hint="Optional. The sentence that stops somebody buying the wrong ticket."
                     />
                     <Field
                       label="Price (₹)"

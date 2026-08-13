@@ -75,7 +75,6 @@ export function SeoStep({ draft, update, issues }: Props) {
         placeholder={draft.title || 'Sunburn Arena ft. Martin Garrix — Mumbai'}
         max={SEO_TITLE_MAX}
         error={errorFor(issues, 'seoTitle')}
-        hint="Google cuts off around 60–70 characters. Put the artist and the city in the first half."
       />
 
       <TextArea

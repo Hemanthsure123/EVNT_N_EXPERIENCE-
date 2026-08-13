@@ -488,7 +488,22 @@ function StepRail({
   onSelect: (step: StepId) => void;
 }) {
   return (
-    <nav aria-label="Wizard steps" className="min-w-0">
+    // ── STICKY, LIKE THE PREVIEW OPPOSITE IT ──────────────────────────────
+    //
+    // The rail scrolled away with the form while the preview on the other side
+    // stayed put, so on the long steps — tickets, details — an organizer lost
+    // both the step list AND the progress figure exactly when the page was
+    // long enough to need them, and had to scroll back up to move on.
+    //
+    // `self-start` is load-bearing: a grid item stretches to the row height by
+    // default, which makes a sticky child have nowhere to stick because its
+    // container is already as tall as the content beside it. Only from `lg`,
+    // where the rail is a column; below that it is a horizontal strip in flow
+    // and pinning it would eat a phone's viewport.
+    <nav
+      aria-label="Wizard steps"
+      className="min-w-0 lg:sticky lg:top-20 lg:self-start"
+    >
       <div className="mb-stack hidden flex-col gap-1.5 lg:flex">
         <div className="flex items-baseline justify-between">
           <span className="text-caption text-muted-foreground">Progress</span>
