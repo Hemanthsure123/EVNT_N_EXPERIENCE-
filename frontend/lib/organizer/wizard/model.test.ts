@@ -526,3 +526,22 @@ describe('patchFingerprint', () => {
     expect(patchFingerprint({ ...before, tiers: [tierWith()] })).toBe(patchFingerprint(before));
   });
 });
+
+describe('restoreDraft and the pending cover', () => {
+  it('drops a blob: poster, because the object died with its document', () => {
+    // A cover picked but not yet uploaded is a `blob:` URL over a local File.
+    // localStorage keeps the string; the browser does not keep the blob. On the
+    // next load it resolves to nothing and the previews render a broken image.
+    const restored = restoreDraft({ posterUrl: 'blob:https://fastride.xyz/9c1e-…' }, []);
+    expect(restored.posterUrl).toBe('');
+  });
+
+  it('keeps a real uploaded poster', () => {
+    const url = 'https://cdn.example.com/storage/v1/object/public/media/poster.jpg';
+    expect(restoreDraft({ posterUrl: url }, []).posterUrl).toBe(url);
+  });
+
+  it('treats an absent poster as empty rather than undefined', () => {
+    expect(restoreDraft({}, []).posterUrl).toBe('');
+  });
+});

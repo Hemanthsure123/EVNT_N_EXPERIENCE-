@@ -332,6 +332,21 @@ export function restoreDraft(
     ...fresh,
     ...stored,
     organizationId,
+    // ── A RESTORED `blob:` COVER POINTS AT NOTHING ────────────────────────
+    //
+    // The whole draft is JSON-serialised into localStorage, and while a cover
+    // is waiting to upload, `posterUrl` is a `blob:` URL for the local file.
+    // A blob URL is scoped to the DOCUMENT that created it: reload the page
+    // and it resolves to nothing, forever. The `File` behind it cannot be
+    // serialised either, so there is no way to revive it.
+    //
+    // Restoring it anyway is what put a broken-image glyph in the wizard's
+    // cover preview, its live Preview pane and the Search step's share card
+    // -- three places whose job is showing what the event will look like, all
+    // reporting damage instead of "no cover yet". Dropping it is the honest
+    // state: the picture is genuinely gone, and the Media step then asks for
+    // it again instead of pretending it is already there.
+    posterUrl: stored.posterUrl?.startsWith('blob:') ? '' : (stored.posterUrl ?? ''),
     // Each tier is normalised for the same reason the draft itself is merged
     // onto a fresh one: a tier written before phases existed has no `phases`
     // array, and `tier.phases.map(...)` on an `undefined` is a white screen
