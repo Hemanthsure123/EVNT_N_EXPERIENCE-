@@ -88,76 +88,92 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
         error={errorFor(issues, 'shortDescription')}
       />
 
-      <div className="flex flex-col gap-1.5">
-        <TextField
-          id="event-duration"
-          label="How long it runs"
-          value={draft.durationMinutes}
-          onChange={(value) => update({ durationMinutes: value.replace(/[^0-9]/g, '') })}
-          placeholder="Minutes, e.g. 180"
-          error={errorFor(issues, 'durationMinutes')}
-          hint={
-            readable
-              ? `Shown as “${readable}”. Separate from the end time — a festival runs 8 hours over a 2-day window.`
-              : 'In minutes. Separate from the end time, which is what the payout and check-in windows use.'
-          }
-        />
-        <Chips
-          label="Common durations"
-          options={DURATION_PRESETS.map((preset) => ({
-            key: preset.label,
-            value: String(preset.minutes),
-          }))}
-          current={draft.durationMinutes}
-          onPick={(durationMinutes) => update({ durationMinutes })}
-        />
-      </div>
+      {/* ── TWO GROUPS, BECAUSE THESE ARE TWO QUESTIONS ────────────────────
+          The step was six sibling blocks at one weight: summary, duration,
+          language, age, accessibility, policies, FAQs. "How long is it and in
+          what language" and "who is allowed in and can they get around" are
+          different decisions, often made by different people, and flattening
+          them into one column is what made a short step feel long. */}
+      <Section title="Running time and language">
+        <div className="flex flex-col gap-block sm:flex-row sm:gap-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <TextField
+              id="event-duration"
+              label="How long it runs"
+              value={draft.durationMinutes}
+              onChange={(value) => update({ durationMinutes: value.replace(/[^0-9]/g, '') })}
+              placeholder="Minutes, e.g. 180"
+              error={errorFor(issues, 'durationMinutes')}
+              // Live feedback, not an explanation. The two sentences that used
+              // to sit here described what the field was NOT (the end time) —
+              // the classic paragraph standing in for a label. The label says
+              // "how long it runs", the placeholder says minutes, and this
+              // echoes the typed number back in the words the event page will
+              // print. Nothing left to explain.
+              hint={readable ? `Shown as “${readable}”` : undefined}
+            />
+            <Chips
+              label="Common durations"
+              options={DURATION_PRESETS.map((preset) => ({
+                key: preset.label,
+                value: String(preset.minutes),
+              }))}
+              current={draft.durationMinutes}
+              onPick={(durationMinutes) => update({ durationMinutes })}
+            />
+          </div>
 
-      <div className="flex flex-col gap-1.5">
-        <TextField
-          id="event-language"
-          label="Language"
-          value={draft.language}
-          onChange={(language) => update({ language })}
-          placeholder="Hindi, English"
-          max={LANGUAGE_MAX}
-          error={errorFor(issues, 'language')}
-        />
-        <Chips
-          label="Common languages"
-          options={LANGUAGE_PRESETS.map((value) => ({ key: value, value }))}
-          current={draft.language}
-          onPick={(language) => update({ language })}
-        />
-      </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <TextField
+              id="event-language"
+              label="Language"
+              value={draft.language}
+              onChange={(language) => update({ language })}
+              placeholder="Hindi, English"
+              max={LANGUAGE_MAX}
+              error={errorFor(issues, 'language')}
+            />
+            <Chips
+              label="Common languages"
+              options={LANGUAGE_PRESETS.map((value) => ({ key: value, value }))}
+              current={draft.language}
+              onPick={(language) => update({ language })}
+            />
+          </div>
+        </div>
+      </Section>
 
-      <div className="flex flex-col gap-1.5">
-        <TextField
-          id="event-age"
-          label="Age restriction"
-          value={draft.ageRestriction}
-          onChange={(ageRestriction) => update({ ageRestriction })}
-          placeholder="18+"
-          max={AGE_RESTRICTION_MAX}
-          error={errorFor(issues, 'ageRestriction')}
-        />
-        <Chips
-          label="Common policies"
-          options={AGE_PRESETS.map((value) => ({ key: value, value }))}
-          current={draft.ageRestriction}
-          onPick={(ageRestriction) => update({ ageRestriction })}
-        />
-      </div>
+      <Section title="Who can come, and how they get in">
+        <div className="flex flex-col gap-block">
+          <div className="flex flex-col gap-1.5">
+            <TextField
+              id="event-age"
+              label="Age restriction"
+              value={draft.ageRestriction}
+              onChange={(ageRestriction) => update({ ageRestriction })}
+              placeholder="18+"
+              max={AGE_RESTRICTION_MAX}
+              error={errorFor(issues, 'ageRestriction')}
+            />
+            <Chips
+              label="Common policies"
+              options={AGE_PRESETS.map((value) => ({ key: value, value }))}
+              current={draft.ageRestriction}
+              onPick={(ageRestriction) => update({ ageRestriction })}
+            />
+          </div>
 
-      <TextArea
-        id="event-accessibility"
-        label="Accessibility"
-        value={draft.accessibilityNotes}
-        onChange={(accessibilityNotes) => update({ accessibilityNotes })}
-        placeholder="Step-free access from Gate 2. Accessible viewing platform beside the sound desk. Assistance dogs welcome. Accessible toilets on the concourse."
-        rows={4}
-        error={errorFor(issues, 'accessibilityNotes')}
-      />
+          <TextArea
+            id="event-accessibility"
+            label="Accessibility"
+            value={draft.accessibilityNotes}
+            onChange={(accessibilityNotes) => update({ accessibilityNotes })}
+            placeholder="Step-free access from Gate 2. Accessible viewing platform beside the sound desk. Assistance dogs welcome. Accessible toilets on the concourse."
+            rows={4}
+            error={errorFor(issues, 'accessibilityNotes')}
+          />
+        </div>
+      </Section>
 
       <Section
         title="Event policies"
