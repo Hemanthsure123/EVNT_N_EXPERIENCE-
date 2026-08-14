@@ -39,8 +39,10 @@ import {
 import {
   DateRangeFilter,
   FilterChips,
+  FilterCluster,
   SearchField,
   SelectFilter,
+  ToolbarDivider,
   presetRange,
   useUrlFilters,
   type DateRange,
@@ -227,34 +229,41 @@ export function EventsTable() {
           label="Search your events"
         />
 
-        <SelectFilter
-          value={values.status}
-          onChange={(status) => set({ status })}
-          options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
-          label="Filter by status"
-        />
+        {/* Status, city and dates are the SECONDARY filters — search is how
+            people actually narrow a list of their own events, so it stays
+            visible and these collapse behind one button on a phone. */}
+        <FilterCluster count={chips.filter((chip) => chip.key !== 'q').length}>
+          <SelectFilter
+            value={values.status}
+            onChange={(status) => set({ status })}
+            options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
+            label="Filter by status"
+          />
 
-        {/* The city filter had a chip and a query param but no control, so it
-            could be cleared and never set. Suggestions come from the rows on
-            screen — a real subset, never a claim to be the complete list,
-            which is why it is a datalist over a free-text field rather than a
-            `<select>` that would silently omit a city whose events are all on
-            the next page. */}
-        <SearchField
-          value={values.city}
-          onChange={(city) => set({ city })}
-          placeholder="City"
-          label="Filter by city"
-          suggestions={cityOptions}
-        />
+          {/* The city filter had a chip and a query param but no control, so it
+              could be cleared and never set. Suggestions come from the rows on
+              screen — a real subset, never a claim to be the complete list,
+              which is why it is a datalist over a free-text field rather than a
+              `<select>` that would silently omit a city whose events are all on
+              the next page. */}
+          <SearchField
+            value={values.city}
+            onChange={(city) => set({ city })}
+            placeholder="City"
+            label="Filter by city"
+            suggestions={cityOptions}
+          />
 
-        <DateRangeFilter
-          preset={values.preset}
-          onPreset={(preset) => set({ preset })}
-          custom={{ from: values.from, to: values.to }}
-          onCustom={(next) => set({ from: next.from, to: next.to })}
-          label="Event date"
-        />
+          <DateRangeFilter
+            preset={values.preset}
+            onPreset={(preset) => set({ preset })}
+            custom={{ from: values.from, to: values.to }}
+            onCustom={(next) => set({ from: next.from, to: next.to })}
+            label="Event date"
+          />
+        </FilterCluster>
+
+        <ToolbarDivider />
 
         {/* `flex-wrap` here as well as on the toolbar: at 390px this group is
             wider than the card, and an inner nowrap row is exactly how a

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check, ChevronDown, Search, X } from 'lucide-react';
+import { Check, ChevronDown, Search, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
 import { TOOLBAR_CONTROL } from './data-table';
@@ -122,6 +122,82 @@ export function SearchField({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The secondary filters, as one group rather than as loose controls.
+ *
+ * ── THE PROBLEM WAS GROUPING, NOT THE CONTROLS ────────────────────────────
+ *
+ * The toolbar was a single `flex-wrap` row holding search, status, city, dates,
+ * a view toggle, a column chooser, an export button and the primary action —
+ * eight pills at one weight with nothing saying which three of them narrow the
+ * rows. On a phone they wrapped into four ragged lines of 44px controls and the
+ * table started below the fold.
+ *
+ * So: search stays visible because it is how people actually filter, the
+ * primary action stays visible because it is why they came, and the rest
+ * collapse behind one button under `sm`. Above `sm` they are always inline and
+ * the button is not rendered at all.
+ *
+ * ── ONE INSTANCE OF THE CHILDREN, NEVER TWO ───────────────────────────────
+ *
+ * The obvious build — render inline on desktop, render again inside a popover
+ * on mobile — duplicates every control, which means duplicate `id`s, duplicate
+ * `datalist`s and two inputs racing to own the same URL parameter. This shows
+ * and hides ONE instance with CSS, so the desktop layout is not conditional on
+ * JavaScript state and there is nothing to keep in sync.
+ *
+ * `open` starts false and renders identically on server and client, so the
+ * collapse costs no hydration risk.
+ */
+export function FilterCluster({
+  children,
+  count,
+}: {
+  children: React.ReactNode;
+  /** How many of the contained filters are applied — drives the badge. */
+  count: number;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const id = React.useId();
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={id}
+        className={cn(TOOLBAR_CONTROL, 'sm:hidden', filterStateClass(count > 0))}
+      >
+        <SlidersHorizontal className="size-3.5" aria-hidden />
+        Filters
+        {count > 0 ? <span className="tabular-nums">({count})</span> : null}
+      </Button>
+
+      <div
+        id={id}
+        className={cn(
+          'w-full flex-wrap items-center gap-2 sm:flex sm:w-auto',
+          open ? 'flex' : 'hidden',
+        )}
+      >
+        {children}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The seam between "what narrows the rows" and "what you do with them".
+ *
+ * Purely visual, and it is the cheapest way to stop a toolbar reading as an
+ * undifferentiated strip of pills: a hairline, on wide screens only, where
+ * wrapping would otherwise make it land mid-row.
+ */
+export function ToolbarDivider() {
+  return <span className="hidden h-6 w-px shrink-0 bg-border lg:block" aria-hidden />;
 }
 
 export type SelectOption = { value: string; label: string };
