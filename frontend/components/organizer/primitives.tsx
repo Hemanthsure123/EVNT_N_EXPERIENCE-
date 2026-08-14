@@ -4,6 +4,7 @@ import * as React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { SceneNothingYet } from '@/components/illustrations/scenes';
 import { Button } from '@/components/ui/button';
+import { RemoteImage } from '@/components/ui/remote-image';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -236,16 +237,11 @@ export function Percent({ value }: { value: number | null | undefined }) {
 /**
  * An event poster that degrades to its empty frame instead of to a broken icon.
  *
- * `<img src={url}>` with no error handling paints the browser's broken-image
- * glyph whenever the URL 404s — which happens for real reasons here: a poster
- * uploaded before the storage backend moved, an object removed from the bucket,
- * or a `NEXT_PUBLIC_MEDIA_BASE_URL` that does not match the host actually
- * serving the file. The row is not broken; one image is missing, and the two
- * should not look the same.
- *
- * The failure is tracked BY URL rather than as a boolean, so a row whose poster
- * is replaced retries the new one. A boolean would latch the placeholder for
- * the life of the component and make a successful re-upload look like it failed.
+ * A thin naming layer over `RemoteImage`, which holds the actual logic and is
+ * shared with the performer gallery and the studio's photo manager — they had
+ * the identical bug for the identical reason. Kept as `Poster` because every
+ * organizer call site reads better for it, and because the default `fallback`
+ * of `null` is exactly right here: the callers already draw an empty frame.
  */
 export function Poster({
   url,
@@ -256,28 +252,7 @@ export function Poster({
   url: string | null | undefined;
   className?: string;
   fallback?: React.ReactNode;
-  /**
-   * Empty by default, which is correct for a thumbnail sitting beside a title
-   * that already names the event — announcing it twice is noise. A GALLERY
-   * image is different: its alt text is content the organizer wrote and the
-   * API refuses an upload without, so those callers pass it.
-   */
   alt?: string;
 }) {
-  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
-
-  if (!url || failedUrl === url) return <>{fallback}</>;
-
-  return (
-    /* eslint-disable-next-line @next/next/no-img-element -- a configurable
-       storage adapter's URL, not a host next/image can be told about at build
-       time. */
-    <img
-      src={url}
-      alt={alt}
-      loading="lazy"
-      onError={() => setFailedUrl(url)}
-      className={className}
-    />
-  );
+  return <RemoteImage src={url} alt={alt} className={className} fallback={fallback} />;
 }

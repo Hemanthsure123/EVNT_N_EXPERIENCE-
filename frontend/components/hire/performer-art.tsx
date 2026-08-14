@@ -3,6 +3,7 @@
 import * as React from 'react';
 import type { PerformerType } from '@/lib/api/performers';
 import { cn } from '@/lib/utils/cn';
+import { RemoteImage } from '@/components/ui/remote-image';
 
 /**
  * A performer's artwork, and what stands in when there is no photograph.
@@ -284,7 +285,7 @@ export function PerformerFrame({
     >
       {photoUrl ? (
         /* eslint-disable-next-line @next/next/no-img-element -- see above. */
-        <img
+        <RemoteImage
           src={photoUrl}
           alt={photoAlt ?? ''}
           loading={priority ? 'eager' : 'lazy'}

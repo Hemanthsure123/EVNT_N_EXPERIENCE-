@@ -16,6 +16,7 @@ import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { PhotoGallery } from '@/components/hire/photo-gallery';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
+import { RemoteImage } from '@/components/ui/remote-image';
 
 /**
  * The gallery manager.
@@ -451,7 +452,16 @@ function PhotoTile({
         {/* eslint-disable-next-line @next/next/no-img-element -- the URL comes
             from a configurable storage adapter, not a host next/image can be
             told about at build time. */}
-        <img src={photo.url} alt={photo.alt_text} className="size-full object-cover" />
+        <RemoteImage
+          src={photo.url}
+          alt={photo.alt_text}
+          className="size-full object-cover"
+          fallback={
+            <span className="flex size-full items-center justify-center px-2 text-center text-caption text-muted-foreground">
+              Could not load — try uploading it again.
+            </span>
+          }
+        />
         {/* A MARKER, not an action — which is the one job the violet accent
             kept. It is a solid fill because what sits behind it is an arbitrary
             photograph, so a tint could land on anything. */}

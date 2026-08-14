@@ -9,6 +9,7 @@ import { PERFORMER_TYPE_LABELS } from '@/lib/api/performers';
 import { profileState, useMyActs } from '@/lib/performer/studio';
 import { ErrorState, Skeleton, StatusPill } from '@/components/organizer/primitives';
 import { Button } from '@/components/ui/button';
+import { RemoteImage } from '@/components/ui/remote-image';
 
 /**
  * The door into the studio.
@@ -129,9 +130,8 @@ export function ActPicker() {
                   >
                     {act.photos[0] ? (
                       // eslint-disable-next-line @next/next/no-img-element -- storage-adapter URL
-                      <img
+                      <RemoteImage
                         src={act.photos[0].url}
-                        alt=""
                         className="size-16 shrink-0 rounded-xl object-cover"
                       />
                     ) : (

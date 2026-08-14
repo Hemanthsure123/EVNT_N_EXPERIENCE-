@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Expand, X } from 'lucide-react';
 import type { PerformerPhoto } from '@/lib/api/performers';
 import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
 import { cn } from '@/lib/utils/cn';
+import { RemoteImage } from '@/components/ui/remote-image';
 
 /**
  * A performer's photos.
@@ -65,10 +66,15 @@ export function PhotoGallery({ photos, name }: { photos: PerformerPhoto[]; name:
       <div className="flex flex-col gap-2">
         <div className="relative aspect-feature w-full overflow-hidden rounded-2xl border border-border bg-muted">
           {/* eslint-disable-next-line @next/next/no-img-element -- see above */}
-          <img
+          <RemoteImage
             src={current?.url}
             alt={current?.alt_text || name}
             className="size-full object-cover"
+            fallback={
+              <span className="flex size-full items-center justify-center px-card text-center text-body-sm text-muted-foreground">
+                This photo could not be loaded.
+              </span>
+            }
           />
           <button
             ref={openerRef}
@@ -109,7 +115,7 @@ export function PhotoGallery({ photos, name }: { photos: PerformerPhoto[]; name:
                   )}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element -- see above */}
-                  <img src={photo.url} alt="" className="size-full object-cover" />
+                  <RemoteImage src={photo.url} className="size-full object-cover" />
                 </button>
               </li>
             ))}
