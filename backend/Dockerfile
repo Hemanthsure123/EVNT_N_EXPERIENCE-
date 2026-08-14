@@ -24,8 +24,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# -- SECURITY UPGRADES, NOT JUST INSTALLS --------------------------------
+#
+# `apt-get upgrade` as well as `install`, because this layer is CACHED. A
+# build that changes only frontend files reuses it byte for byte, so the
+# image keeps whichever package versions were current the day the layer was
+# first built -- while Trivy's database keeps learning about them.
+#
+# That is exactly how CVE-2026-6473 failed a release: libpq5 17.10 was fine
+# when the layer was built, and had a fix (17.11) by the time the scan next
+# ran, on an image whose contents had not changed at all. `upgrade` means a
+# rebuild picks up security patches rather than pinning the past, and the
+# ARG is what makes a rebuild happen when nothing else here has moved.
+ARG APT_REFRESH=2026-08-14
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libpq5 curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 ARG INSTALL_EXTRAS="razorpay,push,observability,s3"
