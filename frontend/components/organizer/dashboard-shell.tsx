@@ -272,7 +272,11 @@ function Sidebar({
   );
 }
 
-function TopBar({
+// Exported ONLY so a test can render the signed-in header directly. Every
+// check that mattered here ran signed-OUT, where the shell short-circuits to
+// `SignedOut` and this bar never mounts — which is how a throw inside it
+// reached production looking like a healthy deploy.
+export function TopBar({
   onOpenDrawer,
   onOpenPalette,
   pathname,
@@ -349,10 +353,18 @@ function TopBar({
         </kbd>
       </Button>
 
-      {/* THE one filled control in this bar. */}
-      <Button asChild size="md" className="shrink-0 lg:h-control-sm">
-        <NotificationBell />
+      <NotificationBell />
 
+      {/* THE one filled control in this bar.
+          ── DO NOT PUT ANOTHER ELEMENT INSIDE THIS ────────────────────────
+          `asChild` renders through Radix `Slot`, which calls
+          `React.Children.only` — exactly one element child, or it THROWS.
+          The bell was briefly nested here and took the whole authenticated
+          dashboard down with it: unauthenticated visitors saw the sign-in
+          branch and never reached this line, so the screen looked fine to
+          every check that was not signed in. A sibling control goes beside
+          this Button, never within it. */}
+      <Button asChild size="md" className="shrink-0 lg:h-control-sm">
         <Link href="/dashboard/events/new" aria-label="Create event">
           <Plus className="size-4 shrink-0" aria-hidden />
           <span className="hidden sm:inline">Create event</span>
