@@ -708,8 +708,7 @@ function SessionField({
             ))}
           </select>
           <p className="text-caption text-muted-foreground">
-            Each session counts its own stock, so this tier can sell out without touching the
-            others.
+            Stock is counted per session.
           </p>
         </>
       )}

@@ -150,8 +150,7 @@ export function RefundRequestQueue({ scope = 'organizer' }: { scope?: Scope }) {
             <div className="flex max-w-md flex-col gap-1.5">
               <h2 className="text-body font-semibold text-foreground">Nothing waiting on you</h2>
               <p className="text-body-sm text-muted-foreground">
-                When a customer asks for a refund it appears here, with what they said, and you
-                decide. They are emailed either way.
+                Requests appear here for you to decide.
               </p>
             </div>
           </div>

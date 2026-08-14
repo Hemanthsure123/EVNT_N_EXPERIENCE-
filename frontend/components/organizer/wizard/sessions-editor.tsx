@@ -189,8 +189,7 @@ export function SessionsEditor({
               onChange={(event) => setEndsAt(event.target.value)}
             />
             <p className="text-caption text-muted-foreground">
-              Sets this session&apos;s own check-in window. Without it, the window closes a grace
-              period after the session starts.
+              Without one, the window closes a grace period after the session starts.
             </p>
           </div>
         </div>
@@ -207,8 +206,7 @@ export function SessionsEditor({
             placeholder="Matinee"
           />
           <p className="text-caption text-muted-foreground">
-            Optional. Name a session only when two start at the same time, such as a main
-            stage and a side stage.
+            Only needed when two sessions start at once — a main stage and a side stage.
           </p>
         </div>
 

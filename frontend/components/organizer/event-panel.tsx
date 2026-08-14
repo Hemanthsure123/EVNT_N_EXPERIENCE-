@@ -349,8 +349,7 @@ function ModerationBanner({ row }: { row: EventRow }) {
       <div className="flex items-start gap-2.5 border-b border-border bg-secondary px-card py-stack">
         <Clock className="mt-0.5 size-4 shrink-0 text-secondary-foreground" aria-hidden />
         <p className="text-body-sm text-secondary-foreground">
-          <span className="font-medium">Waiting for approval.</span> Our team reviews every event
-          before it goes on sale — usually the same day. It is not visible to attendees yet.
+          <span className="font-medium">Waiting for approval.</span> Not visible to attendees yet.
           {row.submitted_at
             ? ` Submitted ${new Date(row.submitted_at).toLocaleDateString('en-IN', {
                 day: 'numeric',

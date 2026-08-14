@@ -163,8 +163,7 @@ export function BookingInspector({
                   />
                 </dl>
                 <p className="text-caption text-muted-foreground">
-                  The payment reference is the provider&rsquo;s own id — quote it when contacting
-                  support about a charge.
+                  Quote this when contacting support about a charge.
                 </p>
               </section>
 

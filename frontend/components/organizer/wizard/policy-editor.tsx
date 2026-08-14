@@ -144,7 +144,7 @@ export function PolicyEditor({
         </Button>
         <p className="text-caption text-muted-foreground">
           {atCap
-            ? `That is the limit of ${MAX_POLICIES}. A page of rules is a document nobody reads.`
+            ? `${MAX_POLICIES} of ${MAX_POLICIES} — that is the limit.`
             : `${publishable} of ${MAX_POLICIES} will appear on the page.`}
         </p>
       </div>

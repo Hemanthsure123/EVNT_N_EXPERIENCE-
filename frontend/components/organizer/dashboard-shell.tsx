@@ -435,10 +435,6 @@ function SignedOut() {
     <div className="flex min-h-dvh items-center justify-center p-card-lg">
       <div className="flex max-w-md flex-col items-center gap-stack-lg text-center">
         <h1 className="text-h3">Sign in to your dashboard</h1>
-        <p className="text-body-sm text-muted-foreground">
-          The organizer dashboard shows your events, your bookings and your money, so it needs to
-          know who you are.
-        </p>
         <Button asChild size="md" className="mt-stack">
           <Link href="/sign-in?next=%2Fdashboard">Sign in</Link>
         </Button>

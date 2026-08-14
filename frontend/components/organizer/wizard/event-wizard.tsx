@@ -284,8 +284,7 @@ export function EventWizard() {
       <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
         <h1 className="text-h3">Could not load your organisations</h1>
         <p className="text-body-sm text-muted-foreground">
-          An event is created under an organization, so this list has to load first. Your
-          draft is safe on this device.
+          Your draft is safe on this device.
         </p>
         <Button
           onClick={() => void organizationsQuery.refetch()}
@@ -307,8 +306,7 @@ export function EventWizard() {
       <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
         <h1 className="text-h3">You need an organisation first</h1>
         <p className="text-body-sm text-muted-foreground">
-          Events belong to an organisation — it is what receives the payouts, so a ticket cannot be
-          sold without one.
+          It is what receives the payouts.
         </p>
         <Button asChild>
           <Link href="/dashboard">Back to the dashboard</Link>

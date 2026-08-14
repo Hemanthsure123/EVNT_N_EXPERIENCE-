@@ -353,8 +353,7 @@ export function CheckIn() {
                   </Button>
                 </div>
                 <p className="text-caption text-muted-foreground">
-                  Works with a USB or Bluetooth reader. The field re-focuses itself after
-                  every scan.
+                  Re-focuses itself after every scan.
                 </p>
               </form>
             </div>

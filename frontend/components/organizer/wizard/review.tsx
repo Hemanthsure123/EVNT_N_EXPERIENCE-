@@ -156,8 +156,7 @@ export function ReviewStep({
       <header className="flex flex-col gap-1.5">
         <h1 className="text-h3">Review and publish</h1>
         <p className="max-w-prose text-body-sm text-muted-foreground">
-          Publishing makes the event visible on the public site and opens ticket sales. You can keep
-          editing afterwards.
+          You can keep editing after it is published.
         </p>
       </header>
 
