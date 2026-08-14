@@ -281,6 +281,24 @@ export function VenueAutocomplete({
           </button>
           , or type the venue and city.
         </p>
+      ) : /* ── A REFUSED SEARCH IS NOT AN EMPTY ONE ──────────────────────
+            `suggestions.isError` was never read. `rows` falls back to `[]` on
+            failure, so a provider that REFUSES the request rendered exactly
+            like a query with no matches: an empty dropdown and no explanation.
+
+            That is the realistic failure here, not a hypothetical one. The
+            adapter calls Google's LEGACY Places endpoint
+            (`maps.googleapis.com/maps/api/place/...`), which Google does not
+            enable on projects created after early 2025 — such a key returns
+            `REQUEST_DENIED` on every keystroke while `/maps/config` still
+            answers `available: true`, because the key IS configured. Silent
+            emptiness would send somebody hunting through their key settings
+            for a fault that is in the API VERSION. */
+        suggestions.isError && debounced.trim().length >= 2 ? (
+        <p role="alert" className="text-caption text-destructive">
+          Venue search was refused by the maps provider. Type the venue and city
+          instead — everything else on this step works.
+        </p>
       ) : !mapsAvailable && !config.isPending ? (
         <p className="text-caption text-muted-foreground">
           Venue search is off for this site. Type the venue name and city.
