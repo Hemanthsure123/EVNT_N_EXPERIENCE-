@@ -215,3 +215,44 @@ export function Percent({ value }: { value: number | null | undefined }) {
   }
   return <>{value}%</>;
 }
+
+/**
+ * An event poster that degrades to its empty frame instead of to a broken icon.
+ *
+ * `<img src={url}>` with no error handling paints the browser's broken-image
+ * glyph whenever the URL 404s — which happens for real reasons here: a poster
+ * uploaded before the storage backend moved, an object removed from the bucket,
+ * or a `NEXT_PUBLIC_MEDIA_BASE_URL` that does not match the host actually
+ * serving the file. The row is not broken; one image is missing, and the two
+ * should not look the same.
+ *
+ * The failure is tracked BY URL rather than as a boolean, so a row whose poster
+ * is replaced retries the new one. A boolean would latch the placeholder for
+ * the life of the component and make a successful re-upload look like it failed.
+ */
+export function Poster({
+  url,
+  className,
+  fallback = null,
+}: {
+  url: string | null | undefined;
+  className?: string;
+  fallback?: React.ReactNode;
+}) {
+  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
+
+  if (!url || failedUrl === url) return <>{fallback}</>;
+
+  return (
+    /* eslint-disable-next-line @next/next/no-img-element -- a configurable
+       storage adapter's URL, not a host next/image can be told about at build
+       time. */
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      onError={() => setFailedUrl(url)}
+      className={className}
+    />
+  );
+}

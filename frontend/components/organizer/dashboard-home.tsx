@@ -8,7 +8,7 @@ import { formatMoney } from '@/lib/discovery/format';
 import { useEventRows, useSettlements } from '@/lib/organizer/queries';
 import { owedTotal } from '@/lib/organizer/attention';
 import type { EventRow } from '@/lib/api/organizer';
-import { EmptyState, ErrorState, Panel, Skeleton } from './primitives';
+import { EmptyState, ErrorState, Panel, Poster, Skeleton } from './primitives';
 import { ActivityFeed } from './activity-feed';
 import { TodayPanel } from './today-panel';
 import { StatusBadge } from './status-badge';
@@ -218,12 +218,7 @@ function UpcomingCard({ event }: { event: EventRow }) {
       className="group flex gap-3 rounded-xl border border-border bg-surface p-card shadow-sm transition-colors duration-fast hover:bg-muted motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="relative hidden size-16 shrink-0 overflow-hidden rounded-lg bg-muted sm:block">
-        {event.poster_url ? (
-          /* eslint-disable-next-line @next/next/no-img-element -- the URL comes
-             from a configurable storage adapter, not a host next/image can be
-             told about at build time. */
-          <img src={event.poster_url} alt="" className="size-full object-cover" />
-        ) : null}
+        <Poster url={event.poster_url} className="size-full object-cover" />
       </span>
 
       <span className="flex min-w-0 flex-1 flex-col gap-1">

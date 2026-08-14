@@ -59,15 +59,24 @@ export function NotificationBell() {
 
   return (
     <div ref={rootRef} className="relative">
+      {/* ── USE THE `icon` SIZE, DO NOT HAND-ROLL ONE ─────────────────────
+          This was `size="sm"` with `size-9 rounded-full p-0` layered on top.
+          `sm` carries `px-pill`, which is horizontal padding for a LABEL, and
+          fighting it with a fixed width and `p-0` produced a stretched empty
+          pill with the icon squeezed out of it — visible in production as a
+          blank capsule wearing an unread badge.
+
+          `size="icon"` exists for exactly this and is already square, already
+          unpadded, and already circular at the base `rounded-full`. */}
       <Button
         type="button"
         variant="outline"
-        size="sm"
+        size="icon"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={count ? `Notifications, ${count} needing attention` : 'Notifications'}
-        className="relative size-9 rounded-full p-0"
+        className="shrink-0 lg:size-control-sm"
       >
         <Bell className="size-4" aria-hidden />
         {count > 0 ? (

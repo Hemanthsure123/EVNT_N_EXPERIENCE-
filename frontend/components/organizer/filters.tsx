@@ -189,17 +189,6 @@ export function FilterCluster({
   );
 }
 
-/**
- * The seam between "what narrows the rows" and "what you do with them".
- *
- * Purely visual, and it is the cheapest way to stop a toolbar reading as an
- * undifferentiated strip of pills: a hairline, on wide screens only, where
- * wrapping would otherwise make it land mid-row.
- */
-export function ToolbarDivider() {
-  return <span className="hidden h-6 w-px shrink-0 bg-border lg:block" aria-hidden />;
-}
-
 export type SelectOption = { value: string; label: string };
 
 export function SelectFilter({

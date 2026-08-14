@@ -24,7 +24,7 @@ import { archiveEvent, publishEvent } from '@/lib/api/organizer-writes';
 import { ApiError } from '@/lib/api/errors';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
-import { EmptyState, ErrorState } from './primitives';
+import { EmptyState, ErrorState, Poster } from './primitives';
 import {
   BulkBar,
   ColumnChooser,
@@ -42,7 +42,6 @@ import {
   FilterCluster,
   SearchField,
   SelectFilter,
-  ToolbarDivider,
   presetRange,
   useUrlFilters,
   type DateRange,
@@ -263,7 +262,13 @@ export function EventsTable() {
           />
         </FilterCluster>
 
-        <ToolbarDivider />
+        {/* No divider between the two groups. One was tried here and the
+            screenshot killed it: the toolbar WRAPS, so a separator that was
+            meant to sit between filtering and acting landed at the far right
+            end of the filter row, reading as a stray tick rather than a seam.
+            A rule can only divide things that are reliably on the same line,
+            and nothing in a wrapping toolbar is. The row break itself is now
+            the separation. */}
 
         {/* `flex-wrap` here as well as on the toolbar: at 390px this group is
             wider than the card, and an inner nowrap row is exactly how a
@@ -539,15 +544,15 @@ function EventCards({
               )}
             >
               <div className="relative aspect-card w-full bg-muted">
-                {row.poster_url ? (
-                  /* eslint-disable-next-line @next/next/no-img-element -- a
-                     configurable storage adapter's URL, not a build-time host. */
-                  <img src={row.poster_url} alt="" className="size-full object-cover" />
-                ) : (
-                  <span className="flex size-full items-center justify-center text-caption text-muted-foreground">
-                    No cover image
-                  </span>
-                )}
+                <Poster
+                  url={row.poster_url}
+                  className="size-full object-cover"
+                  fallback={
+                    <span className="flex size-full items-center justify-center text-caption text-muted-foreground">
+                      No cover image
+                    </span>
+                  }
+                />
 
                 <label className="absolute left-2 top-2 inline-flex cursor-pointer items-center rounded-md bg-surface/90 p-1.5 backdrop-blur">
                   <input
@@ -685,10 +690,7 @@ const COLUMNS: ColumnDef<EventRow>[] = [
     render: (row) => (
       <span className="flex min-w-0 items-center gap-2.5">
         <span className="relative hidden size-8 shrink-0 overflow-hidden rounded-md bg-muted sm:block">
-          {row.poster_url ? (
-            /* eslint-disable-next-line @next/next/no-img-element -- see above */
-            <img src={row.poster_url} alt="" className="size-full object-cover" />
-          ) : null}
+          <Poster url={row.poster_url} className="size-full object-cover" />
         </span>
         <span className="truncate font-medium">{row.title}</span>
       </span>
