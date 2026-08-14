@@ -22,6 +22,7 @@ import {
 } from './data-table';
 import {
   DateRangeFilter,
+  FilterCluster,
   FilterChips,
   SearchField,
   SelectFilter,
@@ -191,30 +192,35 @@ export function BookingsTable() {
           label="Search bookings"
         />
 
-        <SelectFilter
-          value={values.status}
-          onChange={(status) => set({ status })}
-          options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
-          label="Filter by status"
-        />
+        {/* Same grouping as the events table: search stays visible because it
+            is how people actually find a booking, and the three narrowing
+            controls collapse behind one button on a phone. */}
+        <FilterCluster count={chips.filter((chip) => chip.key !== 'q').length}>
+          <SelectFilter
+            value={values.status}
+            onChange={(status) => set({ status })}
+            options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
+            label="Filter by status"
+          />
 
-        <SelectFilter
-          value={values.event_id}
-          onChange={(event_id) => set({ event_id })}
-          options={[
-            { value: '', label: 'All events' },
-            ...events.map((event) => ({ value: event.id, label: event.title })),
-          ]}
-          label="Filter by event"
-        />
+          <SelectFilter
+            value={values.event_id}
+            onChange={(event_id) => set({ event_id })}
+            options={[
+              { value: '', label: 'All events' },
+              ...events.map((event) => ({ value: event.id, label: event.title })),
+            ]}
+            label="Filter by event"
+          />
 
-        <DateRangeFilter
-          preset={values.preset}
-          onPreset={(preset) => set({ preset })}
-          custom={{ from: values.from, to: values.to }}
-          onCustom={(next) => set({ from: next.from, to: next.to })}
-          label="Booked"
-        />
+          <DateRangeFilter
+            preset={values.preset}
+            onPreset={(preset) => set({ preset })}
+            custom={{ from: values.from, to: values.to }}
+            onCustom={(next) => set({ from: next.from, to: next.to })}
+            label="Booked"
+          />
+        </FilterCluster>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <ColumnChooser table={table} />

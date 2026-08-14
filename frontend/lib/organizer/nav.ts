@@ -64,7 +64,12 @@ export const ORGANIZER_SECTIONS: OrganizerSection[] = [
     href: '/dashboard/events/new',
     label: 'Create event',
     icon: CalendarPlus,
-    hint: 'Six steps, saved as you type',
+    // EIGHT. The wizard is basics, venue, schedule, tickets, media, details,
+    // search, review — `STEPS` in `wizard/model.ts`, and a test pins this
+    // string to its length. It said six, which is the count from before search
+    // and details were added: the sidebar and the ⌘K palette both promised a
+    // shorter job than the form actually is.
+    hint: 'Eight steps, saved as you type',
   },
   {
     href: '/dashboard/bookings',
