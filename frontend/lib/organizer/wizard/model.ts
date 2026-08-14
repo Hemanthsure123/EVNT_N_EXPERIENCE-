@@ -737,6 +737,31 @@ export function stepStatus(
 }
 
 /** 0–100, weighted by the steps that actually gate a publish. */
+/**
+ * How close this draft is to being SUBMITTABLE — which is the only thing a
+ * progress bar on this form can honestly mean.
+ *
+ * ── IT USED TO DISAGREE WITH THE SUBMIT BUTTON, IN BOTH DIRECTIONS ────────
+ *
+ * The old list was six hand-written field checks that had drifted from the
+ * rules the form actually enforces:
+ *
+ *   - It counted `posterUrl`, which is RECOMMENDED and not required. A
+ *     perfectly publishable event with no cover sat at 83% forever, so the bar
+ *     under-reported work that was finished.
+ *   - It ignored `validate()` completely. A tier with an unnamed pricing phase,
+ *     a phase priced at ₹0, a start time in the past — none of it registered,
+ *     so the bar read 100% while "Submit for approval" was disabled with four
+ *     things to fix beneath it. A progress meter that says done next to a
+ *     control that says no is worse than no meter: it makes somebody hunt for a
+ *     fault in the button.
+ *
+ * So the last check is now "nothing is refused" rather than "has a picture",
+ * and 100% means exactly what the reader assumes: press Submit and it goes.
+ * The four field checks stay separate from it so the bar still MOVES while an
+ * empty form is filled in — collapsing everything into `validate` would leave
+ * it at 0% until the very last keystroke, which is not progress, it is a light.
+ */
 export function completion(draft: Draft): number {
   const checks = [
     Boolean(draft.title.trim()),
@@ -744,7 +769,9 @@ export function completion(draft: Draft): number {
     Boolean(draft.city.trim()),
     Boolean(draft.startsAt),
     draft.tiers.length > 0,
-    Boolean(draft.posterUrl),
+    // The gate itself. `validate` is what disables Submit, so the bar cannot
+    // reach 100 while it has anything to say.
+    validate(draft).length === 0,
   ];
   return Math.round((checks.filter(Boolean).length / checks.length) * 100);
 }

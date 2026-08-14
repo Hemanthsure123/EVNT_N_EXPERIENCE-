@@ -144,6 +144,9 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
   /* ── restore ──────────────────────────────────────────────────────── */
 
   const storageKey = userId ? draftStorageKey(userId) : null;
+  /** Set once this draft is done with (published, submitted, or reset), so the
+   *  persist effect stops re-creating what `clearStored` just removed. */
+  const finished = React.useRef(false);
   /** Which key the draft in state came from, so the pass below runs once per
    *  account rather than on every render — and runs AGAIN if the account
    *  changes in this tab, which is what loads that person's own draft. */
@@ -153,6 +156,11 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
     if (!ready || !storageKey) return;
     if (restoredFor.current === storageKey) return;
     restoredFor.current = storageKey;
+    // A fresh mount of the wizard is a fresh draft's life, even when the user
+    // never left the app — otherwise navigating away after a publish and back
+    // to /new would land on a component whose guard is still tripped and which
+    // therefore saves nothing at all.
+    finished.current = false;
 
     let stored: Partial<Draft> | null = null;
     try {
@@ -184,7 +192,19 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
   }, [ready, storageKey, organizationIds]);
 
   React.useEffect(() => {
-    if (!hydrated || !storageKey) return;
+    // ── A FINISHED DRAFT MUST NOT WRITE ITSELF BACK ────────────────────────
+    //
+    // `publish()` did `commit(...)` and then `clearStored()`. `commit` is a
+    // setState, so React re-rendered AFTER the removeItem and this effect put
+    // the whole draft straight back into localStorage. The clear was real and
+    // instantly undone.
+    //
+    // The symptom was that opening Create Event again — after publishing, after
+    // submitting, or after simply going Back — reopened the finished event's
+    // values instead of a blank form, permanently, with no way to get a clean
+    // one. `finished` is checked here because the guard has to outlive the
+    // render that trips it, which a piece of state cannot.
+    if (!hydrated || !storageKey || finished.current) return;
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(draft));
     } catch {
@@ -434,6 +454,7 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
 
   const clearStored = React.useCallback(() => {
     if (!storageKey) return;
+    finished.current = true;
     try {
       window.localStorage.removeItem(storageKey);
     } catch {
@@ -472,6 +493,10 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
     setState('local');
     setSavedAt(null);
     clearStored();
+    // `reset` means "start a NEW event here", so persistence resumes — unlike
+    // publish/submit, where the form is finished and the user is navigating
+    // away. Set after `clearStored`, which trips the flag.
+    finished.current = false;
   }, [commit, clearStored, organizationIds]);
 
   React.useEffect(

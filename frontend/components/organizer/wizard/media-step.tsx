@@ -903,6 +903,15 @@ function MediaTile({
             </span>
           }
         />
+        {/* The kind moved out of the caption and onto the picture. A tile was
+            four stacked bands -- image, kind, alt, controls -- for what is one
+            photograph, and a gallery of them read as a list of cards rather
+            than as a gallery. */}
+        {media.kind !== 'hero' ? (
+          <span className="absolute right-2 top-2 rounded-full bg-overlay/85 px-2 py-0.5 text-caption text-on-gradient backdrop-blur-glass">
+            {KIND_LABEL[media.kind]}
+          </span>
+        ) : null}
         {media.kind === 'hero' ? (
           // A scrim pill, not a brand fill: what is behind it is an arbitrary
           // photograph, so the contrast has to come from the scrim. `--overlay`
@@ -916,7 +925,6 @@ function MediaTile({
       </div>
 
       <figcaption className="flex min-w-0 flex-1 flex-col gap-1.5 p-card">
-        <p className="truncate text-caption text-muted-foreground">{KIND_LABEL[media.kind]}</p>
 
         {/* Alt text is edited IN PLACE. It used to be fixed at upload, so a
             typo cost a delete and a re-upload of the same bytes — which is
@@ -942,7 +950,7 @@ function MediaTile({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="line-clamp-2 rounded-sm text-left text-body-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="line-clamp-2 min-w-0 rounded-sm text-left text-body-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {media.alt_text}
           </button>
@@ -951,7 +959,7 @@ function MediaTile({
         {/* Armed, Keep comes FIRST. The safe way out is the one under the
             pointer that just pressed the trash icon; the irreversible one is
             the one you have to travel to. */}
-        <div className="mt-auto flex items-center gap-1 pt-stack">
+        <div className="mt-auto flex items-center justify-end gap-1 pt-stack">
           {/* Up/down rather than drag: the grid is two or three columns at
               different widths, so "up" is not a fixed direction on screen —
               and a drag handle is unusable by keyboard without reimplementing

@@ -386,7 +386,8 @@ describe('priceSummary', () => {
 describe('completion', () => {
   it('is 0 for an empty draft and 100 once every field is filled', () => {
     expect(completion(emptyDraft(''))).toBe(0);
-    expect(completion(draftWith({ tiers: [tierWith()], posterUrl: 'blob:x' }))).toBe(100);
+    // (was: a draft with only tiers + a cover counted as 100%, which is how
+    //  the bar came to disagree with the Submit button. See the suite below.)
   });
 });
 
@@ -543,5 +544,47 @@ describe('restoreDraft and the pending cover', () => {
 
   it('treats an absent poster as empty rather than undefined', () => {
     expect(restoreDraft({}, []).posterUrl).toBe('');
+  });
+});
+
+describe('completion agrees with the submit gate', () => {
+  const publishable = () =>
+    draftWith({
+      organizationId: 'org-1',
+      title: 'Night',
+      venue: 'Arena',
+      city: 'Pune',
+      startsAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      tiers: [tierWith({ name: 'GA', price: '499', quantity: '100' })],
+    });
+
+  it('reaches 100% with no cover image, because a cover is not required', () => {
+    // It used to count `posterUrl`, so a perfectly publishable event sat at
+    // 83% forever and the bar under-reported finished work.
+    const draft = publishable();
+    expect(validate(draft)).toHaveLength(0);
+    expect(draft.posterUrl).toBe('');
+    expect(completion(draft)).toBe(100);
+  });
+
+  it('never reads 100% while anything would be refused', () => {
+    // The reported bug: the bar said 100% while "Submit for approval" was
+    // disabled with things to fix under it. A meter that says done beside a
+    // control that says no sends somebody hunting for a fault in the button.
+    const draft = draftWith({
+      ...publishable(),
+      startsAt: new Date(Date.now() - 86_400_000).toISOString(), // in the past
+    });
+    expect(validate(draft).length).toBeGreaterThan(0);
+    expect(completion(draft)).toBeLessThan(100);
+  });
+
+  it('still moves while an empty form is being filled in', () => {
+    // Collapsing everything into `validate` would leave it at 0% until the
+    // last keystroke — that is a light, not progress.
+    expect(completion(emptyDraft(''))).toBe(0);
+    const partial = draftWith({ title: 'Night', venue: 'Arena' });
+    expect(completion(partial)).toBeGreaterThan(0);
+    expect(completion(partial)).toBeLessThan(100);
   });
 });
