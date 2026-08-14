@@ -112,6 +112,7 @@ export function EmptyState({
   body,
   action,
   icon: Icon,
+  scene: Scene = SceneNothingYet,
 }: {
   title: string;
   body: string;
@@ -131,6 +132,20 @@ export function EmptyState({
    * instead of it, and no caller had to change.
    */
   icon?: React.ComponentType<{ className?: string }>;
+  /**
+   * A SUBJECT-SPECIFIC drawing, replacing the generic "nothing yet" scene.
+   *
+   * `spots.tsx` holds a dozen of these — a payout, a ticket, a refund, a
+   * listing — and until now the organizer surface used none of them: every
+   * empty list on every screen showed the same calendar with a different 14px
+   * badge on it. Where a drawing of the actual subject exists, it says more
+   * than a badge can, so the caller names it.
+   *
+   * Still optional, and the generic scene remains the default, because a list
+   * with no matching drawing should not get an unrelated one just to have a
+   * picture.
+   */
+  scene?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     // Deliberately tighter than the consumer site's empty states. This is a
@@ -141,8 +156,10 @@ export function EmptyState({
           waiting to be filled, not searches that failed, and the two scenes
           are drawn differently on purpose. */}
       <span className="relative inline-flex" aria-hidden>
-        <SceneNothingYet className="h-20" />
-        {Icon ? (
+        <Scene className="h-20" />
+        {/* The badge is redundant once the scene IS the subject -- a ticket
+            drawing wearing a tiny ticket glyph is the same word twice. */}
+        {Icon && Scene === SceneNothingYet ? (
           // Sits on the scene's lower-right, on a surface chip so it reads as
           // a label on the picture rather than a shape floating in it.
           <span className="absolute -bottom-1 -right-1 inline-flex size-7 items-center justify-center rounded-full border border-border bg-surface shadow-sm">

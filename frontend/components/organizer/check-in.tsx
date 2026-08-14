@@ -9,7 +9,6 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
-  QrCode,
   Volume2,
   VolumeX,
   WifiOff,
@@ -24,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils/cn';
 import { Gauge } from './charts';
 import { EmptyState, ErrorState, Panel, Skeleton } from './primitives';
+import { SpotTicket } from '@/components/illustrations/spots';
 
 /**
  * The gate.
@@ -239,7 +239,7 @@ export function CheckIn() {
     return (
       <div className="rounded-xl border border-border bg-surface">
         <EmptyState
-          icon={QrCode}
+          scene={SpotTicket}
           title="No published events to scan for"
           body="The scanner needs a live event. Publish one and it appears in the selector here."
         />

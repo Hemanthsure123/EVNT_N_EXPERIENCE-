@@ -17,6 +17,7 @@ import type { SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { missingForSave } from './details-step';
+import { SpotTicketIssued } from '@/components/illustrations/spots';
 
 /**
  * Review and publish.
@@ -153,7 +154,12 @@ export function ReviewStep({
 
   return (
     <div className="flex flex-col gap-block">
-      <header className="flex flex-col gap-1.5">
+      {/* The last step, and the only one that is a MOMENT rather than a form.
+          Everything before it is data entry; this is where an organizer sends
+          their event to the world, so it gets the one drawing in the wizard
+          chrome. */}
+      <header className="flex flex-col items-start gap-1.5">
+        <SpotTicketIssued className="size-20" />
         <h1 className="text-h3">Review and publish</h1>
         <p className="max-w-prose text-body-sm text-muted-foreground">
           You can keep editing after it is published.

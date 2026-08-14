@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Loader2, Wallet } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatMoney } from '@/lib/discovery/format';
 import type { OrganizerSettlement, SettlementStatus } from '@/lib/api/organizer';
@@ -10,6 +10,7 @@ import { useSettlements } from '@/lib/organizer/queries';
 import { cn } from '@/lib/utils/cn';
 import { TOOLBAR_CONTROL } from './data-table';
 import { EmptyState, ErrorState, Panel, Skeleton, StatusPill, type Tone } from './primitives';
+import { SpotPayout } from '@/components/illustrations/spots';
 
 /**
  * Payouts.
@@ -122,7 +123,7 @@ export function Payouts() {
           </div>
         ) : rows.length === 0 ? (
           <EmptyState
-            icon={Wallet}
+            scene={SpotPayout}
             title="No payouts yet"
             body="Created once an event starts selling. Releases after the event ends and its refund window closes."
             action={

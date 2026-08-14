@@ -21,6 +21,8 @@ import { useScope } from '@/lib/identity/scope';
 import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib/organizer/nav';
 import { useSidebar } from '@/lib/organizer/use-sidebar';
 import { BrandMark } from '@/components/shell/brand-mark';
+import { SceneWelcome } from '@/components/illustrations/onboarding-scenes';
+import { SpotListing } from '@/components/illustrations/spots';
 import { cn } from '@/lib/utils/cn';
 import { NotificationBell } from './notification-bell';
 import { OrganizerPalette } from './command-palette';
@@ -434,6 +436,10 @@ function SignedOut() {
   return (
     <div className="flex min-h-dvh items-center justify-center p-card-lg">
       <div className="flex max-w-md flex-col items-center gap-stack-lg text-center">
+        {/* A full viewport holding one heading and one button is the clearest
+            place in the product for a drawing: nothing is competing with it,
+            and it is the first thing an organizer sees. */}
+        <SceneWelcome className="h-32" />
         <h1 className="text-h3">Sign in to your dashboard</h1>
         <Button asChild size="md" className="mt-stack">
           <Link href="/sign-in?next=%2Fdashboard">Sign in</Link>
@@ -456,11 +462,11 @@ function AwaitingApproval({ hasOrganization }: { hasOrganization: boolean }) {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background px-card-lg">
       <div className="flex max-w-md flex-col items-center gap-stack-lg text-center">
-        {/* The one place violet fills a shape in this shell, and it is a
-            status medallion rather than a control. */}
-        <span className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Loader2 className="size-6 animate-spin motion-reduce:animate-none" aria-hidden />
-        </span>
+        {/* The spinner medallion that used to sit here implied something was
+            LOADING. Nothing is: a human reviews this, over hours or days, and
+            an animation that suggests otherwise makes people refresh. The
+            drawing says "waiting" without claiming progress. */}
+        <SpotListing className="size-28" />
         <h1 className="text-h3">
           {hasOrganization ? 'Your application is with our team' : 'Set up your organization first'}
         </h1>

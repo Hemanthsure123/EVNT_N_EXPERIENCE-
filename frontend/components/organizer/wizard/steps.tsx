@@ -403,7 +403,7 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
             <TimelineRow
               label="Doors and check-in open"
               value={new Date(starts.getTime() - 60 * 60_000).toLocaleString('en-IN', TIME_FORMAT)}
-              note="One hour before, from CHECKIN_WINDOW_OPENS_BEFORE_MINUTES"
+              note="One hour before doors"
             />
             <TimelineRow
               label="Event starts"
@@ -420,7 +420,7 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
             <TimelineRow
               label="Payout releases"
               value="After the event ends, plus the refund window"
-              note="settlements releases the on-hold transfer then, not before"
+              note="Not before — the money is held until then"
             />
           </ol>
         </div>
