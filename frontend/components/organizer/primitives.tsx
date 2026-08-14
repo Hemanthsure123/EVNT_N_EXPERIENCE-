@@ -251,10 +251,18 @@ export function Poster({
   url,
   className,
   fallback = null,
+  alt = '',
 }: {
   url: string | null | undefined;
   className?: string;
   fallback?: React.ReactNode;
+  /**
+   * Empty by default, which is correct for a thumbnail sitting beside a title
+   * that already names the event — announcing it twice is noise. A GALLERY
+   * image is different: its alt text is content the organizer wrote and the
+   * API refuses an upload without, so those callers pass it.
+   */
+  alt?: string;
 }) {
   const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
 
@@ -266,7 +274,7 @@ export function Poster({
        time. */
     <img
       src={url}
-      alt=""
+      alt={alt}
       loading="lazy"
       onError={() => setFailedUrl(url)}
       className={className}

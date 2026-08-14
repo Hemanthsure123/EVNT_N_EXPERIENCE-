@@ -11,6 +11,7 @@ import {
 import { formatEventDateLong } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
 import { StepHeader, TextArea, TextField } from './fields';
+import { Poster } from '@/components/organizer/primitives';
 
 /**
  * How the event appears in search results and in a shared link.
@@ -185,22 +186,29 @@ function SharePreview({
         Shared as a link
       </figcaption>
       <div className="max-w-sm overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-        {posterUrl ? (
-          /* eslint-disable-next-line @next/next/no-img-element -- a blob: URL
-             while the cover is still local, and a storage-adapter URL after;
-             neither is a host next/image can be configured for. */
-          <img src={posterUrl} alt="" className="aspect-card w-full object-cover" />
-        ) : (
-          <div
-            className={cn(
-              'flex aspect-card w-full items-center justify-center bg-muted px-card text-center',
-            )}
-          >
-            <p className="text-caption text-muted-foreground">
-              No cover image — a link with no picture gets markedly fewer clicks.
-            </p>
-          </div>
-        )}
+        {/* ── A DEAD COVER URL MUST NOT LOOK LIKE A BROKEN PREVIEW ────────
+            This was a bare `<img>`, so a poster whose object is missing from
+            the bucket painted the browser's broken-image glyph INSIDE a card
+            whose whole job is showing what a shared link will look like. An
+            organizer reads that as "sharing is broken", not "one file is
+            gone". `Poster` falls back to the same no-cover panel used when
+            there is no poster at all, which is the truthful reading: the
+            share card will have no picture. */}
+        <Poster
+          url={posterUrl}
+          className="aspect-card w-full object-cover"
+          fallback={
+            <div
+              className={cn(
+                'flex aspect-card w-full items-center justify-center bg-muted px-card text-center',
+              )}
+            >
+              <p className="text-caption text-muted-foreground">
+                No cover image — a link with no picture gets markedly fewer clicks.
+              </p>
+            </div>
+          }
+        />
         <div className="flex flex-col gap-0.5 border-t border-border p-card">
           <p className="text-caption uppercase tracking-wide text-muted-foreground">
             curatix.in{city ? ` · ${city}` : ''}

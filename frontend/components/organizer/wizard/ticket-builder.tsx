@@ -477,7 +477,12 @@ function PhaseEditor({
                   // A suggestion, not a default: the placeholder is what most
                   // organizers call these, and it disappears the moment they
                   // call theirs something else.
-                  placeholder={index === 0 ? 'Early bird' : `Phase ${index}`}
+                  //
+                  // `index + 1`, not `index`. The panel above this field is
+                  // headed "Phase 2 of 2" while the field suggested "Phase 1",
+                  // which reads as the form disagreeing with itself about
+                  // which row you are editing.
+                  placeholder={index === 0 ? 'Early bird' : `Phase ${index + 1}`}
                   hint="Buyers see this on the ticket and on their order."
                 />
                 <Field

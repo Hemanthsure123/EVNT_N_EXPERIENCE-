@@ -32,6 +32,7 @@ import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { Section, StepHeader, type DraftSave } from './fields';
 import { missingForSave } from './details-step';
+import { Poster } from '@/components/organizer/primitives';
 
 /**
  * The media step — real uploads against `POST /events/{id}/media/upload`.
@@ -695,13 +696,15 @@ function CoverUploader({
         {draft.posterUrl ? (
           <>
             <div className="w-full max-w-md overflow-hidden rounded-lg border border-border">
-              {/* eslint-disable-next-line @next/next/no-img-element -- a blob:
-                  URL until the save lands, then a storage-adapter URL; neither
-                  is a host next/image can be configured for. */}
-              <img
-                src={draft.posterUrl}
+              <Poster
+                url={draft.posterUrl}
                 alt="Cover preview"
                 className="aspect-card w-full object-cover"
+                fallback={
+                  <p className="flex aspect-card w-full items-center justify-center bg-muted px-card text-center text-caption text-muted-foreground">
+                    This cover could not be loaded. Upload it again.
+                  </p>
+                }
               />
             </div>
             <div className="flex flex-wrap items-center justify-center gap-stack">
@@ -890,10 +893,16 @@ function MediaTile({
   return (
     <figure className="group flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
       <div className="relative aspect-card w-full bg-muted">
-        {/* eslint-disable-next-line @next/next/no-img-element -- the URL comes
-            from a configurable storage adapter, so it is not a host next/image
-            can be told about at build time. */}
-        <img src={media.url} alt={media.alt_text} className="size-full object-cover" />
+        <Poster
+          url={media.url}
+          alt={media.alt_text}
+          className="size-full object-cover"
+          fallback={
+            <span className="flex size-full items-center justify-center px-2 text-center text-caption text-muted-foreground">
+              Image unavailable
+            </span>
+          }
+        />
         {media.kind === 'hero' ? (
           // A scrim pill, not a brand fill: what is behind it is an arbitrary
           // photograph, so the contrast has to come from the scrim. `--overlay`

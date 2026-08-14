@@ -421,7 +421,11 @@ export function phaseIssues(tier: DraftTier): string[] {
   tier.phases.forEach((phase, index) => {
     const label = phase.name.trim() || `Phase ${index + 1}`;
     if (!phase.name.trim()) {
-      problems.push(`${where}: phase ${index + 1} needs a name.`);
+      // `label` already falls back to `Phase N`, so this uses it like every
+      // other message here. It previously said `phase 2 needs a name.` beside
+      // `"Phase 2" needs a price above ₹0.` -- two conventions in one list,
+      // which reads as two different things being wrong.
+      problems.push(`${where}: "${label}" needs a name.`);
     } else if (phase.name.length > PHASE_NAME_MAX) {
       problems.push(`${where}: "${label}" is capped at ${PHASE_NAME_MAX} characters.`);
     }
