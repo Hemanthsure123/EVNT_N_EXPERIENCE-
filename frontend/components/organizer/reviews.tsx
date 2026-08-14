@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
 import { useEventRows, useReviews } from '@/lib/organizer/queries';
 import { ErrorState, Panel, Skeleton } from './primitives';
+import { BarList } from './charts';
 import { TableToolbar } from './data-table';
 import { SelectFilter } from './filters';
 
@@ -45,6 +46,21 @@ export function Reviews() {
     ? rows.reduce((sum, row) => sum + row.rating, 0) / rows.length
     : null;
 
+  // Five fixed buckets, always all five. A distribution that omits the ratings
+  // nobody gave draws a different shape than the one the data has — "no 1-stars"
+  // is the most reassuring fact on this screen and it has to be visible as an
+  // empty row, not as a missing one.
+  const distribution = React.useMemo(
+    () =>
+      [5, 4, 3, 2, 1].map((star) => ({
+        label: `${star}`,
+        value: rows.filter((row) => row.rating === star).length,
+      })),
+    [rows],
+  );
+
+  const verified = rows.filter((row) => row.verified_attendee).length;
+
   return (
     <div className="flex flex-col gap-block">
       <TableToolbar>
@@ -57,17 +73,40 @@ export function Reviews() {
           ]}
           label="Filter by event"
         />
-
-        {average !== null ? (
-          <div className="ml-auto flex items-baseline gap-2">
-            <Stars value={Math.round(average)} />
-            <span className="tabular-nums text-body-sm text-foreground">{average.toFixed(1)}</span>
-            <span className="text-caption text-muted-foreground">
-              across {rows.length} loaded
-            </span>
-          </div>
-        ) : null}
       </TableToolbar>
+
+      {/* ── THE SUMMARY IS A CHART, NOT A SENTENCE ────────────────────────
+          A mean on its own is the least informative thing a review set can
+          say: 4.0 is a room of contented people or a fight between fives and
+          ones, and an organizer needs to tell those apart before reading a
+          word. The distribution answers it at a glance, and the mean sits
+          beside it rather than standing in for it.
+
+          Every figure is scoped to the rows LOADED — the endpoint is
+          cursor-paginated with no aggregate, so a total would be invented.
+          That scope is stated once, here, instead of on each number. */}
+      {average !== null ? (
+        <section className="grid gap-block rounded-xl border border-border bg-surface p-card shadow-sm sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-block-lg">
+          <div className="flex flex-col justify-center gap-1">
+            <p className="text-h2 tabular-nums leading-none text-foreground">
+              {average.toFixed(1)}
+            </p>
+            <Stars value={Math.round(average)} />
+            <p className="text-caption text-muted-foreground">
+              {rows.length} review{rows.length === 1 ? '' : 's'} loaded
+              {verified > 0 ? ` · ${verified} attended` : ''}
+            </p>
+          </div>
+
+          <div className="min-w-0">
+            <BarList
+              items={distribution}
+              format={(value) => String(value)}
+              emptyLabel="No ratings yet."
+            />
+          </div>
+        </section>
+      ) : null}
 
       <Panel title="Reviews" className="overflow-hidden">
         {query.isError ? (
