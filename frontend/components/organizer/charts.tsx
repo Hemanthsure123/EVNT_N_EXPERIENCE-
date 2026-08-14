@@ -132,6 +132,21 @@ function humanise(label: string): string {
   return label.replace(/_/g, ' ');
 }
 
+/**
+ * `2026-08-01` -> `1 Aug`.
+ *
+ * Parsed as a UTC instant and printed in UTC. These are DATE strings the API
+ * has already bucketed into IST days; re-reading one in the browser's local
+ * zone would shift a westward viewer's label back a day and label the series
+ * with dates the server never sent.
+ */
+function shortDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const parsed = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf())) return iso;
+  return parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
 /* ------------------------------------------------------------------ trend */
 
 // Plot geometry, in user units. The SVG is stretched to its container
@@ -259,9 +274,15 @@ export function TrendLine({
         ))}
       </svg>
 
+      {/* The window's ends, as a person would say them. These printed the raw
+          API strings — "2026-08-01" — which is a machine format on the one
+          screen an organizer opens every morning. `<time>` keeps the ISO value
+          machine-readable in `dateTime` while the human reads "1 Aug". */}
       <div className="flex items-baseline justify-between gap-3 text-caption tabular-nums text-muted-foreground">
-        <span>{points[0]?.date}</span>
-        <span>{points[points.length - 1]?.date}</span>
+        <time dateTime={points[0]?.date}>{shortDate(points[0]?.date)}</time>
+        <time dateTime={points[points.length - 1]?.date}>
+          {shortDate(points[points.length - 1]?.date)}
+        </time>
       </div>
 
       <SeriesTable

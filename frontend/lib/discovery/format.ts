@@ -64,6 +64,36 @@ export function formatDateParts(iso: string): { day: string; month: string } {
 const RUPEES = '₹';
 
 /**
+ * Rupees from minor units, with paise shown as TWO digits or not at all.
+ *
+ * ── WHY NOT `Number(x.toFixed(2)).toLocaleString()` ───────────────────────
+ *
+ * That was the old body, and it printed a settlement of 60980 paise as
+ * "₹609.8". `toFixed(2)` produces the string "609.80", wrapping it in
+ * `Number()` parses it straight back to the number 609.8, and the trailing zero
+ * is gone before `toLocaleString` ever sees it. Money with one decimal place is
+ * not a rounding nicety -- it reads as a typo on the one screen where an
+ * organizer is checking what they are owed.
+ *
+ * Whole rupees stay whole: a ₹500 ticket is "₹500", not "₹500.00". The choice is
+ * made from the VALUE, and the digit count is then pinned at both ends so
+ * `toLocaleString` cannot drop it again.
+ */
+function rupees(minorUnits: number): string {
+  const value = minorUnits / 100;
+  const digits = Number.isInteger(value) ? 0 : 2;
+  // The sign goes OUTSIDE the symbol. Prepending "₹" to an already-signed
+  // number gave "₹-609.80"; a settlement `net` is a signed integer (refunds can
+  // exceed captures), so this is reachable on the payouts screen rather than
+  // theoretical.
+  const sign = value < 0 ? '-' : '';
+  return `${sign}${RUPEES}${Math.abs(value).toLocaleString(LOCALE, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}`;
+}
+
+/**
  * "from ₹499" pricing. `null` means ticketing hasn't populated the denormal yet
  * (the backend column is nullable), which is NOT the same as free — so it
  * returns null and the card simply omits the price.
@@ -71,9 +101,7 @@ const RUPEES = '₹';
 export function formatFromPrice(minorUnits: number | null | undefined): string | null {
   if (minorUnits === null || minorUnits === undefined) return null;
   if (minorUnits === 0) return 'Free';
-  const rupees = minorUnits / 100;
-  const rounded = Number.isInteger(rupees) ? rupees : Number(rupees.toFixed(2));
-  return `${RUPEES}${rounded.toLocaleString(LOCALE)}`;
+  return rupees(minorUnits);
 }
 
 /**
@@ -86,9 +114,7 @@ export function formatFromPrice(minorUnits: number | null | undefined): string |
  */
 export function formatMoney(minorUnits: number | null | undefined): string {
   if (minorUnits === null || minorUnits === undefined) return '—';
-  const rupees = minorUnits / 100;
-  const rounded = Number.isInteger(rupees) ? rupees : Number(rupees.toFixed(2));
-  return `${RUPEES}${rounded.toLocaleString(LOCALE)}`;
+  return rupees(minorUnits);
 }
 
 /** The `datetime` attribute for a <time> element. */

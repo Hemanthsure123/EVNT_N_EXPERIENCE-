@@ -115,9 +115,10 @@ export function TodayPanel() {
             <p className="text-h2 tabular-nums leading-none text-foreground">{headline ?? '—'}</p>
           )}
           {overview.isPending ? null : <Delta change={change} />}
-          <p className="text-caption text-muted-foreground">
-            {active.label} booked today, against the same hours yesterday
-          </p>
+          {/* No caption here. It read "Revenue booked today, against the same
+              hours yesterday" — directly under a heading that says "Today", a
+              control that says "Revenue" and a delta that says "vs yesterday".
+              Three restatements of the same sentence, wrapping to two lines. */}
         </div>
 
         <div className="min-w-0">
