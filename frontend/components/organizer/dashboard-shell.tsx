@@ -23,7 +23,6 @@ import { useSidebar } from '@/lib/organizer/use-sidebar';
 import { BrandMark } from '@/components/shell/brand-mark';
 import { cn } from '@/lib/utils/cn';
 import { NotificationBell } from './notification-bell';
-import { useAttentionBadge } from './attention-panel';
 import { OrganizerPalette } from './command-palette';
 
 /**
@@ -238,7 +237,6 @@ function Sidebar({
                         five sections at once is a badge nobody reads, and one
                         that counts "for information" items would never reach
                         zero — which is how people learn to ignore it. */}
-                    {section.href === '/dashboard' ? <AttentionDot /> : null}
                   </Link>
                 </li>
               );
@@ -437,27 +435,6 @@ function SignedOut() {
   );
 }
 
-/**
- * The sidebar's one badge.
- *
- * Renders NOTHING at zero rather than a grey "0" — a counter that is always
- * present is furniture, and furniture does not get looked at. It reads the
- * same `useAttention` hook the dashboard panel does, so the number in the
- * sidebar and the list on the page can never disagree; TanStack dedupes the
- * underlying queries, so it costs no extra request.
- */
-function AttentionDot() {
-  const count = useAttentionBadge();
-  if (count === 0) return null;
-  return (
-    <span
-      className="ml-auto inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-destructive px-1.5 text-caption tabular-nums text-destructive-foreground"
-      aria-label={`${count} item${count === 1 ? '' : 's'} need attention`}
-    >
-      {count}
-    </span>
-  );
-}
 
 /**
  * What a non-approved account sees instead of the dashboard.
