@@ -2,17 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import {
-  ArrowRight,
-  CalendarPlus,
-  CalendarRange,
-  QrCode,
-  Receipt,
-  Ticket,
-  Users,
-  Wallet,
-  type LucideIcon,
-} from 'lucide-react';
+import { ArrowRight, CalendarPlus, CalendarRange } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatMoney } from '@/lib/discovery/format';
 import { useEventRows, useSettlements } from '@/lib/organizer/queries';
@@ -20,9 +10,8 @@ import { owedTotal } from '@/lib/organizer/attention';
 import type { EventRow } from '@/lib/api/organizer';
 import { EmptyState, ErrorState, Panel, Skeleton } from './primitives';
 import { ActivityFeed } from './activity-feed';
-import { KpiStrip } from './kpi-strip';
+import { TodayPanel } from './today-panel';
 import { StatusBadge } from './status-badge';
-import { cn } from '@/lib/utils/cn';
 
 /**
  * The dashboard home.
@@ -36,9 +25,10 @@ import { cn } from '@/lib/utils/cn';
  * look:
  *
  *   1. **What needs attention** — a rejected event loses sales every hour it
- *      goes unseen. It goes first even though it is usually empty.
- *   2. **What happened** — today's revenue, bookings, tickets, against
- *      yesterday. Six tiles, no scroll.
+ *      goes unseen. It is in the header bell, reachable from every screen.
+ *   2. **What happened** — one lead measure at reading size with its own
+ *      fourteen-day chart, switchable between revenue, bookings and tickets,
+ *      over a rule of supporting figures. See `today-panel.tsx`.
  *   3. **What is next** — the events actually coming up, with what is sold.
  *   4. **What just happened** — the live feed, on the side, where a glance
  *      finds it and it never pushes the decisions down the page.
@@ -76,20 +66,23 @@ export function DashboardHome() {
           where it costs nothing on a quiet day and is reachable from every
           screen instead of just this one.
 
-          Everything below the fold is reference: what is coming, what is owed,
-          what just happened. Two columns on a wide screen, one on a narrow —
-          and the money column comes SECOND in the DOM so a phone gets
-          "what's next" before "what you're owed", which is the order somebody
-          checking between tasks needs them in. */}
-      <section className="flex flex-col gap-stack">
-        <SectionHeading title="Today" />
-        <KpiStrip />
-      </section>
+          THE CARD COUNT WAS THE PROBLEM, so it was cut rather than restyled:
+          six KPI tiles became one lead panel with a real chart, and the six
+          "Jump to" tiles are gone entirely — every one of them duplicated a
+          sidebar item that is permanently on screen two inches to the left.
+          A shortcut to somewhere you can already see is not a shortcut, it is
+          twelve more objects between an organizer and their answer.
+
+          Everything below is reference: what is coming, what is owed, what
+          just happened. Two columns on a wide screen, one on a narrow — and
+          the money column comes SECOND in the DOM so a phone gets "what's
+          next" before "what you're owed", which is the order somebody checking
+          between tasks needs them in. */}
+      <TodayPanel />
 
       <div className="grid gap-block xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-block-lg">
         <div className="flex min-w-0 flex-col gap-block">
           <UpcomingEvents />
-          <QuickActions />
         </div>
 
         <div className="flex min-w-0 flex-col gap-block">
@@ -341,76 +334,6 @@ function MoneyCell({
       </dd>
       <p className="text-caption text-muted-foreground">{hint}</p>
     </div>
-  );
-}
-
-/**
- * One click each, no submenus, no confirmations.
- *
- * ONLY destinations that exist and do something. The brief's list also
- * included Generate Promo Code and Create Announcement — neither has a
- * backend, and a button that opens a form nothing can submit is worse than no
- * button. `frontend/BACKLOG.md` lists each against the module it needs.
- *
- * They are quiet OUTLINE tiles, not six filled buttons: these are shortcuts to
- * places, and a grid of near-black pills would out-shout the attention panel
- * at the top of the same screen.
- */
-function QuickActions() {
-  const actions: { label: string; href: string; icon: LucideIcon; hint: string }[] = [
-    {
-      label: 'Create event',
-      href: '/dashboard/events/new',
-      icon: CalendarPlus,
-      hint: 'Eight steps, saved as you type',
-    },
-    {
-      label: 'Scan tickets',
-      href: '/dashboard/check-in',
-      icon: QrCode,
-      hint: 'Camera or handheld scanner',
-    },
-    {
-      label: 'Bookings',
-      href: '/dashboard/bookings',
-      icon: Receipt,
-      hint: 'Search, filter and export',
-    },
-    {
-      label: 'Customers',
-      href: '/dashboard/customers',
-      icon: Users,
-      hint: 'Who buys, and what they are worth',
-    },
-    { label: 'Events', href: '/dashboard/events', icon: Ticket, hint: 'Capacity, sales, revenue' },
-    { label: 'Payouts', href: '/dashboard/payouts', icon: Wallet, hint: 'Settled and owed' },
-  ];
-
-  return (
-    <section className="flex flex-col gap-stack">
-      <SectionHeading title="Jump to" />
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {actions.map((action) => (
-          <li key={action.href}>
-            <Link
-              href={action.href}
-              className={cn(
-                'group flex h-full flex-col gap-1 rounded-xl border border-border bg-surface p-card shadow-sm',
-                'transition-colors duration-fast hover:bg-muted motion-reduce:transition-none',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              )}
-            >
-              <action.icon
-                className="size-4 text-muted-foreground transition-colors group-hover:text-primary motion-reduce:transition-none"
-                aria-hidden
-              />
-              <span className="text-body-sm font-medium">{action.label}</span>
-              <span className="text-caption text-muted-foreground">{action.hint}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 

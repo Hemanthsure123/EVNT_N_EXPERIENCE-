@@ -349,10 +349,6 @@ function CategoryPicker({
         >
           None of these
         </button>
-        <p className="text-caption text-muted-foreground">
-          An uncategorised event still appears in search and on your own page — it just does not
-          sit under a tile.
-        </p>
       </div>
     </div>
   );
