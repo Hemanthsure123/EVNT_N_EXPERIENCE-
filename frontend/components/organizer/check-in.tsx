@@ -7,6 +7,8 @@ import {
   CameraOff,
   Check,
   Loader2,
+  Maximize2,
+  Minimize2,
   QrCode,
   Volume2,
   VolumeX,
@@ -458,6 +460,45 @@ function CameraPanel({
   camera: ReturnType<typeof useCameraScanner>;
   onUnlockSound: () => void;
 }) {
+  /**
+   * Full-bleed scanning, for a phone held at arm's length in a queue.
+   *
+   * ── A CLASS TOGGLE, NEVER A REMOUNT ───────────────────────────────────
+   *
+   * The obvious build is a portal or a separate full-screen branch. Both
+   * would unmount this `<video>` and remount a new one, which drops the
+   * MediaStream attached to the old node -- the camera would freeze the
+   * instant somebody expanded it, in the middle of a queue. So the element
+   * and every hook around it stay exactly where they are and only the
+   * wrapper's classes change.
+   *
+   * Escape exits, because a steward who cannot find the close button is a
+   * steward stuck at a black screen with people waiting.
+   */
+  const [expanded, setExpanded] = React.useState(false);
+  const running = camera.state === 'running';
+
+  React.useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpanded(false);
+    };
+    document.addEventListener('keydown', onKey);
+    // A full-bleed camera over a scrollable page scrolls behind itself.
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [expanded]);
+
+  // Collapse when the camera stops, so stopping never leaves a black
+  // full-screen panel with no video in it.
+  React.useEffect(() => {
+    if (!running) setExpanded(false);
+  }, [running]);
+
   if (!camera.supported) {
     return (
       // A browser-capability note is one of the few "this is missing"
@@ -504,6 +545,13 @@ function CameraPanel({
             Starting…
           </span>
         ) : null}
+
+        {running ? (
+          <Button type="button" variant="outline" onClick={() => setExpanded(true)}>
+            <Maximize2 className="size-3.5" aria-hidden />
+            Full screen
+          </Button>
+        ) : null}
       </div>
 
       {camera.message ? (
@@ -516,23 +564,47 @@ function CameraPanel({
           `start()` can attach the stream to it. */}
       <div
         className={cn(
-          'relative overflow-hidden rounded-xl bg-muted',
+          'overflow-hidden bg-muted',
           camera.state !== 'running' && 'hidden',
+          expanded
+            ? 'fixed inset-0 z-modal rounded-none bg-black'
+            : 'relative rounded-xl',
         )}
       >
         <video
           ref={camera.videoRef}
-          className="aspect-video w-full object-cover"
+          className={cn(
+            'object-cover',
+            expanded ? 'size-full' : 'aspect-video w-full',
+          )}
           muted
           playsInline
         />
+
+        {expanded ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setExpanded(false)}
+            aria-label="Exit full screen"
+            className="absolute right-3 top-3 z-10"
+          >
+            <Minimize2 className="size-3.5" aria-hidden />
+            Done
+          </Button>
+        ) : null}
         {/* The aiming frame. Purely a target for the person holding the phone —
             the decoder reads the whole frame, not just this box. */}
         <span
           className="pointer-events-none absolute inset-0 flex items-center justify-center"
           aria-hidden
         >
-          <span className="size-40 rounded-2xl border-2 border-on-gradient/80 shadow-lg" />
+          <span
+            className={cn(
+              'rounded-2xl border-2 border-on-gradient/80 shadow-lg',
+              expanded ? 'size-64 sm:size-80' : 'size-40',
+            )}
+          />
         </span>
         <p className="absolute inset-x-0 bottom-0 bg-overlay/70 px-3 py-1.5 text-center text-caption text-on-gradient">
           Hold the ticket&rsquo;s QR code in the frame

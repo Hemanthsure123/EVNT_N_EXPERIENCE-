@@ -353,8 +353,15 @@ export function MediaStep({
           held on this device, uploaded with the next save — and there was no
           reason the gallery could not do the same. So it does: pick photos,
           describe them, keep working, and they upload themselves the moment
-          the draft exists. `flush` below is the whole mechanism. */}
-      <>
+          the draft exists. `flush` below is the whole mechanism.
+
+          ── AND IT IS A LABELLED SECTION LIKE ITS NEIGHBOURS ──────────────
+          Cover and Trailer were `Section`s and this -- the longest of the
+          three by far -- was a bare fragment, so the step read as
+          collapsible / unlabelled sprawl / collapsible. It now carries its
+          own heading and count, which also means it can be collapsed once
+          the photos are in and the step stops being a single long scroll. */}
+      <Section title="Gallery" count={`${media.filter((item) => item.kind !== 'video').length} added`}>
           <div className="flex flex-wrap items-center gap-stack">
             <label className="text-caption font-medium text-muted-foreground" htmlFor="media-kind">
               Uploading as
@@ -617,7 +624,7 @@ export function MediaStep({
               ))}
             </ul>
           )}
-      </>
+      </Section>
 
       {eventId ? (
         <Section

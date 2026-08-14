@@ -61,6 +61,20 @@ export function SeoStep({ draft, update, issues }: Props) {
   const description =
     draft.seoDescription.trim() || draft.shortDescription.trim() || derivedDescription;
 
+  // Which of the two lines the preview is showing from the event rather than
+  // from this step. Named here so the JSX below stays one clause instead of a
+  // ternary nested three deep inside a sentence.
+  const inheritedTitle = !draft.seoTitle.trim();
+  const inheritedDescription = !draft.seoDescription.trim();
+  const inherited =
+    inheritedTitle && inheritedDescription
+      ? 'Title and description above are'
+      : inheritedTitle
+        ? 'Title above is'
+        : inheritedDescription
+          ? 'Description above is'
+          : null;
+
   return (
     <div className="flex flex-col gap-block">
       <StepHeader
@@ -100,14 +114,13 @@ export function SeoStep({ draft, update, issues }: Props) {
             posterUrl={draft.posterUrl}
             city={draft.city}
           />
-          {!draft.seoTitle.trim() || !draft.seoDescription.trim() ? (
+          {/* One clause, not three. The preview above already SHOWS the
+              fallback text; the only thing it cannot show is that this IS what
+              the live page emits, rather than a placeholder waiting to be
+              filled in. The old sentence said that twice, in three variants. */}
+          {inherited ? (
             <p className="text-caption text-muted-foreground">
-              {draft.seoTitle.trim()
-                ? 'The description above is your one-line summary. '
-                : draft.seoDescription.trim()
-                  ? 'The title above is your event title. '
-                  : 'Both lines above are falling back to your event title and summary. '}
-              That is exactly what the live page will emit — the fields here only override it.
+              {inherited} inherited from your event. The live page emits exactly this.
             </p>
           ) : null}
         </div>

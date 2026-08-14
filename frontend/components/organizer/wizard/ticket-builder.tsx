@@ -387,8 +387,12 @@ export function TicketBuilder({
         <Button variant="outline" onClick={add} leftIcon={<Plus className="size-4" aria-hidden />}>
           Add ticket
         </Button>
+        {/* The drag handle and the arrow buttons are on each row; describing
+            them here is the paragraph explaining the control. What an organizer
+            genuinely cannot see is that this order is NOT the order buyers get,
+            so only that survives. */}
         <p className="text-caption text-muted-foreground">
-          Drag, or use ↑ ↓, to reorder them here. Buyers always see tiers cheapest first.
+          Buyers always see tiers cheapest first.
         </p>
       </div>
     </div>
@@ -427,8 +431,7 @@ function PhaseEditor({
         <div className="flex min-w-0 flex-col gap-1">
           <h4 className="text-body-sm font-medium text-foreground">Pricing phases</h4>
           <p className="text-caption text-muted-foreground">
-            Optional. Sell the first seats cheaper, then step the price up. Buyers see the
-            live phase price with the normal price struck through.
+            Buyers see the live phase price with the normal price struck through.
           </p>
         </div>
         <Button
