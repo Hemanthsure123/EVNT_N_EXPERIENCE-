@@ -460,6 +460,38 @@ def check_production_settings(
             "SMS_SENDER_ID and SMS_DLT_ENTITY_ID to enable delivery."
         )
 
+    # ── QUEUE_BACKEND=local: NOT A FAKE, BUT NOT A QUEUE EITHER ────────────
+    #
+    # Deliberately a WARNING and not a refusal, for the same reason
+    # `SMS_PROVIDER=disabled` is: it delivers a real, reduced service rather
+    # than accepting work and dropping it. `SyncTaskQueueAdapter` genuinely
+    # RUNS every task. A platform can legitimately launch on it while Cloud
+    # Tasks is being set up, and refusing to boot would take a working site
+    # down over a choice somebody may have made on purpose.
+    #
+    # It is stated every boot because three guarantees quietly do not hold:
+    #
+    #   - Work runs INLINE on the request thread. A refund's provider call and
+    #     a notification's send happen inside the webhook that triggered them.
+    #   - `delay_seconds` is logged and IGNORED, so retry-with-backoff is not
+    #     backoff: a task that re-enqueues itself runs again immediately, in
+    #     the same request, until it reaches its attempt cap. Notifications and
+    #     settlements both retry that way.
+    #   - A failure is logged and swallowed. Nothing redelivers it, so there is
+    #     no dead-letter to inspect afterwards.
+    #
+    # None of that loses money — the ledgers and row locks are what protect
+    # that — but it does mean "it will retry" is not true here.
+    if str(getattr(settings, "QUEUE_BACKEND", "")) == "local":
+        warnings.append(
+            "QUEUE_BACKEND=local runs background work inline on the request "
+            "thread. `delay_seconds` is ignored, so retry-with-backoff retries "
+            "immediately instead of later, and a failed task is logged and "
+            "dropped rather than redelivered. Set QUEUE_BACKEND=cloud_tasks "
+            "(with CLOUD_TASKS_* and the /internal/tasks/run receiver) for real "
+            "scheduling, retries and dead-lettering."
+        )
+
     for (switch, real_value), required in _ADAPTER_CREDENTIALS.items():
         if str(getattr(settings, switch, "")) != real_value:
             continue

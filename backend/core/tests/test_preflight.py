@@ -40,7 +40,15 @@ class _Settings:
             "EMAIL_PROVIDER": "smtp",
             "SMS_PROVIDER": "http",
             "EVENT_BUS_BACKEND": "pubsub",
-            "QUEUE_BACKEND": "local",
+            # A real queue, like every other backend in this fixture. It said
+            # `local` only because nothing checked the queue — which is the gap
+            # the warning below closes. A "fully real configuration" that runs
+            # its background work inline is not one.
+            "QUEUE_BACKEND": "cloud_tasks",
+            "CLOUD_TASKS_QUEUE": "platform-tasks",
+            "CLOUD_TASKS_LOCATION": "asia-south1",
+            "CLOUD_TASKS_TARGET_URL": "https://api.curatix.example/internal/tasks/run",
+            "INTERNAL_TASK_SECRET": "real-internal-task-secret",
             "RAZORPAY_KEY_ID": "rzp_live_real",
             "RAZORPAY_KEY_SECRET": "real-secret",
             "RAZORPAY_WEBHOOK_SECRET": "real-webhook-secret",
@@ -158,6 +166,31 @@ class TestFakeAdapters:
         assert any(
             "SMS_PROVIDER=http" in w for w in warnings
         ), "the warning must say how to turn SMS back on"
+
+    def test_a_local_queue_warns_without_refusing_the_boot(self):
+        """`QUEUE_BACKEND=local` is a real runner, not a fake — but not a queue.
+
+        `SyncTaskQueueAdapter` genuinely executes every task, so a platform can
+        launch on it while Cloud Tasks is being set up. Refusing to boot would
+        take a working site down over a deliberate choice.
+
+        Warning is not optional though, because three guarantees stop holding:
+        work runs inline on the request thread, `delay_seconds` is ignored so
+        retry-with-backoff retries immediately, and a failure is logged and
+        dropped rather than redelivered.
+        """
+        warnings = check_production_settings(_Settings(QUEUE_BACKEND="local"), strict=True)
+
+        assert any(
+            "QUEUE_BACKEND=local" in w for w in warnings
+        ), "a local queue in production must be stated at every boot"
+        assert any(
+            "cloud_tasks" in w for w in warnings
+        ), "the warning must say how to get a real queue"
+
+    def test_a_real_queue_says_nothing(self):
+        warnings = check_production_settings(_Settings(QUEUE_BACKEND="cloud_tasks"), strict=True)
+        assert not any("QUEUE_BACKEND" in w for w in warnings)
 
     def test_fakes_are_a_warning_in_staging_not_a_refusal(self):
         # Exercising the booking funnel without moving money is what staging
