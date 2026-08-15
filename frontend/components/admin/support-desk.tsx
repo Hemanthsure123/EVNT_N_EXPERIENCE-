@@ -181,6 +181,14 @@ const COLUMNS: ColumnDef<AdminBooking>[] = [
     key: 'payment_ref',
     header: 'Payment ref',
     width: 170,
+    // ── A REFERENCE IS SEARCHED BY, NOT SCANNED ──────────────────────────
+    //
+    // Provider ids are how an operator finds ONE row when a customer quotes
+    // one — and the search box above already searches them. Nobody reads a
+    // column of `order_TPxZ6pXVXUXwyM` down the page, but every row paid ~180px
+    // for it, which is what pushed these tables into horizontal scroll and cut
+    // off the columns that ARE scanned. One click in Columns brings it back.
+    defaultHidden: true,
     sortValue: (row) => row.payment_ref,
     render: (row) => (
       <span className="truncate font-mono text-caption text-muted-foreground">

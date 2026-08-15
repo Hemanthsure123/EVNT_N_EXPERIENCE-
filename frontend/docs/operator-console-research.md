@@ -133,12 +133,26 @@ detail drawer rather than a page navigation.
 **Already true here.** One table engine, URL-persisted filters, chips, column
 chooser, CSV export.
 
-**Open (NOT done).** Payments, Users and Bookings all scroll horizontally on a
-wide monitor because every column carries a minimum width. The fix is a
-priority order per table — what must always be visible, what may collapse into
-the row's second line, what belongs only in the drawer. That is per-table
-judgement, not a shared CSS change, which is why it is written down here
-rather than guessed at.
+**Taken (done).** Payments, Bookings and Refunds all scrolled horizontally on a
+wide monitor, cutting off the columns an operator actually scans — Bookings lost
+"Booked" off the right edge with SEVEN columns and nothing hidden by default.
+
+The fix is a priority order per table rather than a shared CSS change, and the
+rule that fell out of it is:
+
+> **A reference is searched BY, not scanned.**
+
+Provider ids — `order_TPxZ6pXVXUXwyM`, `pay_TPkLks2WNu1UcG` — are how you find
+ONE row when a customer quotes one, and the search box above each table already
+searches them. Nobody reads a column of them down the page, yet every row paid
+~180px for it. They are default-hidden and one click away in Columns.
+
+Refunds also carried "Of payment" beside `is_partial`, which is COMPUTED from
+that pair and already states the answer — two columns saying one thing on the
+widest table here.
+
+Default-visible widths after the pass: Bookings 1080 -> 910px, Payments
+1350 -> 950px, Refunds 1340 -> 1030px.
 
 ---
 

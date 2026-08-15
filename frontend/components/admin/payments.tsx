@@ -434,6 +434,14 @@ const PAYMENT_COLUMNS: ColumnDef<AdminPayment>[] = [
     key: 'provider_payment_id',
     header: 'Payment reference',
     width: 200,
+    // ── A REFERENCE IS SEARCHED BY, NOT SCANNED ──────────────────────────
+    //
+    // Provider ids are how an operator finds ONE row when a customer quotes
+    // one — and the search box above already searches them. Nobody reads a
+    // column of `order_TPxZ6pXVXUXwyM` down the page, but every row paid ~180px
+    // for it, which is what pushed these tables into horizontal scroll and cut
+    // off the columns that ARE scanned. One click in Columns brings it back.
+    defaultHidden: true,
     sortValue: (row) => row.provider_payment_id,
     render: (row) =>
       row.provider_payment_id ? (
@@ -491,6 +499,10 @@ const REFUND_COLUMNS: ColumnDef<AdminRefund>[] = [
     header: 'Of payment',
     width: 120,
     numeric: true,
+    // The original payment's amount, kept only as context for `is_partial` —
+    // which is COMPUTED from this against the refund and already states the
+    // answer. Two columns to say one thing, on the widest table here.
+    defaultHidden: true,
     sortValue: (row) => row.payment_amount_minor,
     render: (row) => (
       <span className="text-muted-foreground">{formatMoney(row.payment_amount_minor)}</span>
