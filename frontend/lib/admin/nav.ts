@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Activity,
   Building2,
   CreditCard,
@@ -56,6 +57,16 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     label: 'Overview',
     icon: LayoutDashboard,
     hint: 'Platform totals, revenue, activity and health',
+  },
+  {
+    // Per-EVENT analytics. Platform-wide totals stay on the Overview; this is
+    // the screen that answers "how is that one doing", which the console could
+    // not answer at all — `AdminEventAnalytics` was built against a working
+    // endpoint and never given a route.
+    href: '/admin/analytics',
+    label: 'Event analytics',
+    icon: BarChart3,
+    hint: 'Sales, check-ins and refunds for one event',
   },
   {
     href: '/admin/homepage',

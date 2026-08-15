@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Check, Save } from 'lucide-react';
+import { Archive, ArrowDown, ArrowUp, Check, Save } from 'lucide-react';
 import {
   archiveCategory,
   fetchAdminCategories,
@@ -18,7 +18,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils/cn';
-import { FeaturedManager } from './featured-manager';
 
 /**
  * The homepage CMS.
@@ -79,16 +78,23 @@ export function HomepageCms({
 } = {}) {
   const client = useQueryClient();
 
-  // Bring the tree's chosen section into view. `hero`, `search`, `trust` and
-  // `footer` all live inside the hero panel — they are fields on one record
-  // with one optimistic-lock version, so splitting them into separate forms
-  // would mean several versions of the same row racing each other.
-  React.useEffect(() => {
-    if (!focus) return;
-    const anchor =
-      focus === 'ribbon' ? 'cms-ribbon' : focus === 'categories' ? 'cms-categories' : 'cms-hero';
-    document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [focus]);
+  // ── THE TREE SWITCHES THE PANE. IT USED TO SCROLL IT. ──────────────────
+  //
+  // Every section rendered the WHOLE page and then scrolled to an anchor, which
+  // failed three ways at once:
+  //
+  //   - `footer` scrolled to `cms-hero`, an id that does not exist. Picking
+  //     "Footer note" moved nothing at all.
+  //   - The effect ran before the form had rendered, so `getElementById` was
+  //     often null and the scroll silently did nothing.
+  //   - Ribbon, Footer and Categories all rendered `FeaturedManager` under
+  //     them, so "Featured events" appeared twice in the console and the rail's
+  //     seven sections were really one long page with highlights on it.
+  //
+  // Now each section renders only itself. The fields still belong to ONE record
+  // with ONE optimistic-lock version, so they stay inside ONE form with ONE
+  // save — splitting them into separate forms is what would make versions race.
+  // What changed is what is DRAWN, not what is saved.
 
   // The UNCACHED admin read — see `fetchHomepageDraft`. Seeding the form from
   // the public, edge-cached payload would hand the optimistic lock a stale
@@ -175,8 +181,17 @@ export function HomepageCms({
   const set = (key: FieldKey, value: string) =>
     setDraft((current) => ({ ...current, [key]: value.slice(0, LIMITS[key]) }));
 
+  // `focus` is the tree's id; anything unrecognised falls back to the ribbon,
+  // which is the first field on this record.
+  const section = focus === 'footer' || focus === 'categories' ? focus : 'ribbon';
+
   return (
-    <div className="grid gap-block xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <div
+      className={cn(
+        'grid gap-block',
+        section === 'ribbon' && 'xl:grid-cols-[minmax(0,1fr)_22rem]',
+      )}
+    >
       <div className="flex flex-col gap-block">
         {stale ? (
           <div
@@ -224,11 +239,10 @@ export function HomepageCms({
 
             What replaced the editorial control: `Featured events`, which
             chooses the actual events on that first screen. */}
+        {section === 'ribbon' ? (
         <Panel
-          id="cms-ribbon"
           title="Announcement ribbon"
           subtitle="A thin bar above the header"
-          className="scroll-mt-24"
         >
           <div className="flex flex-col gap-block p-card">
             {/* A native checkbox inside its own label: the whole row is the
@@ -250,15 +264,27 @@ export function HomepageCms({
               max={LIMITS.ribbon_text}
               hint="Turning the ribbon on with no text shows nothing — an empty bar is not a banner."
             />
-            <Field
-              id="footer-note"
-              label="Footer note"
-              value={draft.footer_note ?? ''}
-              onChange={(value) => set('footer_note', value)}
-              max={LIMITS.footer_note}
-            />
           </div>
         </Panel>
+        ) : null}
+
+        {/* The footer note is NOT part of the announcement ribbon and now has
+            its own panel. It lived inside the ribbon's, which is why choosing
+            "Footer note" in the tree appeared to open the ribbon editor. */}
+        {section === 'footer' ? (
+          <Panel title="Footer note" subtitle="One line at the bottom of every page">
+            <div className="flex flex-col gap-block p-card">
+              <Field
+                id="footer-note"
+                label="Footer note"
+                value={draft.footer_note ?? ''}
+                onChange={(value) => set('footer_note', value)}
+                max={LIMITS.footer_note}
+                hint="Left blank, the footer simply has no note. It is not a required line."
+              />
+            </div>
+          </Panel>
+        ) : null}
 
         {/* The one filled action on this screen. */}
         <div className="flex flex-wrap items-center gap-stack">
@@ -286,14 +312,19 @@ export function HomepageCms({
           )}
         </div>
 
-        <FeaturedManager />
-
-        <Categories />
+        {/* `FeaturedManager` used to render here TOO, so it appeared under
+            every section as well as being section 1 of the tree. */}
+        {section === 'categories' ? <Categories /> : null}
       </div>
 
-      <aside className="xl:sticky xl:top-sticky-top xl:self-start">
-        <Preview ribbon={ribbonOn ? (draft.ribbon_text ?? '') : ''} />
-      </aside>
+      {/* The preview is of the RIBBON, so it only accompanies the ribbon. It
+          was pinned beside Categories and the footer as well, where it showed
+          a bar neither of them edits. */}
+      {section === 'ribbon' ? (
+        <aside className="xl:sticky xl:top-sticky-top xl:self-start">
+          <Preview ribbon={ribbonOn ? (draft.ribbon_text ?? '') : ''} />
+        </aside>
+      ) : null}
     </div>
   );
 }
@@ -416,7 +447,28 @@ function Categories() {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['admin'] }),
   });
 
+  /**
+   * Reorder by SWAPPING with a neighbour, not by typing a number.
+   *
+   * Each row carried a numeric `position` box wired to `onChange`, so ordering
+   * eight categories meant knowing that 0 comes first and typing eight numbers
+   * — and every keystroke was a save, so typing "12" wrote position 1 and then
+   * 12. An operator who wants Comedy above Concerts is not thinking in indices.
+   *
+   * Both writes are awaited before the list is invalidated, so the row never
+   * flashes through a half-applied order.
+   */
+  const move = useMutation({
+    mutationFn: async ({ row, other }: { row: AdminCategory; other: AdminCategory }) => {
+      await updateCategory(row.id, { position: other.position });
+      await updateCategory(other.id, { position: row.position });
+    },
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['admin'] }),
+  });
+
   const rows = query.data?.data ?? [];
+  // Order is only meaningful among the categories that are actually in the nav.
+  const orderable = rows.filter((row) => !row.archived_at);
 
   return (
     <Panel
@@ -442,12 +494,18 @@ function Categories() {
         <ul className="divide-y divide-border">
           {rows.map((row) => (
             <li key={row.id} className="flex flex-wrap items-center gap-stack px-card py-2">
+              {/* The position number was the first thing on the row and the
+                  name came second. An operator scanning for "Comedy" was
+                  reading indices. */}
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-body-sm font-medium text-foreground">
                   {row.label}
                 </span>
-                <span className="block truncate font-mono text-caption text-muted-foreground">
-                  /{row.slug} → “{row.search_term || row.slug}”
+                <span className="block truncate text-caption text-muted-foreground">
+                  <span className="font-mono">/{row.slug}</span>
+                  {row.search_term && row.search_term !== row.slug ? (
+                    <> · searches “{row.search_term}”</>
+                  ) : null}
                 </span>
               </span>
 
@@ -468,21 +526,47 @@ function Categories() {
                     />
                     Visible
                   </label>
-                  {/* Right-aligned, tabular: a column of order numbers has to
-                      read as a column. */}
-                  <Input
-                    type="number"
-                    min={0}
-                    value={row.position}
-                    aria-label={`Position of ${row.label}`}
-                    onChange={(event) =>
-                      mutate.mutate({
-                        id: row.id,
-                        patch: { position: Number(event.target.value) || 0 },
-                      })
-                    }
-                    className="w-16 px-2 text-right text-body-sm tabular-nums"
-                  />
+                  {/* ── UP / DOWN, NOT A NUMBER BOX ──────────────────────
+                      The same choice the event wizard's gallery makes, for the
+                      same reason: nobody reorders by index. Disabled at the
+                      ends rather than hidden, so the control does not move
+                      under the pointer as a row travels up the list. */}
+                  <span className="flex shrink-0 items-center">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={move.isPending || orderable.indexOf(row) <= 0}
+                      onClick={() => {
+                        const index = orderable.indexOf(row);
+                        const other = orderable[index - 1];
+                        if (other) move.mutate({ row, other });
+                      }}
+                      aria-label={`Move ${row.label} up`}
+                      className="text-muted-foreground"
+                    >
+                      <ArrowUp className="size-4" aria-hidden />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={
+                        move.isPending ||
+                        orderable.indexOf(row) === -1 ||
+                        orderable.indexOf(row) >= orderable.length - 1
+                      }
+                      onClick={() => {
+                        const index = orderable.indexOf(row);
+                        const other = orderable[index + 1];
+                        if (other) move.mutate({ row, other });
+                      }}
+                      aria-label={`Move ${row.label} down`}
+                      className="text-muted-foreground"
+                    >
+                      <ArrowDown className="size-4" aria-hidden />
+                    </Button>
+                  </span>
 
                   {/* Archiving is the one thing here that takes a tile off the
                       browse nav, so it does not sit flush against the routine

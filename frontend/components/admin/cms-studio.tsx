@@ -120,7 +120,7 @@ const TREE: TreeNode[] = [
     id: 'featured',
     label: 'Featured events',
     icon: Star,
-    blurb: 'The scrolling rail at the top of the front page',
+    blurb: 'The rail at the top of the front page',
   },
   { id: 'ribbon', label: 'Ribbon', icon: Megaphone, blurb: 'The strip above the page' },
   { id: 'categories', label: 'Categories', icon: Tag, blurb: 'The browse tiles' },
@@ -258,7 +258,12 @@ function Tree({
                   </span>
                   {/* The current value, not a description — that is what makes
                       this a content tree rather than a settings menu. */}
-                  <span className="hidden truncate text-caption lg:block">
+                  {/* `line-clamp-2`, not `truncate`. A single clipped line
+                      turned "The scrolling rail at the top of the front page"
+                      into "The scrolling rail at the top of t…", which is the
+                      half that says nothing. These are short enough that two
+                      lines hold all of them. */}
+                  <span className="hidden text-caption lg:line-clamp-2 lg:block">
                     {summary[node.id] || node.blurb}
                   </span>
                 </span>
