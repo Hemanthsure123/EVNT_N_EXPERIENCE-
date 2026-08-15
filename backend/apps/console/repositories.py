@@ -554,11 +554,31 @@ class ConsoleRepository:
         `AuditLog.actor_id` is a plain string, not an FK — deliberately, so the
         trail survives the actor being deleted. That means no `select_related`
         is possible and a naive viewer would issue one query per row.
+
+        ── WHY THE UUID PARSE, AND NOT JUST `if candidate` ──────────────────
+
+        `actor_id` is a CharField and `User.id` is a UUIDField. Handing an
+        arbitrary string to `id__in` does not return no rows -- Django raises
+        while BUILDING the query, so one unparseable actor took down the whole
+        audit page with a 500 and kept it down, because the offending row is
+        append-only and never goes away.
+
+        Non-UUID actors are legitimate: anything the platform did to itself
+        rather than a person doing it. They resolve to no email, which the
+        serializer allows (`actor_email` is `allow_blank`), and the action and
+        target still read correctly.
         """
-        valid = [candidate for candidate in actor_ids if candidate]
-        if not valid:
+        parsed: list[uuid.UUID] = []
+        for candidate in actor_ids:
+            if not candidate:
+                continue
+            try:
+                parsed.append(uuid.UUID(str(candidate)))
+            except (ValueError, AttributeError, TypeError):
+                continue
+        if not parsed:
             return {}
-        rows = User.objects.filter(id__in=valid).values_list("id", "email")
+        rows = User.objects.filter(id__in=parsed).values_list("id", "email")
         return {str(user_id): email for user_id, email in rows}
 
     def list_pending_verifications(self) -> QuerySet[VerificationRecord]:

@@ -769,9 +769,21 @@ export function completion(draft: Draft): number {
     Boolean(draft.city.trim()),
     Boolean(draft.startsAt),
     draft.tiers.length > 0,
-    // The gate itself. `validate` is what disables Submit, so the bar cannot
-    // reach 100 while it has anything to say.
-    validate(draft).length === 0,
+    // The gate itself, and everything it does not cover.
+    //
+    // `validate` catches bad VALUES. It knows nothing about SAVE state, so a
+    // draft whose tiers had not reached the server yet still read 100% beside
+    // a disabled Submit and "One or more ticket types have not saved yet" —
+    // the same disagreement, one layer down.
+    //
+    // The organisation-verification blocker is deliberately NOT counted. It is
+    // real and it does block submission, but it is not the organizer's work to
+    // finish: an operator has to approve them. Holding the bar at 83% for a
+    // form they have completed would be a different lie. Review states that
+    // one on its own, at the top, where it cannot be mistaken for a field.
+    validate(draft).length === 0 &&
+      Boolean(draft.eventId) &&
+      draft.tiers.every((tier) => tier.serverId),
   ];
   return Math.round((checks.filter(Boolean).length / checks.length) * 100);
 }

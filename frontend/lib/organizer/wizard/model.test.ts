@@ -548,14 +548,18 @@ describe('restoreDraft and the pending cover', () => {
 });
 
 describe('completion agrees with the submit gate', () => {
+  // `eventId` and `serverId` are part of being publishable: 100% means the
+  // draft AND its tiers have reached the server, not just that the values are
+  // valid. See the save-state suite below.
   const publishable = () =>
     draftWith({
       organizationId: 'org-1',
+      eventId: 'evt-1',
       title: 'Night',
       venue: 'Arena',
       city: 'Pune',
       startsAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
-      tiers: [tierWith({ name: 'GA', price: '499', quantity: '100' })],
+      tiers: [tierWith({ name: 'GA', price: '499', quantity: '100', serverId: 'tier-1' })],
     });
 
   it('reaches 100% with no cover image, because a cover is not required', () => {
@@ -586,5 +590,38 @@ describe('completion agrees with the submit gate', () => {
     const partial = draftWith({ title: 'Night', venue: 'Arena' });
     expect(completion(partial)).toBeGreaterThan(0);
     expect(completion(partial)).toBeLessThan(100);
+  });
+});
+
+describe('completion and save state', () => {
+  const saved = () =>
+    draftWith({
+      organizationId: 'org-1',
+      eventId: 'evt-1',
+      title: 'Night',
+      venue: 'Arena',
+      city: 'Pune',
+      startsAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      tiers: [tierWith({ name: 'GA', price: '499', quantity: '100', serverId: 'tier-1' })],
+    });
+
+  it('is 100% once everything is valid AND saved', () => {
+    expect(completion(saved())).toBe(100);
+  });
+
+  it('is under 100% while a ticket type has not reached the server', () => {
+    // The reported case: the bar said 100% beside a disabled Submit reading
+    // "One or more ticket types have not saved yet". `validate` catches bad
+    // values and knows nothing about save state.
+    const draft = draftWith({
+      ...saved(),
+      tiers: [tierWith({ name: 'GA', price: '499', quantity: '100', serverId: '' })],
+    });
+    expect(validate(draft)).toHaveLength(0);
+    expect(completion(draft)).toBeLessThan(100);
+  });
+
+  it('is under 100% while the draft itself has never saved', () => {
+    expect(completion(draftWith({ ...saved(), eventId: '' }))).toBeLessThan(100);
   });
 });

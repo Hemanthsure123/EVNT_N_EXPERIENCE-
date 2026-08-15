@@ -262,7 +262,15 @@ export type ModerationStatus = 'pending_review' | 'live' | 'rejected' | 'archive
  */
 export const fetchModerationQueue = (
   params: {
-    status?: ModerationStatus;
+    /**
+     * `all` widens to every moderatable status. It is NOT the same as omitting
+     * this: an ABSENT or unknown status falls back to the pending queue on the
+     * server, deliberately, so a mistyped query string cannot silently widen an
+     * operator's view. Callers that genuinely want the whole set — the event
+     * picker, which has to find a booking's event whatever state it is in —
+     * have to say so.
+     */
+    status?: ModerationStatus | 'all';
     q?: string;
     starts_after?: string;
     starts_before?: string;

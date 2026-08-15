@@ -68,11 +68,17 @@ export function EventPicker({
   }, [open]);
 
   const query = useQuery({
-    // `status: ''` is the ALL tab — a booking can belong to an event that is
-    // finished, archived or sent back, and a picker that only offered live
-    // ones would be unable to find most of what an operator is looking for.
+    // A booking can belong to an event that is finished, archived or sent
+    // back, so this picker needs every moderatable status.
+    //
+    // It used to pass `status: undefined` with a comment claiming that meant
+    // "all". It does not: the server treats an absent status as the PENDING
+    // queue, on purpose, so a mistyped query string cannot widen an operator's
+    // view. With nothing pending, this dropdown told operators "No events on
+    // the platform yet" while the table under it listed five. `all` is the
+    // explicit opt-in that actually means all.
     queryKey: ['admin', 'event-picker', search],
-    queryFn: () => fetchModerationQueue({ status: undefined, q: search || undefined }),
+    queryFn: () => fetchModerationQueue({ status: 'all', q: search || undefined }),
     enabled: open,
     staleTime: 30_000,
   });

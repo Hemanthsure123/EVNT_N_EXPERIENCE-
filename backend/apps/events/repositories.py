@@ -668,11 +668,38 @@ class EventRepository(BaseRepository[Event]):
         The window is on `starts_at`, not `created_at`: an operator filtering
         this list is asking "what is running that weekend", which is a fact
         about the event, not about when its draft was typed.
+
+        ── `all` IS AN EXPLICIT CHOICE, AND STILL NOT "EVERYTHING" ─────────
+
+        An UNKNOWN status falls back to the pending queue, deliberately: a
+        mistyped query string must not silently widen an operator's view. But
+        there was then no way to ask for the moderatable set as a whole, and
+        the console's event picker genuinely needs it — a booking can belong to
+        an event that is live, finished, sent back or archived, so a picker
+        offering only pending ones finds almost nothing. That is exactly what
+        happened: it asked for "all", got the pending fallback, and reported
+        "No events on the platform yet" over a table listing five of them.
+
+        So `all` widens to `MODERATABLE_STATUSES` and NOT to every row.
+        `draft` stays unreachable, because an unsubmitted draft is an
+        organizer's private workspace — the rule this allow-list exists for.
         """
-        chosen = status if status in set(self.MODERATABLE_STATUSES) else None
+        wants_all = status == "all"
+        # Matched against the allow-list rather than cast, so `chosen` is a real
+        # `EventStatus` and the query is typed. An unrecognised string simply
+        # never matches, which IS the pending fallback.
+        chosen: EventStatus | None = None
+        if not wants_all:
+            for candidate in self.MODERATABLE_STATUSES:
+                if status == candidate:
+                    chosen = candidate
+                    break
+        statuses: list[EventStatus] = (
+            list(self.MODERATABLE_STATUSES) if wants_all else [chosen or EventStatus.PENDING_REVIEW]
+        )
         queryset = (
             self.get_queryset()
-            .filter(status=chosen or EventStatus.PENDING_REVIEW, deleted_at__isnull=True)
+            .filter(status__in=statuses, deleted_at__isnull=True)
             .select_related("organization")
             .only(
                 "id",
@@ -710,7 +737,7 @@ class EventRepository(BaseRepository[Event]):
         if starts_before is not None:
             queryset = queryset.filter(starts_at__lte=starts_before)
 
-        if chosen is None or chosen == EventStatus.PENDING_REVIEW:
+        if not wants_all and (chosen is None or chosen == EventStatus.PENDING_REVIEW):
             return queryset.order_by("submitted_at")
         # `-created_at` and NOT `-moderated_at`: the console cursor-paginates
         # this, and a cursor needs a non-null monotonic column. An event can
