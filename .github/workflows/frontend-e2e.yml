@@ -61,12 +61,31 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     # ── A BOUND, NOT A BUFFER ───────────────────────────────────────────────
-    # The job's real cost is ~6-8 min (npm ci, browser download, one production
-    # build, then the specs). GitHub's default is 360 minutes, which is how a
-    # broken run sat at 33m56s and another was still going at 30m44s instead of
-    # failing fast and saying so. 20 is comfortably above a healthy run and far
-    # below "nobody noticed for half an hour".
-    timeout-minutes: 20
+    # GitHub's default is 360 minutes, which is how a broken run sat at 33m56s
+    # instead of failing fast and saying so. This job must be bounded.
+    #
+    # 20 was an estimate ("~6-8 min") made before any run had finished, and it
+    # was wrong in a way that hid everything behind it. MEASURED, from the run
+    # on 00a55d3: setup is 79s (checkout, npm ci, browser download) and the
+    # test step alone had used 1133s -- 18m53s -- when the job was killed. It
+    # never reported, so a suite that has never once told anybody how many
+    # specs fail looked like 36 "cancelled" runs that read as superseded.
+    #
+    # They were not superseded. Every one lasted 20m28s, 20m29s, 20m46s -- a
+    # job killed by `timeout-minutes` is reported as CANCELLED, which is why
+    # this went unread for 38 runs.
+    #
+    # The step is expensive for a real reason: `webServer` runs a full
+    # production `npm run build` before a single spec, and failing specs are
+    # retried once. 30 gives that room while still being far below "nobody
+    # noticed for half an hour".
+    #
+    # Not touched: `workers: 1` in `playwright.config.ts`. The fixture holds
+    # mutable state (`const bookings = new Map()`), so running specs in
+    # parallel against one shared fixture is a correctness risk, not a speed
+    # win. Halving the wall clock is not worth a suite that fails differently
+    # depending on interleaving.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
