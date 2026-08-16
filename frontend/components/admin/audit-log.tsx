@@ -137,15 +137,35 @@ export function AuditLog() {
   );
 }
 
+/**
+ * Did this actor id ever name a user account?
+ *
+ * `User.id` is a UUID. `AuditLog.actor_id` is a free string so the trail can
+ * survive the account being deleted — which also means it holds non-user
+ * actors like `system`. Only the UUID-shaped ones can have been a person.
+ */
+const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUserId = (actorId: string) => USER_ID.test(actorId.trim());
+
+
 function Row({ entry }: { entry: AuditEntry }) {
   const note = typeof entry.metadata?.note === 'string' ? entry.metadata.note : '';
   return (
     <li className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-4 py-2.5 transition-colors duration-fast hover:bg-sunken motion-reduce:transition-none">
       <span className="text-body-sm font-medium text-foreground">
-        {/* An id, not an email, means the account was deleted — the trail
-            deliberately outlives it, so it says so rather than showing a
-            blank. */}
-        {entry.actor_email || (entry.actor_id ? 'a deleted account' : 'the system')}
+        {/* ── A NON-UUID ACTOR IS THE PLATFORM, NOT A DELETED PERSON ──────
+            This read `actor_id ? 'a deleted account' : 'the system'`, so
+            anything with a non-empty actor that did not resolve to an email
+            was reported as a deleted account. System actors are non-empty —
+            they are words like `system` — so the sweeper expiring a hold and
+            the webhook confirming a payment were both attributed to somebody
+            who had closed their account. On the one screen whose job is
+            saying who did what, that is the worst possible error.
+
+            The trail stores `actor_id` as a plain string precisely so it
+            outlives the account. A UUID that no longer resolves IS a deleted
+            person; anything that was never a user id never was one. */}
+        {entry.actor_email || (isUserId(entry.actor_id) ? 'a deleted account' : 'the platform')}
       </span>
       <span className="text-body-sm text-muted-foreground">
         {ACTIONS[entry.action] ?? entry.action.replace(/[._]/g, ' ')}

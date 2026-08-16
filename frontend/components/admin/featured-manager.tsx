@@ -286,10 +286,18 @@ function EventPicker({ onPick, busy }: { onPick: (eventId: string) => void; busy
   const [term, setTerm] = React.useState('');
   const debounced = useDebouncedValue(term.trim(), 250);
 
+  // ── BROWSE FIRST, TYPE TO NARROW ────────────────────────────────────────
+  //
+  // This was `enabled: debounced.length >= 2`, so the panel showed NOTHING
+  // until two characters were typed. An operator curating a front page is
+  // usually choosing from what is on sale, not recalling a title they already
+  // know — and the console's other event chooser (Event analytics) opens with
+  // the list, so the same job behaved two different ways in one product.
+  //
+  // The query now always runs and the term simply narrows it.
   const query = useQuery({
     queryKey: ['admin', 'event-search', debounced],
-    queryFn: () => fetchEvents({ q: debounced }),
-    enabled: debounced.length >= 2,
+    queryFn: () => fetchEvents(debounced ? { q: debounced } : {}),
     staleTime: 30_000,
   });
 
@@ -307,7 +315,7 @@ function EventPicker({ onPick, busy }: { onPick: (eventId: string) => void; busy
         <Input
           value={term}
           onChange={(event) => setTerm(event.target.value)}
-          placeholder="Search approved events to feature"
+          placeholder="Filter by title, venue or city"
           aria-label="Search events to feature"
           className="pl-9 pr-control text-body-sm"
         />
@@ -325,16 +333,19 @@ function EventPicker({ onPick, busy }: { onPick: (eventId: string) => void; busy
         ) : null}
       </div>
 
-      {debounced.length >= 2 ? (
-        query.isPending ? (
-          <Skeleton className="h-20 w-full" />
-        ) : results.length === 0 ? (
-          <p className="text-caption text-muted-foreground">
-            Nothing approved matches “{debounced}”. Only live, upcoming events can be featured.
-          </p>
-        ) : (
+      {query.isPending ? (
+        <Skeleton className="h-20 w-full" />
+      ) : results.length === 0 ? (
+        <p className="text-caption text-muted-foreground">
+          {debounced
+            ? `Nothing approved matches “${debounced}”. Only live, upcoming events can be featured.`
+            : 'No approved, upcoming events yet. Only those can be featured.'}
+        </p>
+      ) : (
           <ul className="flex max-h-48 flex-col divide-y divide-border overflow-y-auto rounded-xl border border-border">
-            {results.slice(0, 8).map((event) => (
+            {/* The list scrolls (`max-h-48`), so a browse-first panel can show
+                more than a search's shortlist without taking the page over. */}
+            {results.slice(0, 25).map((event) => (
               <li key={event.id} className="flex items-center gap-stack px-card py-2">
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-body-sm text-foreground">{event.title}</span>
@@ -360,9 +371,8 @@ function EventPicker({ onPick, busy }: { onPick: (eventId: string) => void; busy
                 </Button>
               </li>
             ))}
-          </ul>
-        )
-      ) : null}
+        </ul>
+      )}
     </div>
   );
 }
