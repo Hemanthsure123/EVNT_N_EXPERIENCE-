@@ -170,7 +170,7 @@ function grainAt(x, y) {
 function buildPoster(lights, seed) {
   const rnd = makeRandom(seed);
   // Two or three key lights in the upper two-thirds.
-  const sources = lights.map((colour, i) => ({
+  const sources = lights.map((colour) => ({
     colour,
     x: 0.16 + rnd() * 0.68,
     y: 0.12 + rnd() * 0.34,
@@ -931,6 +931,80 @@ const server = createServer((req, res) => {
       'Access-Control-Allow-Origin': '*',
     });
     res.end(png);
+    return;
+  }
+
+  // ── GET /homepage ────────────────────────────────────────────────────────
+  //
+  // The fixture served EVERY events endpoint and none of this, so the landing
+  // page rendered with no categories, no featured cities and no collections.
+  // That is why 26 of the 31 failing e2e specs were in `discovery.spec.ts`:
+  // not one assertion about prices or copy, but the whole page arriving empty,
+  // which then fails the heading, the category links, the JSON-LD and axe in
+  // one go.
+  //
+  // The shape is `Homepage` in `lib/api/cms.ts` and the eight categories are
+  // the eight in `lib/discovery/categories.ts` — the same list the specs name.
+  // A fixture that drifts from the contract is worse than no fixture, because
+  // it fails somewhere far from the cause.
+  if (path === '/api/v1/homepage') {
+    const cards = (list) =>
+      list.map((event, index) => ({
+        entry_id: `entry-${event.id}-${index}`,
+        id: event.id,
+        title: event.title,
+        venue: event.venue,
+        city: event.city,
+        starts_at: event.starts_at,
+        poster_url: event.poster_url,
+        from_price: event.from_price,
+        tickets_available: event.tickets_available,
+        organization_id: event.organization_id,
+        organization_name: event.organization_name,
+      }));
+
+    const upcoming = buildEvents().filter((event) => new Date(event.starts_at) > new Date());
+    sendJson(req, res, 200, {
+      hero: {
+        headline: 'What do you feel like?',
+        description: 'Concerts, comedy, workshops and more, across India.',
+        primary_cta: 'Browse events',
+        secondary_cta: 'Hire a performer',
+        search_placeholder: 'Search events, artists or venues',
+        trust_badges: ['Instant tickets', 'Verified organisers', 'Refund protection'],
+      },
+      ribbon: { enabled: false, text: '' },
+      footer_note: '',
+      categories: [
+        { slug: 'concerts', label: 'Concerts', icon: 'Music', search_term: 'concert' },
+        { slug: 'comedy', label: 'Comedy', icon: 'Mic', search_term: 'comedy' },
+        { slug: 'workshops', label: 'Workshops', icon: 'Palette', search_term: 'workshop' },
+        { slug: 'sports', label: 'Sports', icon: 'Trophy', search_term: 'sports' },
+        { slug: 'festivals', label: 'Festivals', icon: 'Tent', search_term: 'festival' },
+        { slug: 'nightlife', label: 'Nightlife', icon: 'Disc3', search_term: 'nightlife' },
+        { slug: 'food-drink', label: 'Food & Drink', icon: 'UtensilsCrossed', search_term: 'food' },
+        { slug: 'tech', label: 'Tech', icon: 'Cpu', search_term: 'tech' },
+      ].map((entry, index) => ({ id: fixtureId(2000 + index), ...entry })),
+      featured_cities: ['Mumbai', 'Bengaluru', 'Delhi', 'Pune'].map((name, index) => ({
+        id: fixtureId(2100 + index),
+        name,
+        image_url: `${ORIGIN}/media/posters/${index}.png`,
+      })),
+      popular_searches: [
+        { label: 'Comedy nights', query: 'comedy' },
+        { label: 'This weekend', query: 'weekend' },
+        { label: 'Live music', query: 'concert' },
+      ].map((entry, index) => ({ id: fixtureId(2200 + index), ...entry })),
+      collections: {
+        featured: cards(upcoming.slice(0, 8)),
+        trending: cards(upcoming.slice(8, 16)),
+        editors_pick: cards(upcoming.slice(16, 24)),
+        recommended: cards(upcoming.slice(24, 32)),
+        new: cards(upcoming.slice(32, 40)),
+      },
+      version: 1,
+      generated_at: new Date().toISOString(),
+    }, LIST_CACHE_CONTROL);
     return;
   }
 
