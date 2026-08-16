@@ -167,6 +167,21 @@ class Event(models.Model):
     seo_title = models.CharField(max_length=70, blank=True, default="")
     seo_description = models.CharField(max_length=160, blank=True, default="")
 
+    #: The human-readable half of the public URL `/events/{slug}-{id}`.
+    #:
+    #: DERIVED from the title (see `slugs.event_slug`), never organizer-supplied
+    #: — it is deliberately absent from `services._EDITABLE_FIELDS`, so a PATCH
+    #: carrying `{"slug": ...}` is ignored.
+    #:
+    #: Deliberately NOT unique and NOT indexed. Nothing ever queries by it: the
+    #: UUID in the same path segment carries identity, so two events with the
+    #: same title are still distinguishable and a rename can never orphan a
+    #: link. Blank is a real, working state — a title that ASCII-slugifies to
+    #: nothing (Devanagari, Tamil, emoji) serves the bare `/events/{id}` URL
+    #: the platform served before this column existed, which is also what every
+    #: row looks like between the schema migration and the backfill.
+    slug = models.CharField(max_length=80, blank=True, default="")
+
     venue = models.CharField(max_length=255)
     city = models.CharField(max_length=120)
 

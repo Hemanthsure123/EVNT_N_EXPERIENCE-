@@ -288,6 +288,12 @@ class EventCardSerializer(serializers.ModelSerializer):
         model = Event
         fields = [
             "id",
+            # The readable half of `/events/{slug}-{id}`. Sent on every payload
+            # that a link is built from, so the frontend CONCATENATES rather
+            # than re-deriving it — a slug computed independently on both sides
+            # eventually disagrees, and a canonical tag that disagrees with the
+            # sitemap is an SEO bug nobody notices for months.
+            "slug",
             "title",
             "venue",
             "city",
@@ -362,6 +368,8 @@ class EventDetailSerializer(serializers.ModelSerializer):
         model = Event
         fields = [
             "id",
+            # See EventCardSerializer — the frontend concatenates, never derives.
+            "slug",
             "organization_id",
             "organization_name",
             "organization_verified",
@@ -413,6 +421,9 @@ class OrganizerEventSummarySerializer(serializers.ModelSerializer):
         model = Event
         fields = [
             "id",
+            # So the organizer's own table links to the canonical public URL
+            # rather than one that redirects.
+            "slug",
             "title",
             "city",
             "category",
@@ -423,6 +434,25 @@ class OrganizerEventSummarySerializer(serializers.ModelSerializer):
             "organization_id",
             "organization_name",
         ]
+        read_only_fields = fields
+
+
+class EventSitemapEntrySerializer(serializers.ModelSerializer):
+    """One `/sitemap.xml` row: what to link to, and when it last changed.
+
+    Three columns, deliberately. A sitemap needs a URL and a date; serializing a
+    card here would read a poster URL, a price and an organization name only to
+    discard them, on the one endpoint whose response is the largest on the
+    platform.
+
+    `updated_at` is the point of the endpoint as much as the URL is — the
+    frontend's sitemap previously stamped every entry with the build time,
+    which tells a crawler nothing about which pages are worth re-fetching.
+    """
+
+    class Meta:
+        model = Event
+        fields = ["id", "slug", "updated_at"]
         read_only_fields = fields
 
 

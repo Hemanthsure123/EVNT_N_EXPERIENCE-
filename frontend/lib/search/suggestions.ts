@@ -17,6 +17,7 @@
 
 import { fetchEvents } from '@/lib/api/events';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
+import { eventPath } from '@/lib/events/ref';
 import { browseHref } from '@/lib/discovery/filters';
 import type { SuggestionGroup, SuggestionsProvider } from './types';
 
@@ -59,7 +60,7 @@ export const derivedSuggestions: SuggestionsProvider = async (query, options = {
         type: 'event',
         label: event.title,
         sublabel: `${event.venue}, ${event.city}`,
-        href: `/events/${event.id}`,
+        href: eventPath(event),
       })),
     });
   }

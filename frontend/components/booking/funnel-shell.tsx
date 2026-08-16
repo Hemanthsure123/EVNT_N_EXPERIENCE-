@@ -6,6 +6,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Container } from '@/components/shell/container';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { cn } from '@/lib/utils/cn';
+import { eventPath } from '@/lib/events/ref';
 import { BookingProvider, useBooking } from './booking-context';
 import { Stepper } from './stepper';
 import { SummaryCard } from './summary-card';
@@ -59,7 +60,7 @@ function FunnelLayout({ children }: { children: React.ReactNode }) {
               16px tall on a phone. `-ml-3` pulls the pill's own padding back so
               the label still sits on the page's left edge optically. */}
           <Link
-            href={`/events/${event.id}`}
+            href={eventPath(event)}
             className={cn(
               '-ml-3 inline-flex h-control w-fit items-center gap-2 rounded-full px-3',
               'text-label text-muted-foreground',

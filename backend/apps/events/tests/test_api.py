@@ -475,3 +475,113 @@ def test_event_rows_are_soft_deleted_never_hard_deleted(make_event):
     event = make_event(status=EventStatus.LIVE)
     Event.objects.filter(pk=event.id).update(deleted_at=timezone.now())
     assert Event.objects.filter(pk=event.id).exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /events/sitemap — the crawler's index of every event page
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_sitemap_lists_only_publicly_visible_events(api_client, make_event):
+    live = make_event(title="Live Show", status=EventStatus.LIVE)
+    make_event(title="A Draft", status=EventStatus.DRAFT)
+    make_event(title="Pending", status=EventStatus.PENDING_REVIEW)
+    deleted = make_event(title="Deleted", status=EventStatus.LIVE)
+    Event.objects.filter(pk=deleted.id).update(deleted_at=timezone.now())
+
+    resp = api_client.get("/api/v1/events/sitemap")
+
+    assert resp.status_code == 200
+    ids = {row["id"] for row in resp.json()["data"]}
+    assert ids == {str(live.id)}
+
+
+@pytest.mark.django_db
+def test_sitemap_includes_past_events_unlike_the_browse_list(api_client, make_event):
+    # A past event's page still resolves, still carries its structured data,
+    # and is still what somebody searching for last month's show should land
+    # on. The browse list bounds itself to upcoming; this must not.
+    past = make_event(
+        title="Last Month", status=EventStatus.LIVE, starts_at=timezone.now() - timedelta(days=30)
+    )
+
+    resp = api_client.get("/api/v1/events/sitemap")
+
+    assert str(past.id) in {row["id"] for row in resp.json()["data"]}
+
+
+@pytest.mark.django_db
+def test_sitemap_carries_the_slug_and_a_real_updated_at(api_client, make_event):
+    make_event(title="Sunburn Arena 2026", status=EventStatus.LIVE)
+
+    row = api_client.get("/api/v1/events/sitemap").json()["data"][0]
+
+    assert row["slug"] == "sunburn-arena-2026"
+    # `lastModified` is the point of this endpoint as much as the URL is: the
+    # sitemap used to stamp the build time on every entry, which tells a
+    # crawler that everything changed at once and nothing in particular is
+    # worth re-fetching.
+    assert row["updated_at"]
+
+
+@pytest.mark.django_db
+def test_sitemap_is_public_and_edge_cacheable(api_client, make_event):
+    make_event(status=EventStatus.LIVE)
+
+    resp = api_client.get("/api/v1/events/sitemap")
+
+    assert resp.status_code == 200  # no auth
+    cache_control = resp.headers["Cache-Control"]
+    assert "public" in cache_control
+    assert "s-maxage=3600" in cache_control
+    assert resp.headers["ETag"]
+
+
+@pytest.mark.django_db
+def test_sitemap_query_budget(api_client, make_event, django_assert_num_queries):
+    for i in range(5):
+        make_event(title=f"Show {i}", status=EventStatus.LIVE)
+
+    # ONE query for the whole document — no auth lookup (it is public), no
+    # per-row join. Three columns off one partial index.
+    with django_assert_num_queries(1):
+        resp = api_client.get("/api/v1/events/sitemap")
+    assert len(resp.json()["data"]) == 5
+
+
+@pytest.mark.django_db
+def test_sitemap_route_is_not_shadowed_by_the_detail_route(api_client, make_event):
+    # An event titled "Sitemap" slugs to `sitemap`. It cannot reach this URL,
+    # because the public path is `/events/{slug}-{uuid}` and the API's own
+    # detail route is `<uuid:event_id>` — but the route ordering is asserted
+    # here so a future looser converter cannot silently break it.
+    make_event(title="Sitemap", status=EventStatus.LIVE)
+
+    resp = api_client.get("/api/v1/events/sitemap")
+
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["data"], list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `slug` on the payloads that links are built from
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_slug_is_on_the_card_detail_and_organizer_payloads(authed_client, make_event):
+    make_event(title="Comedy Night with Kanan Gill", status=EventStatus.LIVE)
+    expected = "comedy-night-with-kanan-gill"
+
+    card = authed_client.get("/api/v1/events").json()["data"][0]
+    detail = authed_client.get(f"/api/v1/events/{card['id']}").json()
+    organizer = authed_client.get("/api/v1/organizer/events").json()["data"][0]
+
+    # The frontend CONCATENATES `{slug}-{id}`; it never re-derives the slug.
+    # A slug computed independently on both sides eventually disagrees, and a
+    # canonical tag that disagrees with the sitemap is an SEO fault nobody
+    # notices for months.
+    assert card["slug"] == expected
+    assert detail["slug"] == expected
+    assert organizer["slug"] == expected

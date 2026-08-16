@@ -27,6 +27,7 @@ import {
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateLong, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
+import { eventPath } from '@/lib/events/ref';
 import { CTA_PILL_LG, PILL_MD } from './cta';
 import { useBooking } from './booking-context';
 import { Rise, StepTransition } from './motion';
@@ -87,7 +88,11 @@ export function ReviewStep() {
    * The selection rides along in the query string so the panel opens on what
    * they already had rather than resetting it.
    */
-  const pickerHref = `/events/${event.id}${query}`;
+  // One canonical event URL for this screen — used by the picker link, the
+  // empty-selection bounce and the "View event" pill, so all three agree and
+  // none of them lands on a redirect.
+  const eventHref = eventPath(event);
+  const pickerHref = `${eventHref}${query}`;
   const payHref = booking
     ? `/booking/${event.id}/pay?${new URLSearchParams({
         [SELECTION_PARAM]: serialiseSelection(selection),
@@ -109,8 +114,8 @@ export function ReviewStep() {
   // it, and a redirect that lands on its own source is the specific way that
   // refactor goes wrong.
   React.useEffect(() => {
-    if (status !== 'unknown' && !selection.length) router.replace(`/events/${event.id}`);
-  }, [status, selection.length, router, event.id]);
+    if (status !== 'unknown' && !selection.length) router.replace(eventHref);
+  }, [status, selection.length, router, eventHref]);
 
   React.useEffect(() => {
     if (status !== 'authenticated' || !selection.length || booking || attempted.current) return;
@@ -260,7 +265,7 @@ export function ReviewStep() {
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button variant="outline" asChild className={PILL_MD}>
-                  <Link href={`/events/${event.id}`}>View event</Link>
+                  <Link href={eventHref}>View event</Link>
                 </Button>
                 <Button variant="ghost" asChild className={PILL_MD}>
                   <a href={directions} target="_blank" rel="noopener noreferrer">

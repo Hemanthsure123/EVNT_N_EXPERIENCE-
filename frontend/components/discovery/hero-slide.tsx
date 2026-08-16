@@ -11,6 +11,7 @@ import {
   formatFromPrice,
   machineDate,
 } from '@/lib/discovery/format';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { FavouriteButton } from './favourite-button';
 import { ShareButton } from './share-button';
@@ -113,12 +114,12 @@ export function HeroSlide({
         {/* Secondary actions — outside the main link, so neither reads as
             navigation. */}
         <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-          <ShareButton title={event.title} path={`/events/${event.id}`} />
+          <ShareButton title={event.title} path={eventPath(event)} />
           <FavouriteButton eventId={event.id} title={event.title} />
         </div>
 
         <Link
-          href={`/events/${event.id}`}
+          href={eventPath(event)}
           className={cn(
             'absolute inset-0 flex flex-col justify-end gap-6 p-6 sm:p-8',
             'transition-[opacity] duration-carousel ease-spring',

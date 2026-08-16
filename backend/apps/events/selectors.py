@@ -37,6 +37,13 @@ from .repositories import EventRepository
 
 EVENT_DETAIL_TTL_SECONDS = 60
 EVENT_LIST_TTL_SECONDS = 30
+#: An hour, far longer than any other read here. This is CRAWLER traffic, not
+#: user traffic: nothing on a visitor's path waits on it, a search engine
+#: re-fetches a sitemap on its own schedule of hours to days, and rebuilding it
+#: scans every live event. The generation counter still orphans it on any write
+#: (see `invalidate_event_caches`), so a newly published event does not wait an
+#: hour to become listed.
+EVENT_SITEMAP_TTL_SECONDS = 3600
 _LOCK_TIMEOUT_SECONDS = 5
 # How long a request that lost the single-flight race waits for the winner to
 # repopulate the cache before falling back to its own DB read. A by-PK rebuild
@@ -61,6 +68,14 @@ def event_detail_cache_key(event_id: uuid.UUID | str) -> str:
 
 def events_list_cache_key(generation: int, filter_hash: str) -> str:
     return f"events:list:v{generation}:{filter_hash}"
+
+
+def events_sitemap_cache_key(generation: int) -> str:
+    """Keyed by the SAME generation counter the listing caches use, so the one
+    `bump` every publicly-visible write already performs orphans this too. A
+    sitemap that keeps advertising a cancelled event for an hour is the failure
+    a separate, un-invalidated key would have."""
+    return f"events:sitemap:v{generation}"
 
 
 def compute_filter_hash(filters: dict) -> str:
@@ -154,6 +169,35 @@ def list_published_events(
     materialising anything."""
     events = events or EventRepository()
     return events.list_published(**filters)
+
+
+def get_events_sitemap_payload(
+    *, events: EventRepository | None = None, cache: CachePort | None = None
+) -> list[dict]:
+    """Every publicly-reachable event as `{id, slug, updated_at}`, for
+    `/sitemap.xml`.
+
+    Cached whole rather than paginated: a sitemap is consumed in one piece by
+    one kind of client, and cursor-paginating it would make the frontend issue
+    N requests at build time to assemble a document it then writes out in full.
+
+    No single-flight lock, unlike the detail read. Two crawlers arriving inside
+    the same expiry window is not a stampede, and the query is a single index
+    scan over one partial index — the protection would cost more than the race.
+    """
+    from .schemas import EventSitemapEntrySerializer
+
+    events = events or EventRepository()
+    cache = cache or _default_cache()
+
+    key = events_sitemap_cache_key(get_events_list_generation(cache))
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    rows = list(EventSitemapEntrySerializer(events.list_for_sitemap(), many=True).data)
+    cache.set(key, rows, timeout_seconds=EVENT_SITEMAP_TTL_SECONDS)
+    return rows
 
 
 def list_owner_events(

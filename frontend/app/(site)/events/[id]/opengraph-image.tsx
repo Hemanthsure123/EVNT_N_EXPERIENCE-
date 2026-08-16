@@ -1,6 +1,7 @@
 import { ImageResponse } from 'next/og';
 import { fetchEventDetail } from '@/lib/api/events';
 import { formatEventDateLong, formatFromPrice } from '@/lib/discovery/format';
+import { parseEventRef } from '@/lib/events/ref';
 import { OG_CONTENT_TYPE, OG_SIZE, OgCard, ogFonts } from '@/lib/seo/og-card';
 
 /**
@@ -54,7 +55,15 @@ export default async function EventOpengraphImage({ params }: { params: { id: st
   let badge: string | undefined;
 
   try {
-    const event = await fetchEventDetail(params.id);
+    // ── STRIP THE SLUG BEFORE FETCHING ────────────────────────────────────
+    // `params.id` is a REF (`{slug}-{uuid}`), and the API's routes are
+    // `<uuid:event_id>` — handing it the whole ref 404s, the `catch` below
+    // swallows that silently, and EVERY event's share preview quietly degrades
+    // to the generic site card with nothing logged anywhere. `parseEventRef`
+    // is pure precisely so it can run here, under the edge runtime.
+    const id = parseEventRef(params.id);
+    if (!id) throw new Error('not an event ref');
+    const event = await fetchEventDetail(id);
     title = event.title;
     // Venue and city, joined only when both are present — "Phoenix Marketcity ·
     // " with a dangling separator is the classic template tell.

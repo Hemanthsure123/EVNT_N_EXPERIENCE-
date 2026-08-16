@@ -11,6 +11,9 @@ import { SiteBottomNav } from '@/components/shell/site-bottom-nav';
 import { SiteHeader } from '@/components/shell/site-header';
 import { SearchProvider } from '@/components/search/search-context';
 import { LocationProvider } from '@/lib/location/location-context';
+import { SOCIAL_HANDLES } from '@/lib/brand';
+import { JsonLd, organizationJsonLd } from '@/lib/seo/json-ld';
+import { SITE_NAME, SITE_URL } from '@/lib/seo/metadata';
 
 /**
  * The public discovery shell. Everything under it is browsable WITHOUT an
@@ -44,6 +47,26 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
   return (
     <LocationProvider>
       <SearchProvider terms={terms}>
+        {/* ── WHO IS SAYING THIS ────────────────────────────────────────
+            Every page declared what it was ABOUT and no page declared the
+            PUBLISHER. `Organization` is what ties the domain to a name and a
+            logo in a knowledge panel, and it belongs once, on the public shell
+            — not in the root layout, which also wraps `/admin`, `/dashboard`
+            and `/studio`, all of them `noindex`.
+
+            `sameAs` carries only handles that are actually configured. An
+            unset one is dropped rather than emitted as an empty string: a
+            `sameAs` pointing nowhere is a reason for Google to distrust the
+            whole block, and inventing profiles is the fabrication this
+            codebase refuses everywhere else. */}
+        <JsonLd
+          data={organizationJsonLd({
+            name: SITE_NAME,
+            url: SITE_URL,
+            logo: `${SITE_URL}/icon`,
+            sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
+          })}
+        />
         {/* The first focusable thing on every page, so it wears the product's
             primary action: the near-black pill (near-white in dark), fully
             rounded. `focus:z-tooltip` keeps it above the sticky header — a skip

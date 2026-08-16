@@ -320,6 +320,56 @@ row can't take a page down. Types are hand-aligned now; run `npm run gen:api` to
 regenerate `lib/api/schema.d.ts` from the backend OpenAPI schema once the
 contract is frozen.
 
+## SEO
+
+Most of this was already in place — `app/robots.ts`, `app/sitemap.ts`, per-route
+`generateMetadata`, canonicals on eighteen routes, `Event` / `BreadcrumbList` /
+`ItemList` / `WebSite` / `FAQPage` JSON-LD, edge-generated OpenGraph cards,
+`noindex` on every private surface, one `<h1>` per page. Five things changed.
+
+**Event URLs are `/events/{slug}-{uuid}`.** The uuid is the identity; the slug is
+readable text the backend derives from the title and sends on every payload
+(`lib/events/ref.ts` concatenates, never re-derives — a slug computed on both
+sides eventually disagrees, and a canonical tag that disagrees with the sitemap
+is an SEO fault nobody notices for months). Because the uuid is always there,
+**no link can break**: a bare `/events/{uuid}` — every link shared before slugs
+existed, every ticket email, every organizer bookmark — still resolves, and 308s
+to the canonical URL. So does a stale slug after a rename.
+
+**That redirect is `middleware.ts`, and it has to be.** It was written in the
+page and in `generateMetadata` first, and neither can emit an HTTP status:
+`app/(site)/loading.tsx` gives the route group a Suspense boundary, so Next has
+already flushed the shell and downgrades the redirect to a CLIENT-side
+navigation encoded in the RSC stream. A browser follows it and looks fine;
+Googlebot sees `200 OK` with an empty shell. The middleware costs the hot path
+nothing — a canonical URL already carries its slug, so only a segment that is
+exactly 36 characters is looked up — and every failure falls through to
+`next()`, because the bare URL renders perfectly well on its own.
+
+**The sitemap lists every live event and every published performer**, with each
+row's real `updated_at` rather than the build time (`GET /events/sitemap`,
+`GET /performers/sitemap`). Event pages carry the `Event` structured data and are
+the only pages anybody searches for, and they were in no sitemap at all —
+reachable to a crawler only by walking landing pages that show twenty events
+each with no paginated URLs. Both feeds degrade to `[]` on failure: an exception
+in `sitemap.ts` does not lose the event URLs, it takes `/sitemap.xml` down.
+
+**Structured data is derived, never assumed.** `eventJsonLd` hard-coded
+`EventScheduled` and `InStock`, so a sold-out show advertised itself as buyable
+and a cancelled event told Google it was going ahead. Both now come off the row,
+and `availability` is omitted rather than guessed when nothing has counted the
+tickets. `JsonLd` also escapes `<` — every value in those blocks is an
+organizer's own title or venue, and `JSON.stringify` keeps the JSON valid while
+the HTML parser happily ends the script at the first literal `</script`.
+
+**A filtered browse URL canonicalises to the landing page that owns it.**
+`/events?category=comedy` → `/categories/comedy`, `?city=Mumbai` →
+`/cities/mumbai`, anything else → `/events`. Without it every filter permutation
+was an indexable near-duplicate competing with the prerendered landing pages
+built to rank for exactly those queries.
+
+`tests/e2e/seo.spec.ts` asserts all of it against a production build.
+
 ## Discovery layer
 
 ### The home page's reading order

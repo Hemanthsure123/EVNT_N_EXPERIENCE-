@@ -454,3 +454,136 @@ def test_create_with_poster_enqueues_async_processing(
     assert task_queue.enqueued == [
         ("events.process_poster", {"event_id": str(event.id), "poster_url": event.poster_url})
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The URL slug — derived, never client-supplied
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_create_event_derives_the_slug_from_the_title(service, organization, owner):
+    event = service.create_event(
+        actor_id=owner.id,
+        organization_id=organization.id,
+        title="Sunburn Arena 2026",
+        venue="V",
+        city="Goa",
+        starts_at=_future(),
+    )
+
+    assert event.slug == "sunburn-arena-2026"
+
+
+@pytest.mark.django_db
+def test_two_events_with_the_same_title_both_save(service, organization, owner):
+    """The test that documents why there is NO unique constraint on `slug`.
+
+    Five cities each running a "New Year's Eve Party" is not a conflict: the
+    uuid in the same path segment tells them apart. A unique slug would have
+    needed a collision suffix, a retry loop inside this transaction, and a
+    backfill that could fail on real duplicate titles in production.
+    """
+    first = service.create_event(
+        actor_id=owner.id,
+        organization_id=organization.id,
+        title="New Year's Eve Party",
+        venue="V",
+        city="Goa",
+        starts_at=_future(),
+    )
+    second = service.create_event(
+        actor_id=owner.id,
+        organization_id=organization.id,
+        title="New Year's Eve Party",
+        venue="V",
+        city="Mumbai",
+        starts_at=_future(),
+    )
+
+    assert first.slug == second.slug == "new-years-eve-party"
+    assert first.id != second.id
+
+
+@pytest.mark.django_db
+def test_renaming_an_event_regenerates_the_slug(service, make_event, owner):
+    event = make_event(title="Old Name", status=EventStatus.DRAFT)
+
+    updated = service.update_event(
+        event_id=event.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"title": "Brand New Name"},
+    )
+
+    # Safe precisely because the OLD url still resolves — it carries the same
+    # uuid — and 308s to this one.
+    assert updated.slug == "brand-new-name"
+
+
+@pytest.mark.django_db
+def test_an_edit_that_does_not_change_the_slug_does_not_rewrite_it(service, make_event, owner):
+    """ "Sunburn Arena!" -> "Sunburn Arena" is the same slug.
+
+    Writing it anyway would manufacture a redirect for an edit that changed no
+    URL, and churn a link people have shared for a punctuation fix.
+    """
+    event = make_event(title="Sunburn Arena", status=EventStatus.DRAFT)
+
+    updated = service.update_event(
+        event_id=event.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"title": "Sunburn Arena!"},
+    )
+
+    assert updated.slug == "sunburn-arena"
+
+
+@pytest.mark.django_db
+def test_editing_something_other_than_the_title_leaves_the_slug_alone(service, make_event, owner):
+    event = make_event(title="Jazz Night", status=EventStatus.DRAFT)
+
+    updated = service.update_event(
+        event_id=event.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"city": "Pune"},
+    )
+
+    assert updated.slug == "jazz-night"
+
+
+@pytest.mark.django_db
+def test_a_client_supplied_slug_is_ignored(service, make_event, owner):
+    """`slug` is DERIVED, so it is deliberately absent from `_EDITABLE_FIELDS`.
+
+    Accepting one would need validation this design otherwise does not need,
+    and would let a client point an event's URL at whatever text it liked.
+    """
+    event = make_event(title="Jazz Night", status=EventStatus.DRAFT)
+
+    updated = service.update_event(
+        event_id=event.id,
+        actor_id=owner.id,
+        expected_version=1,
+        changes={"slug": "something-else", "city": "Pune"},
+    )
+
+    assert updated.slug == "jazz-night"
+
+
+@pytest.mark.django_db
+def test_a_title_with_no_ascii_leaves_the_slug_empty(service, organization, owner):
+    # The event then serves `/events/{uuid}` — the URL this platform served
+    # before slugs existed. Not an error state.
+    event = service.create_event(
+        actor_id=owner.id,
+        organization_id=organization.id,
+        title="संगीत की रात",
+        venue="V",
+        city="Delhi",
+        starts_at=_future(),
+    )
+
+    assert event.slug == ""

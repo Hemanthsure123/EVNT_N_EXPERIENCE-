@@ -205,3 +205,39 @@ def test_list_by_owner_includes_drafts_and_excludes_other_owners(
     titles = {e.title for e in repo.list_by_owner(owner.id)}
 
     assert titles == {"Owner Live", "Owner Draft"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# list_for_sitemap
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_list_for_sitemap_uses_the_same_visibility_rule_as_the_public_list(repo, make_event):
+    """A sitemap that drifts from the read path advertises pages that 404,
+    which is worse for crawling than not listing them at all."""
+    live = make_event(title="Live", status=EventStatus.LIVE)
+    make_event(title="Draft", status=EventStatus.DRAFT)
+    gone = make_event(title="Deleted", status=EventStatus.LIVE)
+    Event.objects.filter(pk=gone.id).update(deleted_at=timezone.now())
+
+    assert [e.id for e in repo.list_for_sitemap()] == [live.id]
+
+
+@pytest.mark.django_db
+def test_list_for_sitemap_is_not_bounded_to_upcoming(repo, make_event):
+    past = make_event(
+        title="Past", status=EventStatus.LIVE, starts_at=timezone.now() - timedelta(days=40)
+    )
+
+    assert past.id in {e.id for e in repo.list_for_sitemap()}
+
+
+@pytest.mark.django_db
+def test_list_for_sitemap_respects_the_cap(repo, make_event):
+    for i in range(4):
+        make_event(title=f"Show {i}", status=EventStatus.LIVE)
+
+    # The cap exists because the sitemap protocol limits one file to 50,000
+    # URLs; past that the answer is a sitemap INDEX, not a bigger document.
+    assert len(list(repo.list_for_sitemap(limit=2))) == 2

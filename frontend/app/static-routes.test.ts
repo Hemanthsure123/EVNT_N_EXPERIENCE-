@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import sitemap from './sitemap';
 import robots from './robots';
 
@@ -83,9 +83,20 @@ describe('every route the footer links to actually exists', () => {
 });
 
 describe('the sitemap and robots.txt agree with each other', () => {
-  const entries = sitemap();
-  const urls = entries.map((entry) => entry.url);
+  // `sitemap()` is ASYNC now — it fetches the live event and performer URLs.
+  // Both fetches are the `...Safe` variants, so with no API reachable in a unit
+  // test they resolve to `[]` and what is asserted below is exactly the static
+  // half. That is the point: the static routes must survive an upstream that is
+  // down, because a sitemap build that throws does not lose the event URLs, it
+  // takes `/sitemap.xml` down entirely.
+  let entries: Awaited<ReturnType<typeof sitemap>>;
+  let urls: string[];
   const disallowed = (robots().rules as { disallow?: string[] }).disallow ?? [];
+
+  beforeAll(async () => {
+    entries = await sitemap();
+    urls = entries.map((entry) => entry.url);
+  });
 
   it('lists every public static page', () => {
     for (const route of [

@@ -59,6 +59,7 @@ from .models import Event, EventSlot, EventStatus, MediaKind
 from .publish_checks import run_publish_checks
 from .repositories import EventRepository, EventSlotRepository
 from .selectors import invalidate_event_caches
+from .slugs import event_slug
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,11 @@ class EventService:
                 place_id=place_id,
                 latitude=latitude,
                 longitude=longitude,
+                # The readable half of `/events/{slug}-{id}`. Derived here, on
+                # the ONE path that creates an event, so no row can exist
+                # without one — and never taken from the request (see
+                # `_EDITABLE_FIELDS`, which deliberately omits it).
+                slug=event_slug(title),
             )
             # We already hold the loaded org — attach it so serializing the
             # response doesn't lazy-load organization.name (an N+1).
@@ -355,6 +361,22 @@ class EventService:
         poster_url = self._upload_poster(event.id, poster) if poster is not None else None
         if poster_url is not None:
             applied_changes["poster_url"] = poster_url
+
+        # A renamed event gets a new slug, and the old URL keeps working — it
+        # carries the same UUID, so it resolves and redirects. Freezing the slug
+        # instead would mean an event whose title was fixed for a typo carries
+        # that typo in its URL forever.
+        #
+        # Guarded on the slug ACTUALLY differing, not merely on `title` being in
+        # the payload: "Sunburn Arena!" -> "Sunburn Arena" is the same slug, and
+        # writing it anyway would manufacture a redirect for an edit that
+        # changed no URL. This rides inside the same conditional UPDATE below,
+        # so it is covered by the optimistic lock and the cache invalidation
+        # with no extra plumbing.
+        if "title" in applied_changes:
+            new_slug = event_slug(applied_changes["title"])
+            if new_slug != event.slug:
+                applied_changes["slug"] = new_slug
 
         was_live = event.status == EventStatus.LIVE
 

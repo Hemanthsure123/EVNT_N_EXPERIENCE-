@@ -13,6 +13,7 @@ import {
   yahooCalendarUrl,
 } from '@/lib/event/calendar';
 import { cn } from '@/lib/utils/cn';
+import { eventPath } from '@/lib/events/ref';
 
 /**
  * Add to calendar.
@@ -52,7 +53,7 @@ export function AddToCalendar({ event, className }: { event: EventDetail; classN
     () =>
       toCalendarEvent(
         event,
-        typeof window === 'undefined' ? '' : `${window.location.origin}/events/${event.id}`,
+        typeof window === 'undefined' ? '' : `${window.location.origin}${eventPath(event)}`,
       ),
     [event],
   );

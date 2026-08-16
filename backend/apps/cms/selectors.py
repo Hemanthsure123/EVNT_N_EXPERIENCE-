@@ -108,6 +108,11 @@ def get_homepage(
             {
                 "entry_id": str(entry.id),
                 "id": str(event.id),
+                # The readable half of the public URL. Carried on the card so a
+                # curated front-page link is the CANONICAL /events/{slug}-{id}
+                # rather than a bare-uuid URL that immediately 308s — a
+                # redirect on the most-clicked link on the site.
+                "slug": event.slug,
                 "title": event.title,
                 "venue": event.venue,
                 "city": event.city,

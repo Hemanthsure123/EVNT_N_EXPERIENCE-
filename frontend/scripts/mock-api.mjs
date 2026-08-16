@@ -261,6 +261,19 @@ function buildPoster(lights, seed) {
 
 const POSTERS = PALETTES.map((lights, i) => buildPoster(lights, 7919 + i * 104729));
 
+/** ASCII slug, matching `django.utils.text.slugify` closely enough for a
+ *  fixture: lowercase, non-alphanumerics collapsed to single hyphens. */
+function slugify(text) {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/, '');
+}
+
 /* -------------------------------------------------------------------------- */
 /* Fixture events                                                             */
 /* -------------------------------------------------------------------------- */
@@ -465,9 +478,19 @@ function buildEvents() {
         else if (availRoll < 0.92) ticketsAvailable = 120 + Math.floor(rnd() * 900);
 
         const org = pick(rnd, seed.orgs);
+        const eventTitle = copy === 0 ? title : `${title} — ${pick(rnd, CITIES)} Edition`;
         events.push({
           id: fixtureId(n),
-          title: copy === 0 ? title : `${title} — ${pick(rnd, CITIES)} Edition`,
+          // Mirrors `backend/apps/events/slugs.event_slug`: the readable half
+          // of `/events/{slug}-{id}`. The fixture has to carry it or the e2e
+          // suite exercises the bare-uuid fallback and never the real URL.
+          slug: slugify(eventTitle),
+          title: eventTitle,
+          // Sent as null/0 by the real serializer, never omitted: `null` means
+          // NOBODY HAS REVIEWED, which the card renders as no badge at all
+          // rather than as a terrible score.
+          rating: null,
+          rating_count: 0,
           venue: pick(rnd, seed.venues),
           city: pick(rnd, CITIES),
           starts_at: startsAt.toISOString(),
@@ -751,6 +774,9 @@ const authError = (res, req, status, code, message, details = {}) =>
 
 const CARD_FIELDS = [
   'id',
+  'slug',
+  'rating',
+  'rating_count',
   'title',
   'venue',
   'city',
@@ -763,21 +789,76 @@ const CARD_FIELDS = [
   'organization_name',
 ];
 
+/**
+ * EVERY field `EventDetailSerializer` sends — not a subset.
+ *
+ * It used to be fourteen of them, and the omissions were not harmless. The
+ * event page reads `event.policies.length`, and an ABSENT `policies` (rather
+ * than the empty list the real API always sends) threw
+ * `Cannot read properties of undefined` during render, which collapsed the
+ * whole event page to the not-found boundary — on every event, in every
+ * production-build run. A fixture that sends less than the contract does not
+ * merely under-test; it makes the app look broken in ways it is not.
+ *
+ * Blank/null defaults are supplied by `withDetailDefaults` below, because the
+ * real serializer never omits a field: "the organizer did not say" is `""` or
+ * `null` on the wire, and the frontend distinguishes that from missing.
+ */
 const DETAIL_FIELDS = [
   'id',
+  'slug',
   'organization_id',
   'organization_name',
+  'organization_verified',
   'title',
   'description',
   'venue',
   'city',
+  'category',
+  'place_id',
+  'latitude',
+  'longitude',
   'starts_at',
   'ends_at',
-  'category',
+  'status',
   'poster_url',
   'from_price',
   'tickets_available',
+  'rating',
+  'rating_count',
+  'version',
+  'created_at',
+  'short_description',
+  'duration_minutes',
+  'language',
+  'age_restriction',
+  'accessibility_notes',
+  'policies',
+  'seo_title',
+  'seo_description',
 ];
+
+/** The blank/null values the real serializer sends for anything unset. */
+const DETAIL_DEFAULTS = {
+  organization_verified: false,
+  place_id: '',
+  latitude: null,
+  longitude: null,
+  status: 'live',
+  rating: null,
+  rating_count: 0,
+  version: 1,
+  short_description: '',
+  duration_minutes: null,
+  language: '',
+  age_restriction: '',
+  accessibility_notes: '',
+  // ALWAYS a list, never undefined — this is the field whose absence broke the
+  // event page.
+  policies: [],
+  seo_title: '',
+  seo_description: '',
+};
 
 const project = (event, fields) => Object.fromEntries(fields.map((f) => [f, event[f]]));
 
@@ -1242,6 +1323,30 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // ── /events/sitemap and /performers/sitemap ──────────────────────────
+  // Declared BEFORE the `/events/{id}` match below, exactly as the real
+  // urls.py declares them before `<uuid:event_id>` — otherwise "sitemap" is
+  // read as an event id and the endpoint 404s.
+  if (path === '/api/v1/events/sitemap') {
+    const rows = buildEvents().map((e) => ({
+      id: e.id,
+      slug: e.slug,
+      // The fixture has no mutation, so every row's "last change" is the same
+      // instant. Real enough to prove the frontend reads it rather than
+      // stamping the build time on every entry.
+      updated_at: e.starts_at,
+    }));
+    sendJson(req, res, 200, { data: rows }, 'public, max-age=600, s-maxage=3600');
+    return;
+  }
+
+  if (path === '/api/v1/performers/sitemap') {
+    // Empty, and that is the honest answer: the fixture publishes no acts, so
+    // the sitemap carries no performer URLs rather than inventing any.
+    sendJson(req, res, 200, { data: [] }, 'public, max-age=600, s-maxage=3600');
+    return;
+  }
+
   const tiersMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/ticket-types\/?$/);
   if (tiersMatch) {
     const event = buildEvents().find((e) => e.id === tiersMatch[1]);
@@ -1270,7 +1375,13 @@ const server = createServer((req, res) => {
       req,
       res,
       200,
-      { ...project(event, DETAIL_FIELDS), status: 'live', version: 1 },
+      {
+        ...DETAIL_DEFAULTS,
+        created_at: event.starts_at,
+        ...Object.fromEntries(
+          Object.entries(project(event, DETAIL_FIELDS)).filter(([, v]) => v !== undefined),
+        ),
+      },
       DETAIL_CACHE_CONTROL,
     );
     return;

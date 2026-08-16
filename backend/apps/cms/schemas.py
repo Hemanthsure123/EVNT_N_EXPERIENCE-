@@ -48,6 +48,7 @@ class HomepageCategorySerializer(serializers.Serializer):
 class HomepageCardSerializer(serializers.Serializer):
     entry_id = serializers.CharField()
     id = serializers.CharField()
+    slug = serializers.CharField(allow_blank=True)
     title = serializers.CharField()
     venue = serializers.CharField()
     city = serializers.CharField()

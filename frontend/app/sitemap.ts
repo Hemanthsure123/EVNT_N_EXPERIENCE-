@@ -1,18 +1,44 @@
 import type { MetadataRoute } from 'next';
+import { fetchEventSitemapSafe } from '@/lib/api/events';
+import { fetchPerformerSitemapSafe } from '@/lib/api/performers';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
+import { eventPath } from '@/lib/events/ref';
 import { SITE_URL } from '@/lib/seo/metadata';
 
 /**
- * The discovery surface's sitemap: the home page, the browse hub, every city
- * and category LANDING page (the ones that are statically prerendered and meant
- * to rank), and the static company/legal/support pages.
+ * The site's sitemap: the home page, the browse hub, every city and category
+ * LANDING page, the static company/legal/support pages, EVERY LIVE EVENT, and
+ * every published performer profile.
  *
- * Individual event URLs are deliberately absent for now — enumerating them
- * needs a full crawl of the cursor-paginated list on every sitemap request. The
- * landing pages link to every live event, so they're all discoverable; a
- * dedicated `GET /events/sitemap` (ids + updated_at, no pagination) is the
- * right backend seam for listing them directly. See BACKLOG.md item 7.
+ * ── THE EVENT URLS ARE THE POINT ──────────────────────────────────────────
+ *
+ * They used to be absent, on the reasoning that enumerating them meant crawling
+ * a cursor-paginated list. That reasoning held, and the consequence was that
+ * the pages carrying `Event` structured data — the ones eligible for a rich
+ * result, and the only pages on the platform somebody actually searches for —
+ * were reachable to a crawler only by walking landing pages that show twenty
+ * events each with no paginated URLs. Everything past the twentieth soonest
+ * event in a city was, in practice, undiscoverable.
+ *
+ * `GET /events/sitemap` (BACKLOG item 7) is the seam that fixes it: three
+ * columns, unpaginated, edge-cached for an hour. Performer profiles are here
+ * for a related reason — they are indexable and canonical'd, and had no inbound
+ * link from anywhere on the public site.
+ *
+ * ── `lastModified` IS REAL NOW ────────────────────────────────────────────
+ *
+ * Every entry used to be stamped with `new Date()` — the build time — which
+ * tells a crawler that the entire site changed at once and therefore nothing in
+ * particular is worth re-fetching. Events and performers carry their own
+ * `updated_at`. The static routes still use the build time, correctly: their
+ * content genuinely does change only when the site is rebuilt.
+ *
+ * ── A FAILED FETCH DEGRADES, IT DOES NOT 500 ──────────────────────────────
+ *
+ * Both reads are the `...Safe` variants. An exception here would not drop the
+ * event URLs, it would take `/sitemap.xml` down completely, and the static half
+ * is worth far more than a 500.
  *
  * `/style-guide` USED TO BE HERE, at priority 0.1. It is internal design-system
  * documentation, and listing it submitted a swatch grid to Google as though it
@@ -60,8 +86,15 @@ const STATIC_ROUTES: ReadonlyArray<{
   { path: '/cookies', priority: 0.2, changeFrequency: 'yearly' },
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
+
+  // In parallel: neither depends on the other, and this route is regenerated
+  // on a long interval rather than per request, so the cost is paid once.
+  const [events, performers] = await Promise.all([
+    fetchEventSitemapSafe(),
+    fetchPerformerSitemapSafe(),
+  ]);
 
   return [
     { url: SITE_URL, lastModified: now, changeFrequency: 'hourly' as const, priority: 1 },
@@ -94,6 +127,26 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified: now,
       changeFrequency: route.changeFrequency,
       priority: route.priority,
+    })),
+
+    // Every live event. Priority 0.8 — the same as a landing page, because
+    // these ARE the destination: a landing page exists to lead here.
+    // `daily`, because price and availability move on an event that is selling.
+    ...events.map((event) => ({
+      url: `${SITE_URL}${eventPath(event)}`,
+      lastModified: new Date(event.updated_at),
+      changeFrequency: 'daily' as const,
+      priority: 0.8,
+    })),
+
+    // Published performer profiles. `weekly` rather than `daily`: a profile is
+    // a description of an act, not a live inventory count, so claiming daily
+    // change would spend crawl budget re-fetching pages that did not move.
+    ...performers.map((performer) => ({
+      url: `${SITE_URL}/hire/${performer.id}`,
+      lastModified: new Date(performer.updated_at),
+      changeFrequency: 'weekly' as const,
+      priority: 0.6,
     })),
   ];
 }

@@ -21,6 +21,14 @@ const SITE_DESCRIPTION =
   'Discover events and experiences, book tickets in seconds, and get in with a single scan.';
 
 /** App-wide metadata defaults (title template, OpenGraph, Twitter, robots). */
+/**
+ * Every event on the platform is in India, prices are in rupees and the dates
+ * are IST. Declaring it means a share preview and a search result are rendered
+ * for the audience the content is actually for, rather than defaulting to
+ * en_US.
+ */
+export const SITE_LOCALE = 'en_IN';
+
 export const defaultMetadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
@@ -34,6 +42,7 @@ export const defaultMetadata: Metadata = {
     type: 'website',
     siteName: SITE_NAME,
     url: SITE_URL,
+    locale: SITE_LOCALE,
     title: `${SITE_NAME} — Discover & book live events`,
     description: SITE_DESCRIPTION,
   },
@@ -49,12 +58,20 @@ export const defaultMetadata: Metadata = {
   },
 };
 
-/** Per-page metadata helper — merges a page title/description into the defaults. */
+/**
+ * Per-page metadata helper — merges a page title/description into the defaults.
+ *
+ * `locale` is repeated here, and it has to be: Next merges metadata per FIELD,
+ * so a page's `openGraph` REPLACES the root's rather than extending it. Setting
+ * it only in `defaultMetadata` meant the one page that inherited it was the one
+ * no route ever rendered — every real page dropped it, silently. Caught by an
+ * e2e assertion rather than by reading the merge rules.
+ */
 export function pageMetadata(title: string, description?: string): Metadata {
   return {
     title,
     description: description ?? SITE_DESCRIPTION,
-    openGraph: { title, description: description ?? SITE_DESCRIPTION },
+    openGraph: { title, description: description ?? SITE_DESCRIPTION, locale: SITE_LOCALE },
     twitter: { title, description: description ?? SITE_DESCRIPTION },
   };
 }

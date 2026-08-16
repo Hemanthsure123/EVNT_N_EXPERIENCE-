@@ -12,6 +12,7 @@ import {
   machineDate,
 } from '@/lib/discovery/format';
 import { ClayIcon } from '@/components/illustrations/clay';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
@@ -71,7 +72,7 @@ export function FeatureCard({
   return (
     <div className="group/card relative h-full">
       <Link
-        href={`/events/${event.id}`}
+        href={eventPath(event)}
         className={cn(
           // `border-border` is load-bearing on a white canvas: `bg-surface` IS
           // the page colour in light theme, so the hairline plus the shadow is

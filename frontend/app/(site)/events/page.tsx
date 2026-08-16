@@ -6,10 +6,12 @@ import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { ResultsView } from '@/components/discovery/results-view';
 import { fetchEventsSafe } from '@/lib/api/events';
 import { categoryBySlug } from '@/lib/discovery/categories';
+import { cityBySlug } from '@/lib/discovery/cities';
 import {
   type DiscoveryFilters,
   WHEN_LABELS,
   filtersFromSearchParams,
+  filtersToSearchParams,
   toServerQuery,
 } from '@/lib/discovery/filters';
 import { eventToJsonLd } from '@/lib/discovery/seo';
@@ -92,14 +94,64 @@ function breadcrumbs(filters: DiscoveryFilters, title: string): BreadcrumbItem[]
   return trail;
 }
 
+/**
+ * Where a filtered browse URL should consolidate its ranking.
+ *
+ * ── THE PROBLEM THIS SOLVES ───────────────────────────────────────────────
+ *
+ * This page set no canonical at all, so every filter permutation —
+ * `?category=comedy`, `?city=Mumbai`, `?when=weekend`, and every combination of
+ * them — was its own indexable, self-canonical URL. Those are near-duplicates
+ * of each other AND of `/categories/{slug}` and `/cities/{slug}`, which are
+ * statically prerendered, carry their own copy, and exist precisely to rank for
+ * those queries. The site was competing with itself, and the pages that lost
+ * were the ones designed to win.
+ *
+ * ── THE RULE ──────────────────────────────────────────────────────────────
+ *
+ * A filter that HAS a dedicated landing page points at it. Anything else —
+ * combinations, date windows, free text — points at `/events`, because there is
+ * no page for "comedy in Mumbai this weekend" and inventing one for every pair
+ * of filters is how a site ends up with ten thousand thin URLs.
+ *
+ * A canonical is a hint about DUPLICATE content, not a redirect: the filtered
+ * view still renders exactly what was asked for, and a visitor never notices.
+ */
+function canonicalFor(filters: DiscoveryFilters): string {
+  // Which filters are ACTUALLY set, asked of the same serialiser that builds
+  // browse URLs — so a default (`sort: 'soonest'`, which is always present on
+  // the parsed object and never in a URL) does not count as a filter, and a
+  // filter added later is picked up here for free. Testing raw truthiness on
+  // the parsed filters instead meant `sort` made every view look combined,
+  // and the landing-page canonicals never fired at all.
+  const active = [...filtersToSearchParams(filters).keys()];
+  if (active.length !== 1) return '/events';
+
+  if (active[0] === 'category') {
+    const category = categoryBySlug(filters.category);
+    if (category) return `/categories/${category.slug}`;
+  }
+  if (active[0] === 'city') {
+    // Only a CURATED city has a landing page — `generateStaticParams` +
+    // `notFound()` in `cities/[city]`. Canonicalising "Nashik" to a URL that
+    // 404s would be strictly worse than leaving it on /events, because a
+    // canonical pointing at a dead page can drop the real one from the index.
+    const city = cityBySlug(filters.city?.toLowerCase());
+    if (city) return `/cities/${city.slug}`;
+  }
+  return '/events';
+}
+
 export async function generateMetadata({
   searchParams,
 }: {
   searchParams: SearchParams;
 }): Promise<Metadata> {
-  const { title, description, indexable } = describe(filtersFromSearchParams(searchParams));
+  const filters = filtersFromSearchParams(searchParams);
+  const { title, description, indexable } = describe(filters);
   return {
     ...pageMetadata(title, description),
+    alternates: { canonical: canonicalFor(filters) },
     ...(indexable ? {} : { robots: { index: false, follow: true } }),
   };
 }

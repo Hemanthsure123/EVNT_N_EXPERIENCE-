@@ -176,6 +176,49 @@ export const fetchPerformers = (
     ...(opts.revalidate !== undefined ? { next: { revalidate: opts.revalidate } } : {}),
   });
 
+/** One `/sitemap.xml` row for a performer profile. */
+export type PerformerSitemapEntry = { id: string; updated_at: string };
+
+/**
+ * Every published performer URL, for `app/sitemap.ts`.
+ *
+ * NEVER THROWS, for the same reason `fetchEventSitemapSafe` does not: an
+ * exception in `sitemap.ts` does not drop these entries, it takes
+ * `/sitemap.xml` down entirely.
+ *
+ * An empty array is a perfectly good answer and the current one — nothing is
+ * published yet — and the sitemap then carries no performer URLs at all rather
+ * than inventing any.
+ */
+export async function fetchPerformerSitemapSafe(): Promise<PerformerSitemapEntry[]> {
+  try {
+    const page = await api.get<{ data: PerformerSitemapEntry[] }>('/performers/sitemap', {
+      auth: false,
+      next: { revalidate: 3600 },
+    });
+    return page.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The published acts, for the public `/hire` page.
+ *
+ * NEVER THROWS and returns `[]` on failure — `/hire` is primarily the enquiry
+ * form, and a listing that cannot load must not take the form down with it.
+ */
+export async function fetchPerformersSafe(
+  params: MarketplaceFilters = {},
+): Promise<PerformerCard[]> {
+  try {
+    const page = await fetchPerformers(params, { revalidate: MARKETPLACE_REVALIDATE_SECONDS });
+    return page.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export const fetchPerformerDetail = (performerId: string, opts: { revalidate?: number } = {}) =>
   api.get<PerformerDetail>(`/performers/${encodeURIComponent(performerId)}`, {
     auth: false,

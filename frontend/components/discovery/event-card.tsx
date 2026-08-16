@@ -8,6 +8,7 @@ import { availabilityBadge } from '@/lib/discovery/availability';
 import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
 import { EventPosterArt } from '@/components/illustrations/poster';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
@@ -211,7 +212,7 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
                 leaves the heart separately clickable inside it — nesting it in
                 an <a> would be invalid and unusable. */}
             <Link
-              href={`/events/${event.id}`}
+              href={eventPath(event)}
               className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
             >
               {event.title}

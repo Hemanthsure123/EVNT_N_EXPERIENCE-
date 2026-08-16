@@ -33,6 +33,14 @@ class _TagListField(serializers.ListField):
         super().__init__(**kwargs)
 
 
+class PerformerSitemapEntrySerializer(serializers.Serializer):
+    """One `/sitemap.xml` row: the id the URL is built from, and when the
+    profile last changed. Nothing else — a sitemap needs a URL and a date."""
+
+    id = serializers.CharField()
+    updated_at = serializers.DateTimeField()
+
+
 class PerformerCardSerializer(serializers.Serializer):
     id = serializers.CharField()
     stage_name = serializers.CharField()

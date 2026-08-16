@@ -1334,6 +1334,78 @@ instead of "every calendar sync 500s".
 withheld -> 403, Google unhappy -> 502. Four codes because the frontend must do
 four different things.
 
+## SEO: the URL is a contract, and structured data must not contradict the page
+
+The SEO foundation was already strong — `robots.ts`, `sitemap.ts`, per-route
+`generateMetadata`, canonicals on eighteen routes, `Event`/`BreadcrumbList`/
+`ItemList`/`WebSite`/`FAQPage` JSON-LD, edge-generated OG cards, `noindex` on
+every private surface, one `<h1>` per page. What was added closes specific gaps,
+and five rules come out of it.
+
+**1. An event URL is `/events/{slug}-{uuid}`, and the UUID is the identity.**
+`Event.slug` (`apps/events/slugs.py`, derived from the title on create/rename)
+is DECORATION; the uuid beside it is what resolves the row. That one decision is
+why there is **no unique constraint, no collision suffix, no slug-history
+table**, why a rename is free (the old URL still carries the same uuid and 308s
+to the new one), and why `GET /events/sitemap` and every future `/events/<word>`
+route is safe from an event titled "Sitemap". The slug is computed ONCE on the
+backend and serialized — `lib/events/ref.ts` concatenates, never re-derives, or
+the canonical tag and the sitemap eventually disagree and nobody notices for
+months. It is absent from `_EDITABLE_FIELDS`: a client cannot set it.
+
+**2. A redirect that must be a real 3xx cannot live in the page.**
+`app/(site)/loading.tsx` gives the route group a Suspense boundary, so Next
+flushes the shell before the page — or its `generateMetadata` — resolves. A
+`redirect()` thrown after that cannot set a status code: Next encodes it into
+the RSC stream as a CLIENT-side navigation. A browser follows it and everything
+looks right, and Googlebot sees `200 OK` with an empty shell. Both placements
+were written and both were measured with `curl` before `middleware.ts` was.
+**The middleware costs the hot path nothing**: a canonical URL already carries
+its slug, so only a segment that is EXACTLY 36 characters is looked up, and
+every failure falls through to `next()` — the bare URL renders perfectly well on
+its own. `matcher: ['/events/:ref+']`, not `:ref`: the plain form compiles to a
+regexp matching `/events` and nothing under it, which is invisible because the
+middleware then simply never runs.
+
+**3. Structured data is DERIVED, never assumed.** `eventJsonLd` used to
+hard-code `EventScheduled` and `InStock`, so a sold-out show advertised itself
+as buyable and a CANCELLED event — which keeps its page on purpose — told Google
+it was going ahead. Both now come off the row, and `availability` is OMITTED
+when `tickets_available` is null rather than guessed. Google demotes structured
+data that contradicts the page, and the visitor who clicks it has been misled by
+us. Same rule for the performer offer: "price on ask" emits no offer, because a
+zero reads as "free".
+
+**4. `JsonLd` escapes `<`.** Every value in those blocks is an organizer's own
+title, description or venue. `JSON.stringify` keeps the JSON valid, and the HTML
+parser does not care about JSON validity — it ends the script at the first
+literal `</script`. That was an XSS seam on the busiest public route, not just
+an SEO one.
+
+**5. A filtered browse URL canonicalises to the landing page that owns it.**
+`/events?category=comedy` points at `/categories/comedy`; `?city=Mumbai` at
+`/cities/mumbai`; anything else at `/events`. Without it every filter
+permutation was its own indexable URL competing with the prerendered landing
+pages built to rank for exactly those queries. The "is this the only filter"
+test asks `filtersToSearchParams`, NOT raw truthiness — `sort` always parses to
+`'soonest'` and made every view look combined, so the canonicals never fired.
+And a city canonicalises only if it is a CURATED one: `cities/[city]` calls
+`notFound()` for the rest, and a canonical pointing at a 404 can drop the real
+page from the index.
+
+**The sitemap now lists every live event and every published performer**, with a
+real `updated_at` rather than the build time (which tells a crawler the whole
+site changed at once and therefore nothing is worth re-fetching). Both feeds
+degrade to `[]` on failure: an exception in `sitemap.ts` does not lose the event
+URLs, it takes `/sitemap.xml` down entirely, and the static half is worth more
+than a 500. Both cap at `SITEMAP_MAX_URLS` (45,000) — past that the protocol
+needs a sitemap INDEX, which is deliberately not built before it is needed.
+
+**`/hire` lists acts again, but only when there are any.** The profiles are
+indexable and canonical'd and NOTHING linked to them, which makes a page not so
+much unranked as absent. Zero published acts renders nothing at all, exactly as
+before — a section nothing backs is absent, not empty.
+
 ## Saved events: the affordance comes before the account
 
 `events.SavedEvent` is a user's saved event, and the shape of the API follows

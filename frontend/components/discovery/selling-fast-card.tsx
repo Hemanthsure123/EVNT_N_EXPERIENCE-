@@ -7,6 +7,7 @@ import { inferCategory } from '@/lib/discovery/categories';
 import { demandSignal } from '@/lib/discovery/demand';
 import { formatEventDate, formatFromPrice, machineDate } from '@/lib/discovery/format';
 import { ClayIcon } from '@/components/illustrations/clay';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { categoryTint } from './category-tint';
 import { Countdown } from './countdown';
@@ -36,7 +37,7 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
 
   return (
     <Link
-      href={`/events/${event.id}`}
+      href={eventPath(event)}
       className={cn(
         'group/urgent flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-md',
         'transition duration-base ease-spring hover:-translate-y-1 hover:shadow-lg',

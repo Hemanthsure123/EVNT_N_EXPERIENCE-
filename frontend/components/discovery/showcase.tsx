@@ -5,6 +5,8 @@ import { Container } from '@/components/shell/container';
 import type { Homepage, HomepageCard } from '@/lib/api/cms';
 import { fetchEventsSafe } from '@/lib/api/events';
 import type { EventCard as EventCardModel } from '@/lib/api/types';
+import { eventToJsonLd } from '@/lib/discovery/seo';
+import { JsonLd, eventItemListJsonLd } from '@/lib/seo/json-ld';
 import { Aurora } from './aurora';
 import { Marquee } from './marquee';
 import { ShowcaseCard } from './showcase-card';
@@ -86,6 +88,26 @@ export async function Showcase({ collections }: { collections: Homepage['collect
 
   return (
     <section className="relative isolate overflow-hidden border-b border-border">
+      {/* ── THE CRAWLER-FACING MIRROR OF THE FIRST SCREEN ─────────────────
+          The front page is the most-linked URL on the site and it emitted no
+          ItemList at all: `WebSite` said the site had a search box and nothing
+          said what was on sale. These are the same events a visitor sees, in
+          the same order, with the same names and prices — so the structured
+          data cannot claim anything the page does not show.
+
+          NAMED the same way the heading is. Curated and derived are different
+          rows and the ItemList says which it is, for exactly the reason the
+          <h1> does: presenting an index query as an editor's choice is a
+          fabrication whether a person or a crawler reads it. */}
+      {events.length ? (
+        <JsonLd
+          data={eventItemListJsonLd(
+            isCurated ? 'Featured this week' : 'On sale now',
+            events.map(eventToJsonLd),
+          )}
+        />
+      ) : null}
+
       <Aurora />
 
       <Container className="flex flex-col gap-8 py-14 sm:gap-10 sm:py-20">

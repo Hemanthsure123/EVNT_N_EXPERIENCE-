@@ -16,6 +16,7 @@ import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateLong } from '@/lib/discovery/format';
 import { summariseTiers } from '@/lib/discovery/tiers';
+import { eventPath, parseEventRef } from '@/lib/events/ref';
 import { JsonLd, breadcrumbJsonLd, eventJsonLd } from '@/lib/seo/json-ld';
 import { SITE_URL, pageMetadata } from '@/lib/seo/metadata';
 
@@ -71,9 +72,28 @@ async function getTiers(id: string): Promise<TicketTier[]> {
   }
 }
 
+/**
+ * `[id]` is a REF, not a bare id: `{slug}-{uuid}`, of which the bare uuid is
+ * the degenerate case (see lib/events/ref.ts). Everything that fetches has to
+ * strip it back to the uuid, because the API's routes are `<uuid:event_id>`
+ * and would 404 on the full ref.
+ */
+function eventIdFrom(ref: string): string | null {
+  return parseEventRef(ref);
+}
+
 export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
-  const event = await getEvent(params.id);
+  const id = eventIdFrom(params.id);
+  if (!id) return pageMetadata('Event not found');
+  const event = await getEvent(id);
   if (!event) return pageMetadata('Event not found');
+
+  // The canonical-URL redirect is NOT here. It lives in `middleware.ts`,
+  // because neither this function nor the page body can emit a real HTTP
+  // status once `app/(site)/loading.tsx` has flushed the shell — Next
+  // downgrades the redirect to a client-side navigation that no crawler
+  // follows. The long explanation is in that file.
+
   // The organizer's own SEO copy wins when they wrote it; otherwise the
   // derived line, which is built from real columns and never invented. The
   // Studio's search preview applies exactly this fallback, so what an
@@ -83,31 +103,51 @@ export async function generateMetadata({ params }: { params: { id: string } }): 
   const description = event.seo_description?.trim() || event.short_description?.trim() || derived;
   return {
     ...pageMetadata(title, description),
-    alternates: { canonical: `/events/${event.id}` },
+    // The canonical is the SLUG url, whichever URL was requested. This is what
+    // consolidates a bare-uuid link's ranking onto the readable one, and it
+    // does that on its own — the 308 in `middleware.ts` is belt as well as
+    // braces, and covers the stale-slug case the middleware deliberately
+    // skips.
+    alternates: { canonical: eventPath(event) },
     openGraph: {
       title,
       description,
-      ...(event.poster_url ? { images: [{ url: event.poster_url }] } : {}),
+      // ── NO `images` HERE, DELIBERATELY ────────────────────────────────
+      // Setting it would override `opengraph-image.tsx` in this same segment,
+      // which is the hand-designed 1200x630 card carrying the title, the date
+      // and the price over the poster. That override meant every event WITH a
+      // poster shared as a bare poster of arbitrary aspect ratio — cropped to
+      // an unpredictable centre by every platform — and the designed card only
+      // ever appeared for events that had no poster at all, i.e. exactly the
+      // ones with the least to show.
     },
   };
 }
 
 export default async function EventDetailPage({ params }: { params: { id: string } }) {
+  const id = eventIdFrom(params.id);
+  // Not a ref at all. A 404 rather than a guess: a segment with no uuid in it
+  // is a request for a page that does not exist, not a mangled event.
+  if (!id) notFound();
+
   // All three reads only need the id from the URL, so they go out together
   // rather than one after another — on a slow link that's two whole round trips
   // off the time to first byte, and this route is `force-dynamic`, so it's paid
   // on every request. `fetchEventContentSafe` never throws, so a blip in the
   // below-the-fold enrichment cannot take down the buy button.
   const [event, tiers, content] = await Promise.all([
-    getEvent(params.id),
-    getTiers(params.id),
-    fetchEventContentSafe(params.id),
+    getEvent(id),
+    getTiers(id),
+    fetchEventContentSafe(id),
   ]);
   if (!event) notFound();
 
+  // No canonical-URL redirect here either — see the note in
+  // `generateMetadata` above, and `middleware.ts`, which owns it.
+
   const category = inferCategory(event);
   const summary = summariseTiers(tiers);
-  const url = `${SITE_URL}/events/${event.id}`;
+  const url = `${SITE_URL}${eventPath(event)}`;
 
   const crumbs = [
     { label: 'Home', href: '/' },
@@ -129,6 +169,20 @@ export default async function EventDetailPage({ params }: { params: { id: string
           image: event.poster_url || undefined,
           description: event.description || undefined,
           priceMinor: summary.fromPrice ?? event.from_price,
+          // Both DERIVED, never assumed. A cancelled event keeps its page on
+          // purpose (people hold the link in an email), and telling Google it
+          // is going ahead as scheduled — which is what the hard-coded value
+          // did — is a claim the page itself contradicts two lines further
+          // down.
+          //
+          // The tier read is the freshest availability on the page — but only
+          // when there ARE tiers. An empty list means "not on sale yet" or "the
+          // tier fetch failed", and `summary.available` is 0 for both, which
+          // would publish a SOLD OUT claim about an event that has simply not
+          // opened. Falling back to the event's own denormal keeps unknown as
+          // unknown, and `eventJsonLd` then omits `availability` entirely.
+          status: event.status,
+          ticketsAvailable: summary.tiers.length ? summary.available : event.tickets_available,
         })}
       />
       <JsonLd

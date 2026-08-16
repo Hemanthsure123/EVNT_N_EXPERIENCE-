@@ -33,6 +33,9 @@ urlpatterns = [
     # ── PUBLIC MARKETPLACE ───────────────────────────────────────────────
     path("performers", api.PerformerBrowseView.as_view(), name="performer-browse"),
     path("performers/facets", api.MarketplaceFacetsView.as_view(), name="performer-facets"),
+    # Before the <uuid:performer_id> route for the same reason the events
+    # sitemap route is: a literal segment must not be reachable as an id.
+    path("performers/sitemap", api.PerformerSitemapView.as_view(), name="performer-sitemap"),
     path(
         "performers/<uuid:performer_id>",
         api.PerformerDetailView.as_view(),

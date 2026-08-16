@@ -36,6 +36,11 @@ from .models import (
 # select_related join. Deliberately tiny: this is the highest-volume payload.
 _CARD_FIELDS = (
     "id",
+    # The human-readable half of `/events/{slug}-{id}`. In EVERY field set that
+    # feeds a serializer for the same deferred-load reason as `category` below:
+    # a card that has to re-fetch it is one extra query per card, on the
+    # highest-volume payload on the platform.
+    "slug",
     "title",
     "venue",
     "city",
@@ -59,6 +64,8 @@ _CARD_FIELDS = (
 # Columns the fuller event *detail* needs.
 _DETAIL_FIELDS = (
     "id",
+    # See the note in _CARD_FIELDS: serialized, so it must not be deferred.
+    "slug",
     "organization_id",
     "organization__name",
     # Whether an operator has verified the organizer. Rides on the SAME
@@ -118,6 +125,10 @@ _DETAIL_FIELDS = (
 # show there).
 _ORGANIZER_CARD_FIELDS = (
     "id",
+    # See the note in _CARD_FIELDS: serialized, so it must not be deferred.
+    # The organizer's own table links to the public page, and it should link to
+    # the canonical URL rather than one that redirects.
+    "slug",
     "title",
     "city",
     "starts_at",
@@ -145,11 +156,23 @@ _WRITE_LOAD_FIELDS = (
     # detail field set's comment above describes.
     "organization__verified_level",
     "title",
+    # `update_event` compares the newly-derived slug against the stored one, so
+    # that a title edit which produces the SAME slug writes nothing and costs no
+    # redirect. Reading it here keeps that comparison free rather than making it
+    # a deferred load on every edit.
+    "slug",
     "venue",
     "starts_at",
     "status",
     "version",
 )
+
+#: Hard ceiling on `/sitemap.xml` entries. The sitemap protocol caps a single
+#: file at 50,000 URLs (and 50MB); this leaves room for the static routes and
+#: the performer pages the same document carries. Past this the correct answer
+#: is a sitemap INDEX splitting events across several files — a real piece of
+#: work, deliberately not built before there are 45,000 live events to need it.
+SITEMAP_MAX_URLS = 45_000
 
 
 class EventRepository(BaseRepository[Event]):
@@ -198,13 +221,9 @@ class EventRepository(BaseRepository[Event]):
         """
         lower_bound = starts_after or timezone.now()
         qs = (
-            self.get_queryset()
+            self._publicly_visible()
             .select_related("organization")
-            .filter(
-                status=EventStatus.LIVE,
-                deleted_at__isnull=True,
-                starts_at__gte=lower_bound,
-            )
+            .filter(starts_at__gte=lower_bound)
         )
         if city:
             qs = qs.filter(city=city)
@@ -225,6 +244,37 @@ class EventRepository(BaseRepository[Event]):
                 search_vector=SearchQuery(search, config="english", search_type="websearch")
             )
         return qs.only(*_CARD_FIELDS).order_by("starts_at", "id")
+
+    def list_for_sitemap(self, *, limit: int = SITEMAP_MAX_URLS) -> QuerySet[Event]:
+        """Every publicly-reachable event, for `/sitemap.xml`.
+
+        Three columns and nothing else — a sitemap needs a URL and a date, so
+        pulling a card payload here would be reading a poster URL and a price
+        to throw them away.
+
+        The visibility filter is `_publicly_visible()`, the SAME predicate
+        `list_published` uses, rather than a restatement of it. A sitemap that
+        drifts from the read path advertises pages that 404, which is worse for
+        crawling than not listing them at all.
+
+        Unlike the browse list this is NOT bounded to upcoming events: a past
+        event's page still resolves, still carries its structured data, and is
+        still what somebody searching for last month's show should land on.
+
+        Ordered `-updated_at` so the freshest rows survive the cap. The cap
+        exists because a sitemap file is limited to 50,000 URLs / 50MB by the
+        protocol — past that this needs a sitemap INDEX, which is the next step
+        and deliberately not built before it is needed.
+        """
+        return (
+            self._publicly_visible()
+            .only("id", "slug", "updated_at")
+            .order_by("-updated_at", "id")[:limit]
+        )
+
+    def _publicly_visible(self) -> QuerySet[Event]:
+        """Rows a signed-out visitor may see: live and not soft-deleted."""
+        return self.get_queryset().filter(status=EventStatus.LIVE, deleted_at__isnull=True)
 
     # --- reads: organizer --------------------------------------------------
 
@@ -266,10 +316,13 @@ class EventRepository(BaseRepository[Event]):
         place_id: str = "",
         latitude=None,
         longitude=None,
+        slug: str = "",
     ) -> Event:
         return Event.objects.create(
             organization_id=organization_id,
             title=title,
+            # Derived from the title by the service, never client-supplied.
+            slug=slug,
             venue=venue,
             city=city,
             starts_at=starts_at,

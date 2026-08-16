@@ -41,6 +41,11 @@ node_modules/
 # HERE, where frontend/.gitignore's anchored rules cannot reach it — that has
 # already happened once with test-results/.
 .next/
+# Alternate Next build outputs (`NEXT_DIST_DIR=…`). A verification build must
+# never write into `.next/` while a dev server is holding it — on Windows that
+# silently corrupts the running server's output — so these get their own
+# directories, and they are build artefacts exactly as `.next/` is.
+.next-*/
 frontend/out/
 frontend/.env.local
 test-results/

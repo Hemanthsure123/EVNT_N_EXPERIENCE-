@@ -49,6 +49,7 @@ from .schemas import (
     EventMediaListSerializer,
     EventMediaSerializer,
     EventSearchQuerySerializer,
+    EventSitemapEntrySerializer,
     EventSlotSerializer,
     EventTimelineSerializer,
     OrganizerEventSummarySerializer,
@@ -71,6 +72,7 @@ from .selectors import (
     events_list_cache_key,
     get_event_detail_payload,
     get_events_list_generation,
+    get_events_sitemap_payload,
     list_owner_events,
     list_published_events,
 )
@@ -83,6 +85,13 @@ _PUBLIC_LIST_S_MAXAGE = 30
 _PUBLIC_DETAIL_MAX_AGE = 30
 _PUBLIC_DETAIL_S_MAXAGE = 60
 _PUBLIC_SWR = 30
+
+# The sitemap is read by crawlers on their own schedule, not on a visitor's
+# path, so it is cached for far longer than the discovery reads above — and it
+# is the one response here where serving a slightly stale copy costs nothing.
+_SITEMAP_MAX_AGE = 600
+_SITEMAP_S_MAXAGE = 3600
+_SITEMAP_SWR = 3600
 
 
 def _no_store(response: Response) -> Response:
@@ -164,6 +173,46 @@ class EventListCreateView(APIView):
 
         return _no_store(
             Response(EventDetailSerializer(event).data, status=status.HTTP_201_CREATED)
+        )
+
+
+class EventSitemapView(APIView):
+    """Every publicly-reachable event URL, for the frontend's `/sitemap.xml`.
+
+    ── WHY THIS ENDPOINT EXISTS ──────────────────────────────────────────────
+    Event detail pages are the ones carrying `Event` structured data and the
+    ones eligible for rich results, and until now they appeared in no sitemap
+    at all — a crawler could reach them only by walking landing pages that show
+    twenty events each with no paginated URLs. Everything below the twentieth
+    soonest event in a city was, in practice, undiscoverable.
+
+    ── NOT THE BROWSE ENDPOINT WITH A BIG page_size ──────────────────────────
+    That one is cursor-paginated (so a sitemap build would issue N requests),
+    bounded to UPCOMING events (a past event's page still resolves and should
+    still be indexed), and returns a full card payload per row. This returns
+    three columns and the whole set.
+
+    Public and edge-cacheable with a long TTL: it is identical for everyone and
+    is read by crawlers, not by visitors.
+    """
+
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses={200: EventSitemapEntrySerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        body = {"data": get_events_sitemap_payload()}
+
+        etag = make_etag(body)
+        if is_not_modified(request, etag):
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+
+        return with_cache_headers(
+            Response(body),
+            etag=etag,
+            max_age_seconds=_SITEMAP_MAX_AGE,
+            private=False,
+            s_maxage_seconds=_SITEMAP_S_MAXAGE,
+            stale_while_revalidate_seconds=_SITEMAP_SWR,
         )
 
 

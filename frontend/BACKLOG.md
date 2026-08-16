@@ -103,18 +103,31 @@ today, so "popular" is currently an assertion.
 
 ---
 
-### 7. A sitemap feed — `GET /events/sitemap`
+### 7. A sitemap feed — `GET /events/sitemap` — DONE
 
-**Interim:** `app/sitemap.ts` lists the home page, the browse hub, and every
-statically-prerendered city and category landing page. Individual event URLs are
-absent: enumerating them today would mean crawling the cursor-paginated list on
-every sitemap request. Every live event is still discoverable — the landing
-pages link to them.
+Built as specified: `id`, `slug` and `updated_at`, unpaginated, public and
+edge-cached for an hour (crawler traffic, never a visitor's). The visibility
+filter is the SAME predicate the public browse list uses
+(`EventRepository._publicly_visible`) rather than a restatement of it — a
+sitemap that drifts from the read path advertises pages that 404.
 
-**Why a real one is better:** direct indexing of event pages, which are the ones
-carrying `Event` JSON-LD and eligible for rich results.
+Two deliberate differences from the browse endpoint:
 
-**Shape:** ids + `updated_at` only, unpaginated (or `Last-Modified`-driven).
+- **Past events are included.** Their pages still resolve, still carry `Event`
+  JSON-LD, and are what somebody searching for last month's show should land on.
+- **`updated_at` is real.** `app/sitemap.ts` used to stamp `new Date()` on every
+  entry, which tells a crawler the whole site changed at once and therefore
+  nothing in particular is worth re-fetching.
+
+`GET /performers/sitemap` was added alongside it, for the same reason and in the
+same shape. It returns an empty list while nothing is published, which is the
+honest answer — the sitemap then carries no performer URLs rather than inventing
+any.
+
+**Still open:** a sitemap INDEX. Both endpoints cap at 45,000 rows
+(`SITEMAP_MAX_URLS`) because the protocol limits one file to 50,000 URLs / 50MB.
+Past that the document has to be split across several files with an index at the
+top. Not built before there are 45,000 live events to need it.
 
 ---
 
@@ -1473,8 +1486,41 @@ separate configuration bug (the job built against `https://ci.invalid/api`, so
 every spec failed on DNS long before any assertion was reached, and the real
 mismatch was invisible).
 
-With the API base pointed at the fixture backend, the true state is
-**51 pass / 38 fail / 3 skipped**.
+With the API base pointed at the fixture backend, the true state was
+**51 pass / 38 fail / 3 skipped**. Measured again on a real production build
+(`npm run build && next start`, which is what CI runs) it was **39 pass / 31
+fail**, every failure in `discovery.spec.ts`. It is now **47 pass / 24 fail**,
+and the causes below are no longer guesses.
+
+**Two of the 31 were not stale specs at all, and both are fixed:**
+
+1. **The fixture's event DETAIL payload was missing sixteen of the serializer's
+   thirty fields**, `policies` among them. The event page reads
+   `event.policies.length`, and an ABSENT `policies` (rather than the empty list
+   the real API always sends) threw `Cannot read properties of undefined` during
+   render — which collapsed the ENTIRE event page to the not-found boundary, on
+   every event, in every production-build run. Eight specs failed on that one
+   line. `scripts/mock-api.mjs` now sends every field the serializer does, with
+   the same blank/null defaults. A fixture that sends less than the contract
+   does not merely under-test; it makes the app look broken in ways it is not.
+2. **`tests/e2e/discovery.spec.ts:94` asserted `ItemList` JSON-LD on the home
+   page and the home page emitted none.** The only component that built it was
+   `components/discovery/hero-featured.tsx`, whose sole consumer `home-hero.tsx`
+   is imported nowhere. The spec was right about what the page SHOULD carry —
+   the home rail is a list of events — so `Showcase` emits it now.
+
+**The axe failures are NOT an accessibility regression** — the open question
+this item raised, now answered. Every violation is `color-contrast`, and every
+reported ratio is ~1.02 between two near-whites (`#fcfcfc` on `#ffffff`). That
+is the signature of `content-visibility: auto` (the `.cv-card` utility on deep
+grid rows) taking a subtree far enough out of the render tree that axe cannot
+resolve its colours. `styles/globals.css` already documents this exact
+interaction as the reason `cv-card` is scoped to grid rows and nothing else; it
+still catches the browse grid and the event page's "More in {city}" row. Real
+contrast failures produce plausible ratios, not 1.02. The fix belongs in the
+spec (scroll the grid, or scope the scan) or in dropping `cv-card` — the
+codebase's own comment argues for the latter: "an accessibility gate you can't
+trust is worth more than the remaining milliseconds".
 
 The specs are STALE, not flaky. `app/(site)/page.tsx` was rewritten in
 `c983c09` to lead with `<Showcase>`; `tests/e2e/discovery.spec.ts` has not been
@@ -1484,19 +1530,40 @@ component now imported **nowhere**:
     expected  <h1>What do you feel like…   (HomeHero, orphaned)
     actual    <h1>Happening soon           (Showcase)
 
-Roughly where the 38 sit: home ~4, deep search palette ~4, booking funnel ~6,
-event page ~11, carousel / featured island / sort dropdown ~9, axe ~4.
+**The remaining 24 are genuinely stale**, and they are all one kind of thing —
+a spec describing a control the redesign removed or renamed:
+
+- **featured carousel (4) and featured island (6)** — 10 of the 24. These assert
+  `components/discovery/carousel.tsx`, `featured-island.tsx`, `hero-slide.tsx`
+  and `featured-context.tsx`, which are reachable only from `hero-featured.tsx`
+  -> `home-hero.tsx`, and nothing imports that. The components are dead and the
+  specs test nothing that ships. Deleting both together is the honest fix, and
+  is deliberately left out of the SEO change that diagnosed it.
+- **deep search (4) + "/" opens search (1) + the funnel's search step (1)** —
+  all six wait for `getByRole('combobox', { name: /Search events, artists/ })`.
+  The header's search control is a `button`, not a combobox.
+- **`region "Featured events"` (2)** — `Showcase` renders a `Marquee`, which is
+  a `list`.
+- **quick filters (1)** — no `navigation` named "Quick filters" on the home page.
+- **3 / 2 / 1 columns (1)** — the browse grid is 4-up at the widest breakpoint.
+- **subscribe card copy (1)** — the card says something else now, and what it
+  says is more accurate.
+- **axe (3)** — the `content-visibility` false positives described above.
 
 Two things to be careful about while fixing this:
 
-- **The axe failures may be real.** They are the only ones that could be an
-  accessibility regression in the shipped UI rather than an outdated
-  assertion. Check those before assuming the spec is at fault.
+- **The axe failures were checked and are not real.** See above. Do not
+  "fix" the UI for them.
 - **The fixture does not serve `GET /events/{id}/content`** (it 404s, while
   detail and `ticket-types` both return 200). `fetchEventContentSafe` swallows
   that correctly, so the page still renders — but any spec asserting gallery,
   FAQs or running order is asserting against empty collections. Extend
-  `scripts/mock-api.mjs` rather than weakening the spec.
+  `scripts/mock-api.mjs` rather than weakening the spec. The same applies to
+  every other endpoint the fixture is missing: the event-detail gap above cost
+  eight specs and looked like eight separate UI bugs.
+- **`tests/e2e/seo.spec.ts` is green (15/15) and is the model to follow.** It
+  was written alongside the SEO work and passes on a production build, so a new
+  spec failing here is a real signal rather than more of the same noise.
 
 **Until this is done, `frontend-e2e` runs but does not gate the deploy** —
 `.github/workflows/frontend-e2e.yml`, excluded from `resolve`'s `needs:` in

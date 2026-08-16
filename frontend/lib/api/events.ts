@@ -19,6 +19,34 @@ import type { EventCard, EventDetail, Paginated, TicketTier } from './types';
 export const PUBLIC_LIST_REVALIDATE_SECONDS = 30;
 /** Matches the backend's `s-maxage` for the public detail. */
 export const PUBLIC_DETAIL_REVALIDATE_SECONDS = 60;
+/** Matches the backend's `s-maxage` on `GET /events/sitemap`. Long, because a
+ *  sitemap is read by crawlers on their own schedule, never on a visitor's. */
+export const SITEMAP_REVALIDATE_SECONDS = 3600;
+
+/** One `/sitemap.xml` row: what to link to, and when it last changed. */
+export type EventSitemapEntry = { id: string; slug: string; updated_at: string };
+
+/**
+ * Every publicly-reachable event URL, for `app/sitemap.ts`.
+ *
+ * NEVER THROWS. `sitemap.ts` is a build-time/route handler with no error
+ * boundary: an exception here does not degrade the document, it takes
+ * `/sitemap.xml` down entirely — and the static half (landing pages, legal,
+ * support) is far more valuable than a 500. An empty array means the sitemap
+ * ships without event URLs, which is exactly the state it was in before this
+ * endpoint existed.
+ */
+export async function fetchEventSitemapSafe(): Promise<EventSitemapEntry[]> {
+  try {
+    const page = await api.get<{ data: EventSitemapEntry[] }>('/events/sitemap', {
+      auth: false,
+      next: { revalidate: SITEMAP_REVALIDATE_SECONDS },
+    });
+    return page.data ?? [];
+  } catch {
+    return [];
+  }
+}
 
 /** Exactly the query params `EventSearchQuerySerializer` + CursorPagination accept. */
 export type EventsQuery = {

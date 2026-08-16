@@ -8,6 +8,7 @@ import { ArrowRight, ChevronRight, GripVertical, X } from 'lucide-react';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDate, formatFromPrice } from '@/lib/discovery/format';
 import { useDraggable } from '@/lib/discovery/use-draggable';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { categoryTint } from './category-tint';
 import { useFeatured } from './featured-context';
@@ -191,7 +192,7 @@ export function FeaturedIsland() {
         </button>
 
         <Link
-          href={`/events/${event.id}`}
+          href={eventPath(event)}
           draggable={false}
           className={cn(
             'group/island flex min-w-0 items-center gap-3 rounded-full',

@@ -12,6 +12,7 @@ from apps.accounts.models import User
 from apps.accounts.repositories import UserRepository
 from apps.events.models import Event, EventStatus
 from apps.events.repositories import EventRepository
+from apps.events.slugs import event_slug
 from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
 
@@ -107,6 +108,11 @@ def make_event(organization):
             city=city,
             description=description,
             starts_at=starts_at,
+            # Derived here for the same reason `EventService.create_event`
+            # derives it: in production no event exists without one, so a
+            # fixture that skipped it would test a state the system never
+            # reaches and quietly exercise the bare-uuid URL fallback.
+            slug=event_slug(title),
         )
         if status != EventStatus.DRAFT:
             Event.objects.filter(pk=event.id).update(status=status)

@@ -8,6 +8,7 @@ import { availabilityBadge } from '@/lib/discovery/availability';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
 import { ClayIcon } from '@/components/illustrations/clay';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
@@ -130,7 +131,7 @@ export function EventRow({
 
             <h3 className="line-clamp-2 text-body font-semibold leading-tight text-foreground sm:text-body-lg">
               <Link
-                href={`/events/${event.id}`}
+                href={eventPath(event)}
                 className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
               >
                 {event.title}

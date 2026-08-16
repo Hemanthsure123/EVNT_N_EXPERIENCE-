@@ -9,6 +9,17 @@ import { type Page, expect, test } from '@playwright/test';
  * against the real backend too.
  */
 
+/**
+ * A canonical event URL: `/events/{slug}-{uuid}`, of which a bare `/events/{uuid}`
+ * is the degenerate case (an event whose title yields no ASCII slug).
+ *
+ * This used to be `/\/events\/[0-9a-f-]+$/`, which is the URL shape from before
+ * event slugs existed. The uuid is still there — it is what resolves the event,
+ * and it is why every link shared under the old shape still works — but it is no
+ * longer the whole segment.
+ */
+const EVENT_URL = /\/events\/(?:[a-z0-9-]*-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const seriousOrWorse = (v: { impact?: string | null }) =>
   v.impact === 'critical' || v.impact === 'serious';
 
@@ -446,7 +457,7 @@ test.describe('the whole funnel', () => {
 
     await page.goto('/events?category=comedy');
     await page.locator('main ul li a[href^="/events/"]').first().click();
-    await expect(page).toHaveURL(/\/events\/[0-9a-f-]+$/);
+    await expect(page).toHaveURL(EVENT_URL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Tickets' })).toBeVisible();
     await expectPublic(page);
@@ -879,7 +890,7 @@ test.describe('the event page', () => {
   const anEvent = async (page: Page) => {
     await page.goto('/events');
     await page.locator('main ul li a[href^="/events/"]').first().click();
-    await expect(page).toHaveURL(/\/events\/[0-9a-f-]+$/);
+    await expect(page).toHaveURL(EVENT_URL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   };
 

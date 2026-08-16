@@ -12,6 +12,7 @@ import { verifyPayment } from '@/lib/api/payments';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { fetchTicketsForBooking } from '@/lib/booking/tickets';
 import { formatFromPrice } from '@/lib/discovery/format';
+import { eventPath } from '@/lib/events/ref';
 import { CTA_PILL_LG, PILL } from './cta';
 import { useBooking } from './booking-context';
 import { Celebration } from './celebration';
@@ -219,7 +220,7 @@ export function ConfirmationStep() {
               <Link href="/events">Find your next event</Link>
             </Button>
             <Button variant="ghost" asChild size="lg" className={PILL}>
-              <Link href={`/events/${event.id}`}>Back to the event</Link>
+              <Link href={eventPath(event)}>Back to the event</Link>
             </Button>
           </div>
         </div>

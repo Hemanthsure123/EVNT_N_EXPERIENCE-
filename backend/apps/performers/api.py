@@ -62,6 +62,7 @@ from .schemas import (
     PerformerDetailSerializer,
     PerformerPhotoSerializer,
     PerformerQuoteSerializer,
+    PerformerSitemapEntrySerializer,
     QuoteSerializer,
     ReadinessSerializer,
     SubmitQuoteSerializer,
@@ -73,6 +74,8 @@ from .services import readiness_problems
 # Edge/browser TTLs for the public reads. Short by design: the server-side
 # cache is invalidated instantly on publish, and these bound how long a CDN may
 # still serve a just-changed profile.
+_SITEMAP_MAX_AGE = 600
+_SITEMAP_S_MAXAGE = 3600
 _PUBLIC_MAX_AGE = 30
 _PUBLIC_S_MAXAGE = 60
 _PUBLIC_SWR = 30
@@ -160,6 +163,42 @@ class PerformerBrowseView(APIView):
             private=False,
             s_maxage_seconds=_PUBLIC_S_MAXAGE,
             stale_while_revalidate_seconds=_PUBLIC_SWR,
+        )
+
+
+class PerformerSitemapView(APIView):
+    """Every published performer URL, for the frontend's `/sitemap.xml`.
+
+    These profiles are indexable and carry a canonical tag, and they appeared
+    in no sitemap and had no public inbound link — so a crawler had no route to
+    them at all. This is the route.
+
+    It returns an EMPTY list while nothing is published, and that is the
+    correct answer rather than a problem to work around: the sitemap then
+    simply carries no performer URLs, which is exactly the state it was in
+    before. Nothing here invents a page.
+
+    Long edge TTL — crawler traffic, not visitor traffic.
+    """
+
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses={200: PerformerSitemapEntrySerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        rows = PerformerRepository().list_for_sitemap()
+        body = {"data": cast(list, PerformerSitemapEntrySerializer(rows, many=True).data)}
+
+        etag = make_etag(body)
+        if is_not_modified(request, etag):
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+
+        return with_cache_headers(
+            Response(body),
+            etag=etag,
+            max_age_seconds=_SITEMAP_MAX_AGE,
+            private=False,
+            s_maxage_seconds=_SITEMAP_S_MAXAGE,
+            stale_while_revalidate_seconds=_SITEMAP_S_MAXAGE,
         )
 
 

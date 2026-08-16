@@ -6,6 +6,11 @@ from . import api
 # surface and the /organizer/events dashboard live in this one module.
 urlpatterns = [
     path("events", api.EventListCreateView.as_view(), name="event-list-create"),
+    # Declared BEFORE the <uuid:event_id> route. Django's uuid converter cannot
+    # match the literal "sitemap", so ordering is not load-bearing here — but
+    # declaring it first means nobody has to work that out, and it is the
+    # ordering that stays correct if a looser converter is ever introduced.
+    path("events/sitemap", api.EventSitemapView.as_view(), name="event-sitemap"),
     path("events/<uuid:event_id>", api.EventDetailView.as_view(), name="event-detail"),
     path(
         "events/<uuid:event_id>/publish",

@@ -29,6 +29,7 @@ import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateLong, formatEventTime } from '@/lib/discovery/format';
 import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
+import { eventPath } from '@/lib/events/ref';
 
 /**
  * The event page, as a component — so the Studio's preview IS the event page.
@@ -207,7 +208,7 @@ export function EventPageBody({
                   they would each be a control that cannot do its one job. */}
               {preview ? null : (
                 <div className="flex flex-wrap items-center gap-2">
-                  <ShareMenu title={event.title} path={`/events/${event.id}`} />
+                  <ShareMenu title={event.title} path={eventPath(event)} />
                   {/* Beside share and save: all three are "keep this for later"
                       actions, and separating them would make the calendar the
                       only one a visitor has to hunt for. */}

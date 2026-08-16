@@ -33,6 +33,10 @@ from .models import (
     RequestStatus,
 )
 
+#: Hard ceiling on sitemap entries — see the same constant in
+#: `apps/events/repositories.py` for the sitemap-protocol reasoning.
+SITEMAP_MAX_URLS = 45_000
+
 #: The marketplace card. Deliberately tiny — this is the highest-volume payload.
 _CARD_FIELDS = (
     "id",
@@ -148,6 +152,24 @@ class PerformerRepository(BaseRepository[Performer]):
 
         # Featured first, then newest. Both are in the index the browse uses.
         return queryset.only(*_CARD_FIELDS).order_by("-is_featured", "-created_at", "id")
+
+    def list_for_sitemap(self, *, limit: int = SITEMAP_MAX_URLS) -> QuerySet[Performer]:
+        """Every published profile, for `/sitemap.xml`.
+
+        Two columns. The same visibility predicate `list_published` uses, so
+        the sitemap can never advertise a profile the public detail read would
+        404 — a draft or a rejected act is nobody's to find.
+
+        Unfiltered and unpaginated on purpose: a crawler wants the whole set in
+        one document, and cursor-paginating it would mean the sitemap build
+        issuing N requests to assemble something it writes out whole.
+        """
+        return (
+            self.get_queryset()
+            .filter(status=PerformerStatus.LIVE, deleted_at__isnull=True)
+            .only("id", "updated_at")
+            .order_by("-updated_at", "id")[:limit]
+        )
 
     # --- reads: owner ------------------------------------------------------
 

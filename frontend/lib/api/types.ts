@@ -20,6 +20,17 @@ export type Paginated<T> = {
  * ticketing populates them. */
 export type EventCard = {
   id: string;
+  /**
+   * The readable half of the public URL, `/events/{slug}-{id}`.
+   *
+   * OPTIONAL on purpose. It lets this frontend typecheck and deploy against a
+   * backend that has not shipped the column yet, and `eventPath()` falls back
+   * to the bare-id URL — which is exactly what the platform served before, so
+   * nothing breaks in the gap. Never derived on this side: the backend
+   * computes it once on write and sends it, so the canonical tag, the JSON-LD
+   * `url` and the sitemap cannot drift apart.
+   */
+  slug?: string;
   title: string;
   venue: string;
   city: string;

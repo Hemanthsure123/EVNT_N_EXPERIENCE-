@@ -7,6 +7,7 @@ import type { EventCard as EventCardData } from '@/lib/api/types';
 import { availabilityBadge } from '@/lib/discovery/availability';
 import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 
@@ -50,7 +51,7 @@ export function ShowcaseCard({
 
   return (
     <Link
-      href={`/events/${event.id}`}
+      href={eventPath(event)}
       className={cn(
         'group relative flex aspect-[3/4] w-[15rem] shrink-0 overflow-hidden rounded-2xl border border-border bg-sunken shadow-lg sm:w-[17rem]',
         'transition duration-base ease-out hover:-translate-y-1 hover:shadow-xl',
