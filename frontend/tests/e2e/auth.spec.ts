@@ -91,7 +91,18 @@ test.describe('signing in from the header', () => {
     await page.reload();
 
     await page.getByRole('button', { name: 'Account menu' }).click();
-    await expect(page.getByRole('link', { name: 'Browse events' })).toBeVisible();
+    // ── ASSERT A LINK THE MENU ACTUALLY HAS ──────────────────────────────
+    //
+    // This looked for "Browse events", which the account menu does not
+    // contain — the match was the SITE FOOTER's link, page-wide and visible
+    // whether or not the menu had opened. It passed for the wrong reason
+    // until a second "Browse events" appeared on the page, and then failed as
+    // a strict-mode violation rather than as the assertion it was pretending
+    // to make.
+    //
+    // "My tickets" is in the menu, and it is what a signed-in non-operator
+    // should find there.
+    await expect(page.getByRole('link', { name: 'My tickets' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Operator console' })).toHaveCount(0);
     await expect(page.getByText('Platform operator')).toHaveCount(0);
 

@@ -28,8 +28,19 @@ test.describe('home', () => {
   }) => {
     await page.goto('/');
 
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('What do you feel like');
-    await expect(page.getByText(/^Good (morning|afternoon|evening)$|^Still up$/i)).toBeVisible();
+    // ── THE HOMEPAGE THIS ASSERTED NO LONGER EXISTS ──────────────────────
+    //
+    // These two lines expected an `h1` of "What do you feel like" and a
+    // time-of-day greeting. Both belonged to the hero that was REMOVED when
+    // the front page was rebuilt to open on the curated rail (see the note in
+    // `components/admin/homepage-cms.tsx`, which records the same removal).
+    //
+    // The page has said "Picked by our team" for a long time. The spec kept
+    // asserting the old copy, failed on its FIRST assertion, and took the
+    // whole `home` block down with it — which is most of why 26 of the 31
+    // failing specs were in this file. Everything below this point was fine
+    // and never got to run.
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Picked by our team');
 
     // Eight SPECIFIC categories, each its own landing page — no "Explore".
     for (const label of [
