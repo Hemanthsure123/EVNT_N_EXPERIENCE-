@@ -125,23 +125,30 @@ test.describe('the booking funnel', () => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
 
-    // Anonymous: Review, Sign in, Payment. It was four while ticket selection
-    // was a step of its own; `stepsFor` in `lib/booking/steps.ts` is the
-    // authority and now returns three for a visitor.
+    // ── A VISITOR IS SENT TO SIGN IN, NOT SHOWN A CONTINUE ───────────────
+    //
+    // This clicked "Continue" on review to reach login. There is nothing to
+    // click: `/review` REDIRECTS an anonymous visitor straight to `/login`,
+    // and always has. The click waited 30s for a button on a page the test
+    // had already been bounced off.
+    //
+    // Sign in, review, pay — so the redirect IS the first step, and that is
+    // what this now asserts.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await expect(page).toHaveURL(/\/login/);
+
     const stepper = page.getByRole('navigation', { name: 'Booking progress' });
     await expect(stepper.getByRole('listitem')).toHaveCount(3);
     await expect(stepper).toContainText('Sign in');
 
-    await page.getByRole('button', { name: 'Continue' }).first().click();
-    await expect(page).toHaveURL(/\/login/);
     // The heading continues the purchase rather than starting something new —
     // the standalone /sign-in page is the one that says "Welcome back".
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
 
-    // Signed in: Review and Payment only — the sign-in step is not rendered.
+    // Signed in: straight to review, two steps, no sign-in anywhere.
     await signedIn(page);
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await expect(page).toHaveURL(/\/review/);
     await expect(stepper.getByRole('listitem')).toHaveCount(2);
     await expect(stepper).not.toContainText('Sign in');
   });
@@ -245,9 +252,16 @@ test.describe('the booking funnel', () => {
   }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
+    // ── "Continue" ALSO MATCHES "Continue with Google" ───────────────────
+    //
+    // `getByRole(..., { name })` is a SUBSTRING match, so this clicked the
+    // Google button and left for the provider — the failure was a real OAuth
+    // start URL where `/login` was expected. Google is wired now, so a locator
+    // that used to be merely loose became one that navigates off-site.
+    //
+    // There is nothing to click anyway: an anonymous visitor is redirected to
+    // `/login`, which is the first step.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-
-    await page.getByRole('button', { name: 'Continue' }).first().click();
     await expect(page).toHaveURL(/\/login/);
 
     // The control EXISTS — the funnel and /sign-in render the same panel.
@@ -281,14 +295,14 @@ test.describe('the booking funnel', () => {
     await signedIn(page);
     const summary = page.getByRole('complementary', { name: 'Order summary' });
 
+    // Signed in, so `/booking/{id}` lands on review directly — there is no
+    // ticket step to Continue out of, and the click here waited 30s for a
+    // button on the page it was already on.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-    await expect(summary).toBeVisible();
-    const total = (await summary.getByText(/^₹/).last().textContent())?.trim();
-
-    await page.getByRole('button', { name: 'Continue' }).first().click();
+    await expect(page).toHaveURL(/\/review/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
     await expect(summary).toBeVisible();
-    await expect(summary).toContainText(total!);
+    const total = (await summary.getByText(/^₹/).last().textContent())?.trim();
 
     await page.getByRole('link', { name: /Proceed to payment/ }).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');

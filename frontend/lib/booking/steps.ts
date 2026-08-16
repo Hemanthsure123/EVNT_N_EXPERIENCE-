@@ -11,8 +11,19 @@
  *
  * The event page keeps the picker, because that is where somebody is deciding
  * — beside the poster, the date, the venue and the line-up. The funnel now
- * starts where the decision ENDS: confirm what you picked, prove who you are
- * if we do not know yet, pay.
+ * starts where the decision ENDS: prove who you are if we do not know yet,
+ * confirm what you picked, pay.
+ *
+ * ── SIGN IN COMES FIRST, AND THE STEPPER USED TO DISAGREE ─────────────────
+ *
+ * `stepsFor(false)` returned `[review, login, payment]`, so a visitor was told
+ * they were starting on Review. The ROUTING has always sent an anonymous
+ * visitor from `/review` straight to `/login` — so the progress indicator
+ * named a step they were about to be bounced out of, and the one they were
+ * actually on was drawn as step 2.
+ *
+ * A stepper that disagrees with the router is worse than no stepper: it is the
+ * only thing on the screen claiming to say where you are.
  *
  * `booking` survives as a StepId only so an old `/booking/{id}` link still
  * resolves; the route redirects to `review` and no stepper ever draws it.
@@ -44,7 +55,7 @@ const ALL: Record<StepId, Step> = {
 };
 
 export const stepsFor = (authenticated: boolean): Step[] =>
-  authenticated ? [ALL.review, ALL.payment] : [ALL.review, ALL.login, ALL.payment];
+  authenticated ? [ALL.review, ALL.payment] : [ALL.login, ALL.review, ALL.payment];
 
 /** Which step a pathname is on. */
 export function currentStep(pathname: string): StepId {
