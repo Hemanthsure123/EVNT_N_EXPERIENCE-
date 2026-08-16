@@ -92,25 +92,31 @@ test.describe('the booking funnel', () => {
   test('carries the selection in the URL, and the summary follows it', async ({ page }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
-    await page.goto(`/booking/${eventId}`);
+    // ── THE TICKETS STEP NO LONGER EXISTS ────────────────────────────────
+    //
+    // This asserted an `h1` of "Choose your tickets" and drove a stepper on
+    // `/booking/{id}`. That step was REMOVED: selection moved to the event
+    // page, beside the poster and the date, rather than asking for the same
+    // four things again on a screen of its own. `/booking/{id}` now redirects
+    // to review, and `app/(site)/booking/[eventId]/page.tsx` says so.
+    //
+    // The stepper's own behaviour — including the double-click that used to
+    // write 1 twice — is covered where it now lives, in discovery.spec.ts's
+    // "quantity is bounded by what is actually left".
+    //
+    // What is still worth pinning HERE is the funnel's half of the contract:
+    // a selection carried in the URL survives the redirect and the summary
+    // reflects it.
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:2`);
 
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+    await expect(page).toHaveURL(/\/review/);
     const summary = page.getByRole('complementary', { name: 'Order summary' });
-    await expect(summary).toContainText('No tickets chosen yet');
-
-    // Two presses inside one frame, deliberately. The rendered quantity trails
-    // the URL by a render, so a stepper that computed "displayed + 1" would
-    // write 1 twice and silently drop the second tap — on the money path.
-    const add = page.getByRole('button', { name: `Add one ${tiers[0]!.name} ticket` });
-    await add.dblclick();
-
-    // The URL is the state — shareable, and survives a reload.
-    await expect(page).toHaveURL(new RegExp(`tickets=${tiers[0]!.id}%3A2`));
     await expect(summary).toContainText(`${tiers[0]!.name}`);
     await expect(summary).toContainText('× 2');
 
+    // Shareable and reload-safe: the URL is the state, not component memory.
     await page.reload();
-    await expect(page.getByLabel(`${tiers[0]!.name} quantity`)).toHaveText('2');
+    await expect(summary).toContainText('× 2');
   });
 
   test('shows the sign-in step to a visitor, and skips it entirely once signed in', async ({
@@ -119,10 +125,12 @@ test.describe('the booking funnel', () => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
 
-    // Anonymous: four steps, and Continue lands on sign-in.
+    // Anonymous: Review, Sign in, Payment. It was four while ticket selection
+    // was a step of its own; `stepsFor` in `lib/booking/steps.ts` is the
+    // authority and now returns three for a visitor.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
     const stepper = page.getByRole('navigation', { name: 'Booking progress' });
-    await expect(stepper.getByRole('listitem')).toHaveCount(4);
+    await expect(stepper.getByRole('listitem')).toHaveCount(3);
     await expect(stepper).toContainText('Sign in');
 
     await page.getByRole('button', { name: 'Continue' }).first().click();
@@ -131,10 +139,10 @@ test.describe('the booking funnel', () => {
     // the standalone /sign-in page is the one that says "Welcome back".
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
 
-    // Signed in: three steps, no sign-in anywhere, and Continue goes to review.
+    // Signed in: Review and Payment only — the sign-in step is not rendered.
     await signedIn(page);
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-    await expect(stepper.getByRole('listitem')).toHaveCount(3);
+    await expect(stepper.getByRole('listitem')).toHaveCount(2);
     await expect(stepper).not.toContainText('Sign in');
   });
 
