@@ -51,44 +51,46 @@ export function HomeSkeleton() {
   return (
     <>
       <LoadingAnnouncement label="Loading events" />
-      <section className="border-b border-border" aria-hidden>
-        {/* No `.hero-atmosphere` here any more. It was the loading state's copy
-            of the hero's old violet aurora, so leaving it would flash a page
-            that no longer exists for the whole of the wait. */}
-        <Container className="flex flex-col gap-10 py-12 lg:py-16">
-          <div className="grid gap-12 lg:grid-cols-[42fr_58fr] lg:items-center lg:gap-16">
-            <div className="flex flex-col gap-8">
-              <div className="flex flex-col gap-5">
-                <Bar className="h-4 w-28" />
-                <Bar className="h-12 w-full max-w-md" />
-                <Bar className="h-12 w-4/5 max-w-sm" />
-                <Bar className="h-5 w-full max-w-lg" />
-                <Bar className="h-5 w-3/4 max-w-md" />
-              </div>
-              <Bar className="h-14 w-full rounded-full" />
-              <div className="flex flex-wrap gap-2">
-                {CHIP_WIDTHS.slice(0, 5).map((w, i) => (
-                  <Bar key={i} className={cn('h-control rounded-full', w)} />
-                ))}
-              </div>
-            </div>
+      {/* ── SHAPED LIKE THE PAGE THAT ACTUALLY ARRIVES ──────────────────────
+          This drew the OLD split hero: a two-column `42fr_58fr` grid with a
+          search bar, five quick-filter chips and a big feature panel. That
+          hero was removed when the front page was rebuilt to open on the
+          curated rail, and its components have since been deleted outright —
+          so the loading state was reserving space for a layout that no longer
+          exists in the tree, and the page visibly jumped when content landed.
+          A skeleton that mismatches its page is worse than none: it spends the
+          whole wait promising the wrong thing.
 
-            <div className="flex flex-col gap-5">
-              <Bar className="aspect-poster w-full rounded-2xl sm:aspect-feature" />
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {[0, 1, 2].map((i) => (
-                  <Bar key={i} className={cn('h-16 rounded-xl', i === 2 && 'hidden sm:block')} />
-                ))}
-              </div>
+          What ships is `Showcase`: an eyebrow, an `h1`, a "Browse all events"
+          pill, and a horizontal rail of portrait cards — then the eight
+          category tiles. */}
+      <section className="border-b border-border" aria-hidden>
+        <Container className="flex flex-col gap-8 py-14 sm:gap-10 sm:py-20">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-2.5">
+              <Bar className="h-6 w-40 rounded-full" />
+              <Bar className="h-11 w-full max-w-lg" />
             </div>
+            <Bar className="h-control w-44 shrink-0 rounded-full" />
+          </div>
+          {/* The rail. `overflow-hidden` so the reserved row cannot add
+              horizontal scroll while it is standing in for one. */}
+          <div className="flex gap-5 overflow-hidden">
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} className="flex w-64 shrink-0 flex-col gap-3">
+                <Bar className="aspect-portrait w-full rounded-2xl" />
+                <Bar className="h-5 w-4/5" />
+                <Bar className="h-4 w-3/5" />
+              </div>
+            ))}
           </div>
         </Container>
       </section>
 
       <Container className="flex flex-col gap-8 py-section lg:py-section-lg" aria-hidden>
         <SectionHeaderSkeleton />
-        {/* Category tiles are vertical now — label and blurb over a tinted
-            plate — so the reserved box is a card, not a row. */}
+        {/* Category tiles are vertical — label and blurb over a tinted plate —
+            so the reserved box is a card, not a row. */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 8 }, (_, i) => (
             <Bar key={i} className="h-52 rounded-xl" />

@@ -90,7 +90,9 @@ export function HireABandSection() {
                 <Sparkles className="size-3.5" aria-hidden />
                 New on Curatix
               </span>
-              <h2 className="text-h3 sm:text-h2 lg:text-h1">Hire a band for your own event</h2>
+              <h2 className="text-h3 font-extrabold tracking-tight sm:text-h2 lg:text-h1">
+                Hire a band for your own event
+              </h2>
             </div>
 
             {/* One instance, sized responsively, rather than a mobile copy and

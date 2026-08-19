@@ -30,6 +30,16 @@ export const HOMEPAGE_REVALIDATE_SECONDS = 60;
 export type HomepageCard = {
   entry_id: string;
   id: string;
+  /**
+   * The readable half of `/events/{slug}-{id}`, so a curated front-page link is
+   * the CANONICAL URL rather than a bare-uuid one that immediately 308s — a
+   * redirect on the most-clicked links on the site.
+   *
+   * Optional for the same reason it is on `EventCard`: this frontend must
+   * typecheck and deploy against a backend that has not shipped the column,
+   * and `eventPath()` falls back to the bare-id URL.
+   */
+  slug?: string;
   title: string;
   venue: string;
   city: string;

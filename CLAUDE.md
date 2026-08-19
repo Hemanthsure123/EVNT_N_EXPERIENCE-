@@ -1406,6 +1406,50 @@ indexable and canonical'd and NOTHING linked to them, which makes a page not so
 much unranked as absent. Zero published acts renders nothing at all, exactly as
 before — a section nothing backs is absent, not empty.
 
+## The front page follows a reference design, and only where it can be honest
+
+The home screen and `/hire` were rebuilt to a supplied reference (District by
+Zomato). What was copied is the SHAPE — a two-row header, a full-width hero that
+commits to one event, a chip row, a poster grid. What was not copied is anything
+that would require inventing product.
+
+**Four rules came out of it, and they generalise:**
+
+1. **Copy a nav's shape, never its contents.** The reference bar carries seven
+   destinations (Dining, Movies, Stores, Play…) because that company sells seven
+   things. Ours carries the four routes that exist. A nav item is a promise that
+   a page is there.
+2. **A chip is a filter or it is not a chip.** Every quick filter on the home
+   page is `browseHref(...)` — a real, shareable `/events?…` URL the browse page
+   parses, so the compiler enforces the vocabulary. The reference's "Under 10 km"
+   is absent: distance needs coordinates most events do not have and a parameter
+   `GET /events` does not accept, and a chip that quietly returned everything is
+   a filter that lies. "Tomorrow" IS there, as the one-day date range it actually
+   is — computed per render, because a date frozen at module scope on an ISR page
+   means the day after whichever day the bundle was built.
+3. **The h1 can be invisible; it cannot be absent or unstable.** The biggest text
+   on the first screen is an event's name, and that name changes on every chevron
+   press — a document whose heading mutates on a carousel click has no outline. So
+   the h1 is `sr-only`, first in the document, and names the PAGE.
+4. **A reference behaviour that costs an affordance does not ship.** The
+   reference collapses its whole nav row on scroll. That was built here and taken
+   back out, because this row also holds the ACCOUNT CONTROL — collapsing it left
+   a signed-in visitor with no route to their tickets or sign-out until they
+   scrolled back to the top. The row condenses instead.
+
+**The palette did not move.** Every token in `styles/tokens.css` is unchanged;
+what changed is layout, type and density. Typography went from Space Grotesk over
+Inter to **one family, Plus Jakarta Sans**, separated by weight and tracking
+rather than by family — two skeletons that disagree is why the old headings read
+as a different product from the paragraphs under them.
+
+**`PosterCard` sits BESIDE `EventCard`, not on top of it.** Browse is a working
+surface where you compare twenty events on date, price and availability, so its
+card keeps its chips, its date row and its bordered container. The front page is
+a shop window: one artwork, three lines of text, no chrome. Two cards because
+they answer two questions — and both take their availability badge from the same
+helper, so an event never contradicts itself between them.
+
 ## Saved events: the affordance comes before the account
 
 `events.SavedEvent` is a user's saved event, and the shape of the API follows
@@ -1559,6 +1603,17 @@ The rule: **a trigger passes itself as the anchor; a keyboard shortcut passes
 nothing.** A panel that jumps to the middle of the screen breaks the link
 between the control pressed and the results shown, and a palette summoned by a
 reflex has no control to attach to.
+
+**The keyboard half of that was documented for months and never wired.** This
+section, and `search-context.tsx`'s own docstring, both described ⌘K and `/` on
+the public site; only `admin-shell.tsx` had a handler, so on every public page
+the reflex did nothing and nothing said so. It is a `keydown` listener in
+`SearchProvider` now. `/` is the delicate one — a printable character must never
+steal a keystroke from someone typing, so it stands down inside any `input`,
+`textarea`, `select` or `contenteditable` (matched with `closest`, because the
+caret in a contenteditable sits on a descendant), and for any modifier, since
+⌘/ and Ctrl+/ belong to the OS and the browser. Three e2e specs asserted this
+behaviour and were being read as stale; they were right and the app was wrong.
 
 Two details that are not obvious:
 

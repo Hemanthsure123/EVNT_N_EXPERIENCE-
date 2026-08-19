@@ -100,6 +100,48 @@ test.describe('event URLs', () => {
   });
 });
 
+test.describe('a URL that does not resolve', () => {
+  // ── A SOFT 404 IS A REAL SEO DEFECT ──────────────────────────────────────
+  //
+  // `notFound()` inside these routes renders the right page with a `200`.
+  // Google calls that a soft 404: it crawls the URL, may index it, and reports
+  // it in Search Console — and every mistyped or expired event link becomes an
+  // indexable duplicate of the not-found page. `middleware.ts` returns the real
+  // status for the cases it can decide without new I/O.
+
+  test('a segment that is not an event ref is a real 404', async ({ request }) => {
+    const response = await request.get('/events/not-an-event');
+    expect(response.status()).toBe(404);
+  });
+
+  test('an event that does not exist is a real 404', async ({ request }) => {
+    const response = await request.get('/events/00000000-0000-4000-8000-000000000000');
+    expect(response.status()).toBe(404);
+  });
+
+  test('a city with no landing page is a real 404', async ({ request }) => {
+    // The curated list is a constant in the bundle, so this costs no I/O.
+    const response = await request.get('/cities/nowhere-at-all');
+    expect(response.status()).toBe(404);
+  });
+
+  test('the 404 still renders the styled page, not a bare status', async ({ page }) => {
+    // The status and the page are not a trade: `NextResponse.rewrite` with a
+    // status keeps both. A bare 404 body would be a UX regression for anybody
+    // who mistyped a link.
+    await page.goto('/events/not-an-event');
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  });
+
+  test('a live event and a curated city are untouched', async ({ page, request }) => {
+    // The guard rail: middleware that 404s must never catch a real page.
+    await page.goto('/events');
+    const href = await page.locator('main ul li a[href^="/events/"]').first().getAttribute('href');
+    expect((await request.get(href!, { maxRedirects: 0 })).status()).toBe(200);
+    expect((await request.get('/cities/mumbai')).status()).toBe(200);
+  });
+});
+
 test.describe('structured data', () => {
   const blocks = async (page: Page) => {
     const raw = await page.locator('script[type="application/ld+json"]').allTextContents();

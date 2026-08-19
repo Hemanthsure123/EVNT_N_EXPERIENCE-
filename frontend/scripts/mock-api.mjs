@@ -1033,6 +1033,11 @@ const server = createServer((req, res) => {
       list.map((event, index) => ({
         entry_id: `entry-${event.id}-${index}`,
         id: event.id,
+        // The readable half of `/events/{slug}-{id}`. On the card because a
+        // CURATED front-page link must be the canonical URL rather than a
+        // bare-uuid one that immediately 308s — a redirect on the most-clicked
+        // links on the site. Mirrors `HomepageCardSerializer`.
+        slug: event.slug,
         title: event.title,
         venue: event.venue,
         city: event.city,

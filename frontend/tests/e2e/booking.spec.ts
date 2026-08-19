@@ -107,6 +107,12 @@ test.describe('the booking funnel', () => {
     // What is still worth pinning HERE is the funnel's half of the contract:
     // a selection carried in the URL survives the redirect and the summary
     // reflects it.
+    // SIGNED IN FIRST, deliberately. `/booking/{id}` redirects to review on the
+    // server, and review then bounces an anonymous visitor on to `/login` — so
+    // asserting `/review` without a session was a race between two redirects
+    // that passed in isolation and failed under a full-suite run. The step this
+    // test is named for is the one it should be standing on.
+    await signedIn(page);
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:2`);
 
     await expect(page).toHaveURL(/\/review/);
@@ -346,7 +352,20 @@ test.describe('the booking funnel', () => {
     const book = page.getByRole('link', { name: 'Book tickets' });
     if ((await book.count()) === 0) test.skip(true, 'this event is sold out');
     await book.click();
-    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+\?tickets=/);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+
+    // ── THE TICKETS STEP IS GONE ─────────────────────────────────────────
+    //
+    // This asserted an `h1` of "Choose your tickets" and an intermediate
+    // `/booking/{id}?tickets=` URL. Selection moved to the event page, so
+    // `/booking/{id}` is now a server redirect straight into the funnel — the
+    // intermediate URL is a hop this only ever caught by winning a race, and
+    // the heading belongs to a screen that no longer exists.
+    //
+    // What is worth pinning is the contract that actually matters: pressing
+    // Book tickets carries the CHOSEN TIER into the funnel, and lands on the
+    // funnel's real first step for a visitor without a session.
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+\/(login|review)/);
+    await expect(page).toHaveURL(/tickets=/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
   });
 });

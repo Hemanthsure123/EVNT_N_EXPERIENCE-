@@ -15,6 +15,30 @@ export interface HeaderProps {
   nav?: React.ReactNode;
   /** Search slot (rendered in the centre column on lg+). */
   search?: React.ReactNode;
+  /**
+   * A full-width row UNDER the bar — the site's search field.
+   *
+   * A slot rather than a second header component: the sticky positioning, the
+   * glass-on-scroll transition and the route-progress bar all belong to one
+   * element, and two stacked sticky headers is how you get a 1px seam that
+   * only shows up on a scrolled retina screen.
+   */
+  belowBar?: React.ReactNode;
+  /**
+   * ── REMOVED, DELIBERATELY: `collapseOnScroll` ─────────────────────────
+   *
+   * The reference design hides its whole nav row once scrolled, leaving only
+   * the search field docked. That was built here and then taken back out,
+   * because in THIS header the same row also holds the theme toggle and the
+   * ACCOUNT CONTROL — so collapsing it meant a signed-in visitor had no route
+   * to their tickets, saved events or sign-out until they scrolled back to
+   * the top. A layout that hides the only path to the account menu is not a
+   * layout decision, it is a lost affordance dressed up as one.
+   *
+   * The row still CONDENSES (`h-header-lg` -> `h-header`), which is most of
+   * the space the collapse was buying, and the search bar is full-width in
+   * both states.
+   */
   /** Right-side actions slot, in visual order. */
   actions?: React.ReactNode;
   className?: string;
@@ -69,7 +93,7 @@ export interface HeaderProps {
  * HERE and nowhere else in the shell — see the two rules on `.glass` in
  * globals.css.
  */
-export function Header({ logo, nav, search, actions, className }: HeaderProps) {
+export function Header({ logo, nav, search, belowBar, actions, className }: HeaderProps) {
   const [scrolled, setScrolled] = React.useState(false);
 
   React.useEffect(() => {
@@ -92,7 +116,7 @@ export function Header({ logo, nav, search, actions, className }: HeaderProps) {
       >
         <Container
           className={cn(
-            'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 transition-[height] duration-base ease-out sm:gap-4 lg:gap-block',
+            'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 transition-[height,opacity] duration-base ease-out sm:gap-4 lg:gap-block',
             scrolled ? 'h-header' : 'h-header md:h-header-lg',
           )}
         >
@@ -127,6 +151,8 @@ export function Header({ logo, nav, search, actions, className }: HeaderProps) {
 
           <div className="flex shrink-0 items-center justify-end gap-0.5 sm:gap-1">{actions}</div>
         </Container>
+
+        {belowBar ? <Container className="pb-3 pt-0">{belowBar}</Container> : null}
 
         <RouteProgress />
       </header>

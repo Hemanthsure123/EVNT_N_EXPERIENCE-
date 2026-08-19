@@ -24,8 +24,8 @@ browsing. All three render the same panel.
 
 ## Stack
 
-Next.js 14 (App Router, RSC) · TypeScript · Tailwind CSS 3 · next/font (Space
-Grotesk / Inter / JetBrains Mono) · Radix UI primitives · TanStack Query ·
+Next.js 14 (App Router, RSC) · TypeScript · Tailwind CSS 3 · next/font (Plus
+Jakarta Sans / JetBrains Mono) · Radix UI primitives · TanStack Query ·
 react-hook-form + zod · Framer Motion · lucide-react · Storybook · Vitest +
 Testing Library · Playwright + axe · ESLint + Prettier + Stylelint.
 
@@ -120,6 +120,11 @@ reading as one document rather than a stack of widgets.
 `components/shell/header.tsx` is the chrome (three columns, condense on scroll);
 `site-header.tsx` composes it. The row was rebuilt after it was found painting
 its own nav underneath the search field at every desktop width.
+
+**It is TWO rows now** — the search moved out of the bar into a full-width row
+of its own, which is what finally ended the budget fight described below. See
+"The header is two rows" under the discovery layer. Everything in this section
+still governs row one.
 
 **What broke it, because the shape recurs.** The columns were
 `[1fr auto 1fr]` with `min-w-0` on both sides — equal side tracks do centre the
@@ -368,67 +373,102 @@ the HTML parser happily ends the script at the first literal `</script`.
 was an indexable near-duplicate competing with the prerendered landing pages
 built to rank for exactly those queries.
 
+**A URL that does not resolve now returns a real 404.** `notFound()` inside
+these routes renders the right page with a `200` — a soft 404, which Google
+crawls, may index, and reports in Search Console. Two hypotheses were tested and
+eliminated by rebuilding without them (`app/(site)/loading.tsx` and
+`app/(site)/not-found.tsx`), and the standalone server production actually runs
+behaves the same as `next start`, so the cause is inside Next's streaming rather
+than this app's boundaries. The middleware sets the status for the cases it can
+decide with no new I/O — a segment that is not an event ref, an event whose
+(already-happening) lookup 404s, and a city outside the curated list — and
+`NextResponse.rewrite` with a status keeps the styled page, so this is not a
+trade between a correct status and a good error page. `/hire/{id}` would need a
+lookup per request and is left in BACKLOG 80.
+
 `tests/e2e/seo.spec.ts` asserts all of it against a production build.
 
 ## Discovery layer
 
 ### The home page's reading order
 
-Each block narrows the question the one above it asked: **hero** (what are you in
-the mood for — search, four quick filters, and a live featured event in the same
-screen) -> **Pick a mood** (eight categories, 4×2) -> **Trending searches** ->
-**Trending near you** -> **This weekend** -> **Upcoming** -> **Popular cities**
--> **trust**.
+**Recommend, then list, then navigate.** A visitor arrives in one of three
+states — "show me something good", "show me what's on", "I know roughly what I
+want" — and the first three blocks answer exactly one each, in descending order
+of how many people are in that state:
 
-The featured carousel lives _inside_ the hero rather than in a band below it.
-That fills the empty right half of a desktop viewport, puts a real event and a
-real CTA above the fold, and removes a whole section of scroll before the page
-says anything concrete. Its slides are Server Components, so the poster is in the
-initial HTML with `priority` — a client-rendered carousel would have pushed the
-hero image behind hydration.
+| block | job | component |
+| --- | --- | --- |
+| hero carousel | ONE event, full width, in its own colour | `hero-carousel.tsx` |
+| All Events | chips + a poster grid of what is on sale | `all-events.tsx` |
+| Browse by mood | eight ways in for somebody with no plan | `category-tiles.tsx` |
+| Hire a band | the second product, its own tinted band | `hire-a-band-section.tsx` |
+| Why / newsletter | the trust argument, then the one ask | — |
 
-### The featured island
+**The hero commits to one event.** Date, title, venue, from-price and a single
+black CTA, beside the poster, over a blurred blow-up of that same poster — so
+each slide takes the colour of the event it shows without anybody picking a
+colour per event. The rail it replaces put five posters on screen at once,
+which is a shelf: five things at a fifth of the attention each, and no room for
+any of them to say when it is or what it costs.
 
-Once the hero scrolls away, the carousel keeps running for nobody. A compact
-floating pill takes the rotation over — same index, same clock (both read
-`FeaturedProvider`, so the two can never show different events), in a strip of
-screen instead of a screenful. It re-keys on each change so it reads as one
-object morphing rather than a second widget swapping.
+**It does not autoplay.** A banner that advances on a timer moves the CTA out
+from under a pointer already travelling towards it and restarts the decision
+every few seconds. Chevrons, dots, arrow keys and a swipe are all explicit.
 
-It is **draggable by the whole pill**, from the first press, because a persistent
-floating element will eventually cover the one thing someone is reading, and
-letting them move it is more honest than guessing a position that is never wrong.
+**Below `md` the same slides are a peeking rail** — one component, one set of
+keyboard behaviours. A 360px split of nothing is not a hero.
 
-Two browser behaviours had to be defeated to get that. `setPointerCapture`
-retargets the trailing `click` to the capturing element, which silently breaks the
-link and the dismiss button inside it — so the gesture is tracked with
-document-level listeners instead, attached only for the life of a gesture. And an
-`<a>` and an `<img>` are natively draggable, so pressing on the title or poster
-handed the gesture to the browser's own drag-and-drop, which fires `pointercancel`
-and killed ours — hence `draggable={false}` on both plus a cancelled `dragstart`.
-Until that, only the grip moved.
+**The chips under "All Events" are real filter URLs.** Each is `browseHref(...)`,
+so it is shareable, back-buttonable and server-rendered, and the compiler
+enforces that a chip cannot encode a param the browse page does not parse.
+"Tomorrow" has no named window in that vocabulary (today / weekend / week /
+month), so it is the one-day RANGE it actually is, computed per render — frozen
+at module scope it would mean the day after whichever day the bundle was built.
+The reference design's "Under 10 km" is deliberately absent: distance needs
+coordinates most events do not have and a parameter `GET /events` does not
+accept, and a chip that silently returned everything is a filter that lies.
 
-Movement only counts past 6px, so a tap still opens the event; the trailing click
-of a real drag is swallowed once, in capture phase, for the whole pill. Positions are clamped into the viewport (and re-clamped on
-resize), persisted per device, nudgeable with the arrow keys from the grip, and
-`Escape` puts it back. It hides while the search palette is open, is dismissible
-for the session, and gets no motion at all under `prefers-reduced-motion`.
+**One h1, and it is not drawn.** The biggest text on the first screen is the
+name of an event, and the hero's title cannot be the h1 because it changes on
+every chevron press. So the h1 is `sr-only`, first in the document, and names
+the page; everything below is an h2.
 
-`visibility`, not just `opacity`, drives the hidden state — an `opacity-0`
-element is still hit-testable, tabbable and in the a11y tree. That single
-property replaced an `aria-hidden`/`inert` pair that could disagree with it.
+### The header is two rows
 
-The `/` shortcut hint lives on the **header** search only. In the hero the field
-already ends in a Search button, and stacking a keyboard hint beside a primary
-action crowds the one control that section exists for; a shortcut belongs next to
-a field you can't see.
+Row one is identity and place — wordmark, city switcher, nav, account. Row two
+is one thing: the search field, full width, on every breakpoint.
 
-The nav holds **destinations only**, so the active pill derives from
-`usePathname()` alone. Filters live in the hero's quick-filter row because
-they're query params on `/events`, and distinguishing them in the nav would need
-`useSearchParams` — which opts every static page in this layout out of
-prerendering. Below `lg` the pills collapse to Home + More, and **More is the
-complete index**, so nothing becomes unreachable.
+The single-row header this replaces had all five competing for ~1232px and the
+search field lost every time — squeezed to ~240px at `lg`, replaced by an icon
+below that. Giving it its own row costs 56px and ends the width fight: the nav
+no longer thins out by breakpoint, so every destination is visible at every
+desktop width instead of disappearing one by one on the way down.
+
+The reference hides its nav row once scrolled, leaving the search docked alone.
+That was built here and then **taken back out**: this row also carries the
+account control, so collapsing it left a signed-in visitor with no route to
+their tickets or sign-out until they scrolled back to the top. The row condenses
+instead. Hiding the only path to the account menu is not a layout decision.
+
+The nav carries OUR four destinations. The reference's bar carries seven —
+Dining, Movies, Stores, Play — because that company sells seven things. Copying
+the shape of a nav is a design decision; copying its contents would be shipping
+links to pages that do not exist.
+
+### Typography
+
+One family, two roles. **Plus Jakarta Sans** — a geometric grotesque with
+near-circular bowls, a tall x-height and a 200–800 axis — covers both the 56px
+extrabold hero line and the 13px medium chip label, separated by weight and
+tracking rather than by family. The Space Grotesk / Inter pairing it replaces
+was two skeletons that disagreed, which is why the old headings read as a
+different product from the paragraphs under them. `--font-display` and
+`--font-sans` remain separate variables so putting a real display face back is a
+change to `lib/theme/fonts.ts` and nothing else.
+
+The colour palette is unchanged. Every token in `styles/tokens.css` is the same
+one it was; what moved is layout, type and density.
 
 ### The browse page
 
@@ -1084,6 +1124,7 @@ scripts/mock-api.mjs   the fixture backend
 styles/            tokens.css (source of truth) + globals.css
 ```
 
-> The display face ships as **Space Grotesk** (a Design-System-sanctioned
-> alternative to Satoshi, which isn't on Google Fonts). Swapping to real Satoshi
-> later is a one-line change in `lib/theme/fonts.ts` — nothing else moves.
+> Both faces are **Plus Jakarta Sans** — see "Typography" above for why one
+> family covers display and body. `--font-display` and `--font-sans` are still
+> separate variables, so putting a distinct display face back is a one-line
+> change in `lib/theme/fonts.ts` and nothing else moves.

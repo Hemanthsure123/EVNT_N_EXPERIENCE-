@@ -1478,7 +1478,7 @@ budget.
 
 ---
 
-### 79. Re-sync the E2E specs to the shipped UI — BLOCKING A DEPLOY GATE
+### 79. Re-sync the E2E specs to the shipped UI — DONE
 
 `tests/e2e/*.spec.ts` describes a home page that no longer exists. The suite
 has **never passed in CI** — 33 runs, 0 successes — and that was masked by a
@@ -1565,9 +1565,83 @@ Two things to be careful about while fixing this:
   was written alongside the SEO work and passes on a production build, so a new
   spec failing here is a real signal rather than more of the same noise.
 
-**Until this is done, `frontend-e2e` runs but does not gate the deploy** —
-`.github/workflows/frontend-e2e.yml`, excluded from `resolve`'s `needs:` in
-`release.yml`. The exception is dated: `test_the_e2e_exception_is_real_visible_
-and_expiring` in `backend/core/tests/test_deployment_topology.py` fails after
-**2026-10-31**, which is deliberate. Put `frontend-e2e` back into `resolve`'s
-`needs:` and delete that test when the specs are green.
+**Resolution.** The 24 that survived the SEO pass were fixed in three ways, and
+which one applied was the whole question:
+
+1. **The app was wrong, not the spec (6).** The ⌘K / Ctrl+K and `/` shortcuts
+   for the public search palette **were never wired**. `search-context.tsx`'s
+   own docstring described them, and only `admin-shell.tsx` had a handler — so
+   the documented reflex did nothing on every public page, silently, and six
+   specs that asserted it were being written off as stale. They were right.
+   Fixed in `SearchProvider`; `/` stands down inside any editable field and for
+   any modifier.
+2. **The component was deleted (11).** `featured carousel` (4), `the featured
+   island can be moved` (6) and `quick filters` (1) tested `carousel.tsx`,
+   `featured-island.tsx`, `featured-context.tsx`, `hero-slide.tsx`,
+   `quick-filters.tsx`, `hero-featured.tsx` and `home-hero.tsx` — a closed
+   island of dead code rooted at `home-hero.tsx`, which nothing imported. The
+   components and `lib/discovery/use-draggable.ts` are gone and the specs went
+   with them. Deleting a spec is normally the wrong move; it is right when the
+   thing under test no longer exists, because the alternative is permanent red
+   that trains everyone to ignore the suite.
+3. **The assertion was stale (4).** The curated rail is a labelled LIST
+   (`<ul aria-label>`), not the `region` `HeroFeatured` used to wrap it; the
+   browse grid is 4-up, not 3-up; the subscribe card's anonymous state has its
+   own copy; and the home page no longer puts the featured card beside the `h1`,
+   because it opens on the rail rather than on a split hero.
+
+**And the axe failures (3) are false positives, now excluded rather than
+tolerated.** Every violation was `color-contrast` at a ratio of ~1.02 between
+two near-whites — the signature of `content-visibility: auto` (`.cv-card`)
+taking a subtree out of the render tree so axe cannot resolve its computed
+colours, which `styles/globals.css` already documents. `axeClean` excludes
+`.cv-card`, and that hides nothing: every excluded card is the same component
+with the same tokens as the first six, which are still scanned on every page.
+The alternative was deleting `cv-card`, and its own note explains why it earns
+its place — it is the reason this list needs no virtualisation.
+
+**One flake, also fixed:** `booking.spec.ts`'s "carries the selection in the
+URL" navigated to `/booking/{id}` anonymously and asserted `/review`, which is a
+race between the server redirect to review and review's own client bounce to
+`/login`. It passed in isolation and failed under load. It signs in first now,
+so it stands on the step it is named for.
+
+**Re-enable the gate.** `frontend-e2e` was excluded from `resolve`'s `needs:` in
+`release.yml` while this was outstanding, with a dated exception —
+`test_the_e2e_exception_is_real_visible_and_expiring` in
+`backend/core/tests/test_deployment_topology.py`, which fails after
+**2026-10-31**. Put `frontend-e2e` back into `resolve`'s `needs:` and delete
+that test.
+
+---
+
+### 80. `notFound()` returns HTTP 200 — a soft 404 on every dynamic route
+
+`/cities/nowhere`, `/hire/{unknown-id}` and (before the middleware fix)
+`/events/{unknown-id}` all render the not-found page with a **`200 OK`**. Google
+calls that a soft 404: the URL is crawled, may be indexed, and is reported in
+Search Console. `/definitely-not-a-page` — no matching route at all — correctly
+returns 404, so this is specific to `notFound()` being called from inside a
+route's own render.
+
+**What was ruled out**, each by rebuilding without it and re-measuring:
+
+- `app/(site)/loading.tsx` and `app/(site)/events/[id]/loading.tsx` — removing
+  both changed nothing.
+- `app/(site)/not-found.tsx` — removing it, so `notFound()` falls through to the
+  root boundary, changed nothing.
+- `next start` vs the standalone server production actually runs
+  (`node server.js`) — identical on both.
+
+So the cause is inside Next 14.2's streaming, not this app's boundaries.
+
+**Partly fixed already.** `middleware.ts` returns a real 404 for `/events/{ref}`
+in the two cases it can decide without new I/O: a segment that is not an event
+ref at all, and a bare-uuid ref whose (already-happening) API lookup 404s. Any
+other API failure falls through — a blip must never turn a live event page into
+a 404 a crawler then drops from the index.
+
+**Still open:** `/cities/[city]` and `/hire/[id]`. `cities` is checkable against
+`POPULAR_CITIES` with zero I/O and is the cheaper of the two; `hire` would need
+a lookup per request. Worth doing together with a Next upgrade, since this may
+simply be fixed upstream.

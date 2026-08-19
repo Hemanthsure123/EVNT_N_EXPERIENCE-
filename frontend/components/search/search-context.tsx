@@ -156,6 +156,60 @@ export function SearchProvider({
     [openSearch],
   );
 
+  /**
+   * ── ⌘K / Ctrl+K AND `/` ───────────────────────────────────────────────
+   *
+   * This file's own docstring has always said "the header trigger, the hero
+   * trigger and the ⌘K/Ctrl+K shortcut all drive the same instance", and the
+   * `anchor` doc below it describes at length what the KEYBOARD shape looks
+   * like. Neither shortcut was ever wired on the public site — only
+   * `admin-shell.tsx` had a handler — so the documented reflex did nothing,
+   * silently, on every page. Three e2e specs asserted it and were read as
+   * stale; they were right and the app was wrong.
+   *
+   * Both open with a `null` anchor, which is the CENTRED palette: a keyboard
+   * invocation has no control to hang a panel beneath, and one that jumped to
+   * a corner of the screen would be attached to nothing.
+   *
+   * `/` is the delicate one. It is a printable character, so it must never
+   * steal a keystroke from someone typing — in an input, a textarea, a select,
+   * or anything `contenteditable`, including a rich-text field inside a
+   * shadow-rooted widget. It also stands down for any modifier, because
+   * Ctrl+/ and ⌘/ are the browser's and the OS's to define, not ours.
+   */
+  React.useEffect(() => {
+    const isTyping = (target: EventTarget | null): boolean => {
+      const element = target as HTMLElement | null;
+      if (!element || typeof element.closest !== 'function') return false;
+      // `closest` rather than a tag check on the target itself: a caret inside
+      // a contenteditable sits on a descendant node, not on the host element.
+      return Boolean(
+        element.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]'),
+      );
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        // Chrome's own address-bar focus is ⌘K/Ctrl+K, so this must claim the
+        // key — every command palette on the web does the same.
+        event.preventDefault();
+        openSearch('', null);
+        return;
+      }
+
+      if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (isTyping(event.target)) return;
+        event.preventDefault();
+        openSearch('', null);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [openSearch]);
+
   const resolvedTerms = terms?.length ? terms : POPULAR_SEARCHES;
 
   const value = React.useMemo<SearchContextValue>(
@@ -169,16 +223,7 @@ export function SearchProvider({
       closeSearch,
       preload,
     }),
-    [
-      open,
-      initialQuery,
-      anchor,
-      resolvedTerms,
-      openSearch,
-      triggerProps,
-      closeSearch,
-      preload,
-    ],
+    [open, initialQuery, anchor, resolvedTerms, openSearch, triggerProps, closeSearch, preload],
   );
 
   return (

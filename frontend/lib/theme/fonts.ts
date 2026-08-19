@@ -1,27 +1,48 @@
-import { Inter, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
+import { JetBrains_Mono, Plus_Jakarta_Sans } from 'next/font/google';
 
 /**
- * Self-hosted fonts via next/font (subset + display:swap for zero layout shift
- * and no render-blocking network). Each exposes a CSS variable consumed by the
- * Tailwind fontFamily tokens.
+ * Self-hosted fonts via next/font (subset + `display: swap`, so no layout shift
+ * and no render-blocking network). Each exposes a CSS variable that the
+ * Tailwind `fontFamily` tokens consume — nothing in the app names a font
+ * directly.
  *
- * Display face: the Design System specifies "Satoshi (or Sora / Space Grotesk)".
- * Satoshi isn't on Google Fonts, so we ship the sanctioned alternative
- * **Space Grotesk** now; swapping to real Satoshi later is a one-line change to
- * next/font/local here — nothing else in the app moves.
+ * ── ONE FAMILY, TWO ROLES ─────────────────────────────────────────────────
+ *
+ * This shipped as Space Grotesk for headings over Inter for body: two families
+ * whose skeletons disagree, which is why the old headings read as a different
+ * product from the paragraphs under them.
+ *
+ * **Plus Jakarta Sans** now does both jobs. It is a geometric grotesque with
+ * near-circular bowls, a tall x-height and a genuinely wide weight axis
+ * (200–800), so the SAME family covers a 40px extrabold display line and a
+ * 13px medium chip label without either looking borrowed. That is what the
+ * reference design does — a single face, separated by weight and tracking
+ * rather than by family — and it is also cheaper: one font to download instead
+ * of two, on the page that decides whether somebody stays.
+ *
+ * `--font-display` and `--font-sans` therefore resolve to the same face. They
+ * stay as SEPARATE variables on purpose: every heading in the app already says
+ * `font-display`, so putting a real display face back later is a change to
+ * this file and nothing else.
  */
-export const fontSans = Inter({
+const jakarta = Plus_Jakarta_Sans({
   subsets: ['latin'],
   display: 'swap',
+  // The full range the type scale actually uses: 500 for chips and labels,
+  // 800 for the hero. Listing only what is used keeps the payload honest.
+  weight: ['400', '500', '600', '700', '800'],
   variable: '--font-sans',
 });
 
-export const fontDisplay = Space_Grotesk({
+const jakartaDisplay = Plus_Jakarta_Sans({
   subsets: ['latin'],
   display: 'swap',
-  weight: ['500', '600', '700'],
+  weight: ['600', '700', '800'],
   variable: '--font-display',
 });
+
+export const fontSans = jakarta;
+export const fontDisplay = jakartaDisplay;
 
 export const fontMono = JetBrains_Mono({
   subsets: ['latin'],
