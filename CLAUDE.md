@@ -1450,6 +1450,65 @@ a shop window: one artwork, three lines of text, no chrome. Two cards because
 they answer two questions — and both take their availability badge from the same
 helper, so an event never contradicts itself between them.
 
+## Progressive disclosure on the event page (primary, secondary, tertiary)
+
+The event page had TEN full-weight sections stacked below the fold — good to
+know, the running order, the organiser, the venue, accessibility, two FAQ sets,
+reviews and two policy sets. Every one of them rendered at once, which made the
+page a document to scroll rather than a decision to make.
+
+None of it was deleted. Somebody genuinely needs the age limit and somebody
+genuinely needs the refund rule — they just do not need them at the same
+moment. So information is now sorted three ways, and this ranking governs every
+detail surface built after it:
+
+- **Primary, always visible:** poster, title, date, venue, price, the ticket
+  panel, the countdown. What decides whether to book.
+- **Secondary, visible but compact:** the description, the video, reviews.
+- **Tertiary, one press away:** the fact grid, running order, venue card,
+  organiser card, FAQs and policies — each a `DisclosureRow` opening a
+  `DetailSheet` holding the SAME component that used to sit on the page.
+
+**The content is unchanged; only when you see it changed.** The sheets reuse
+`sections.tsx` verbatim, so there is no second copy of the venue card to drift.
+
+Four rules came out of it:
+
+1. **A row carries a summary, not just a label.** "Venue details" alone makes
+   the reader press to find out whether pressing was worth it; "Venue details /
+   Phoenix Marketcity, Mumbai" has already answered the common case.
+2. **A row with nothing behind it is ABSENT, not empty.** `buildDisclosures`
+   omits the running order when the organiser supplied none, and omits
+   accessibility rather than opening a sheet that says nothing — on access
+   information especially, an empty panel reads as a claim that there is no
+   provision, which is not what an empty column means.
+3. **One sheet, keyed by the active row.** A single `openKey`, never six
+   booleans: two booleans can both be true, which Radix renders as two stacked
+   focus traps where Escape then closes the wrong one. The `key` on the sheet
+   also stops React reusing one instance across two disclosures, which would
+   carry the previous sheet's scroll position into the next.
+4. **The icon must be a rendered ELEMENT, never a component reference.**
+   `buildDisclosures` runs in a server component and the rows are consumed by a
+   client one; a function cannot cross that boundary. React rejects it with
+   "Functions cannot be passed directly to Client Components", and it surfaces
+   as the WHOLE event page failing to render rather than as a missing icon.
+   That bug was written here and caught by e2e — eight event-page specs went
+   red at once, including ones that had nothing to do with the change.
+
+**A bottom sheet on a phone, a centred dialog on a pointer.** One component
+(`components/event/detail-sheet.tsx`) on Radix's Dialog, so the focus trap,
+Escape, the inert background and `aria-modal` are the library's rather than a
+re-implementation — seven hand-built dialogs would be seven sets of focus bugs.
+The shape differs by viewport because the ergonomics do: a centred dialog on a
+phone puts its close button where a thumb cannot reach. The header is pinned
+and only the body scrolls, so a long policy set can never push its own close
+control off screen.
+
+**Heading levels inside a sheet start at `h3`.** Radix renders the sheet's
+title as an `h2`, so a subsection using `SectionHeading` (also an `h2`) would
+sit as a peer of the thing it belongs to, and the outline a screen-reader user
+navigates by would say they are two unrelated headings.
+
 ## Saved events: the affordance comes before the account
 
 `events.SavedEvent` is a user's saved event, and the shape of the API follows

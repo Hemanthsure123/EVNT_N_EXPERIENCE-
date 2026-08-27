@@ -1000,22 +1000,56 @@ test.describe('the event page', () => {
     await expect(page.getByText('Starts in', { exact: true })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Tickets' })).toBeVisible();
 
-    for (const heading of [
-      'Good to know',
+    // ── THE TERTIARY DETAIL IS A ROW, NOT A SECTION ─────────────────────
+    //
+    // These five used to be five full-weight sections stacked down the page.
+    // They are rows now, and the assertion moved with the UI rather than being
+    // deleted: each must still be REACHABLE, which is the property that
+    // actually matters and the one progressive disclosure can break.
+    for (const row of [
+      'Things to know',
       'Organiser',
-      'Getting there',
+      'Venue details',
       'Frequently asked',
-      'Before you book',
+      'Terms and policies',
     ]) {
-      await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+      await expect(page.getByRole('button', { name: new RegExp(row) })).toBeVisible();
     }
 
     // The reading order is the DOM order, which is what a screen reader follows.
     const headings = await page.locator('h1, h2').allTextContents();
-    const order = ['Good to know', 'Organiser', 'Getting there', 'Frequently asked'];
+    const order = ['About this event', 'Event information'];
     const indexes = order.map((h) => headings.findIndex((text) => text.trim() === h));
-    expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
     expect(indexes.every((i) => i >= 0)).toBe(true);
+    expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+  });
+
+  test('secondary detail opens in a sheet, and Escape closes it', async ({ page }) => {
+    await anEvent(page);
+
+    // Scoped BY NAME, not `getByRole('dialog')` alone. The page can already be
+    // showing an unrelated overlay — `LocationPrompt` is a modal and opens by
+    // itself — so a bare count asserts something about THAT dialog instead of
+    // this one, and fails for a reason with nothing to do with disclosure.
+    const sheet = page.getByRole('dialog', { name: 'Venue details' });
+
+    // Nothing is open until asked for — the whole point of the change.
+    await expect(sheet).toHaveCount(0);
+
+    await page.getByRole('button', { name: /Venue details/ }).click();
+    await expect(sheet).toBeVisible();
+
+    // The sheet's title MATCHES the row that opened it. A sheet titled
+    // something else reads as though the wrong thing opened.
+    await expect(sheet.getByRole('heading', { name: 'Venue details' })).toBeVisible();
+    await expect(sheet).toContainText(/\w/);
+
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+
+    // A second row opens its OWN content rather than reusing the first sheet's.
+    await page.getByRole('button', { name: /Things to know/ }).click();
+    await expect(page.getByRole('dialog', { name: 'Things to know' })).toBeVisible();
   });
 
   test('counts down without flashing a wrong value', async ({ page }) => {
@@ -1149,7 +1183,16 @@ test.describe('the event page', () => {
     }
     await page.keyboard.press('Escape');
 
-    const directions = page.getByRole('link', { name: /Directions/ });
+    // Directions live in the venue card, which is behind a disclosure row now.
+    // The assertion did not weaken — it opens the sheet first, and what it
+    // checks (the link leaves the site safely) is exactly what it checked
+    // before. A link that is one press away is still a link; one that opened a
+    // tab without `noopener` would still be the bug this test exists for.
+    await page.getByRole('button', { name: /Venue details/ }).click();
+    const sheet = page.getByRole('dialog', { name: 'Venue details' });
+    await expect(sheet).toBeVisible();
+
+    const directions = sheet.getByRole('link', { name: /Directions/ });
     await expect(directions).toHaveAttribute('href', /google\.com\/maps/);
     await expect(directions).toHaveAttribute('target', '_blank');
     await expect(directions).toHaveAttribute('rel', /noopener/);

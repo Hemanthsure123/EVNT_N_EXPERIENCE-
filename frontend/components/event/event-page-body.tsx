@@ -21,7 +21,9 @@ import {
   VenueCard,
 } from '@/components/event/sections';
 import { TicketPanel } from '@/components/event/ticket-panel';
+import { EventDisclosures, type Disclosure } from '@/components/event/disclosures';
 import { EventReviews } from '@/components/reviews/event-reviews';
+import { Building2, CalendarClock, HelpCircle, Info, MapPin, ScrollText } from 'lucide-react';
 import type { EventContent } from '@/lib/api/event-content';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { ClayIcon } from '@/components/illustrations/clay';
@@ -249,11 +251,6 @@ export function EventPageBody({
               </section>
             ) : null}
 
-            <section className="flex flex-col gap-4">
-              <SectionHeading>Good to know</SectionHeading>
-              <QuickFacts event={event} />
-            </section>
-
             {event.description ? (
               <section className="flex flex-col gap-4">
                 <SectionHeading>About this event</SectionHeading>
@@ -263,43 +260,23 @@ export function EventPageBody({
               </section>
             ) : null}
 
-            {/* Each of these renders ONLY when the organiser supplied it. There
-                is no "running order coming soon" and no empty accessibility
-                panel — a heading over nothing is a promise the page cannot
-                keep, and on access information specifically, silence is honest
-                where a placeholder would be a claim. */}
-            {content.timeline.length ? (
-              <section className="flex flex-col gap-4">
-                <SectionHeading>What happens when</SectionHeading>
-                <RunningOrder entries={content.timeline} />
-              </section>
-            ) : null}
+            {/* ── EVERYTHING ELSE, ONE PRESS AWAY ───────────────────────────
+                These six used to be six full-weight sections stacked here,
+                and with the four above them the page ran to ten. All of it is
+                information somebody genuinely needs — the age limit, the
+                refund rule, when the gates open — but not all of it at the
+                same moment, and rendering it all at once made the page a
+                document to scroll rather than a decision to make.
 
+                Each row carries a summary that answers the common case
+                outright, so the press is only for the rest. Rows that have
+                nothing behind them are ABSENT, not empty: `buildDisclosures`
+                omits the running order when the organiser supplied none, and
+                omits accessibility rather than opening a sheet that says
+                nothing — silence is honest where a placeholder is a claim. */}
             <section className="flex flex-col gap-4">
-              <SectionHeading>Organiser</SectionHeading>
-              <OrganizerCard event={event} />
-            </section>
-
-            <section className="flex flex-col gap-4">
-              <SectionHeading>Getting there</SectionHeading>
-              <VenueCard event={event} />
-            </section>
-
-            {event.accessibility_notes?.trim() ? (
-              <section className="flex flex-col gap-4">
-                <SectionHeading>Accessibility</SectionHeading>
-                <AccessibilityNotes notes={event.accessibility_notes} />
-              </section>
-            ) : null}
-
-            <section className="flex flex-col gap-4">
-              <SectionHeading>Frequently asked</SectionHeading>
-              {/* The organiser's own questions first: "is there parking at THIS
-                  venue" beats "how does a QR ticket work" for someone deciding
-                  tonight. The platform set below is about how the platform
-                  works and is identical on every event. */}
-              <EventFaqs faqs={content.faqs} />
-              <Faqs />
+              <SectionHeading>Event information</SectionHeading>
+              <EventDisclosures items={buildDisclosures(event, content)} />
             </section>
 
             {/* Reviews sit AFTER the practical detail and BEFORE the rules:
@@ -312,16 +289,6 @@ export function EventPageBody({
                 <EventReviews eventId={event.id} />
               </section>
             )}
-
-            <section className="flex flex-col gap-4">
-              <SectionHeading>Before you book</SectionHeading>
-              {/* The organiser's rules FIRST: "carry a photo ID" is the one
-                  that stops somebody at the gate, and "no card data is
-                  stored" is reassurance. A reader gives this section about
-                  four seconds. */}
-              <OrganizerPolicies policies={event.policies} />
-              <Policies />
-            </section>
           </div>
         </div>
 
@@ -338,4 +305,145 @@ export function EventPageBody({
       )}
     </>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Progressive disclosure                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** A compact "2h 30m" for a ROW. The sheet shows the precise value. */
+function briefDuration(event: EventDetail): string | null {
+  const minutes =
+    event.duration_minutes && event.duration_minutes > 0
+      ? event.duration_minutes
+      : event.ends_at != null
+        ? Math.round((Date.parse(event.ends_at) - Date.parse(event.starts_at)) / 60_000)
+        : null;
+  if (minutes == null || minutes <= 0 || !Number.isFinite(minutes)) return null;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours && rest) return `${hours}h ${rest}m`;
+  if (hours) return `${hours}h`;
+  return `${rest}m`;
+}
+
+/**
+ * The rows, in the order somebody deciding actually needs them.
+ *
+ * Practicalities before rules: "what time do the gates open" and "where is it"
+ * are questions asked while deciding, and the refund policy is one asked after
+ * deciding. The organiser sits between the two because it is both — who is
+ * running this is a trust signal and a route to their other events.
+ *
+ * A row appears ONLY when there is something behind it. An empty sheet is
+ * worse than an absent row: the reader spent a press to learn nothing, and on
+ * accessibility specifically a "no information" panel reads as a claim that
+ * the venue has no provision, which is not what an empty column means.
+ */
+function buildDisclosures(event: EventDetail, content: EventContent): Disclosure[] {
+  const items: Disclosure[] = [];
+
+  const facts = [briefDuration(event), event.language?.trim(), event.age_restriction?.trim()]
+    .filter(Boolean)
+    .join(' · ');
+  const hasNotes = Boolean(event.accessibility_notes?.trim());
+
+  items.push({
+    key: 'know',
+    icon: <Info />,
+    label: 'Things to know',
+    // Falls back to naming what IS in the sheet rather than to a generic
+    // "details" — the fact grid always carries the date, venue and organiser.
+    value: facts || 'Date, venue, organiser and more',
+    // Two columns of facts plus free prose needs the wider sheet.
+    size: 'lg',
+    content: (
+      <div className="flex flex-col gap-6">
+        <QuickFacts event={event} />
+        {hasNotes ? (
+          <div className="flex flex-col gap-3">
+            {/* An `h3`, not `SectionHeading`. Radix renders the sheet's own
+                title as an `h2`, so a subsection inside it that ALSO rendered
+                an `h2` would sit at the same level as the thing it belongs
+                to — the outline a screen-reader user navigates by would say
+                these are two peers rather than a heading and its part. */}
+            <h3 className="text-h4">Accessibility</h3>
+            <AccessibilityNotes notes={event.accessibility_notes} />
+          </div>
+        ) : null}
+      </div>
+    ),
+  });
+
+  if (content.timeline.length) {
+    const first = content.timeline[0];
+    const rest = content.timeline.length - 1;
+    items.push({
+      key: 'schedule',
+      icon: <CalendarClock />,
+      label: 'Schedule and timeline',
+      value: rest > 0 ? `${first.label} · ${rest} more` : first.label,
+      description: formatEventDateLong(event.starts_at),
+      size: 'lg',
+      content: <RunningOrder entries={content.timeline} />,
+    });
+  }
+
+  items.push({
+    key: 'venue',
+    icon: <MapPin />,
+    label: 'Venue details',
+    value: `${event.venue}, ${event.city}`,
+    size: 'lg',
+    content: <VenueCard event={event} />,
+  });
+
+  items.push({
+    key: 'organiser',
+    icon: <Building2 />,
+    label: 'Organiser',
+    value: event.organization_name,
+    content: <OrganizerCard event={event} />,
+  });
+
+  items.push({
+    key: 'faqs',
+    icon: <HelpCircle />,
+    label: 'Frequently asked',
+    // Counts the organiser's OWN questions only. The platform set below them is
+    // identical on every event, so folding it into the count would make every
+    // event claim the same baseline number of answers.
+    value: content.faqs.length
+      ? `${content.faqs.length} question${content.faqs.length === 1 ? '' : 's'} from the organiser`
+      : 'How tickets, entry and refunds work',
+    size: 'lg',
+    content: (
+      <div className="flex flex-col gap-6">
+        {/* The organiser's own questions first: "is there parking at THIS
+            venue" beats "how does a QR ticket work" for someone deciding
+            tonight. */}
+        <EventFaqs faqs={content.faqs} />
+        <Faqs />
+      </div>
+    ),
+  });
+
+  items.push({
+    key: 'terms',
+    icon: <ScrollText />,
+    label: 'Terms and policies',
+    value: 'Refunds, entry and ID',
+    size: 'lg',
+    content: (
+      <div className="flex flex-col gap-6">
+        {/* The organiser's rules FIRST: "carry a photo ID" is the one that
+            stops somebody at the gate, and "no card data is stored" is
+            reassurance. A reader gives this about four seconds. */}
+        <OrganizerPolicies policies={event.policies} />
+        <Policies />
+      </div>
+    ),
+  });
+
+  return items;
 }
