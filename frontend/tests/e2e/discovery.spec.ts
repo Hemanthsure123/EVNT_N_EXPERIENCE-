@@ -1065,7 +1065,21 @@ test.describe('the event page', () => {
       await page.goto(href);
       panel = page.getByRole('region', { name: 'Tickets' });
       plus = panel.getByRole('button', { name: 'Increase quantity' });
-      if ((await plus.count()) > 0) {
+      // ── WAIT, DO NOT SNAPSHOT ──────────────────────────────────────────
+      //
+      // This asked `plus.count()` immediately after `goto`. `count()` is a
+      // SNAPSHOT — the one locator method that does not auto-wait — and the
+      // ticket panel is a client island fed by an UNCACHED tier read, so on a
+      // loaded machine it has not rendered yet. All eight events then read as
+      // zero and the test failed as "no event has a sellable tier" while the
+      // fixture was serving six perfectly sellable ones. Passing alone and
+      // failing in a full run is exactly the shape a missing wait produces.
+      const appeared = await plus
+        .first()
+        .waitFor({ state: 'attached', timeout: 4000 })
+        .then(() => true)
+        .catch(() => false);
+      if (appeared) {
         found = true;
         break;
       }
