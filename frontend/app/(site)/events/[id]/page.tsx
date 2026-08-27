@@ -19,6 +19,7 @@ import { summariseTiers } from '@/lib/discovery/tiers';
 import { eventPath, parseEventRef } from '@/lib/events/ref';
 import { JsonLd, breadcrumbJsonLd, eventJsonLd } from '@/lib/seo/json-ld';
 import { SITE_URL, pageMetadata } from '@/lib/seo/metadata';
+import { browseHref } from '@/lib/discovery/filters';
 
 /**
  * The event page — the conversion surface.
@@ -151,7 +152,7 @@ export default async function EventDetailPage({ params }: { params: { id: string
 
   const crumbs = [
     { label: 'Home', href: '/' },
-    { label: event.city, href: `/cities/${event.city.toLowerCase()}` },
+    { label: event.city, href: browseHref({ city: event.city }) },
     ...(category ? [{ label: category.label, href: `/categories/${category.slug}` }] : []),
     { label: event.title },
   ];

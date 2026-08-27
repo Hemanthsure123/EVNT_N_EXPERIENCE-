@@ -52,7 +52,6 @@ function pageFileFor(urlPath: string): string | null {
 const FOOTER_ROUTES = [
   // Discover
   '/events',
-  '/cities',
   // Organizers — the supply side's front door, and the two pages beside it
   '/organizer',
   '/dashboard',

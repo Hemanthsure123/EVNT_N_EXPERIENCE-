@@ -2,7 +2,6 @@ import type { MetadataRoute } from 'next';
 import { fetchEventSitemapSafe } from '@/lib/api/events';
 import { fetchPerformerSitemapSafe } from '@/lib/api/performers';
 import { CATEGORIES } from '@/lib/discovery/categories';
-import { POPULAR_CITIES } from '@/lib/discovery/cities';
 import { eventPath } from '@/lib/events/ref';
 import { SITE_URL } from '@/lib/seo/metadata';
 
@@ -104,20 +103,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: 'hourly' as const,
       priority: 0.9,
     },
-    {
-      url: `${SITE_URL}/cities`,
-      lastModified: now,
-      changeFrequency: 'weekly' as const,
-      priority: 0.7,
-    },
     ...CATEGORIES.map((category) => ({
       url: `${SITE_URL}/categories/${category.slug}`,
-      lastModified: now,
-      changeFrequency: 'daily' as const,
-      priority: 0.8,
-    })),
-    ...POPULAR_CITIES.map((city) => ({
-      url: `${SITE_URL}/cities/${city.slug}`,
       lastModified: now,
       changeFrequency: 'daily' as const,
       priority: 0.8,

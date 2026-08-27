@@ -19,7 +19,6 @@ const EXPECTED_LINKS = [
   // Discover
   '/events',
   '/events?when=weekend',
-  '/cities',
   // Organizers. `/dashboard` replaced a SECOND link to `/organizer` that was
   // labelled "Organizer login" — two rows, one destination, neither a login.
   '/organizer',

@@ -6,7 +6,6 @@ import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { ResultsView } from '@/components/discovery/results-view';
 import { fetchEventsSafe } from '@/lib/api/events';
 import { categoryBySlug } from '@/lib/discovery/categories';
-import { cityBySlug } from '@/lib/discovery/cities';
 import {
   type DiscoveryFilters,
   WHEN_LABELS,
@@ -17,6 +16,7 @@ import {
 import { eventToJsonLd } from '@/lib/discovery/seo';
 import { JsonLd, eventItemListJsonLd } from '@/lib/seo/json-ld';
 import { pageMetadata } from '@/lib/seo/metadata';
+import { browseHref } from '@/lib/discovery/filters';
 
 /**
  * Browse / search results.
@@ -82,7 +82,7 @@ function describe(filters: DiscoveryFilters): {
 function breadcrumbs(filters: DiscoveryFilters, title: string): BreadcrumbItem[] {
   const trail: BreadcrumbItem[] = [{ label: 'Home', href: '/' }];
   if (filters.city) {
-    trail.push({ label: filters.city, href: `/cities/${filters.city.toLowerCase()}` });
+    trail.push({ label: filters.city, href: browseHref({ city: filters.city }) });
   }
   if (filters.category) {
     const category = categoryBySlug(filters.category);
@@ -102,7 +102,7 @@ function breadcrumbs(filters: DiscoveryFilters, title: string): BreadcrumbItem[]
  * This page set no canonical at all, so every filter permutation —
  * `?category=comedy`, `?city=Mumbai`, `?when=weekend`, and every combination of
  * them — was its own indexable, self-canonical URL. Those are near-duplicates
- * of each other AND of `/categories/{slug}` and `/cities/{slug}`, which are
+ * of each other AND of `/categories/{slug}`, which is
  * statically prerendered, carry their own copy, and exist precisely to rank for
  * those queries. The site was competing with itself, and the pages that lost
  * were the ones designed to win.
@@ -131,14 +131,17 @@ function canonicalFor(filters: DiscoveryFilters): string {
     const category = categoryBySlug(filters.category);
     if (category) return `/categories/${category.slug}`;
   }
-  if (active[0] === 'city') {
-    // Only a CURATED city has a landing page — `generateStaticParams` +
-    // `notFound()` in `cities/[city]`. Canonicalising "Nashik" to a URL that
-    // 404s would be strictly worse than leaving it on /events, because a
-    // canonical pointing at a dead page can drop the real one from the index.
-    const city = cityBySlug(filters.city?.toLowerCase());
-    if (city) return `/cities/${city.slug}`;
-  }
+  // ── A CITY FILTER IS NO LONGER A PAGE OF ITS OWN ───────────────────────
+  //
+  // `/cities/{slug}` was the canonical target for `?city=`, and the whole
+  // route is gone: location is a SELECTOR now, not a destination. So a
+  // city-filtered browse view canonicalises to itself rather than to a URL
+  // that redirects — a canonical pointing at a 301 makes the crawler resolve
+  // one more hop to learn what it already had, and Google treats a canonical
+  // chain as a hint it may ignore.
+  //
+  // `?city=` is therefore the ONLY single filter that stays self-canonical.
+  if (active[0] === 'city') return browseHref({ city: filters.city });
   return '/events';
 }
 

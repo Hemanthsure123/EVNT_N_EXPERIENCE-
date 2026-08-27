@@ -46,16 +46,16 @@ async function signedIn(page: Page, options?: { staff?: boolean }) {
 
 test.describe('signing in from the header', () => {
   test('offers Sign in to a visitor, and returns them to where they were', async ({ page }) => {
-    await page.goto('/cities');
+    await page.goto('/about');
 
     const signIn = page.getByRole('banner').getByRole('link', { name: 'Sign in' });
     await expect(signIn).toBeVisible();
     // The destination is carried, so signing in is never a detour that loses
     // the page you were reading.
-    await expect(signIn).toHaveAttribute('href', /next=%2Fcities/);
+    await expect(signIn).toHaveAttribute('href', /next=%2Fabout/);
 
     await signIn.click();
-    await expect(page).toHaveURL(/\/sign-in\?next=%2Fcities/);
+    await expect(page).toHaveURL(/\/sign-in\?next=%2Fabout/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Welcome back');
 
     const account = await register(page);
@@ -63,7 +63,7 @@ test.describe('signing in from the header', () => {
     await page.getByLabel('Password', { exact: true }).fill(account.password);
     await page.getByRole('button', { name: 'Sign in', exact: true }).last().click();
 
-    await expect(page).toHaveURL(/\/cities$/);
+    await expect(page).toHaveURL(/\/about$/);
     await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toHaveCount(0);
   });
 

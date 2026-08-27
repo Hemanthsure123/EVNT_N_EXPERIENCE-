@@ -80,7 +80,7 @@ export const config = {
   // `^\/events(?:\/(.json))?$`. A matcher that silently matches the wrong
   // paths is invisible: the middleware simply never runs and everything looks
   // like it works, which is exactly how this was nearly shipped inert.
-  matcher: ['/events/:ref+', '/cities/:city+'],
+  matcher: ['/events/:ref+', '/cities', '/cities/:city+'],
 };
 
 /**
@@ -110,12 +110,31 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   // deciding here costs no I/O at all — which is the whole reason this route
   // is worth intercepting and `/hire/{id}` (which would need a lookup per
   // request) is not.
+  // ── /cities IS GONE, AND ITS URLS ARE NOT ───────────────────────────────
+  //
+  // Location is a SELECTOR now, not a destination, so the whole `/cities`
+  // route was deleted. Its URLs were indexed and are in people's history and
+  // in the sitemap this app shipped, so deleting the route is not the same as
+  // deleting the URLs: a curated city 301s to the browse view that shows
+  // exactly what its landing page showed.
+  //
+  // 308 rather than 307 for the same reason the event-slug redirect uses one:
+  // this is PERMANENT, and a crawler needs to be told so or it keeps asking.
+  //
+  // An UNCURATED slug still 404s. It never had a page, so redirecting it to
+  // `/events` would be a soft 404 — a URL that never existed answering 200
+  // with content that is not what was asked for.
+  if (pathname === '/cities') {
+    return NextResponse.redirect(new URL('/events', request.url), 308);
+  }
   if (pathname.startsWith('/cities/')) {
     const slug = pathname.slice('/cities/'.length);
-    if (!slug.includes('/') && !cityBySlug(slug.toLowerCase())) {
-      return notFoundResponse(request);
-    }
-    return NextResponse.next();
+    if (slug.includes('/')) return notFoundResponse(request);
+    const city = cityBySlug(slug.toLowerCase());
+    if (!city) return notFoundResponse(request);
+    const target = new URL('/events', request.url);
+    target.searchParams.set('city', city.name);
+    return NextResponse.redirect(target, 308);
   }
 
   const ref = pathname.slice('/events/'.length);

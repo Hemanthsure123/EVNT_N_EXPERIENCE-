@@ -87,19 +87,6 @@ export function SiteHeader() {
               Events
             </NavLink>
             <CategoriesMenu active={pathname.startsWith('/categories')} />
-            {/* ── THE WIDTH LADDER ────────────────────────────────────────
-                Two rows bought the search field its own full-width row, and
-                that is most of the budget problem solved — but 768px is still
-                768px. `Cities` joins at `lg`, which is exactly the width the
-                measurement showed the row fitting at. Everything hidden here
-                is in the bottom nav under the thumb. */}
-            <NavLink
-              href="/cities"
-              active={pathname.startsWith('/cities')}
-              className="hidden lg:inline-flex"
-            >
-              Cities
-            </NavLink>
             {/* Survives every width: somebody hiring a band for a wedding is
                 not browsing events, and burying the second PRODUCT would be a
                 business decision dressed up as a layout one. */}

@@ -18,7 +18,7 @@ const canonicalOf = (page: Page) => page.locator('link[rel="canonical"]').getAtt
 
 test.describe('canonical URLs', () => {
   test('every main public page declares one, and it is self-referencing', async ({ page }) => {
-    for (const path of ['/', '/events', '/cities', '/hire', '/about', '/pricing']) {
+    for (const path of ['/', '/events', '/hire', '/about', '/pricing']) {
       await page.goto(path);
       const canonical = await canonicalOf(page);
       expect(canonical, `${path} has no canonical`).toBeTruthy();

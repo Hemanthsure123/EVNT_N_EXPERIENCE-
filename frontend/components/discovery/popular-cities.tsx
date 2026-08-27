@@ -4,6 +4,7 @@ import { ArrowUpRight } from 'lucide-react';
 import { CityScene } from '@/components/illustrations/city-scenes';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
 import { cn } from '@/lib/utils/cn';
+import { browseHref } from '@/lib/discovery/filters';
 
 /**
  * Popular cities — the second entry point into browse, after categories.
@@ -39,7 +40,7 @@ export function PopularCities({ className }: { className?: string }) {
       {POPULAR_CITIES.map((city) => (
         <li key={city.slug}>
           <Link
-            href={`/cities/${city.slug}`}
+            href={browseHref({ city: city.name })}
             className={cn(
               'group flex h-full flex-col justify-between gap-2 rounded-xl border border-border bg-surface p-3 shadow-sm transition duration-base ease-spring',
               'sm:gap-3 sm:p-card',

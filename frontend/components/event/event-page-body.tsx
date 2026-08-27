@@ -32,6 +32,7 @@ import { formatEventDateLong, formatEventTime } from '@/lib/discovery/format';
 import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { eventPath } from '@/lib/events/ref';
+import { browseHref } from '@/lib/discovery/filters';
 
 /**
  * The event page, as a component — so the Studio's preview IS the event page.
@@ -122,7 +123,7 @@ export function EventPageBody({
 
   const crumbs = [
     { label: 'Home', href: '/' },
-    { label: event.city, href: `/cities/${event.city.toLowerCase()}` },
+    { label: event.city, href: browseHref({ city: event.city }) },
     ...(category ? [{ label: category.label, href: `/categories/${category.slug}` }] : []),
     { label: event.title },
   ];

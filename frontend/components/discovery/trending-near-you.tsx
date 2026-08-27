@@ -71,7 +71,7 @@ export function TrendingNearYou({
             title={city ? `Nothing on in ${city.name} yet` : 'Nothing trending right now'}
             description="New events go live every week. Try a nearby city in the meantime."
             ctaLabel="Browse all cities"
-            ctaHref="/cities"
+            ctaHref="/events"
           />
         )
       ) : null}

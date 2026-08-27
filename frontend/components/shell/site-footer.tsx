@@ -74,7 +74,7 @@ const COLUMNS: FooterColumn[] = [
     links: [
       { label: 'Browse events', href: '/events' },
       { label: 'This weekend', href: '/events?when=weekend' },
-      { label: 'Popular cities', href: '/cities' },
+      { label: 'Browse events', href: '/events' },
     ],
   },
   {

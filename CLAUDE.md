@@ -1450,6 +1450,60 @@ a shop window: one artwork, three lines of text, no chrome. Two cards because
 they answer two questions — and both take their availability badge from the same
 helper, so an event never contradicts itself between them.
 
+## Cities is a selector, not a destination
+
+`/cities` and `/cities/[city]` are DELETED. Location is chosen from the header
+now, so a city is a filter you apply rather than a page you visit, and the
+landing pages were a second way to express `?city=` that had to be kept in sync
+with the browse view forever.
+
+**The route is gone; the URLs are not.** Those pages were indexed and are in
+`sitemap.xml`, in browser histories and in shared links, so deleting the route
+is not the same as deleting the URLs. `middleware.ts` **308**s a curated city to
+`/events?city={name}` — the browse view showing exactly what the landing page
+showed. 308 and not 307 for the same reason the event-slug redirect uses one:
+it is permanent, and a crawler needs telling or it keeps asking.
+
+**An uncurated slug still 404s.** `/cities/nashik` never had a page, and
+redirecting it to `/events` would be a soft 404 — a URL that never existed
+answering 200 with content nobody asked for. Only the slugs that HAD a page get
+a redirect.
+
+**`?city=` is now the one single filter that is self-canonical.** It used to
+canonicalise to `/cities/{slug}`; pointing it at a URL that now 301s would make
+the crawler resolve an extra hop to learn what it already had, and Google treats
+a canonical chain as a hint it may ignore. `?category=` still canonicalises to
+`/categories/{slug}`, which is a real page.
+
+**`lib/discovery/cities.ts` STAYS.** It is the data behind the city switcher,
+the location prompt, the filter drawer and the search suggestions. What was
+removed is a ROUTE, not the concept of a city.
+
+## The All Events filter bar sticks with CSS and nothing else
+
+`position: sticky` on the chip row, whose parent is the same Container that
+holds the grid. A sticky element is bounded by its CONTAINING BLOCK, so it
+follows the reader down the event list and stops of its own accord where the
+section ends — which is the entire requirement, with no scroll listener, no
+measured offsets and no `IntersectionObserver`. A JS version would additionally
+have to re-measure on resize, on font load and on every filter change.
+
+Three things it does not work without, each verified by measuring
+`getBoundingClientRect` at several scroll positions rather than by eye:
+
+1. **A background.** The row is transparent by default and the poster grid
+   scrolls visibly through it.
+2. **`z-[999]`, one below the header's `z-sticky` (1000).** The header sticks at
+   `top-0` and this sticks beneath it; on equal z the later element in the DOM
+   wins, so the chips would slide over the header's bottom edge and its shadow.
+3. **It stays a SCROLLER at every width** rather than wrapping from `sm`. A bar
+   that is one line on a phone and two on a tablet changes height as it pins,
+   which shifts the grid underneath it.
+
+Measured: pins at 88px on desktop and 80px on mobile, stable across the whole
+section, and released (`barTop` −801 against a section bottom of −701) once the
+section has scrolled past.
+
 ## Progressive disclosure on the event page (primary, secondary, tertiary)
 
 The event page had TEN full-weight sections stacked below the fold — good to

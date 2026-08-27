@@ -152,7 +152,6 @@ export function CategoriesMenu({ active }: { active: boolean }) {
         <div className="mt-1.5 flex flex-wrap gap-1 border-t border-border pt-1.5">
           {[
             { href: '/events', label: 'All events' },
-            { href: '/cities', label: 'Browse by city' },
           ].map((item) => (
             <Link
               key={item.href}

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { CalendarDays, Home, MapPin, Music4 } from 'lucide-react';
+import { CalendarDays, Home, Heart, Music4 } from 'lucide-react';
 import { BottomNav } from './bottom-nav';
 
 /**
@@ -23,7 +23,7 @@ export function SiteBottomNav() {
       items={[
         { href: '/', label: 'Home', icon: <Home className="size-5" /> },
         { href: '/events', label: 'Events', icon: <CalendarDays className="size-5" /> },
-        { href: '/cities', label: 'Cities', icon: <MapPin className="size-5" /> },
+        { href: '/saved', label: 'Saved', icon: <Heart className="size-5" /> },
         { href: '/hire', label: 'Hire', icon: <Music4 className="size-5" /> },
       ]}
     />

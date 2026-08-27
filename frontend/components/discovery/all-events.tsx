@@ -87,10 +87,31 @@ export async function AllEvents() {
           All Events
         </h2>
 
-        {/* One row, scrolled rather than wrapped. Wrapping puts the grid a
-            whole row further down on a phone for no gain; a snapped scroller
-            keeps the first cards on the first screen. */}
-        <div className="-mx-4 flex gap-2.5 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
+        {/* ── STICKY, AND IT STOPS WHERE THE SECTION DOES ───────────────────
+            One row, scrolled rather than wrapped. Wrapping puts the grid a
+            whole row further down on a phone for no gain; a scroller keeps the
+            first cards on the first screen. It stays a SCROLLER at every width
+            now rather than wrapping from `sm` — a bar that is one line on a
+            phone and two on a tablet changes height as it sticks, which shifts
+            the grid under it.
+
+            `position: sticky` and nothing else: a sticky element is bounded by
+            its CONTAINING BLOCK, and this row's parent is the same Container
+            that holds the grid. So it follows the reader down the event list
+            and stops of its own accord at the end of the section — which is
+            exactly the requirement, with no scroll listener, no measured
+            offsets and no `IntersectionObserver` to get wrong. A JS version
+            would also have to re-measure on resize, on font load and on every
+            filter change.
+
+            Two details it does not work without:
+              - a BACKGROUND. The row is transparent by default and the poster
+                grid would scroll visibly through it.
+              - `z-[999]`, one below the header's `z-sticky` (1000). The header
+                sticks at `top-0` and this sticks beneath it; on the same z the
+                later element in the DOM wins, so the chips would slide over
+                the header's bottom edge and its shadow. */}
+        <div className="sticky top-sticky-top z-[999] -mx-4 flex gap-2.5 overflow-x-auto bg-background px-4 py-2 [-ms-overflow-style:none] [scrollbar-width:none] lg:top-sticky-top-lg lg:-mx-6 lg:px-6 [&::-webkit-scrollbar]:hidden">
           <Link href="/events" className={cn(CHIP_CLASS, 'font-semibold')}>
             <SlidersHorizontal className="size-4" aria-hidden />
             Filters
