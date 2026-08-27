@@ -29,7 +29,12 @@ import time
 import pytest
 import redis
 
-from core.adapters.redis.adapter import _TIMEOUT_SECONDS, _UNAVAILABLE, RedisCacheAdapter
+from core.adapters.redis.adapter import (
+    _TIMEOUT_SECONDS,
+    _UNAVAILABLE,
+    RedisCacheAdapter,
+    _is_degradable,
+)
 
 #: A port on the loopback with nothing behind it. Connecting is refused
 #: immediately, which is the fastest honest way to produce a real
@@ -133,6 +138,27 @@ class TestWhatIsDeliberatelyNOTSwallowed:
     def test_a_data_error_is_NOT_treated_as_unavailable(self):
         assert not issubclass(redis.exceptions.DataError, _UNAVAILABLE)
         assert not issubclass(redis.exceptions.ResponseError, _UNAVAILABLE)
+
+    def test_a_ResponseError_is_not_transport_but_MAY_still_degrade(self):
+        """Read the assertion above carefully, because taken alone it states
+        the belief that caused a production outage.
+
+        `ResponseError` is correctly absent from `_UNAVAILABLE` — it is not a
+        transport failure. But "not transport" does not mean "must always
+        raise": when a hosted Redis answers `max requests limit exceeded`, it
+        is refusing for a CAPACITY reason, which is identical in consequence
+        to being unreachable. That case degraded nowhere, so it 500'd every
+        read path that writes back to the cache.
+
+        The rule is `_is_degradable`, not `_UNAVAILABLE` membership.
+        See `test_redis_cache_quota_refusal.py`.
+        """
+        quota = redis.exceptions.ResponseError("max requests limit exceeded. Limit: 500000")
+        our_bug = redis.exceptions.ResponseError("WRONGTYPE Operation against a key")
+
+        assert not isinstance(quota, _UNAVAILABLE)
+        assert _is_degradable(quota)
+        assert not _is_degradable(our_bug)
 
 
 @pytest.mark.django_db

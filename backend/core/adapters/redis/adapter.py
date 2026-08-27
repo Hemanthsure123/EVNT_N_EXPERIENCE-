@@ -59,15 +59,78 @@ logger = logging.getLogger(__name__)
 #: — wait forever — which is the wrong default for anything off-box.
 _TIMEOUT_SECONDS = 5.0
 
-#: What "the cache is unavailable" looks like. Deliberately NARROW: these are
-#: transport failures, and anything else (a bad reply, a scripting error, a
-#: bug in this file) is a real fault that must surface rather than be silently
-#: swallowed into a cache miss nobody notices for a month.
+#: What "the cache is unavailable" looks like at the TRANSPORT layer.
+#:
+#: Still deliberately narrow: a bad reply, a scripting error or a bug in this
+#: file is a real fault that must surface rather than be silently swallowed
+#: into a cache miss nobody notices for a month.
 _UNAVAILABLE = (
-    redis.exceptions.ConnectionError,
+    redis.exceptions.ConnectionError,  # AuthenticationError subclasses this
     redis.exceptions.TimeoutError,
     redis.exceptions.BusyLoadingError,
 )
+
+#: ── AND WHAT IT LOOKS LIKE WHEN THE SERVER ANSWERS "NO" ──────────────────
+#:
+#: This tuple used to be the whole story, and it cost a production outage.
+#: The docstring at the top of this file already named "a rate limit" as one
+#: of the ordinary reasons a managed cache fails — but a rate limit does not
+#: arrive as a ConnectionError. Upstash ACCEPTS the connection and replies:
+#:
+#:     ResponseError: max requests limit exceeded. Limit: 500000, Usage: 500000
+#:
+#: `ResponseError` was not caught, so it propagated out of `cache.set()` and
+#: 500'd every read path that writes back — the browse list, the event page,
+#: the homepage, announcements — while the DATABASE WAS HEALTHY AND THE ROWS
+#: HAD ALREADY BEEN FETCHED. The request had done all of its real work and
+#: then died putting a copy in a cache it did not need.
+#:
+#: The distinction that matters is not the exception CLASS, it is whether the
+#: server refused for a reason about CAPACITY (identical in consequence to
+#: being unreachable) or because we sent it something wrong (our bug).
+#: Redis reports the former with a small set of well-known prefixes, and
+#: hosted providers add quota messages of their own.
+_CAPACITY_PREFIXES = (
+    "OOM",  # over maxmemory
+    "READONLY",  # writing to a replica
+    "MISCONF",  # RDB snapshot failing; refuses writes
+    "CLUSTERDOWN",
+    "NOREPLICAS",
+    "LOADING",
+)
+_CAPACITY_PHRASES = (
+    "max requests limit exceeded",  # Upstash monthly quota
+    "max daily request limit",  # Upstash daily quota
+    "max number of clients reached",
+    "quota exceeded",
+    "rate limit",
+)
+
+
+def _is_capacity_refusal(exc: BaseException) -> bool:
+    """Did the server refuse because it CANNOT, rather than because we erred?
+
+    A capacity refusal degrades exactly like an unreachable cache. A
+    `WRONGTYPE`, an unknown command or a wrong arity is a bug in this file
+    and must still surface — swallowing those is how a cache silently stops
+    working and nobody finds out for a month.
+    """
+    message = str(exc)
+    upper = message.upper()
+    lower = message.lower()
+    return upper.startswith(_CAPACITY_PREFIXES) or any(p in lower for p in _CAPACITY_PHRASES)
+
+
+def _is_degradable(exc: BaseException) -> bool:
+    """True when the cache should be treated as simply unavailable."""
+    if isinstance(exc, _UNAVAILABLE):
+        return True
+    return isinstance(exc, redis.exceptions.ResponseError) and _is_capacity_refusal(exc)
+
+
+#: Caught by every method below. `_unavailable()` re-raises anything that
+#: `_is_degradable` rejects, so the widened catch never hides a real fault.
+_DEGRADABLE = (*_UNAVAILABLE, redis.exceptions.ResponseError)
 
 
 class _CacheJSONEncoder(json.JSONEncoder):
@@ -104,12 +167,28 @@ class RedisCacheAdapter(CachePort):
         )
 
     def _unavailable(self, operation: str, key: str, exc: Exception) -> None:
-        """One log line per degraded call, at WARNING.
+        """One log line per degraded call, at WARNING — or a re-raise.
 
-        Not ERROR: the request succeeded, just slowly. Not silence either —
-        "the cache has been down for a week and everything is fine" is a
-        sentence somebody should be able to disprove from the logs.
+        THE SINGLE PLACE that decides whether a Redis failure degrades or
+        surfaces. Every method catches the wide `_DEGRADABLE`; this narrows
+        it back down, so there is exactly one rule and no method can drift
+        from it.
+
+        Not ERROR for the degraded case: the request succeeded, just slowly.
+        Not silence either — "the cache has been down for a week and
+        everything is fine" is a sentence somebody should be able to
+        disprove from the logs.
         """
+        if not _is_degradable(exc):
+            # A WRONGTYPE, an unknown command, a wrong arity: our bug, and it
+            # must surface. Widening the catch to cover quota refusals must
+            # not become a blanket amnesty for everything Redis can say.
+            logger.error(
+                "cache.protocol_error",
+                exc_info=True,
+                extra={"operation": operation, "cache_key": key},
+            )
+            raise exc
         logger.warning(
             "cache.unavailable",
             extra={"operation": operation, "cache_key": key, "error": str(exc)},
@@ -121,7 +200,7 @@ class RedisCacheAdapter(CachePort):
         # client — decode_responses=True makes the real runtime type `str`.
         try:
             raw = cast("str | None", self._client.get(key))
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # A MISS, which is the whole design: the caller falls through to
             # the query the cache was standing in front of.
             self._unavailable("get", key, exc)
@@ -131,7 +210,7 @@ class RedisCacheAdapter(CachePort):
     def set(self, key: str, value: Any, *, timeout_seconds: int | None = None) -> None:
         try:
             self._client.set(key, json.dumps(value, cls=_CacheJSONEncoder), ex=timeout_seconds)
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # Nothing to recover: the value the caller just computed is already
             # on its way to the client. The next read simply recomputes it.
             self._unavailable("set", key, exc)
@@ -139,7 +218,7 @@ class RedisCacheAdapter(CachePort):
     def delete(self, key: str) -> None:
         try:
             self._client.delete(key)
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # The one degradation with a visible consequence: an invalidation
             # that did not land leaves a stale entry until its TTL expires.
             # Every key on this platform carries one (30s-5min), so the window
@@ -154,7 +233,7 @@ class RedisCacheAdapter(CachePort):
                     key, json.dumps(value, cls=_CacheJSONEncoder), ex=timeout_seconds, nx=True
                 )
             )
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # FALSE, not True. `add` is "claim this if nobody has" — the honest
             # answer when the claim could not be made is that it was not made,
             # and every caller treats a lost claim as a reason to do less
@@ -168,7 +247,7 @@ class RedisCacheAdapter(CachePort):
         # reads it back as an int without special-casing.
         try:
             return int(cast(int, self._client.incrby(key, delta)))
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # 0 is the safe answer for both callers. The events list keys on a
             # GENERATION counter, and a generation that fails to advance
             # orphans nothing — readers keep the current one until the TTL
@@ -181,7 +260,9 @@ class RedisCacheAdapter(CachePort):
     def ping(self) -> bool:
         try:
             return bool(self._client.ping())
-        except _UNAVAILABLE:
+        except _DEGRADABLE as exc:
+            if not _is_degradable(exc):
+                raise
             # The health endpoint PROBES this, and it must report the truth
             # rather than an exception: a tile that is red because the cache is
             # down is the point. No log line — the caller is asking, so it is
@@ -201,7 +282,7 @@ class RedisCacheAdapter(CachePort):
         )
         try:
             acquired = lock.acquire(blocking=blocking_timeout_seconds > 0)
-        except _UNAVAILABLE as exc:
+        except _DEGRADABLE as exc:
             # NOT acquired. Every caller of this treats a lost lock as "somebody
             # else is rebuilding, do the cheap thing" — so an unreachable cache
             # means single-flight protection is off and N requests rebuild
