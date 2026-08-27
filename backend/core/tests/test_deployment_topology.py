@@ -938,16 +938,32 @@ class TestReleaseWorkflow:
     def test_the_e2e_exception_is_real_visible_and_expiring(self):
         """E2E runs and reports, but does not gate — and cannot do so quietly.
 
-        The suite has never passed (33 runs, 0 successes) because it is STALE,
-        not flaky: 38 of 92 specs assert a home page replaced in c983c09,
-        including `<HomeHero>`, a component now imported nowhere. Blocking
-        every deploy on tests that describe a UI which was intentionally
-        changed would mean the pipeline could never ship anything.
+        ── THE ORIGINAL JUSTIFICATION HAS LAPSED, AND SAYING SO IS THE POINT ──
+
+        This exception was taken because the suite had NEVER passed (33 runs, 0
+        successes) and was STALE, not flaky: 38 of 92 specs asserted a home page
+        replaced in c983c09, including `<HomeHero>`, a component imported
+        nowhere. Blocking every deploy on tests describing a UI that was
+        intentionally changed would have meant never shipping anything.
+
+        That is no longer true. The specs were re-synced and the suite passed in
+        CI for the first time on e9a3ff2 (run #45: 99 passed, 0 failed, 2
+        skipped). So the staleness argument no longer supports anything, and
+        only the CONCURRENCY argument below still does — and the two justify
+        different things. Concurrency justifies keeping the suite in its OWN
+        workflow; it does not justify the suite gating nothing.
+
+        Gating it from here is therefore NOT a `needs:` edge — the assertions
+        below forbid that, for the concurrency reason, and they are still right.
+        It is a required status check in branch protection, which is a
+        repository SETTING and cannot be made from inside this repo. That is the
+        decision this date now exists to force, and it is a smaller one than it
+        was: the evidence it was waiting for exists.
 
         What this asserts is that the exception stays HONEST:
 
-          - the suite still RUNS in the pipeline (it is a real `uses:` stage,
-            not deleted and not commented out),
+          - the suite still RUNS on every push (its own workflow, with a real
+            `push` trigger — not deleted and not commented out),
           - it is NOT dressed up as passing — no `continue-on-error`, which
             would turn a red suite into a green tick,
           - and it is genuinely outside `deploy`'s dependency graph rather than

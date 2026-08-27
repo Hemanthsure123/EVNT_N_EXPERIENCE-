@@ -1606,12 +1606,24 @@ race between the server redirect to review and review's own client bounce to
 `/login`. It passed in isolation and failed under load. It signs in first now,
 so it stands on the step it is named for.
 
-**Re-enable the gate.** `frontend-e2e` was excluded from `resolve`'s `needs:` in
-`release.yml` while this was outstanding, with a dated exception —
-`test_the_e2e_exception_is_real_visible_and_expiring` in
-`backend/core/tests/test_deployment_topology.py`, which fails after
-**2026-10-31**. Put `frontend-e2e` back into `resolve`'s `needs:` and delete
-that test.
+**OUTCOME: the suite is green in CI.** Run **#45** on `e9a3ff2` is the first
+success in the repository's history — 33 runs, 0 successes before it. Locally
+the same commit reports 99 passed / 0 failed / 2 skipped on a production build.
+The staleness this item was opened for is gone.
+
+**Re-enabling the gate is NOT "put it back in `resolve`'s `needs:`".** That was
+the original instruction here and following it now would reintroduce a bug that
+was separately found and fixed: a workflow run does not finish until every job
+in it finishes, so a ~20-minute suite held `release.yml`'s `production-deploy`
+concurrency lock long after the deploy decision was made, and the next push
+queued behind it. `test_the_e2e_exception_is_real_visible_and_expiring`
+(`backend/core/tests/test_deployment_topology.py`) now ASSERTS `frontend-e2e` is
+not a job in `release.yml`, and that assertion is correct — do not delete it.
+
+Gating from here is a **required status check on `frontend-e2e` in branch
+protection**. That is a repository SETTING, not a file in this repo, so it
+cannot be committed — it has to be switched on in GitHub. The dated exception
+(**2026-10-31**) stands until it is.
 
 ---
 
@@ -1641,7 +1653,16 @@ ref at all, and a bare-uuid ref whose (already-happening) API lookup 404s. Any
 other API failure falls through — a blip must never turn a live event page into
 a 404 a crawler then drops from the index.
 
-**Still open:** `/cities/[city]` and `/hire/[id]`. `cities` is checkable against
-`POPULAR_CITIES` with zero I/O and is the cheaper of the two; `hire` would need
-a lookup per request. Worth doing together with a Next upgrade, since this may
-simply be fixed upstream.
+**`/cities/[city]` is now DONE**, not open: the curated list is a constant in
+this bundle, so the middleware decides it with zero I/O, and
+`tests/e2e/seo.spec.ts` asserts `/cities/nowhere-at-all` returns a real `404`.
+
+**Still open: `/hire/[id]` only** — and it stays open on a trade-off rather than
+an oversight. For an event the middleware is ALREADY fetching, to build the
+redirect, so the 404 costs nothing extra; a performer profile has no redirect to
+build, so a lookup would buy nothing but a status code while putting an API
+round-trip in front of every profile page load. The zero-I/O half is available
+whenever it is wanted — a segment that is not a uuid at all (`/hire/nonsense`)
+is decidable from the URL — but the uuid-shaped-yet-unknown case, which is the
+one a crawler actually reaches, is not. Worth doing together with a Next
+upgrade, since this may simply be fixed upstream.
