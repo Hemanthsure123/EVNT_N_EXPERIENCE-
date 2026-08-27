@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { BriefForm } from '@/components/hire/brief-form';
 import { PerformerCard } from '@/components/hire/performer-card';
+import { SpotHireABand } from '@/components/illustrations/spots';
 import { Container } from '@/components/shell/container';
 import { PERFORMER_TYPE_LABELS, type PerformerType } from '@/lib/api/enquiries';
 import { fetchPerformersSafe } from '@/lib/api/performers';
@@ -87,24 +88,44 @@ export default async function HirePage() {
     <>
       {/* ── THE STATEMENT BAND ─────────────────────────────────────────── */}
       <section className="border-b border-border bg-muted/40">
-        <Container className="flex flex-col gap-4 py-10 sm:py-14 lg:py-16">
-          <h1 className="max-w-3xl text-h2 font-extrabold leading-[1.1] tracking-tight text-foreground lg:text-display">
-            Hire a band, DJ or performer for your own event
-          </h1>
-          <p className="max-w-2xl text-body-lg text-muted-foreground">
-            Tell us the date, the city and roughly what you have in mind. Our team comes back to you
-            with options and prices — no account needed.
-          </p>
+        <Container className="flex items-center gap-8 py-8 sm:py-12 lg:gap-12 lg:py-16">
+          <div className="flex min-w-0 flex-1 flex-col gap-3 sm:gap-4">
+            {/* ── THE TYPE LADDER IS A MOBILE FIX, NOT A PREFERENCE ───────
+                At `text-h2` and extrabold this headline wrapped to THREE lines
+                on a 390px phone, and the 18px paragraph under it to five — so
+                the entire first screen, and part of the second, was copy before
+                anything you could act on. On a page whose whole job is a form,
+                that is the copy talking the visitor out of filling it in. It
+                steps down two rungs on a phone and back up on a desktop, where
+                the width earns the size. */}
+            <h1 className="max-w-3xl text-h3 font-extrabold leading-[1.1] tracking-tight text-foreground sm:text-h2 lg:text-display">
+              Hire a band, DJ or performer for your own event
+            </h1>
+            <p className="max-w-2xl text-body text-muted-foreground sm:text-body-lg">
+              Tell us the date, the city and roughly what you have in mind. Our team comes back to
+              you with options and prices — no account needed.
+            </p>
 
-          {/* The type chips. `?type=` is a param this route already reads, so
-              each one is a real URL rather than a client-side toggle. */}
-          <div className="-mx-4 mt-1 flex gap-2.5 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
-            {ENTRY_TYPES.map((type) => (
-              <Link key={type} href={`/hire?type=${type}`} className={CHIP_CLASS}>
-                {PERFORMER_TYPE_LABELS[type]}
-              </Link>
-            ))}
+            {/* The type chips. `?type=` is a param this route already reads, so
+                each one is a real URL rather than a client-side toggle. */}
+            <div className="-mx-4 mt-1 flex gap-2.5 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
+              {ENTRY_TYPES.map((type) => (
+                <Link key={type} href={`/hire?type=${type}`} className={CHIP_CLASS}>
+                  {PERFORMER_TYPE_LABELS[type]}
+                </Link>
+              ))}
+            </div>
           </div>
+
+          {/* ── THE OTHER HALF OF A 1440px BAND ─────────────────────────
+              Text only, this band left roughly half the width empty at every
+              desktop size — which on an image-forward layout reads as a
+              placeholder somebody forgot to fill. The artwork is the one the
+              home page's Hire band already uses, so the two entry points to
+              this product look like the same product; it is decorative and
+              carries no information the copy does not, which is why it is
+              `aria-hidden` and why it is the first thing to go on a phone. */}
+          <SpotHireABand className="hidden h-44 w-auto shrink-0 lg:block xl:h-52" aria-hidden />
         </Container>
       </section>
 
