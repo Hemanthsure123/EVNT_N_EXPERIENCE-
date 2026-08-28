@@ -6,6 +6,7 @@ import { fetchEventsSafe } from '@/lib/api/events';
 import { addDays, istToday } from '@/lib/discovery/calendar';
 import { browseHref } from '@/lib/discovery/filters';
 import { cn } from '@/lib/utils/cn';
+import { AutoRail } from '@/components/discovery/auto-rail';
 import { PosterCard } from './poster-card';
 
 /**
@@ -125,21 +126,39 @@ export async function AllEvents() {
 
         {events.length ? (
           <>
-            {/* 3-up on desktop, matching the reference. The browse grid goes
-                to four and five because it is a working surface where density
-                is the point; here the poster is the content. */}
-            <ul className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+            {/* ── A RAIL THAT MOVES, NOT A GRID THAT SITS ────────────────────
+                This was a static 3-up grid. It is a horizontal rail that
+                advances every 4 seconds, which is what makes the section read
+                as a shop window rather than a page of results — and the browse
+                page one press away is where a grid belongs, because that is
+                the surface for comparing twenty events rather than noticing
+                three.
+
+                `AutoRail` owns the motion AND its stops: a visible pause
+                button, pause on hover and on keyboard focus, no motion at all
+                under `prefers-reduced-motion`, and a permanent handover the
+                moment somebody scrolls it themselves. Auto-motion without a
+                stop is a WCAG 2.2.2 failure, and one that resumes over a
+                deliberate scroll is the most irritating thing a carousel does.
+
+                Card widths are set here rather than in `AutoRail`, which knows
+                nothing about posters — two on a phone, four at desktop, so the
+                rail always shows a partial card and reads as scrollable. */}
+            <AutoRail label="All events">
               {events.map((event, index) => (
-                <li key={event.id}>
+                <li
+                  key={event.id}
+                  className="w-[46%] shrink-0 snap-start sm:w-[31%] lg:w-[23%]"
+                >
                   <PosterCard
                     event={event}
                     // The first row is above the fold on every width.
                     priority={index < 3}
-                    sizes="(min-width: 1024px) 30vw, (min-width: 640px) 45vw, 92vw"
+                    sizes="(min-width: 1024px) 23vw, (min-width: 640px) 31vw, 46vw"
                   />
                 </li>
               ))}
-            </ul>
+            </AutoRail>
 
             <Link
               href="/events"

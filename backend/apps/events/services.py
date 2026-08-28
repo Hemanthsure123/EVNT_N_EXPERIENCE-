@@ -579,6 +579,110 @@ class EventService:
         )
         return {key: value for key, value in summary.items() if key != "attendee_emails"}
 
+    #: Copied onto a duplicate. Deliberately NOT every column.
+    #:
+    #: What is excluded is the point of the list:
+    #:   - `status`, `version`, `slug` — a copy starts as a fresh DRAFT.
+    #:   - moderation fields (`moderation_note`, `moderated_at`, `moderated_by`)
+    #:     — a previous approval is not transferable; the copy is a new event
+    #:     and a human decides on it again.
+    #:   - `from_price_minor` / `tickets_available` — display denormals
+    #:     `ticketing` owns and recomputes from real tier rows. Copying them
+    #:     would put a price on a page with nothing behind it.
+    #:   - `search_vector` — a DB trigger maintains it.
+    _CLONED_FIELDS = (
+        "title",
+        "description",
+        "short_description",
+        "venue",
+        "city",
+        "category",
+        "place_id",
+        "latitude",
+        "longitude",
+        "starts_at",
+        "ends_at",
+        "duration_minutes",
+        "language",
+        "age_restriction",
+        "accessibility_notes",
+        "seo_title",
+        "seo_description",
+        "policies",
+        "poster_url",
+    )
+
+    def duplicate_event(
+        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str
+    ) -> Event:
+        """Copy an event into a fresh DRAFT the organizer can edit.
+
+        Running the same show monthly meant retyping the venue, the policies,
+        the age limit and the running order every time. This copies all of it
+        and hands back a draft.
+
+        ── WHAT IT DOES NOT COPY, AND WHY ────────────────────────────────────
+
+        A clone is a NEW event, not a continuation, so nothing that was earned
+        by the original comes with it:
+
+          - It is always a DRAFT, whatever the source was. A copy of a live
+            event that arrived already live would be an event published
+            without anyone deciding to publish it.
+          - Moderation history does not transfer. A previous approval was for
+            a specific event on a specific date.
+          - No bookings, tickets, scans or settlement — those belong to the
+            original and are `PROTECT`ed to it.
+          - NO TICKET TYPES. They belong to `ticketing`, and dependencies here
+            point one way — ticketing imports events, never the reverse — so
+            reaching across to clone tier rows would invert the one rule that
+            keeps these modules separable. The consequence is honest and
+            deliberate: the copy cannot be published until the organizer adds
+            a tier, because `ticketing` registers exactly that publish check.
+            The API says so in its response rather than leaving them to
+            discover it at the publish gate.
+
+        The content collections this module OWNS — FAQs and the running order
+        — are copied, because they are the retyping this exists to remove.
+        """
+        source = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
+
+        fields = {name: getattr(source, name) for name in self._CLONED_FIELDS}
+        # A list column: copy the VALUE, not the reference, or editing the
+        # clone's policies would edit the original's in the same process.
+        fields["policies"] = list(fields.get("policies") or [])
+        title = f"Copy of {source.title}"[: Event._meta.get_field("title").max_length]
+
+        with UnitOfWork() as uow:
+            clone = self._events.create_clone(
+                organization_id=source.organization_id,
+                fields={**fields, "title": title, "slug": event_slug(title)},
+            )
+            self._events.copy_content_to(source_id=source.id, target_id=clone.id)
+
+            uow.publish(
+                EVENT_CREATED,
+                {
+                    "event_id": str(clone.id),
+                    "organization_id": str(clone.organization_id),
+                    "cloned_from": str(source.id),
+                },
+                aggregate_id=str(clone.id),
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="event.duplicated",
+                target_type="event",
+                target_id=str(clone.id),
+                metadata={"cloned_from": str(source.id)},
+            )
+
+        logger.info(
+            "event_duplicated",
+            extra={"event_id": str(clone.id), "cloned_from": str(source.id)},
+        )
+        return clone
+
     def archive_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         """Retire an event the organizer is finished with.
 

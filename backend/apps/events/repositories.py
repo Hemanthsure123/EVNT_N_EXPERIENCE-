@@ -553,6 +553,62 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def create_clone(self, *, organization_id, fields: dict) -> Event:
+        """Insert a copy as a fresh DRAFT.
+
+        `status` is set HERE rather than passed in, so no caller can clone an
+        event into a published state by handing over the wrong dictionary.
+        """
+        return Event.objects.create(
+            organization_id=organization_id,
+            status=EventStatus.DRAFT,
+            **fields,
+        )
+
+    def copy_content_to(self, *, source_id, target_id) -> None:
+        """Copy the collections this module OWNS onto the clone.
+
+        FAQs and the running order — the retyping a duplicate exists to
+        remove. `bulk_create` so a twenty-entry running order is one INSERT
+        rather than twenty.
+
+        MEDIA IS NOT COPIED. An `EventMedia` row points at a stored object,
+        and two events sharing one storage key means deleting either one's
+        gallery breaks the other's — the rows are cheap to copy and the
+        BLOBS are not, so this would need a real object copy in the storage
+        adapter to be safe. Skipped deliberately rather than done wrongly;
+        the poster URL comes across on the event row itself, which is a plain
+        column and not a lifecycle-managed asset.
+        """
+        EventFaq.objects.bulk_create(
+            [
+                EventFaq(
+                    event_id=target_id,
+                    question=row.question,
+                    answer=row.answer,
+                    position=row.position,
+                )
+                for row in EventFaq.objects.filter(event_id=source_id).only(
+                    "question", "answer", "position"
+                )
+            ]
+        )
+        EventTimelineEntry.objects.bulk_create(
+            [
+                EventTimelineEntry(
+                    event_id=target_id,
+                    kind=row.kind,
+                    label=row.label,
+                    description=row.description,
+                    starts_at=row.starts_at,
+                    position=row.position,
+                )
+                for row in EventTimelineEntry.objects.filter(event_id=source_id).only(
+                    "kind", "label", "description", "starts_at", "position"
+                )
+            ]
+        )
+
     def archive_if_archivable(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
         """draft | rejected | finished -> archived, under the optimistic lock.
 

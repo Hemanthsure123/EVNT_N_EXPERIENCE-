@@ -7,6 +7,7 @@ import {
   Archive,
   BarChart3,
   CalendarPlus,
+  CopyPlus,
   ExternalLink,
   LayoutGrid,
   Receipt,
@@ -20,7 +21,7 @@ import type { EventRow } from '@/lib/api/organizer';
 import { STATUS_FILTERS } from '@/lib/organizer/event-status';
 import { canSubmit, submitBlockers } from '@/lib/organizer/submit-gate';
 import { useEventRows, useInvalidateOrganizer } from '@/lib/organizer/queries';
-import { archiveEvent, publishEvent } from '@/lib/api/organizer-writes';
+import { archiveEvent, duplicateEvent, publishEvent } from '@/lib/api/organizer-writes';
 import { ApiError } from '@/lib/api/errors';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
@@ -383,6 +384,37 @@ export function EventsTable() {
                 : `${selectedRows.length} selected, none ready to submit.`
           }
           onClick={() => void runBulk('Submitted', canSubmit, (row) => publishEvent(row.id))}
+        />
+        {/* ── DUPLICATE ────────────────────────────────────────────────────
+            Running the same show monthly meant retyping the venue, the
+            policies, the age limit and the running order every time.
+
+            It applies to ANY event, unlike submit and archive, which have
+            source-state rules — a copy of a live event is as reasonable as a
+            copy of a draft, and the copy is always a draft either way.
+
+            Bounded to ONE row on purpose. Cloning eight events at once
+            produces eight drafts called "Copy of …" with nothing to tell them
+            apart, which is a mess to undo and not a thing anybody asked for.
+            The button reads as single-select and says so when it is not. */}
+        <BulkButton
+          icon={CopyPlus}
+          label="Duplicate"
+          disabled={busy || selectedRows.length !== 1}
+          title={
+            selectedRows.length > 1
+              ? 'Select one event to duplicate.'
+              : 'Copy this event into a new draft'
+          }
+          onClick={() =>
+            void runBulk(
+              'Duplicated',
+              () => true,
+              async (row) => {
+                await duplicateEvent(row.id);
+              },
+            )
+          }
         />
         <BulkButton
           icon={Archive}

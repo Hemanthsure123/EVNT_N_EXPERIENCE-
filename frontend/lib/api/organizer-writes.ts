@@ -120,6 +120,22 @@ export const publishEvent = (eventId: string) =>
 export const archiveEvent = (eventId: string) =>
   api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/archive`, {});
 
+/**
+ * Copy an event into a fresh draft.
+ *
+ * Returns the NEW event, not the source — the caller needs its id to navigate
+ * to, and answering with the original would look like nothing happened.
+ *
+ * The copy has NO TICKET TYPES: they belong to `ticketing`, whose dependency
+ * points at `events` and not back, so the clone cannot reach across to
+ * duplicate tier rows. The practical consequence is that the copy cannot be
+ * published until a tier is added — the publish check `ticketing` registers —
+ * which is why the caller tells the organizer on the way in rather than
+ * letting them discover it at the gate.
+ */
+export const duplicateEvent = (eventId: string) =>
+  api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/duplicate`, {});
+
 /** What a cancellation actually did. A bare 200 would leave an organiser who
  *  just spent money with no idea how much. */
 export type CancelEventResult = {

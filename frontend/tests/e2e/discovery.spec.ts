@@ -290,6 +290,29 @@ test.describe('home', () => {
   // sufficient — a header can destroy itself internally without moving
   // `scrollWidth` by a pixel, and did. See "header nav never wraps or collides
   // with the search" below for the check that catches that.
+  test('the auto-advancing rail can be stopped, which is not optional', async ({ page }) => {
+    await page.goto('/');
+
+    // WCAG 2.2.2: anything moving automatically for more than five seconds
+    // needs a mechanism to pause it. Content that slides away mid-word is
+    // unusable for anyone who reads slowly and hostile to anyone with a
+    // vestibular disorder, so this is pinned rather than trusted.
+    const rail = page.getByRole('list', { name: 'All events' });
+    await expect(rail).toBeVisible();
+
+    const pause = page.getByRole('button', { name: /Pause all events/i });
+    await expect(pause).toBeVisible();
+    await expect(pause).toHaveAttribute('aria-pressed', 'false');
+
+    await pause.click();
+    // The control reports its own state, so a screen reader can tell whether
+    // the thing was actually stopped.
+    await expect(page.getByRole('button', { name: /Play all events/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
   for (const width of [360, 768, 1024, 1280, 1440]) {
     test(`lays out at ${width}px with no horizontal overflow`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });

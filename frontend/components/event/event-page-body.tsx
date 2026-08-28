@@ -110,16 +110,25 @@ export function EventPageBody({
   // the filmstrip: a still that plays when you click it is not a photograph,
   // and mixing the two makes the gallery's arrow keys mean two things.
   const video = content.media.find((item) => item.kind === 'video');
-  const gallery: GalleryImage[] = [
-    ...(hero
-      ? [{ url: hero.url, alt: hero.alt_text || event.title }]
-      : event.poster_url
-        ? [{ url: event.poster_url, alt: event.title }]
-        : []),
-    ...content.media
-      .filter((item) => item.kind === 'gallery')
-      .map((item) => ({ url: item.url, alt: item.alt_text || event.title })),
-  ];
+  // ── THE HERO IS THE ARTWORK; THE GALLERY IS ITS OWN SECTION ─────────────
+  //
+  // These used to be one list: the organiser's gallery photographs were
+  // appended to the hero's filmstrip, so the top of the page carried every
+  // image the event had and there was no gallery section at all.
+  //
+  // They answer different questions. The hero is "what is this" — one picture,
+  // above the fold, the LCP element. The gallery is "show me more", which
+  // somebody asks AFTER deciding to keep reading. Splitting them lets the hero
+  // stay a single decisive image and gives the photographs a section that is
+  // absent, not empty, when there are none.
+  const heroImages: GalleryImage[] = hero
+    ? [{ url: hero.url, alt: hero.alt_text || event.title }]
+    : event.poster_url
+      ? [{ url: event.poster_url, alt: event.title }]
+      : [];
+  const galleryImages: GalleryImage[] = content.media
+    .filter((item) => item.kind === 'gallery')
+    .map((item) => ({ url: item.url, alt: item.alt_text || event.title }));
 
   // Two groups, one builder. `RAIL_KEYS` is the only place the split is
   // stated, so a new disclosure lands in the body unless it is named here —
@@ -221,7 +230,7 @@ export function EventPageBody({
               </div>
             </div>
 
-            <HeroGallery images={gallery} categorySlug={category?.slug} />
+            <HeroGallery images={heroImages} categorySlug={category?.slug} />
 
             <div className="flex min-w-0 flex-col gap-4">
               {/* Save, share and add-to-calendar all need a PUBLISHED event —
@@ -269,6 +278,18 @@ export function EventPageBody({
           </div>
 
           <div className="flex min-w-0 flex-col gap-10 lg:col-start-1 lg:row-start-2">
+            {/* ABSENT, not empty. An event with no gallery gets no heading —
+                a "Gallery" over nothing is a promise the page cannot keep.
+                `priority={false}`: the hero above is the LCP element, and
+                marking a second set of images high-priority competes with it
+                for the same bandwidth. */}
+            {galleryImages.length ? (
+              <section className="flex flex-col gap-4">
+                <SectionHeading>Gallery</SectionHeading>
+                <HeroGallery images={galleryImages} priority={false} />
+              </section>
+            ) : null}
+
             {video ? (
               <section className="flex flex-col gap-4">
                 <SectionHeading>Watch</SectionHeading>

@@ -1450,6 +1450,78 @@ a shop window: one artwork, three lines of text, no chrome. Two cards because
 they answer two questions — and both take their availability badge from the same
 helper, so an event never contradicts itself between them.
 
+## Clone an event, and what a copy deliberately does not inherit
+
+`POST /events/{id}/duplicate` copies an event into a fresh DRAFT. Running the
+same show monthly meant retyping the venue, the policies, the age limit and the
+running order every time.
+
+A copy is a NEW event, not a continuation, so nothing the original EARNED comes
+with it:
+
+- **Always a draft**, whatever the source was. A copy of a live event arriving
+  already live would be an event published without anyone deciding to.
+- **No moderation history.** A previous approval was for a specific event on a
+  specific date; a human decides on the copy again.
+- **No `from_price_minor` / `tickets_available`.** Display denormals `ticketing`
+  recomputes from real tier rows — copying them puts a price on a page with
+  nothing behind it.
+- **No bookings, tickets, scans or settlement.** They are `PROTECT`ed to the
+  original.
+- **NO TICKET TYPES.** They belong to `ticketing`, and dependencies point one
+  way — ticketing imports events, never the reverse — so reaching across to
+  clone tier rows would invert the rule that keeps the modules separable. The
+  consequence is deliberate and stated in the API docstring: the copy cannot be
+  published until a tier is added, which is the publish check `ticketing`
+  registers.
+
+FAQs and the running order ARE copied — they belong to `events`, and they are
+the retyping this exists to remove. **Media is not**, and that is not an
+oversight: an `EventMedia` row points at a stored object, so two events sharing
+one storage key means deleting either one's gallery breaks the other's. Copying
+it safely needs a real object copy in the storage adapter; skipped rather than
+done wrongly. The poster URL comes across on the event row, which is a plain
+column and not a lifecycle-managed asset.
+
+`policies` is copied BY VALUE. It is a list column, and copying the reference
+means editing the clone's policies edits the original's for the life of the
+process.
+
+The UI bounds it to ONE selected row. Cloning eight events at once produces
+eight drafts called "Copy of …" with nothing to tell them apart.
+
+## The hero is the artwork; the gallery is its own section
+
+They used to be one list: the organiser's gallery photographs were appended to
+the hero's filmstrip, so the top of the page carried every image the event had
+and there was no gallery section at all.
+
+They answer different questions. The hero is "what is this" — one picture,
+above the fold, the LCP element. The gallery is "show me more", asked after
+deciding to keep reading. Split, the hero stays a single decisive image and the
+photographs get a section that is ABSENT, not empty, when there are none.
+
+Both render `HeroGallery`, so there is one lightbox — the arrows, Escape, focus
+return, background inerting and arrow-key stepping are the hard part, and a
+second copy is a second set of focus bugs. The gallery instance passes
+`priority={false}`: the hero above is the LCP element and a second
+high-priority image set competes for the same bandwidth.
+
+## Auto-motion needs a stop, and it is not optional
+
+The home page's All Events rail advances every 4 seconds. WCAG 2.2.2 requires a
+pause mechanism for anything moving automatically past five seconds, and there
+are three, all real: a visible pause button, pause on hover AND keyboard focus
+(or tabbing to a card moves it out from under the focus ring), and no motion at
+all under `prefers-reduced-motion`.
+
+It scrolls with `scrollBy` rather than a transform animation, so the rail stays
+draggable, swipeable and keyboard-scrollable. Touching it hands control over
+PERMANENTLY — an auto-advance that resumes over a deliberate scroll is the most
+irritating thing a carousel does. `onScroll` is deliberately not the stop
+signal, because `scrollBy` fires it too and the rail would pause itself on its
+own first tick.
+
 ## Readiness means "can I serve", not "is everything perfect"
 
 `/health/` returned 503 whenever ANY probe failed, cache included. That looks

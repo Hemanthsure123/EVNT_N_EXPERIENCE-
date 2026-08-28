@@ -587,3 +587,80 @@ def test_a_title_with_no_ascii_leaves_the_slug_empty(service, organization, owne
     )
 
     assert event.slug == ""
+
+
+@pytest.mark.django_db
+class TestDuplicate:
+    """Cloning an event. What it REFUSES to carry over is the whole design —
+    a copy is a new event, not a continuation, so nothing the original earned
+    comes with it."""
+
+    def test_it_copies_the_content_and_names_the_copy(self, service, make_event, owner):
+        source = make_event(status=EventStatus.LIVE, venue="Phoenix", city="Mumbai")
+        clone = service.duplicate_event(event_id=source.id, actor_id=owner.id)
+
+        assert clone.id != source.id
+        assert clone.title == f"Copy of {source.title}"
+        assert clone.venue == "Phoenix"
+        assert clone.city == "Mumbai"
+        assert clone.organization_id == source.organization_id
+
+    def test_a_copy_of_a_live_event_is_a_draft(self, service, make_event, owner):
+        """THE invariant. Arriving already live would be an event published
+        without anybody deciding to publish it."""
+        source = make_event(status=EventStatus.LIVE)
+        assert service.duplicate_event(event_id=source.id, actor_id=owner.id).status == (
+            EventStatus.DRAFT
+        )
+
+    def test_moderation_history_does_not_transfer(self, service, make_event, owner):
+        """A previous approval was for a specific event on a specific date, and
+        is not a credential the copy inherits."""
+        source = make_event(status=EventStatus.REJECTED)
+        source.moderation_note = "Poster breaches the guidelines"
+        source.save(update_fields=["moderation_note"])
+
+        clone = service.duplicate_event(event_id=source.id, actor_id=owner.id)
+
+        assert clone.moderation_note == ""
+        assert clone.moderated_at is None
+
+    def test_it_carries_no_ticketing_denormals(self, service, make_event, owner):
+        """`from_price_minor` and `tickets_available` are display columns
+        `ticketing` recomputes from real tier rows. The clone has no tiers, so
+        copying them would put a price on a page with nothing behind it."""
+        source = make_event(status=EventStatus.LIVE)
+        source.from_price_minor = 49900
+        source.tickets_available = 120
+        source.save(update_fields=["from_price_minor", "tickets_available"])
+
+        clone = service.duplicate_event(event_id=source.id, actor_id=owner.id)
+
+        assert clone.from_price_minor is None
+        assert clone.tickets_available is None
+
+    def test_the_slug_is_derived_from_the_new_title(self, service, make_event, owner):
+        clone = service.duplicate_event(
+            event_id=make_event(status=EventStatus.DRAFT).id, actor_id=owner.id
+        )
+        assert clone.slug.startswith("copy-of-")
+
+    def test_policies_are_copied_by_value(self, service, make_event, owner):
+        """A list column. Copying the REFERENCE would mean editing the clone's
+        policies edits the original's for the life of the process."""
+        source = make_event(status=EventStatus.DRAFT)
+        source.policies = [{"title": "ID required", "body": "Carry a photo ID"}]
+        source.save(update_fields=["policies"])
+
+        clone = service.duplicate_event(event_id=source.id, actor_id=owner.id)
+        clone.policies.append({"title": "Added later", "body": "..."})
+
+        source.refresh_from_db()
+        assert len(source.policies) == 1
+
+    def test_somebody_elses_event_cannot_be_cloned(self, service, make_event, other_user):
+        """Ownership is checked on the SOURCE. Without it, cloning would be a
+        read of any event on the platform dressed up as a write."""
+        source = make_event(status=EventStatus.LIVE)
+        with pytest.raises(NotEventOwnerError):
+            service.duplicate_event(event_id=source.id, actor_id=other_user.id)

@@ -22,6 +22,11 @@ urlpatterns = [
         api.EventArchiveView.as_view(),
         name="event-archive",
     ),
+    path(
+        "events/<uuid:event_id>/duplicate",
+        api.EventDuplicateView.as_view(),
+        name="event-duplicate",
+    ),
     path("organizer/events", api.OrganizerEventListView.as_view(), name="organizer-event-list"),
 ]
 
