@@ -310,9 +310,7 @@ class EventDuplicateView(APIView):
     @extend_schema(request=None, responses={201: EventDetailSerializer})
     def post(self, request: Request, event_id: str) -> Response:
         service = build_event_service()
-        event = service.duplicate_event(
-            event_id=event_id, actor_id=cast(User, request.user).id
-        )
+        event = service.duplicate_event(event_id=event_id, actor_id=cast(User, request.user).id)
         return _no_store(Response(EventDetailSerializer(event).data, status=201))
 
 

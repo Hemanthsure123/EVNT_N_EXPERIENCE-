@@ -612,9 +612,7 @@ class EventService:
         "poster_url",
     )
 
-    def duplicate_event(
-        self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str
-    ) -> Event:
+    def duplicate_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         """Copy an event into a fresh DRAFT the organizer can edit.
 
         Running the same show monthly meant retyping the venue, the policies,
