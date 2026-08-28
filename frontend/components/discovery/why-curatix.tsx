@@ -18,22 +18,18 @@ const PROMISES = [
   {
     icon: ShieldCheck,
     title: 'Secure payments',
-    body: 'Every payment is confirmed by a signed, server-to-server webhook. Card details are never stored.',
   },
   {
     icon: BadgeCheck,
     title: 'Verified organizers',
-    body: 'Organizers are verified before they can sell, and paid only after the event has run.',
   },
   {
     icon: QrCode,
     title: 'Instant tickets',
-    body: 'Your ticket is issued the moment payment clears — signed, and one scan to get in.',
   },
   {
     icon: RotateCcw,
     title: 'Easy refunds',
-    body: 'If a ticket cannot be issued after you pay, the refund starts on its own. You never have to ask.',
   },
 ];
 
@@ -94,9 +90,6 @@ export function WhyCuratix() {
                     <span className="text-body-sm font-semibold leading-tight text-foreground sm:text-body-lg sm:leading-normal">
                       {promise.title}
                     </span>
-                  </span>
-                  <span className="text-caption text-muted-foreground sm:text-body-sm">
-                    {promise.body}
                   </span>
                 </div>
               </Reveal>

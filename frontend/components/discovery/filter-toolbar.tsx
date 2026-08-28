@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowUpDown, LayoutGrid, Rows3, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowUpDown, SlidersHorizontal, X } from 'lucide-react';
 import { Container } from '@/components/shell/container';
 import { Chip } from '@/components/ui/chip';
 import { DatePicker } from './date-picker';
@@ -27,7 +27,6 @@ import {
 } from '@/lib/discovery/filters';
 import { cn } from '@/lib/utils/cn';
 import { OverflowRow, type OverflowItem } from './overflow-row';
-import type { ViewMode } from '@/lib/discovery/use-view-mode';
 
 /**
  * The browse page's control surface: one sticky row, in the order the eye needs
@@ -96,8 +95,6 @@ export function FilterToolbar({
   onChange,
   onOpenFilters,
   resultLabel,
-  view,
-  onViewChange,
 }: {
   filters: DiscoveryFilters;
   onChange: (next: DiscoveryFilters) => void;
@@ -105,8 +102,6 @@ export function FilterToolbar({
   onOpenFilters: () => void;
   /** e.g. "24+ events" — announced politely as the results change. */
   resultLabel: string;
-  view: ViewMode;
-  onViewChange: (view: ViewMode) => void;
 }) {
   const chips = activeFilterChips(filters);
   const activeCount = chips.length + (filters.sort === 'soonest' ? 0 : 1);
@@ -172,7 +167,19 @@ export function FilterToolbar({
   return (
     <div
       className={cn(
-        'sticky top-14 z-sticky border-y border-border',
+        // ── THE OFFSET IS THE HEADER'S HEIGHT, NOT A NUMBER ──────────────
+        //
+        // This was `top-14` — 56px, hard-coded — and the header became TWO
+        // rows (identity, then the full-width search field). So the bar stuck
+        // 56px from the top, which is INSIDE the header: most of it sat behind
+        // the search row and only a sliver showed. It is not that the bar
+        // stopped being sticky; it stuck to the wrong place.
+        //
+        // `--sticky-top` is the header's own height, so the two cannot drift
+        // apart again. `z-[999]` is one BELOW the header's `z-sticky` (1000):
+        // on equal z the later element in the DOM wins, which is what let this
+        // bar paint over the header's bottom edge.
+        'sticky top-sticky-top z-[999] border-y border-border lg:top-sticky-top-lg',
         // One real backdrop-filter on the page's one sticky bar — the same
         // exception the site header gets. Cards use `.glass-media` instead.
         'glass',
@@ -217,20 +224,12 @@ export function FilterToolbar({
           <OverflowRow
             items={items}
             gapPx={ROW_GAP_PX}
-            renderMore={(hidden) => (
-              <button
-                type="button"
-                onClick={onOpenFilters}
-                className={cn(
-                  'inline-flex h-9 items-center gap-1.5 rounded-full border border-dashed border-border bg-surface px-4 text-label text-muted-foreground',
-                  'transition-colors duration-fast hover:border-border-strong hover:text-foreground',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                )}
-              >
-                More filters
-                <span className="tabular-nums">{hidden.length}</span>
-              </button>
-            )}
+            // NO "more filters" control. There is already a `Filters` button,
+            // two rows up and always visible, that opens the same panel — two
+            // buttons for one destination is two things to read and one of
+            // them redundant. Overflowing chips simply do not render; the
+            // panel is where the full set lives.
+            renderMore={() => null}
           />
 
           <span className="hidden h-6 w-px shrink-0 bg-border xl:block" aria-hidden />
@@ -280,8 +279,6 @@ export function FilterToolbar({
               </SelectContent>
             </Select>
           </div>
-
-          <ViewToggle view={view} onChange={onViewChange} />
         </div>
 
         <div className="flex h-12 min-w-0 items-center gap-2 border-t border-border">
@@ -335,50 +332,6 @@ export function FilterToolbar({
           </p>
         </div>
       </Container>
-    </div>
-  );
-}
-
-/**
- * Grid or list. Not decoration: a 3-up grid is for scanning by poster, a list is
- * for COMPARING — same date, price and venue at the same x-position down the
- * page, which a staggered grid can't give you. The choice persists, because it's
- * a preference about how someone reads, not about this one query.
- */
-function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (view: ViewMode) => void }) {
-  const options: { id: ViewMode; label: string; icon: typeof LayoutGrid }[] = [
-    { id: 'grid', label: 'Grid view', icon: LayoutGrid },
-    { id: 'list', label: 'List view', icon: Rows3 },
-  ];
-
-  return (
-    <div
-      role="group"
-      aria-label="Result layout"
-      className="flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-surface p-0.5"
-    >
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={view === option.id}
-          aria-label={option.label}
-          onClick={() => onChange(option.id)}
-          className={cn(
-            'inline-flex size-8 items-center justify-center rounded-full transition duration-fast ease-spring',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            'motion-reduce:transition-none',
-            // Near-black fill, label in the token that FLIPS with the theme —
-            // `on-gradient` is white in both, and the dark theme's fill is
-            // near-white.
-            view === option.id
-              ? 'bg-cta text-cta-foreground shadow-sm'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-          )}
-        >
-          <option.icon className="size-4" aria-hidden />
-        </button>
-      ))}
     </div>
   );
 }

@@ -1,9 +1,7 @@
 import * as React from 'react';
 import type { EventCard as EventCardData } from '@/lib/api/types';
-import type { ViewMode } from '@/lib/discovery/use-view-mode';
 import { cn } from '@/lib/utils/cn';
 import { EventCard, EventCardSkeleton } from './event-card';
-import { EventRow, EventRowSkeleton } from './event-row';
 import { Reveal } from './reveal';
 
 /**
@@ -59,14 +57,12 @@ const PROMO_INDEX = 6;
 export function EventGrid({
   events,
   priorityCount = 0,
-  view = 'grid',
   promo,
   className,
 }: {
   events: EventCardData[];
   /** How many leading posters to mark `priority` (the above-the-fold row). */
   priorityCount?: number;
-  view?: ViewMode;
   /** An extra cell woven into the grid — renders nothing when it renders null. */
   promo?: React.ReactNode;
   className?: string;
@@ -74,18 +70,6 @@ export function EventGrid({
   // Only ever inserted once there are enough real results around it for the
   // grid to still read as a grid.
   const showPromo = Boolean(promo) && events.length > PROMO_INDEX;
-
-  if (view === 'list') {
-    return (
-      <ul className={cn('flex flex-col gap-3 sm:gap-4', className)}>
-        {events.map((event, index) => (
-          <li key={event.id} className={cn(index >= 6 && 'sm:cv-card')}>
-            <EventRow event={event} priority={index < Math.min(priorityCount, 2)} />
-          </li>
-        ))}
-      </ul>
-    );
-  }
 
   return (
     <ul
@@ -141,22 +125,7 @@ export function EventGrid({
   );
 }
 
-export function EventGridSkeleton({
-  count = 6,
-  view = 'grid',
-}: {
-  count?: number;
-  view?: ViewMode;
-}) {
-  if (view === 'list') {
-    return (
-      <div className="flex flex-col gap-3 sm:gap-4" aria-hidden>
-        {Array.from({ length: count }, (_, i) => (
-          <EventRowSkeleton key={i} />
-        ))}
-      </div>
-    );
-  }
+export function EventGridSkeleton({ count = 6 }: { count?: number }) {
   return (
     <div
       className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-5 lg:grid-cols-4 lg:gap-6 2xl:grid-cols-5"

@@ -101,11 +101,6 @@ export default async function HirePage() {
             <h1 className="max-w-3xl text-h3 font-extrabold leading-[1.1] tracking-tight text-foreground sm:text-h2 lg:text-display">
               Hire a band, DJ or performer for your own event
             </h1>
-            <p className="max-w-2xl text-body text-muted-foreground sm:text-body-lg">
-              Tell us the date, the city and roughly what you have in mind. Our team comes back to
-              you with options and prices — no account needed.
-            </p>
-
             {/* The type chips. `?type=` is a param this route already reads, so
                 each one is a real URL rather than a client-side toggle. */}
             <div className="-mx-4 mt-1 flex gap-2.5 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">

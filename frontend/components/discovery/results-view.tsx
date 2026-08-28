@@ -19,7 +19,6 @@ import {
   filtersToSearchParams,
   toServerQuery,
 } from '@/lib/discovery/filters';
-import { useViewMode } from '@/lib/discovery/use-view-mode';
 import { useOnline } from '@/lib/utils/use-online';
 import { CategoryBanner } from './category-banner';
 import { EventGrid, EventGridSkeleton } from './event-grid';
@@ -118,10 +117,8 @@ export function ResultsView({
   const [filters, setFilters] = React.useState(initialFilters);
   // The grid lags the controls by a frame or two on purpose — see the note above.
   const deferredFilters = React.useDeferredValue(filters);
-  const [view, setView] = useViewMode();
   // Same split for the layout switch: the toggle shows its new pressed state
   // immediately, and re-laying twenty cards out as rows follows.
-  const deferredView = React.useDeferredValue(view);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const online = useOnline();
   const sentinelRef = React.useRef<HTMLDivElement>(null);
@@ -267,8 +264,6 @@ export function ResultsView({
         onChange={updateFilters}
         onOpenFilters={() => setDrawerOpen(true)}
         resultLabel={resultLabel}
-        view={view}
-        onViewChange={setView}
       />
 
       <FilterDrawer
@@ -310,7 +305,7 @@ export function ResultsView({
             roughly 45rem tall at three-up, and a floor shorter than one row
             lets the page jump on every filter change. */}
         <div ref={resultsRef} className="flex min-h-[45rem] scroll-mt-32 flex-col gap-6">
-          {loading ? <EventGridSkeleton view={deferredView} /> : null}
+          {loading ? <EventGridSkeleton /> : null}
 
           {!loading && failed ? (
             <EmptyState
@@ -344,7 +339,6 @@ export function ResultsView({
                 <MemoEventGrid
                   events={events}
                   priorityCount={3}
-                  view={deferredView}
                   promo={<SubscribeCard asListItem />}
                 />
               </div>

@@ -74,7 +74,10 @@ const COLUMNS: FooterColumn[] = [
     links: [
       { label: 'Browse events', href: '/events' },
       { label: 'This weekend', href: '/events?when=weekend' },
-      { label: 'Browse events', href: '/events' },
+      // Was a second, identical `Browse events` — the row that replaced the
+      // deleted `/cities` link duplicated the first instead of replacing it,
+      // so the column listed one destination twice.
+      { label: 'Hire a band', href: '/hire' },
     ],
   },
   {
@@ -345,6 +348,26 @@ export function SiteFooter({ className }: { className?: string }) {
               ))}
             </ul>
           </div>
+
+          {/* The reference carries a line of this kind under the legal row.
+              It names only pages that EXIST — terms, cookies and privacy are
+              all real routes — rather than the reference's fuller list, which
+              includes a content-guidelines page this product does not have. */}
+          <p className="text-center text-caption text-muted-foreground sm:text-left">
+            By using {LEGAL_NAME} you agree to our{' '}
+            <Link href="/terms" className={inlineLinkClass}>
+              Terms
+            </Link>
+            ,{' '}
+            <Link href="/cookies" className={inlineLinkClass}>
+              Cookie Policy
+            </Link>{' '}
+            and{' '}
+            <Link href="/privacy" className={inlineLinkClass}>
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </div>
       </Container>
     </footer>

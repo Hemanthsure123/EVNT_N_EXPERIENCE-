@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   Building2,
   Check,
+  ChevronRight,
   ChevronsUpDown,
   CircleHelp,
   Info,
@@ -126,7 +127,7 @@ export function AccountMenu() {
         />
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-72 p-1.5">
+      <PopoverContent align="end" className="w-80 p-2">
         <div className="flex items-center gap-3 px-2.5 pb-2.5 pt-2">
           {/* The identity card is always the PERSON, whatever scope is active —
               it answers "who am I signed in as", which the scope cannot change. */}
@@ -263,8 +264,22 @@ export function AccountMenu() {
 
 // `min-h-control` (44px) rather than padding alone: this menu is a thumb
 // target on a phone as often as a cursor target on a desktop.
+/**
+ * A row in the account menu, as a CARD rather than a dropdown line.
+ *
+ * The reference design's account panel is a stack of generously-padded rounded
+ * rows, each with its icon on the left and a chevron on the right, grouped
+ * under quiet section labels. That reads as a set of DESTINATIONS you are
+ * choosing between; a tight 28px dropdown line reads as a menu of commands.
+ * The distinction matters here because almost every row IS a destination —
+ * profile, tickets, dashboard, console, help, settings.
+ *
+ * `min-h-11` is the 44px touch floor, which the old `py-2` row missed on a
+ * phone. The chevron is drawn by `MenuLink` (links go somewhere) and omitted
+ * for the sign-out button (it does not).
+ */
 const rowClass = cn(
-  'flex min-h-control w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body-sm',
+  'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-body-sm',
   'transition-colors duration-fast hover:bg-muted',
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 );
@@ -324,7 +339,9 @@ function ScopeRow({
         active && 'bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover',
       )}
     >
-      <span className={cn('shrink-0', active ? 'text-nav-active-foreground' : 'text-muted-foreground')}>
+      <span
+        className={cn('shrink-0', active ? 'text-nav-active-foreground' : 'text-muted-foreground')}
+      >
         {icon}
       </span>
       <span className="min-w-0 flex-1">
@@ -356,8 +373,12 @@ function MenuLink({
 }) {
   return (
     <Link href={href} onClick={onNavigate} className={rowClass}>
-      <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      {children}
+      <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {/* A chevron because the row GOES somewhere. The sign-out button below
+          deliberately has none: it performs an action and stays put, and an
+          affordance that says "forward" on it would be a small lie. */}
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
     </Link>
   );
 }
