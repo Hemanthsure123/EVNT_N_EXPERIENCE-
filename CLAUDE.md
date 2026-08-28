@@ -1450,6 +1450,32 @@ a shop window: one artwork, three lines of text, no chrome. Two cards because
 they answer two questions — and both take their availability badge from the same
 helper, so an event never contradicts itself between them.
 
+## Readiness means "can I serve", not "is everything perfect"
+
+`/health/` returned 503 whenever ANY probe failed, cache included. That looks
+careful and is wrong, and it rolled back a working deploy.
+
+The sequence, because every step was individually reasonable: Upstash's quota
+ran out; the Redis adapter was fixed to degrade on a quota refusal, which also
+made `ping()` honest; `/health/` started truthfully reporting the cache as
+down; and the deploy pipeline's FIRST smoke test is `[ "$code" = "200" ]`. So a
+degraded cache blocked a release — and the release it blocked was the one
+repairing the cache path.
+
+**The database decides readiness. The cache never does.** Every read path is
+cache-ASIDE and falls through to a query the database can still answer, so an
+instance with no cache is slower and completely correct. Refusing traffic over
+it is the same mistake `RedisCacheAdapter` exists to prevent, moved one layer
+up.
+
+`status` is `ok` while the instance can serve and `unhealthy` only when it
+cannot. Nothing is hidden: `checks` reports each probe and a `degraded` array
+names what is down while still serving, so an operator reads the real state
+from a 200 instead of inferring it from a status code that cannot tell
+"slower" from "broken". `core/tests/test_health.py` pins the smoke-test
+contract explicitly, because the pipeline lives in another directory and
+cannot fail this file's build.
+
 ## Ticket selection is a screen again — and the rule is ASK ONCE
 
 This has now been both ways, and the history is the point.

@@ -121,6 +121,24 @@ export function EventPageBody({
       .map((item) => ({ url: item.url, alt: item.alt_text || event.title })),
   ];
 
+  // Two groups, one builder. `RAIL_KEYS` is the only place the split is
+  // stated, so a new disclosure lands in the body unless it is named here —
+  // which is the safe default: the rail is beside the money and has room for
+  // two rows, not six.
+  const allDisclosures = buildDisclosures(event, content);
+  const bodyItems = allDisclosures.filter((item) => !RAIL_KEYS.includes(item.key));
+  const railItems = RAIL_KEYS.map((key) => allDisclosures.find((item) => item.key === key))
+    .filter((item): item is Disclosure => Boolean(item))
+    // A rail row is a ROW, never a preview: the rail is 22rem of column beside
+    // the price, and a four-fact grid or a running order in there is the
+    // sidebar-picker mistake in a different costume. The summary the preview
+    // would have shown moves onto the row's own value line.
+    .map((item) => ({
+      ...item,
+      preview: undefined,
+      value: item.key === 'schedule' ? scheduleSummary(content) : item.value,
+    }));
+
   const crumbs = [
     { label: 'Home', href: '/' },
     { label: event.city, href: browseHref({ city: event.city }) },
@@ -145,28 +163,24 @@ export function EventPageBody({
         */}
         <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-12">
           <div className="flex min-w-0 flex-col gap-6 lg:col-start-1 lg:row-start-1">
-            {/* ── PICTURE FIRST, THEN WHAT AND WHEN ─────────────────────────
-                The order is the one every study of this page type arrives at,
-                and it is not a style preference. A large clear image is what a
-                visitor processes first — and then, immediately beneath it, the
-                facts that decide whether the rest of the page is worth reading.
-                Ticketmaster describes the EDP as "the starting point of the
-                purchase flow"; the pattern is image, identity, price, in that
-                order, with the price reachable without scrolling.
+            {/* ── NAME IT, DATE IT, THEN SHOW IT ────────────────────────────
+                The reference design puts the title and the date ABOVE the
+                artwork, and this now matches it.
 
-                Two previous arrangements failed here for opposite reasons.
-                Stacked full-width, a poster-shaped hero filled the first screen
-                and pushed the title and the ticket panel below the fold. Side
-                by side, the frame was sized by height with an automatic width,
-                so a landscape image resolved 917px wide inside a 352px column
-                and ran over the title — which is the bug in the screenshots.
+                The previous order was picture-first, on the argument that a
+                large clear image is what a visitor processes first. That is
+                true of a poster somebody is BROWSING. It is the wrong way
+                round for a page they have already chosen to open: they arrived
+                from a card that showed them the artwork, so leading with it
+                again spends the first screen re-showing what they just
+                clicked, and pushes the one fact that decides everything — the
+                DATE — below it.
 
-                The frame is fixed 16:9 and bounded by the COLUMN now, so it can
-                do neither: at 1440 the left column is 832px, the hero is 468px
-                tall, and the title, the date and the top of the ticket panel
-                are all on the first screen. */}
-            <HeroGallery images={gallery} categorySlug={category?.slug} />
-
+                The constraint that produced the old order still holds and is
+                still handled: the frame is a fixed 16:9 bounded by the COLUMN,
+                so a landscape image cannot resolve wider than its column and
+                run over the title, which is the bug that caused the last two
+                rearrangements. */}
             <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-2">
                 {category ? (
@@ -205,7 +219,11 @@ export function EventPageBody({
                   {event.venue}, {event.city}
                 </p>
               </div>
+            </div>
 
+            <HeroGallery images={gallery} categorySlug={category?.slug} />
+
+            <div className="flex min-w-0 flex-col gap-4">
               {/* Save, share and add-to-calendar all need a PUBLISHED event —
                   a public URL to share, an id to save against. In a preview
                   they would each be a control that cannot do its one job. */}
@@ -227,20 +245,27 @@ export function EventPageBody({
                 </div>
               )}
             </div>
-
             <Countdown startsAt={event.starts_at} />
           </div>
 
           {/* `lg:top-sticky-top-lg` is the header's own height plus a rung of
               breathing room, derived rather than the hard-coded 80px it was —
               which had already drifted from a 72px header. */}
-          <div className="lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1">
+          {/* ── THE RAIL CARRIES THE DECISION, AND THE TWO FACTS BESIDE IT ──
+              Price and CTA first, then WHERE and WHEN as compact rows — which
+              is where the reference design puts them, and it is right: the
+              venue and the gate time are the two things somebody checks
+              immediately after the price, and sending them down the page to
+              find either is what made this page a scroll. Everything else
+              (organiser, FAQs, policies) stays in the body. */}
+          <div className="flex flex-col gap-3 lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1">
             <BookingCta
               eventId={event.id}
               tiers={tiers}
               cancelled={event.status === 'cancelled'}
               preview={preview}
             />
+            {railItems.length ? <EventDisclosures items={railItems} /> : null}
           </div>
 
           <div className="flex min-w-0 flex-col gap-10 lg:col-start-1 lg:row-start-2">
@@ -276,7 +301,7 @@ export function EventPageBody({
                 nothing — silence is honest where a placeholder is a claim. */}
             <section className="flex flex-col gap-4">
               <SectionHeading>Event information</SectionHeading>
-              <EventDisclosures items={buildDisclosures(event, content)} />
+              <EventDisclosures items={bodyItems} />
             </section>
 
             {/* Reviews sit AFTER the practical detail and BEFORE the rules:
@@ -307,9 +332,27 @@ export function EventPageBody({
   );
 }
 
+/**
+ * Which disclosures sit in the booking rail, IN THE ORDER THEY APPEAR THERE.
+ *
+ * Where, then when — the two things somebody checks straight after the price.
+ * The array is the ordering too, so this is the single place the rail's shape
+ * is stated.
+ */
+const RAIL_KEYS = ['venue', 'schedule'];
+
 /* -------------------------------------------------------------------------- */
 /* Progressive disclosure                                                     */
 /* -------------------------------------------------------------------------- */
+
+/** "Gates open at 1:00 PM" — the one schedule fact worth a rail row. */
+function scheduleSummary(content: EventContent): string | undefined {
+  const first = content.timeline[0];
+  if (!first) return undefined;
+  // The time is omitted rather than guessed: an entry may carry a label and
+  // no `starts_at`, and "Gates open at Invalid Date" is worse than "Gates open".
+  return first.starts_at ? `${first.label} at ${formatEventTime(first.starts_at)}` : first.label;
+}
 
 /** A compact "2h 30m" for a ROW. The sheet shows the precise value. */
 function briefDuration(event: EventDetail): string | null {

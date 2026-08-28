@@ -372,7 +372,11 @@ test.describe('the booking funnel', () => {
     await notNow.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
     if (await notNow.isVisible().catch(() => false)) await notNow.click();
 
-    const book = page.getByRole('link', { name: 'Book tickets' });
+    // STRICT on purpose, unlike the discovery specs: this test adds a ticket, so
+    // it must land on an event that HAS one. A sold-out event's CTA reads "See
+    // ticket types" and accepting it here would walk into a picker with nothing
+    // to pick and fail on the add, instead of skipping as intended.
+    const book = page.getByRole('link', { name: /^Book tickets$/ });
     if ((await book.count()) === 0) test.skip(true, 'this event is sold out');
 
     // ── THE TICKETS STEP IS BACK, AND THE EVENT PAGE NO LONGER PICKS ─────

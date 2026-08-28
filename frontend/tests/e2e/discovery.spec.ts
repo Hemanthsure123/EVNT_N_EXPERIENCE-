@@ -1028,7 +1028,14 @@ test.describe('the event page', () => {
     const notNow = page.getByRole('button', { name: 'Not now' });
     await notNow.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
     if (await notNow.isVisible().catch(() => false)) await notNow.click();
-    await page.getByRole('link', { name: 'Book tickets' }).first().click();
+    // A sold-out event's CTA reads "See ticket types" and goes to the SAME
+    // screen — the tiers are still worth looking at, and a returning ticket
+    // shows up there. Matching only "Book tickets" made this depend on which
+    // event the fixture happens to list first.
+    await page
+      .getByRole('link', { name: /^(Book tickets|See ticket types)$/ })
+      .first()
+      .click();
     await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+/);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   };
@@ -1155,7 +1162,7 @@ test.describe('the event page', () => {
     let found = false;
     for (const href of hrefs.slice(0, 8)) {
       await page.goto(href);
-      const book = page.getByRole('link', { name: /^Book tickets$/ }).first();
+      const book = page.getByRole('link', { name: /^(Book tickets|See ticket types)$/ }).first();
       // A sold-out event's CTA reads "See ticket types" and still goes to the
       // same screen; one with no tiers at all has no link to press.
       if ((await book.count()) === 0) continue;
@@ -1198,8 +1205,22 @@ test.describe('the event page', () => {
       // enabled again. The assertion after the loop is what decides the test.
       await plus.click({ timeout: 2000 }).catch(() => undefined);
     }
+    // THE invariant: you cannot ask for more than exists.
     await expect(plus).toBeDisabled();
-    await expect(page.getByText(/Up to \d+ per order/).first()).toBeVisible();
+
+    // And the reason must be ON SCREEN, whichever it is. A control that stops
+    // responding without saying why reads as broken.
+    //
+    // This asserted only "Up to N per order", which conflates the two bounds:
+    // a tier with three left disables at three and never shows a per-order
+    // cap. Which one a run hits depends on the fixture's inventory, so the
+    // assertion was passing on luck.
+    await expect(
+      page
+        .getByText(/Up to \d+ per order/)
+        .or(page.getByText(/left|remaining|Sold out/i))
+        .first(),
+    ).toBeVisible();
   });
 
   test('one booking CTA per viewport, and it never promises a checkout', async ({ page }) => {
@@ -1215,7 +1236,7 @@ test.describe('the event page', () => {
 
     // Exactly ONE booking CTA on the desktop layout: the panel's own. The
     // mobile bar is hidden here, so a page never shows two.
-    const cta = page.getByRole('link', { name: /^Book tickets$/ });
+    const cta = page.getByRole('link', { name: /^(Book tickets|See ticket types)$/ });
     await expect(cta).toHaveCount(1);
     // It points at the ticket screen, WITHOUT a preselected basket — nothing
     // has been chosen yet, and a `?tickets=` the visitor never picked is a
@@ -1226,7 +1247,7 @@ test.describe('the event page', () => {
     // it goes to the same place.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => window.scrollTo(0, 2400));
-    const bar = page.getByRole('link', { name: /Book tickets|See tiers/ }).last();
+    const bar = page.getByRole('link', { name: /Book tickets|See tiers|See ticket types/ }).last();
     await expect(bar).toBeVisible();
     await expect(bar).toHaveAttribute('href', /^\/booking\/[0-9a-f-]+$/);
   });
