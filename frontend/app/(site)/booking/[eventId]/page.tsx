@@ -1,34 +1,30 @@
-import { redirect } from 'next/navigation';
+import * as React from 'react';
+import { BookingStep } from '@/components/booking/step-booking';
 
 /**
- * The old step 1. It now redirects to Review.
+ * Step 1 — choose tickets.
  *
- * Ticket selection moved to the EVENT PAGE, where somebody is deciding beside
- * the poster, the date and the line-up — rather than being asked for the same
- * four things a second time on a screen of its own. See `lib/booking/steps.ts`.
+ * ── THIS ROUTE HAS BEEN A PAGE, THEN A REDIRECT, AND IS A PAGE AGAIN ──────
  *
- * The route is kept rather than deleted because `/booking/{id}` is a URL that
- * has been shared, bookmarked and emailed. Deleting it would 404 somebody
- * holding a link to their own checkout; redirecting lands them exactly where
- * that link was always trying to take them.
+ * It began as the ticket step while the EVENT PAGE also carried a full picker,
+ * so pressing Book asked for the same four things twice. That was resolved by
+ * deleting this screen and keeping the event page's picker — the right call
+ * against that pairing, and the wrong half to keep.
  *
- * The query string carries the selection (`?tickets=<tierId>:<qty>`), so it is
- * forwarded verbatim — dropping it here would silently empty the basket the
- * link was for.
+ * The event page no longer picks. It shows a price and a `Book tickets` CTA,
+ * and the choosing happens here, on a screen whose only job is choosing. The
+ * duplication the redirect existed to remove is still gone; what changed is
+ * which of the two screens survived.
+ *
+ * Why this half: a tier is not a radio button any more. It carries live
+ * availability, a per-order maximum and a sale window, and a picker wedged
+ * into a 22rem sidebar next to a poster is the worst place to read any of
+ * that. `lib/booking/steps.ts` carries the full history.
+ *
+ * The `?tickets=<tierId>:<qty>` query still arrives here from an older link
+ * and is honoured — `BookingStep` reads the selection from the URL, so a
+ * bookmarked checkout opens with its basket intact rather than empty.
  */
-export default async function BookingEntryPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ eventId: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const { eventId } = await params;
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(await searchParams)) {
-    if (typeof value === 'string') query.set(key, value);
-    else if (Array.isArray(value) && value[0]) query.set(key, value[0]);
-  }
-  const suffix = query.toString();
-  redirect(`/booking/${eventId}/review${suffix ? `?${suffix}` : ''}`);
+export default function Page() {
+  return <BookingStep />;
 }

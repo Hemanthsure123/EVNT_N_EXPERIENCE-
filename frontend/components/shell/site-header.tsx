@@ -71,13 +71,21 @@ export function SiteHeader() {
               hairline — the reference's arrangement, and the right one: the
               city scopes everything the nav then leads to, so it reads before
               the destinations rather than sitting among them as a fifth. */}
-          <span className="mx-1 hidden h-8 w-px shrink-0 bg-border lg:mx-2 lg:block" aria-hidden />
-          {/* From `lg` only. The city scopes what the nav leads to, so it reads
-              before the destinations — but at 768px the row is brand + divider
-              + city + four pills + two controls, which is over budget and was
-              measured overflowing. Below `lg` the city is still one tap away on
-              `/cities` and in the bottom nav. */}
-          <CitySwitcher className="hidden lg:flex" />
+          <span className="mx-1 h-8 w-px shrink-0 bg-border lg:mx-2" aria-hidden />
+          {/* ── ON EVERY WIDTH NOW, AND IT HAD TO BE ─────────────────────────
+              This was `hidden lg:flex`, on a real measurement: at 768px the row
+              was brand + divider + city + FOUR pills + two controls and it
+              overflowed. The note said the city was "still one tap away on
+              /cities and in the bottom nav" — and `/cities` is deleted, so on a
+              phone there was no way to set a location at all, for the control
+              that scopes the entire catalogue.
+
+              Two things paid for it: the `Cities` pill is gone from the nav,
+              and below `md` the nav row is gone entirely (the bottom bar has
+              it), so the mobile row is brand + city + theme + account. The
+              trigger drops its label below `sm` and is a pin with the city
+              name read out by screen readers. */}
+          <CitySwitcher />
 
           <NavRail activeKey={pathname} className="ml-1 hidden md:flex lg:ml-3">
             <NavLink

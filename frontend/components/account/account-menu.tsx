@@ -7,7 +7,10 @@ import {
   Building2,
   Check,
   ChevronsUpDown,
+  CircleHelp,
+  Info,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Plus,
   Settings,
@@ -215,10 +218,32 @@ export function AccountMenu() {
 
         <Divider />
 
-        {/* Settings is the appearance + account page; a dedicated support
-            surface does not exist yet, so no entry points at one. §12.3. */}
+        {/* ── LABELLED GROUPS, AND ONLY WHERE SOMETHING BACKS THEM ─────────
+            The note here used to say a dedicated support surface did not
+            exist. It does — `/support`, `/help` and `/about` are all real
+            routes — so the entries are real too.
+            
+            What is still ABSENT is deliberate: no "Payment settings" (nothing
+            stores a payment method; cards never touch this platform, Razorpay
+            holds them), no "Chat with us" (there is no chat) and no "Share
+            feedback" (there is no endpoint). Each appears in the reference
+            design and each would be a menu row that goes nowhere. */}
+        <GroupLabel>Support</GroupLabel>
+        <MenuLink href="/help" icon={CircleHelp} onNavigate={close}>
+          Help centre
+        </MenuLink>
+        <MenuLink href="/support" icon={LifeBuoy} onNavigate={close}>
+          Contact support
+        </MenuLink>
+
+        <Divider />
+
+        <GroupLabel>More</GroupLabel>
         <MenuLink href="/account/settings" icon={Settings} onNavigate={close}>
           Settings
+        </MenuLink>
+        <MenuLink href="/about" icon={Info} onNavigate={close}>
+          About us
         </MenuLink>
         <button
           type="button"
@@ -246,6 +271,26 @@ const rowClass = cn(
 
 // `border-strong`, not `border`: this rule has to actually separate two groups
 // of rows, and a 1.27:1 hairline on a white popover reads as nothing.
+/**
+ * A section heading inside the menu.
+ *
+ * `aria-hidden` and NOT a `<h*>`: this popover has `role="menu"`, whose only
+ * valid children are menu items and separators. A heading in there is dropped
+ * by some screen readers and announced out of order by others, and the
+ * `<Divider role="separator">` above it already conveys the grouping. It is a
+ * visual affordance, so it is exposed visually and nowhere else.
+ */
+function GroupLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      aria-hidden
+      className="px-3 pb-1 pt-2 text-caption uppercase tracking-wide text-muted-foreground"
+    >
+      {children}
+    </div>
+  );
+}
+
 function Divider() {
   return <div className="my-1.5 h-px bg-border-strong" role="separator" />;
 }

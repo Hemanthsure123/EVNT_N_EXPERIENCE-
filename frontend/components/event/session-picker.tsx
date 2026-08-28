@@ -2,11 +2,7 @@
 
 import * as React from 'react';
 import { cn } from '@/lib/utils/cn';
-import {
-  type Session,
-  type SessionDay,
-  sessionNote,
-} from '@/lib/event/sessions';
+import { type Session, type SessionDay, sessionNote } from '@/lib/event/sessions';
 
 /**
  * Pick a showtime, for an event that runs more than once.
@@ -57,9 +53,7 @@ export function SessionPicker({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-body font-semibold text-foreground">Select a session</h3>
         {multiDay ? (
-          <span className="text-caption text-foreground-subtle">
-            {days.length} dates
-          </span>
+          <span className="text-caption text-foreground-subtle">{days.length} dates</span>
         ) : null}
       </div>
 
@@ -88,7 +82,7 @@ export function SessionPicker({
                   'text-body-sm font-medium transition duration-fast ease-out',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   active
-                    ? 'border-primary bg-primary-subtle text-primary-subtle-foreground'
+                    ? 'bg-primary-subtle text-primary-subtle-foreground border-primary'
                     : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground',
                   // Not disabled — a day with nothing left is still a day the
                   // event runs, and a buyer looking for it must be able to open
@@ -153,7 +147,7 @@ function SessionChip({
         'transition duration-fast ease-out',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         selected && !disabled
-          ? 'border-primary bg-primary-subtle ring-2 ring-primary/30'
+          ? 'bg-primary-subtle border-primary ring-2 ring-primary/30'
           : 'border-border hover:border-border-strong',
         disabled && 'cursor-not-allowed opacity-55',
       )}

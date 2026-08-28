@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {Ban, Check, Info, Loader2, Minus, Plus } from 'lucide-react';
+import { Ban, Check, Info, Loader2, Minus, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import { SessionPicker } from '@/components/event/session-picker';
@@ -138,8 +138,8 @@ export function TicketPanel({
   const [selectedSlotId, setSelectedSlotId] = React.useState<string | null>(null);
   const fallbackSession = defaultSession(days);
   const session =
-    days.flatMap((day) => day.sessions).find((s) => s.slot.id === selectedSlotId)
-    ?? fallbackSession;
+    days.flatMap((day) => day.sessions).find((s) => s.slot.id === selectedSlotId) ??
+    fallbackSession;
 
   // With no sessions this is every tier, unchanged.
   const visibleTiers = React.useMemo(
@@ -207,7 +207,12 @@ export function TicketPanel({
           If you booked, your refund is already on its way back to the account you paid from. Card
           refunds take 5-7 working days; UPI is usually 1-3.
         </p>
-        <Button size="lg" asChild variant="outline" className="h-control-lg w-full rounded-full px-pill-lg">
+        <Button
+          size="lg"
+          asChild
+          variant="outline"
+          className="h-control-lg w-full rounded-full px-pill-lg"
+        >
           <Link href="/events">Find something else</Link>
         </Button>
       </section>
@@ -241,40 +246,39 @@ export function TicketPanel({
       )}
     >
       <div className="flex flex-col gap-4 p-card lg:p-card-lg lg:pb-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-h4">Tickets</h2>
-          <AvailabilityLine state={state} refreshing={query.isFetching} />
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-h4">Tickets</h2>
+            <AvailabilityLine state={state} refreshing={query.isFetching} />
+          </div>
+          {summary.sold > 0 ? (
+            // Real bookings, summed from the tiers' own `sold` column. No
+            // "interested" count and no rating: nothing on this platform records
+            // either, so there is nothing to show.
+            <p className="shrink-0 text-right text-caption text-muted-foreground">
+              <span className="block text-body font-semibold tabular-nums text-foreground">
+                {summary.sold.toLocaleString('en-IN')}
+              </span>
+              booked
+            </p>
+          ) : null}
         </div>
-        {summary.sold > 0 ? (
-          // Real bookings, summed from the tiers' own `sold` column. No
-          // "interested" count and no rating: nothing on this platform records
-          // either, so there is nothing to show.
-          <p className="shrink-0 text-right text-caption text-muted-foreground">
-            <span className="block text-body font-semibold tabular-nums text-foreground">
-              {summary.sold.toLocaleString('en-IN')}
-            </span>
-            booked
-          </p>
+
+        {days.length ? (
+          <SessionPicker
+            days={days}
+            selected={session}
+            onSelect={(next: Session) => {
+              setSelectedSlotId(next.slot.id);
+              // The tier chosen for the previous session does not exist in this
+              // one. Clearing it lets the default (cheapest sellable) re-run
+              // rather than leaving a stale id that resolves to nothing.
+              setSelectedId(null);
+              setQuantity(1);
+            }}
+            className="border-b border-border pb-5"
+          />
         ) : null}
-      </div>
-
-      {days.length ? (
-        <SessionPicker
-          days={days}
-          selected={session}
-          onSelect={(next: Session) => {
-            setSelectedSlotId(next.slot.id);
-            // The tier chosen for the previous session does not exist in this
-            // one. Clearing it lets the default (cheapest sellable) re-run
-            // rather than leaving a stale id that resolves to nothing.
-            setSelectedId(null);
-            setQuantity(1);
-          }}
-          className="border-b border-border pb-5"
-        />
-      ) : null}
-
       </div>
 
       {/* THE SCROLLING MIDDLE. `min-h-0` is what makes it actually scroll
@@ -294,121 +298,120 @@ export function TicketPanel({
           tickets" on screen for an event with fifty tiers, which is the
           problem the bounded panel was built to solve. */}
       <div className="min-h-ticket-scroll min-w-0 flex-1 overflow-y-auto overscroll-contain px-card lg:px-card-lg">
-      {tiers.length ? (
-        <ul className="flex flex-col gap-3 pb-4">
-          {tiers.map((tier, index) => (
-            <li key={tier.id}>
-              <TierOption
-                tier={tier}
-                rank={tierRank(index, tiers.length)}
-                selected={selected?.id === tier.id}
-                onSelect={() => {
-                  setSelectedId(tier.id);
-                  setQuantity(1);
-                }}
-              />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="rounded-lg border border-dashed border-border bg-sunken p-card text-body-sm text-muted-foreground">
-          {days.length
-            ? // A different fact from "this event has no tickets yet", and
-              // saying the general thing here would send someone away from an
-              // event whose other showtimes are on sale.
-              'No tickets are listed for this session yet. Try another showtime.'
-            : 'Ticket tiers for this event haven’t been published yet. Check back closer to the date.'}
-        </p>
-      )}
-
+        {tiers.length ? (
+          <ul className="flex flex-col gap-3 pb-4">
+            {tiers.map((tier, index) => (
+              <li key={tier.id}>
+                <TierOption
+                  tier={tier}
+                  rank={tierRank(index, tiers.length)}
+                  selected={selected?.id === tier.id}
+                  onSelect={() => {
+                    setSelectedId(tier.id);
+                    setQuantity(1);
+                  }}
+                />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="rounded-lg border border-dashed border-border bg-sunken p-card text-body-sm text-muted-foreground">
+            {days.length
+              ? // A different fact from "this event has no tickets yet", and
+                // saying the general thing here would send someone away from an
+                // event whose other showtimes are on sale.
+                'No tickets are listed for this session yet. Try another showtime.'
+              : 'Ticket tiers for this event haven’t been published yet. Check back closer to the date.'}
+          </p>
+        )}
       </div>
 
       {/* THE PINNED FOOTER. Quantity, total and the CTA never scroll away, so
           the press is one reach from anywhere in the list. */}
       <div className="flex flex-col gap-4 border-t border-border bg-surface p-card lg:p-card-lg lg:pt-4">
-      {selected ? (
-        <>
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col">
-              <span className="text-body-sm text-muted-foreground">Quantity</span>
-              <span className="text-caption text-foreground-subtle">
-                Up to {maxQuantity} per order
-              </span>
+        {selected ? (
+          <>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col">
+                <span className="text-body-sm text-muted-foreground">Quantity</span>
+                <span className="text-caption text-foreground-subtle">
+                  Up to {maxQuantity} per order
+                </span>
+              </div>
+              <Stepper value={quantity} max={maxQuantity} onChange={setQuantity} />
             </div>
-            <Stepper value={quantity} max={maxQuantity} onChange={setQuantity} />
-          </div>
 
-          {/* The total is the last number read before the press, so it steps up
+            {/* The total is the last number read before the press, so it steps up
               to h3 — the CTA below it and this line are the only two things in
               the panel competing for the eye. */}
-          <div className="flex items-end justify-between gap-4">
-            <span className="text-body-sm text-muted-foreground">Total</span>
-            <span className="text-h3 tabular-nums text-foreground">
-              {formatFromPrice(total) ?? '—'}
-            </span>
-          </div>
-        </>
-      ) : null}
+            <div className="flex items-end justify-between gap-4">
+              <span className="text-body-sm text-muted-foreground">Total</span>
+              <span className="text-h3 tabular-nums text-foreground">
+                {formatFromPrice(total) ?? '—'}
+              </span>
+            </div>
+          </>
+        ) : null}
 
-      {/*
+        {/*
         The way into checkout. The chosen tier and quantity ride along in the
         query string, so the funnel opens on exactly what was picked here rather
         than making someone choose twice.
       */}
-      <div className="flex flex-col gap-2">
-        {preview ? (
-          // The real control, inert. Rendering the live pill would offer a
-          // checkout for an event that does not exist yet; hiding it would
-          // misrepresent the page being previewed. So it keeps its size and
-          // position — the thing the preview exists to show — and says why it
-          // cannot be pressed.
-          <Button
-            size="lg"
-            disabled
-            className="h-control-lg w-full rounded-full bg-cta px-pill-lg text-cta-foreground"
-          >
-            Book tickets
-          </Button>
-        ) : state.kind === 'sold_out' || !selected ? (
-          <Button
-            size="lg"
-            variant="outline"
-            disabled
-            className="h-control-lg w-full rounded-full px-pill-lg"
-          >
-            {state.kind === 'sold_out' ? 'Sold out' : 'Book tickets'}
-          </Button>
-        ) : (
-          // The black pill, spelled out here rather than inherited: `--cta` is
-          // the primary-action token and it INVERTS per theme, where the shared
-          // Button's `primary` variant is the wayfinding violet.
-          <Button
-            size="lg"
-            asChild
-            className={cn(
-              'h-control-lg w-full rounded-full px-pill-lg',
-              'bg-cta text-cta-foreground hover:bg-cta-hover active:bg-cta-active',
-            )}
-          >
-            <Link href={`/booking/${eventId}?tickets=${selected.id}:${quantity}`}>
+        <div className="flex flex-col gap-2">
+          {preview ? (
+            // The real control, inert. Rendering the live pill would offer a
+            // checkout for an event that does not exist yet; hiding it would
+            // misrepresent the page being previewed. So it keeps its size and
+            // position — the thing the preview exists to show — and says why it
+            // cannot be pressed.
+            <Button
+              size="lg"
+              disabled
+              className="h-control-lg w-full rounded-full bg-cta px-pill-lg text-cta-foreground"
+            >
               Book tickets
-            </Link>
-          </Button>
-        )}
-        {/* Two reassurance lines lived under the button — "availability is
+            </Button>
+          ) : state.kind === 'sold_out' || !selected ? (
+            <Button
+              size="lg"
+              variant="outline"
+              disabled
+              className="h-control-lg w-full rounded-full px-pill-lg"
+            >
+              {state.kind === 'sold_out' ? 'Sold out' : 'Book tickets'}
+            </Button>
+          ) : (
+            // The black pill, spelled out here rather than inherited: `--cta` is
+            // the primary-action token and it INVERTS per theme, where the shared
+            // Button's `primary` variant is the wayfinding violet.
+            <Button
+              size="lg"
+              asChild
+              className={cn(
+                'h-control-lg w-full rounded-full px-pill-lg',
+                'bg-cta text-cta-foreground hover:bg-cta-hover active:bg-cta-active',
+              )}
+            >
+              <Link href={`/booking/${eventId}?tickets=${selected.id}:${quantity}`}>
+                Book tickets
+              </Link>
+            </Button>
+          )}
+          {/* Two reassurance lines lived under the button — "availability is
             re-checked when you book" and "every ticket is a signed QR code".
             Both are true and neither is a decision anybody is making at the
             moment they press Book; they were 60px of footnote under the one
             control the panel exists for. The refund and scanning guarantees
             are on the page below, where somebody reading about them is
             actually asking. */}
-        {preview ? (
-          <p className="flex items-start gap-2 text-caption text-foreground-subtle">
-            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            Preview — this is how the panel will look once the event is live.
-          </p>
-        ) : null}
-      </div>
+          {preview ? (
+            <p className="flex items-start gap-2 text-caption text-foreground-subtle">
+              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              Preview — this is how the panel will look once the event is live.
+            </p>
+          ) : null}
+        </div>
       </div>
     </section>
   );

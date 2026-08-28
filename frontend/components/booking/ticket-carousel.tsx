@@ -198,7 +198,7 @@ export function TicketCarousel({
             onClick={() => goTo(Math.max(0, active - 1))}
             disabled={active === 0}
             aria-label="Previous ticket"
-            className="inline-flex size-9 items-center justify-center rounded-full border border-border text-foreground transition-colors duration-fast hover:bg-muted disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex size-9 items-center justify-center rounded-full border border-border text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
           >
             <ChevronLeft className="size-4" aria-hidden />
           </button>
@@ -223,7 +223,7 @@ export function TicketCarousel({
             onClick={() => goTo(Math.min(count - 1, active + 1))}
             disabled={active === count - 1}
             aria-label="Next ticket"
-            className="inline-flex size-9 items-center justify-center rounded-full border border-border text-foreground transition-colors duration-fast hover:bg-muted disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex size-9 items-center justify-center rounded-full border border-border text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
           >
             <ChevronRight className="size-4" aria-hidden />
           </button>

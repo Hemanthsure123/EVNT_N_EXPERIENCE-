@@ -20,7 +20,7 @@ import {
   SectionHeading,
   VenueCard,
 } from '@/components/event/sections';
-import { TicketPanel } from '@/components/event/ticket-panel';
+import { BookingCta } from '@/components/event/booking-cta';
 import { EventDisclosures, type Disclosure } from '@/components/event/disclosures';
 import { EventReviews } from '@/components/reviews/event-reviews';
 import { Building2, CalendarClock, HelpCircle, Info, MapPin, ScrollText } from 'lucide-react';
@@ -235,10 +235,9 @@ export function EventPageBody({
               breathing room, derived rather than the hard-coded 80px it was —
               which had already drifted from a 72px header. */}
           <div className="lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1">
-            <TicketPanel
+            <BookingCta
               eventId={event.id}
-              initialTiers={tiers}
-              slots={content.slots}
+              tiers={tiers}
               cancelled={event.status === 'cancelled'}
               preview={preview}
             />
@@ -358,6 +357,10 @@ function buildDisclosures(event: EventDetail, content: EventContent): Disclosure
     value: facts || 'Date, venue, organiser and more',
     // Two columns of facts plus free prose needs the wider sheet.
     size: 'lg',
+    // The first four answer the question outright for most visitors — the
+    // date, how long it runs, where, and who. Hiding those behind a press to
+    // save four lines is disclosure for its own sake.
+    preview: <QuickFacts event={event} limit={4} />,
     content: (
       <div className="flex flex-col gap-6">
         <QuickFacts event={event} />
@@ -387,6 +390,16 @@ function buildDisclosures(event: EventDetail, content: EventContent): Disclosure
       description: formatEventDateLong(event.starts_at),
       size: 'lg',
       content: <RunningOrder entries={content.timeline} />,
+      // "Gates open at 1:00 PM" is the single fact somebody scans this section
+      // for; the rest of the running order is for the day itself. The time is
+      // omitted rather than guessed when the organiser left it out — a
+      // timeline entry may carry a label and no `starts_at`.
+      preview: (
+        <p className="text-body-lg font-semibold text-foreground">
+          {first.starts_at ? `${first.label} at ${formatEventTime(first.starts_at)}` : first.label}
+        </p>
+      ),
+      previewCta: 'View full schedule & timeline',
     });
   }
 

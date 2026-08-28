@@ -44,6 +44,19 @@ async function axeClean(page: Page, label: string) {
 }
 
 /** An event with healthy stock, plus its tiers — straight from the fixture. */
+/**
+ * ── WHY THESE ENTER AT `/review`, NOT `/booking/{id}` ─────────────────────
+ *
+ * `/booking/{id}` is the TICKET-SELECTION screen again (§5): it renders a
+ * picker rather than redirecting into the funnel. These specs are about what
+ * happens AFTER a selection exists — the sign-in gate, the summary card, the
+ * auth providers — so they deep-link past it with the selection already in the
+ * query, exactly as pressing Continue would.
+ *
+ * The press itself is covered by "is reachable from the event page, and
+ * carries the tier chosen there", which is the one spec that walks the whole
+ * path rather than jumping into the middle of it.
+ */
 async function bookableEvent(page: Page) {
   const events = await page.evaluate(async (api) => {
     const response = await fetch(`${api}/events?page_size=40`);
@@ -113,7 +126,7 @@ test.describe('the booking funnel', () => {
     // that passed in isolation and failed under a full-suite run. The step this
     // test is named for is the one it should be standing on.
     await signedIn(page);
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:2`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:2`);
 
     await expect(page).toHaveURL(/\/review/);
     const summary = page.getByRole('complementary', { name: 'Order summary' });
@@ -140,22 +153,26 @@ test.describe('the booking funnel', () => {
     //
     // Sign in, review, pay — so the redirect IS the first step, and that is
     // what this now asserts.
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/login/);
 
+    // FOUR steps signed out, not three: Tickets is a step again (§5), so the
+    // funnel is Tickets -> Sign in -> Review -> Payment. What matters here is
+    // unchanged — the stepper agrees with the router about where you are, and
+    // Sign in is drawn because the router just sent you to it.
     const stepper = page.getByRole('navigation', { name: 'Booking progress' });
-    await expect(stepper.getByRole('listitem')).toHaveCount(3);
+    await expect(stepper.getByRole('listitem')).toHaveCount(4);
     await expect(stepper).toContainText('Sign in');
 
     // The heading continues the purchase rather than starting something new —
     // the standalone /sign-in page is the one that says "Welcome back".
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
 
-    // Signed in: straight to review, two steps, no sign-in anywhere.
+    // Signed in: straight to review, three steps, no sign-in anywhere.
     await signedIn(page);
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/review/);
-    await expect(stepper.getByRole('listitem')).toHaveCount(2);
+    await expect(stepper.getByRole('listitem')).toHaveCount(3);
     await expect(stepper).not.toContainText('Sign in');
   });
 
@@ -246,7 +263,7 @@ test.describe('the booking funnel', () => {
   test('shows no promo field and no invented taxes', async ({ page }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
 
     // No coupon endpoint exists, so no coupon input pretends one does.
     await expect(page.getByPlaceholder(/promo|coupon/i)).toHaveCount(0);
@@ -267,7 +284,7 @@ test.describe('the booking funnel', () => {
     //
     // There is nothing to click anyway: an anonymous visitor is redirected to
     // `/login`, which is the first step.
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/login/);
 
     // The control EXISTS — the funnel and /sign-in render the same panel.
@@ -304,7 +321,7 @@ test.describe('the booking funnel', () => {
     // Signed in, so `/booking/{id}` lands on review directly — there is no
     // ticket step to Continue out of, and the click here waited 30s for a
     // button on the page it was already on.
-    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/review/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
     await expect(summary).toBeVisible();
@@ -325,7 +342,7 @@ test.describe('the booking funnel', () => {
       await page.goto('/events');
       const { eventId, tiers } = await bookableEvent(page);
 
-      await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+      await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
       await axeClean(page, 'booking step 1');
 
@@ -344,28 +361,45 @@ test.describe('the booking funnel', () => {
     });
   });
 
-  test('is reachable from the event page with the chosen tier', async ({ page }) => {
+  test('is reachable from the event page, and carries the tier chosen there', async ({ page }) => {
     await page.goto('/events');
     const { eventId } = await bookableEvent(page);
     await page.goto(`/events/${eventId}`);
 
+    // `LocationPrompt` is a modal; while it is open the CTA behind it is inert
+    // and a click lands on the scrim, which reads as a broken link.
+    const notNow = page.getByRole('button', { name: 'Not now' });
+    await notNow.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
+    if (await notNow.isVisible().catch(() => false)) await notNow.click();
+
     const book = page.getByRole('link', { name: 'Book tickets' });
     if ((await book.count()) === 0) test.skip(true, 'this event is sold out');
-    await book.click();
 
-    // ── THE TICKETS STEP IS GONE ─────────────────────────────────────────
+    // ── THE TICKETS STEP IS BACK, AND THE EVENT PAGE NO LONGER PICKS ─────
     //
-    // This asserted an `h1` of "Choose your tickets" and an intermediate
-    // `/booking/{id}?tickets=` URL. Selection moved to the event page, so
-    // `/booking/{id}` is now a server redirect straight into the funnel — the
-    // intermediate URL is a hop this only ever caught by winning a race, and
-    // the heading belongs to a screen that no longer exists.
+    // This has been asserted both ways. It once expected `/booking/{id}` to
+    // redirect, because selection lived on the event page; §5 moved selection
+    // to a screen of its own, so the redirect is a page again.
     //
-    // What is worth pinning is the contract that actually matters: pressing
-    // Book tickets carries the CHOSEN TIER into the funnel, and lands on the
-    // funnel's real first step for a visitor without a session.
+    // The contract moved with it. The CTA carries NO `?tickets=`, because
+    // nothing has been chosen yet — a preselected basket would be the checkout
+    // deciding on the visitor's behalf. The tier is chosen here, and THAT is
+    // what has to survive into the next step.
+    await book.click();
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+
+    const add = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
+    await add.scrollIntoViewIfNeeded();
+    await add.click();
+
+    const proceed = page.getByRole('button', { name: /Continue/i }).first();
+    await proceed.scrollIntoViewIfNeeded();
+    await proceed.click();
+
+    // The funnel's real first step for a visitor without a session, with the
+    // selection carried across.
     await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+\/(login|review)/);
     await expect(page).toHaveURL(/tickets=/);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
   });
 });

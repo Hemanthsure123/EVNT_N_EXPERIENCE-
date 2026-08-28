@@ -1,39 +1,39 @@
 /**
  * The funnel's steps, and how a URL maps onto them.
  *
- * ── TICKET SELECTION IS NOT A STEP ANY MORE ───────────────────────────────
+ * ── TICKET SELECTION IS A STEP AGAIN, AND STILL ONLY ASKED ONCE ───────────
  *
- * It used to be step 1: the event page had a full picker — session, tier,
- * quantity, total, Book — and pressing Book opened a funnel screen that asked
- * for exactly the same four things again. Two screens, one decision, and a
- * progress bar telling somebody they were a quarter of the way through a
- * choice they had already made.
+ * The history matters, because this has now been both ways.
  *
- * The event page keeps the picker, because that is where somebody is deciding
- * — beside the poster, the date, the venue and the line-up. The funnel now
- * starts where the decision ENDS: prove who you are if we do not know yet,
- * confirm what you picked, pay.
+ * Originally it was step 1 AND the event page carried a full picker, so
+ * pressing Book asked for the same four things a second time: two screens, one
+ * decision, and a progress bar telling somebody they were a quarter of the way
+ * through a choice they had already made. The fix at the time was to delete
+ * the step and keep the event page's picker.
+ *
+ * It is a step again — but the duplication is gone the OTHER way. The event
+ * page no longer picks; it shows a price and a `Book tickets` CTA, and the
+ * picking happens once, on a screen whose only job is picking. That is the
+ * shape the reference design uses, and it is better than the original for a
+ * reason the first version could not have: a ticket tier now carries real
+ * availability, per-order limits and a sale window, and a panel wedged into a
+ * 22rem sidebar beside a poster is the worst place to read any of it.
+ *
+ * The rule that survives from the old note is the one that mattered: ASK
+ * ONCE. Whichever screen owns the picker, the other must not have one.
  *
  * ── SIGN IN COMES FIRST, AND THE STEPPER USED TO DISAGREE ─────────────────
  *
- * `stepsFor(false)` returned `[review, login, payment]`, so a visitor was told
- * they were starting on Review. The ROUTING has always sent an anonymous
- * visitor from `/review` straight to `/login` — so the progress indicator
- * named a step they were about to be bounced out of, and the one they were
- * actually on was drawn as step 2.
- *
- * A stepper that disagrees with the router is worse than no stepper: it is the
- * only thing on the screen claiming to say where you are.
- *
- * `booking` survives as a StepId only so an old `/booking/{id}` link still
- * resolves; the route redirects to `review` and no stepper ever draws it.
+ * `stepsFor(false)` once returned `[review, login, payment]`, so a visitor was
+ * told they were starting on Review while the router bounced them to Login. A
+ * stepper that disagrees with the router is worse than no stepper: it is the
+ * only thing on screen claiming to say where you are.
  *
  * ── LOGIN IS CONDITIONAL, and that shapes the model ───────────────────────
  *
- * Showing a signed-in person a step they will never see — greyed out, or worse
- * briefly highlighted — is an unnecessary screen. So the step LIST depends on
- * auth: two steps when signed in, three when not, and the stepper renders
- * whatever it is given rather than hiding one of a fixed three.
+ * Showing a signed-in person a step they will never see is an unnecessary
+ * screen. So the step LIST depends on auth, and the stepper renders whatever
+ * it is given rather than hiding one of a fixed set.
  */
 
 export type StepId = 'booking' | 'login' | 'review' | 'payment';
@@ -46,8 +46,6 @@ export type Step = {
 };
 
 const ALL: Record<StepId, Step> = {
-  // Not in any step list — see the note above. Kept so `currentStep` can name
-  // the legacy `/booking/{id}` URL while it redirects.
   booking: { id: 'booking', label: 'Tickets', segment: '' },
   login: { id: 'login', label: 'Sign in', segment: 'login' },
   review: { id: 'review', label: 'Review', segment: 'review' },
@@ -55,7 +53,9 @@ const ALL: Record<StepId, Step> = {
 };
 
 export const stepsFor = (authenticated: boolean): Step[] =>
-  authenticated ? [ALL.review, ALL.payment] : [ALL.login, ALL.review, ALL.payment];
+  authenticated
+    ? [ALL.booking, ALL.review, ALL.payment]
+    : [ALL.booking, ALL.login, ALL.review, ALL.payment];
 
 /** Which step a pathname is on. */
 export function currentStep(pathname: string): StepId {

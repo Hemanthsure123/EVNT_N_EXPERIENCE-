@@ -4,48 +4,55 @@ import { currentStep, stepHref, stepsFor } from './steps';
 /**
  * The funnel's shape.
  *
- * Nothing tested this, which is how it kept a step that had stopped existing:
- * ticket selection moved to the event page and the stepper carried on drawing
- * "1 Tickets" in front of it, telling somebody they were a third of the way
- * through a choice they had already made.
+ * ── THIS HAS NOW BEEN BOTH WAYS, AND THE INVARIANT IS "ASK ONCE" ──────────
+ *
+ * Ticket selection began as step 1 while the event page ALSO carried a full
+ * picker, so pressing Book asked for the same four things again. The step was
+ * deleted and the event page kept the picker. It is a step again now, and the
+ * event page's picker is gone: the picking happens once, on a screen whose
+ * only job is picking.
+ *
+ * What is worth testing is not which screen won. It is that exactly one did —
+ * and that the stepper agrees with the router about where somebody is.
  */
 
 describe('stepsFor', () => {
-  it('is Review then Payment when signed in', () => {
-    expect(stepsFor(true).map((step) => step.id)).toEqual(['review', 'payment']);
+  it('starts at Tickets, because that is where the funnel now begins', () => {
+    expect(stepsFor(true).map((step) => step.id)).toEqual(['booking', 'review', 'payment']);
   });
 
-  it('puts Sign in FIRST when signed out, because the router does', () => {
-    // This asserted `['review', 'login', 'payment']`, on the argument that a
-    // sign-in wall before the total is the fastest way to lose somebody who
-    // has already chosen. That is a real argument — but it was never
-    // IMPLEMENTED: `/booking/{id}/review` has always redirected an anonymous
-    // visitor to `/login`.
+  it('puts Sign in after Tickets and before Review, because the router does', () => {
+    // This once asserted `['review', 'login', 'payment']`, on the argument
+    // that a sign-in wall before the total loses somebody who has already
+    // chosen. A real argument — but never IMPLEMENTED: `/booking/{id}/review`
+    // has always redirected an anonymous visitor to `/login`, so the stepper
+    // drew "Review" as the step somebody was about to be bounced out of.
     //
-    // So the stepper drew "Review" as step 1 for somebody who was about to be
-    // bounced to step 2, and the step they were actually on was numbered
-    // second. A progress indicator that disagrees with the router is worse
-    // than none, since it is the only thing on screen claiming to say where
-    // you are.
-    //
-    // Resolved in favour of the router: sign in, then review, then pay. If the
-    // review-before-sign-in argument is ever taken up, the REDIRECT is what
-    // has to change, and this test should change with it.
-    expect(stepsFor(false).map((step) => step.id)).toEqual(['login', 'review', 'payment']);
+    // Resolved in favour of the router. If the review-before-sign-in argument
+    // is ever taken up, the REDIRECT is what has to change, and this test
+    // changes with it.
+    expect(stepsFor(false).map((step) => step.id)).toEqual([
+      'booking',
+      'login',
+      'review',
+      'payment',
+    ]);
   });
 
-  it('never includes the ticket-selection step', () => {
-    // THE regression. `booking` survives as an id so the legacy
-    // `/booking/{id}` URL can still be named while it redirects, and it must
-    // never be drawn as a step again.
+  it('draws Tickets exactly once, and only in one place in the product', () => {
+    // The invariant that survived both reversals. `booking` is a real step
+    // again ONLY because the event page stopped picking; if a picker ever
+    // returns to the event page, this step has to go with it.
     for (const authenticated of [true, false]) {
-      expect(stepsFor(authenticated).map((step) => step.id)).not.toContain('booking');
+      const ids = stepsFor(authenticated).map((step) => step.id);
+      expect(ids.filter((id) => id === 'booking')).toHaveLength(1);
+      expect(ids[0]).toBe('booking');
     }
   });
 
-  it('numbers to two steps signed in and three signed out', () => {
-    expect(stepsFor(true)).toHaveLength(2);
-    expect(stepsFor(false)).toHaveLength(3);
+  it('numbers to three steps signed in and four signed out', () => {
+    expect(stepsFor(true)).toHaveLength(3);
+    expect(stepsFor(false)).toHaveLength(4);
   });
 });
 
@@ -58,18 +65,23 @@ describe('currentStep', () => {
     expect(currentStep(`/booking/${id}/confirmation`)).toBe('payment');
   });
 
-  it('still names the legacy entry URL', () => {
-    // It resolves to `booking` so nothing throws while the route redirects to
-    // review. The stepper never asks about this one, because `stepsFor` does
-    // not contain it.
+  it('names the entry URL as the ticket step it now renders', () => {
+    // `/booking/{id}` was a redirect and is a PAGE again. The mapping did not
+    // change; what changed is that the step it names is one somebody can see.
     expect(currentStep('/booking/evt-1')).toBe('booking');
   });
 });
 
 describe('stepHref', () => {
   it('builds the URL for a step, carrying a query when given one', () => {
-    const [review, payment] = stepsFor(true);
+    const [tickets, review, payment] = stepsFor(true);
+    expect(stepHref('evt-1', tickets)).toBe('/booking/evt-1');
     expect(stepHref('evt-1', review)).toBe('/booking/evt-1/review');
     expect(stepHref('evt-1', payment, 'tickets=abc:2')).toBe('/booking/evt-1/pay?tickets=abc:2');
+  });
+
+  it('gives the ticket step a bare URL, since its segment is empty', () => {
+    const [tickets] = stepsFor(true);
+    expect(stepHref('evt-1', tickets, 'tickets=abc:2')).toBe('/booking/evt-1?tickets=abc:2');
   });
 });

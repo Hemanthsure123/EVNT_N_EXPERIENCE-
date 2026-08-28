@@ -115,7 +115,7 @@ export function BookingBar({
         </div>
 
         <a
-          href="#tickets"
+          href={`/booking/${eventId}`}
           className={cn(
             'ml-auto inline-flex h-control shrink-0 items-center justify-center rounded-full px-pill text-label',
             soldOut
@@ -124,7 +124,7 @@ export function BookingBar({
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           )}
         >
-          {soldOut ? 'See tiers' : 'Choose tickets'}
+          {soldOut ? 'See tiers' : 'Book tickets'}
         </a>
       </div>
     </div>

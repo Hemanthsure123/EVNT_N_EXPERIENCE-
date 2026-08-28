@@ -142,7 +142,6 @@ export function PaymentSection({
     }
   };
 
-
   const errorBlock = error ? (
     <p
       role="alert"
@@ -257,8 +256,7 @@ export function PaymentSection({
             <span className="font-mono text-caption text-foreground">
               {active.payment_order_id}
             </span>
-            . Payments are temporarily unavailable, so this booking cannot be completed right
-            now.
+            . Payments are temporarily unavailable, so this booking cannot be completed right now.
           </p>
           <p className="text-caption text-muted-foreground">
             Nothing has been charged. Your hold stays until it expires — try again shortly, or

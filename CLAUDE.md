@@ -1450,6 +1450,63 @@ a shop window: one artwork, three lines of text, no chrome. Two cards because
 they answer two questions — and both take their availability badge from the same
 helper, so an event never contradicts itself between them.
 
+## Ticket selection is a screen again — and the rule is ASK ONCE
+
+This has now been both ways, and the history is the point.
+
+It began as funnel step 1 while the EVENT PAGE also carried a full picker, so
+pressing Book asked for the same four things twice. That was fixed by deleting
+the step and keeping the event page's picker; `/booking/{id}` became a redirect.
+
+It is a screen again, and the event page's picker is gone. The duplication is
+still absent — resolved the other way. Why this half won: a tier carries live
+availability, a per-order maximum and a sale window, and a picker wedged into a
+22rem sidebar beside a poster is the worst place to read any of it.
+
+**The invariant that survived both reversals is the one to keep: exactly one
+screen picks.** `components/event/booking-cta.tsx` must never grow a tier list
+or a quantity control; the moment it does, the funnel asks twice again.
+
+The event page's CTA carries **no `?tickets=`**. Nothing has been chosen yet,
+and a preselected basket is the checkout deciding on the visitor's behalf.
+
+The funnel is Tickets → [Sign in] → Review → Payment: four steps signed out,
+three signed in. The stepper must agree with the ROUTER — it once drew "Review"
+as step 1 for somebody the router was about to bounce to `/login`.
+
+## Preview, then "See all" — disclosure has to earn itself
+
+Two of the event page's six disclosures render a preview ON the page instead of
+collapsing to a row, because hiding them is disclosure for its own sake:
+
+- **Things to know** shows four facts (`QuickFacts limit={4}`) — the date, the
+  run time, the venue, the organiser — with "See all" beside it. One component
+  renders both lengths, so a hand-written preview cannot drift from the list.
+- **Schedule** shows "Gates open at 1:00 PM" with "View full schedule &
+  timeline". The time is OMITTED rather than guessed when a timeline entry has
+  no `starts_at`.
+
+Everything genuinely long — the venue card, the organiser, the FAQ set, the
+policies — stays a row.
+
+## Security headers, and the one that is deliberately missing
+
+`next.config.mjs` sets `frame-ancestors 'none'`, `base-uri 'self'`,
+`object-src 'none'`, `form-action` (Razorpay allowed, since Checkout POSTs back
+on some flows), plus `nosniff`, `Referrer-Policy` and `Permissions-Policy`.
+There was NO CSP anywhere before: `prod.py`'s `X_FRAME_OPTIONS: DENY` covers
+what the BACKEND serves, and every page a visitor looks at is served by Next.
+
+**`geolocation=(self)`, not `()`.** `LocationPrompt` asks for it; denying it
+would break a shipped feature while looking like a hardening win.
+
+**`script-src` is deliberately absent.** Without nonces it needs
+`'unsafe-inline'`, which is the exact capability injected script needs — theatre
+that also risks breaking Razorpay on the money path. Doing it properly means a
+per-request nonce from middleware, which opts every page out of static
+rendering. On a read path tuned to 0 warm DB queries that trade needs measuring,
+not assuming. Separate change, own test run.
+
 ## Cities is a selector, not a destination
 
 `/cities` and `/cities/[city]` are DELETED. Location is chosen from the header

@@ -227,7 +227,9 @@ export function PayStep() {
     <StepTransition stepKey="pay" className="flex flex-col gap-section">
       <Rise>
         <header className="flex flex-col gap-stack">
-          <h1 className="text-h2 md:text-h1">{isDemo ? 'Complete your booking' : 'Pay securely'}</h1>
+          <h1 className="text-h2 md:text-h1">
+            {isDemo ? 'Complete your booking' : 'Pay securely'}
+          </h1>
           <p className="text-body text-muted-foreground">
             {isDemo
               ? 'No payment provider is connected to this deployment, so this checkout is simulated. Your tickets are real.'
@@ -357,8 +359,7 @@ export function PayStep() {
               <span className="font-mono text-caption text-foreground">
                 {active.payment_order_id}
               </span>
-              . Payments are temporarily unavailable, so this booking cannot be completed right
-              now.
+              . Payments are temporarily unavailable, so this booking cannot be completed right now.
             </p>
             <p className="text-caption text-muted-foreground">
               Nothing has been charged. Your hold stays until it expires — try again shortly, or

@@ -95,6 +95,68 @@ const nextConfig = {
     // headers (ISR / edge) are added per-route as public pages are built, to
     // mirror the backend's public read-path caching.
     return [
+      // ── SECURITY HEADERS, ON EVERY RESPONSE THIS APP SERVES ─────────────
+      //
+      // There was NO Content-Security-Policy anywhere: not in Django settings,
+      // not here, not in the Caddyfile. `prod.py` sets `X_FRAME_OPTIONS: DENY`,
+      // which covers responses the BACKEND serves — and every page a visitor
+      // actually looks at is served by this app, which had no frame protection
+      // at all. A checkout that can be framed is a clickjacking target.
+      //
+      // ── WHAT IS DELIBERATELY NOT HERE: script-src ───────────────────────
+      //
+      // A `script-src` without nonces needs `'unsafe-inline'`, because Next's
+      // App Router hydrates through inline `self.__next_f.push(...)` scripts.
+      // `script-src 'unsafe-inline'` stops approximately no XSS — it is the
+      // exact capability an injected script needs — so it would be theatre
+      // that also risks breaking Razorpay Checkout on the money path.
+      //
+      // Doing it properly means a per-request nonce, which means generating it
+      // in middleware and reading it through `headers()`, which opts EVERY
+      // page out of static rendering. On a codebase whose public read path is
+      // tuned to 0 DB queries warm and served from the edge, that trade needs
+      // measuring, not assuming. It is a separate change with its own test
+      // run — see BACKLOG.
+      //
+      // What IS here are the directives that cannot break a render and close
+      // real holes: framing, plugin embedding, `<base>` hijacking, and where
+      // forms may post.
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: [
+              // The clickjacking fix, and the reason this block exists.
+              "frame-ancestors 'none'",
+              // A stored `<base href>` silently re-points every relative URL
+              // on the page, including the ones the funnel posts to.
+              "base-uri 'self'",
+              // Flash/Java embeds. Nothing here uses them; leaving the door
+              // open costs nothing to close.
+              "object-src 'none'",
+              // Razorpay is listed because Checkout hands control back by
+              // form POST on some flows. Omitting it would break payment for
+              // exactly the visitors this platform must not fail.
+              "form-action 'self' https://api.razorpay.com https://checkout.razorpay.com",
+            ].join('; '),
+          },
+          // Browsers still honour this and it is not expressible in CSP.
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          // Matches the backend's `SECURE_REFERRER_POLICY`, so a request does
+          // not leak the full URL of a private page to a third party.
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          // GEOLOCATION IS `self`, NOT `()`. `LocationPrompt` asks for it to
+          // sort events by distance; denying it here would break a shipped
+          // feature while looking like a hardening win. Camera, microphone and
+          // payment-request are genuinely unused.
+          {
+            key: 'Permissions-Policy',
+            value: 'camera=(), microphone=(), payment=(), geolocation=(self)',
+          },
+        ],
+      },
+
       {
         source: '/:all*(woff2|woff|ttf|otf)',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],

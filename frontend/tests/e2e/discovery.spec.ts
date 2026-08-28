@@ -629,25 +629,41 @@ test.describe('the whole funnel', () => {
     await expectPublic(page);
   });
 
-  test('city and category landing pages are server-rendered with structured data', async ({
-    page,
-  }) => {
-    await page.goto('/cities/mumbai');
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('Events in Mumbai');
-    let blocks = await page.locator('script[type="application/ld+json"]').allTextContents();
-    expect(blocks.map((b) => JSON.parse(b)['@type'])).toContain('BreadcrumbList');
-
+  test('category landing pages are server-rendered with structured data', async ({ page }) => {
+    // The city half of this moved. `/cities/*` is deleted — location is a
+    // selector now, not a destination — so the assertion below checks the
+    // REDIRECT instead, which is the behaviour that has to keep working for
+    // every link already out in the world.
     await page.goto('/categories/concerts');
     await expect(page.getByRole('heading', { level: 1 })).toContainText('Concerts events');
-    blocks = await page.locator('script[type="application/ld+json"]').allTextContents();
+    const blocks = await page.locator('script[type="application/ld+json"]').allTextContents();
     expect(blocks.map((b) => JSON.parse(b)['@type'])).toContain('ItemList');
   });
 
-  test('the sitemap lists the landing pages', async ({ request }) => {
+  test('a retired city URL still lands somewhere useful, permanently', async ({ request }) => {
+    // A 308 and not a 301: the method must be preserved, and a crawler needs
+    // telling this is permanent or it keeps asking. A curated city carries its
+    // filter across; the hub does not need one.
+    const city = await request.get('/cities/mumbai', { maxRedirects: 0 });
+    expect(city.status()).toBe(308);
+    expect(city.headers()['location']).toContain('/events?city=Mumbai');
+
+    const hub = await request.get('/cities', { maxRedirects: 0 });
+    expect(hub.status()).toBe(308);
+    expect(hub.headers()['location']).toContain('/events');
+
+    // An uncurated slug never had a page, so it 404s rather than becoming a
+    // soft 404 pointing at /events.
+    expect((await request.get('/cities/nowhere-at-all')).status()).toBe(404);
+  });
+
+  test('the sitemap lists the landing pages, and no retired ones', async ({ request }) => {
     const xml = await (await request.get('/sitemap.xml')).text();
     expect(xml).toContain('/categories/concerts');
-    expect(xml).toContain('/cities/mumbai');
     expect(xml).toContain('/events');
+    // A sitemap's job is listing destinations. Leaving the city URLs in would
+    // have made it thirteen redirects.
+    expect(xml).not.toContain('/cities');
   });
 });
 
@@ -690,7 +706,13 @@ test.describe('layout and navigation', () => {
     const workshops = page.getByRole('link', { name: /^Workshops/ });
     await expect(workshops).toBeVisible();
     await expect(page.getByRole('link', { name: /^All events/ })).toBeVisible();
-    await expect(page.getByRole('link', { name: /^Browse by city/ })).toBeVisible();
+    // "Browse by city" was here and is gone with `/cities`. The city is chosen
+    // from the header's location control now, which is reachable at every
+    // width — including the phone widths where this menu's whole purpose is to
+    // stop things becoming unreachable.
+    await expect(
+      page.getByRole('banner').getByRole('button', { name: /city|location/i }),
+    ).toBeVisible();
     await workshops.click();
     await expect(page).toHaveURL('/categories/workshops');
 
@@ -992,6 +1014,25 @@ test.describe('the event page', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   };
 
+  /**
+   * The ticket picker used to sit ON the event page; it is a screen of its own
+   * now (`/booking/{id}`). The assertions about it did not weaken, they
+   * MOVED — reaching them costs one press, and that press is itself the thing
+   * §5 asked for.
+   */
+  const itsTicketPage = async (page: Page) => {
+    await anEvent(page);
+    // `LocationPrompt` is a MODAL. While it is open everything behind it is
+    // inert, so a click on the CTA lands on the scrim and simply does nothing
+    // — no error, no navigation, and a failure that reads like a broken link.
+    const notNow = page.getByRole('button', { name: 'Not now' });
+    await notNow.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
+    if (await notNow.isVisible().catch(() => false)) await notNow.click();
+    await page.getByRole('link', { name: 'Book tickets' }).first().click();
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+/);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  };
+
   test('answers the questions in order: what, when, how much, where, who', async ({ page }) => {
     await anEvent(page);
 
@@ -1006,15 +1047,16 @@ test.describe('the event page', () => {
     // They are rows now, and the assertion moved with the UI rather than being
     // deleted: each must still be REACHABLE, which is the property that
     // actually matters and the one progressive disclosure can break.
-    for (const row of [
-      'Things to know',
-      'Organiser',
-      'Venue details',
-      'Frequently asked',
-      'Terms and policies',
-    ]) {
+    for (const row of ['Organiser', 'Venue details', 'Frequently asked', 'Terms and policies']) {
       await expect(page.getByRole('button', { name: new RegExp(row) })).toBeVisible();
     }
+
+    // "Things to know" is not a row: it renders a four-fact PREVIEW on the
+    // page with a "See all" control beside it, because the language, the age
+    // limit and the run time answer the question outright for most visitors.
+    // The heading is on the page and the rest is one press away.
+    await expect(page.getByRole('heading', { name: 'Things to know' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /See all/ })).toBeVisible();
 
     // The reading order is the DOM order, which is what a screen reader follows.
     const headings = await page.locator('h1, h2').allTextContents();
@@ -1047,8 +1089,10 @@ test.describe('the event page', () => {
     await page.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);
 
-    // A second row opens its OWN content rather than reusing the first sheet's.
-    await page.getByRole('button', { name: /Things to know/ }).click();
+    // A second control opens its OWN content rather than reusing the first
+    // sheet's. This one is the preview's "See all" rather than a row — the
+    // opener differs, the sheet must not.
+    await page.getByRole('button', { name: /See all/ }).click();
     await expect(page.getByRole('dialog', { name: 'Things to know' })).toBeVisible();
   });
 
@@ -1071,11 +1115,11 @@ test.describe('the event page', () => {
       if (r.url().includes('/ticket-types')) requests.push(r.url());
     });
 
-    await anEvent(page);
-    const panel = page.getByRole('region', { name: 'Tickets' });
-
-    // Every tier button names a price. `sold` and `available` are real columns.
-    const tiers = panel.getByRole('button', { name: /₹|Free/ });
+    await itsTicketPage(page);
+    // The funnel's `TierPicker`, not the event page's old `TicketPanel` — two
+    // components with two vocabularies. Each tier offers an add control named
+    // for the tier it belongs to, which is also what makes them countable.
+    const tiers = page.getByRole('button', { name: /Add one .+ ticket/ });
     expect(await tiers.count()).toBeGreaterThan(0);
 
     // The client re-verifies inventory rather than trusting the server payload.
@@ -1083,6 +1127,19 @@ test.describe('the event page', () => {
   });
 
   test('quantity is bounded by what is actually left', async ({ page }) => {
+    // ── IT NEEDS LONGER THAN THE DEFAULT NOW, AND THAT IS A REAL COST ────
+    //
+    // The picker moved behind a press (§5), so each candidate costs TWO
+    // navigations instead of one — up to sixteen for a walk of eight. Against
+    // the 30s default this passed about two runs in three, which is the worst
+    // possible state for a test: green often enough to look fine, red often
+    // enough to train people to re-run it.
+    //
+    // The budget is raised rather than the walk shortened, because shortening
+    // it is how this test quietly stops running: if every candidate it checks
+    // happens to be sold out, it asserts nothing.
+    test.setTimeout(120_000);
+
     // Walk the results until an event with a sellable tier turns up. Skipping
     // when the first card happens to be sold out would mean this test quietly
     // never runs — which is the same as not having it.
@@ -1092,13 +1149,18 @@ test.describe('the event page', () => {
       links.map((a) => (a as HTMLAnchorElement).getAttribute('href')),
     )) as string[];
 
-    let panel = page.getByRole('region', { name: 'Tickets' });
-    let plus = panel.getByRole('button', { name: 'Increase quantity' });
+    // The picker is a SCREEN now, so each candidate costs an extra press:
+    // event page -> Book tickets -> the list of tier types.
+    let plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
     let found = false;
     for (const href of hrefs.slice(0, 8)) {
       await page.goto(href);
-      panel = page.getByRole('region', { name: 'Tickets' });
-      plus = panel.getByRole('button', { name: 'Increase quantity' });
+      const book = page.getByRole('link', { name: /^Book tickets$/ }).first();
+      // A sold-out event's CTA reads "See ticket types" and still goes to the
+      // same screen; one with no tiers at all has no link to press.
+      if ((await book.count()) === 0) continue;
+      await book.click();
+      plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
       // ── WAIT, DO NOT SNAPSHOT ──────────────────────────────────────────
       //
       // This asked `plus.count()` immediately after `goto`. `count()` is a
@@ -1122,43 +1184,51 @@ test.describe('the event page', () => {
 
     for (let i = 0; i < 15; i += 1) {
       if (await plus.isDisabled()) break;
-      await plus.click();
+      // Scrolled into view before EVERY press, because the header is sticky
+      // and the control can end up underneath it. Playwright then reports
+      // "subtree intercepts pointer events", which reads like a broken button
+      // and is really a test clicking somewhere a person never would — a
+      // person scrolls. `force: true` would hide a genuine overlay bug, so it
+      // is deliberately not used.
+      await plus.scrollIntoViewIfNeeded();
+      // A SHORT timeout and a swallowed rejection, because the control can
+      // become disabled BETWEEN the check above and this line: the press that
+      // takes the last ticket re-renders the button as disabled, and a default
+      // 30s `click()` then waits for a button that is never becoming
+      // enabled again. The assertion after the loop is what decides the test.
+      await plus.click({ timeout: 2000 }).catch(() => undefined);
     }
     await expect(plus).toBeDisabled();
-    await expect(panel.getByText(/Up to \d+ per order/)).toBeVisible();
+    await expect(page.getByText(/Up to \d+ per order/).first()).toBeVisible();
   });
 
   test('one booking CTA per viewport, and it never promises a checkout', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await anEvent(page);
-    // Exactly ONE ticket panel exists in the document at every width — it is
-    // placed by the grid, not duplicated per breakpoint. (It was duplicated
-    // once, which put two `id="tickets"` anchors in every page.)
+
+    // The event page no longer CONTAINS a picker — that is the change §5
+    // asked for, and it is the thing most likely to creep back. One region,
+    // one `#tickets` anchor, and no tier or quantity control anywhere on it.
     await expect(page.getByRole('region', { name: 'Tickets' })).toHaveCount(1);
     await expect(page.locator('#tickets')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: /Increase quantity|^\+$/ })).toHaveCount(0);
 
-    // Desktop: the panel owns the CTA; the mobile bar is hidden.
-    await expect(page.getByRole('link', { name: /Choose tickets|See tiers/ })).toBeHidden();
-
-    // Exactly ONE booking CTA. It's a link into the funnel when there is stock
-    // to sell, and a disabled button when there isn't — never both, and never a
-    // live-looking button that goes nowhere.
-    const cta = page
-      .getByRole('link', { name: 'Book tickets' })
-      .or(page.getByRole('button', { name: /^(Book tickets|Sold out)$/ }));
+    // Exactly ONE booking CTA on the desktop layout: the panel's own. The
+    // mobile bar is hidden here, so a page never shows two.
+    const cta = page.getByRole('link', { name: /^Book tickets$/ });
     await expect(cta).toHaveCount(1);
-    if ((await page.getByRole('link', { name: 'Book tickets' }).count()) === 1) {
-      await expect(page.getByRole('link', { name: 'Book tickets' })).toHaveAttribute(
-        'href',
-        /\/booking\/[0-9a-f-]+\?tickets=/,
-      );
-    } else {
-      await expect(page.getByRole('button', { name: /^(Book tickets|Sold out)$/ })).toBeDisabled();
-    }
+    // It points at the ticket screen, WITHOUT a preselected basket — nothing
+    // has been chosen yet, and a `?tickets=` the visitor never picked is a
+    // checkout deciding on their behalf.
+    await expect(cta).toHaveAttribute('href', /^\/booking\/[0-9a-f-]+$/);
 
+    // Mobile: the sticky bar takes over once the panel has scrolled away, and
+    // it goes to the same place.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => window.scrollTo(0, 2400));
-    await expect(page.getByRole('link', { name: /Choose tickets|See tiers/ })).toBeVisible();
+    const bar = page.getByRole('link', { name: /Book tickets|See tiers/ }).last();
+    await expect(bar).toBeVisible();
+    await expect(bar).toHaveAttribute('href', /^\/booking\/[0-9a-f-]+$/);
   });
 
   test('the photo opens full size and closes on Escape', async ({ page }) => {

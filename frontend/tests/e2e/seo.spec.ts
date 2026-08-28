@@ -35,8 +35,20 @@ test.describe('canonical URLs', () => {
     await page.goto('/events?category=comedy');
     expect(new URL((await canonicalOf(page))!).pathname).toBe('/categories/comedy');
 
+    // ── A CITY IS THE ONE FILTER THAT IS SELF-CANONICAL ──────────────────
+    //
+    // This asserted `/cities/mumbai`, and that page no longer exists: location
+    // is a selector now, not a destination, and `/cities/*` 308s to exactly
+    // this URL. Canonicalising to a redirect would make the crawler resolve an
+    // extra hop to learn what it already had, and a canonical chain is a hint
+    // Google may ignore — so `?city=` points at itself.
+    //
+    // Compared with the SEARCH included: `URL.pathname` drops the query, so a
+    // pathname-only assertion here would pass for a bare `/events` and prove
+    // nothing about the filter being preserved.
     await page.goto('/events?city=Mumbai');
-    expect(new URL((await canonicalOf(page))!).pathname).toBe('/cities/mumbai');
+    const cityCanonical = new URL((await canonicalOf(page))!);
+    expect(cityCanonical.pathname + cityCanonical.search).toBe('/events?city=Mumbai');
 
     // Two filters have no landing page of their own, so they consolidate onto
     // the browse hub rather than inventing a URL for every possible pair.

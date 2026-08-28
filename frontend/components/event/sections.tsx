@@ -91,7 +91,7 @@ function formatMinutes(minutes: number): string {
  * between `starts_at` and `ends_at`: a two-day festival runs eight hours a
  * night, and the derived figure would say "About 32 hours".
  */
-export function QuickFacts({ event }: { event: EventDetail }) {
+export function QuickFacts({ event, limit }: { event: EventDetail; limit?: number }) {
   const category = inferCategory(event);
   const derivedHours =
     event.ends_at != null
@@ -127,6 +127,12 @@ export function QuickFacts({ event }: { event: EventDetail }) {
     ...(category ? [{ icon: category.icon, label: 'Category', value: category.label }] : []),
   ];
 
+  // `limit` renders the PREVIEW that sits on the page beside a "See all"
+  // control; the sheet renders the same component unlimited. One source, two
+  // lengths — a hand-written preview would drift from the full list the first
+  // time a fact was added.
+  const shown = limit ? facts.slice(0, limit) : facts;
+
   return (
     // A <dl> may only directly contain <dt>/<dd> pairs, optionally wrapped one
     // level deep in a <div>. An earlier version nested them two levels down to
@@ -135,7 +141,7 @@ export function QuickFacts({ event }: { event: EventDetail }) {
     // therefore lives INSIDE the <dt>, which is also where it belongs: it
     // labels the fact, it doesn't sit next to it.
     <dl className="grid gap-4 sm:grid-cols-2">
-      {facts.map((fact) => (
+      {shown.map((fact) => (
         // A WELL, not a card: these are the page's own facts, not seven
         // separate objects. Seven lifted white cards on a white page is seven
         // shadows competing with the one panel that should be lifting.
@@ -597,7 +603,6 @@ export function Policies() {
     </ul>
   );
 }
-
 
 /**
  * The event's trailer.

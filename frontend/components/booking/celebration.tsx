@@ -45,7 +45,7 @@ const PIECES = Array.from({ length: 22 }, (_, index) => {
   const spread = ((index * 37) % 100) - 50;
   return {
     left: `${((index * 53) % 96) + 2}%`,
-    delay: `${((index * 11) % 260)}ms`,
+    delay: `${(index * 11) % 260}ms`,
     drift: `${spread}px`,
     rotate: `${((index * 71) % 360) - 180}deg`,
     duration: `${1100 + ((index * 97) % 700)}ms`,

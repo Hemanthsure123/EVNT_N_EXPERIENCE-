@@ -277,8 +277,7 @@ class Symbol_ {
     const count = Math.floor(this.version / 7) + 2;
     // Version 32 is the one case the general formula gets wrong; the spec
     // fixes its step at 26.
-    const step =
-      this.version === 32 ? 26 : Math.ceil((this.version * 4 + 4) / (count * 2 - 2)) * 2;
+    const step = this.version === 32 ? 26 : Math.ceil((this.version * 4 + 4) / (count * 2 - 2)) * 2;
     const result: number[] = [6];
     for (let pos = this.size - 7; result.length < count; pos -= step) result.splice(1, 0, pos);
     return result;

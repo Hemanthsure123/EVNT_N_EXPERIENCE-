@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { ChevronRight } from 'lucide-react';
 import { DetailSheet, DisclosureList, DisclosureRow } from '@/components/event/detail-sheet';
 
 /**
@@ -42,6 +43,19 @@ export interface Disclosure {
   description?: string;
   content: React.ReactNode;
   size?: 'md' | 'lg';
+  /**
+   * Rendered ON the page, above a "see all" control, instead of collapsing to
+   * a single row.
+   *
+   * Two of these earn it. "Things to know" and the schedule answer the
+   * question outright for most visitors — the language, the age limit, what
+   * time the gates open — and hiding those behind a press to save four lines
+   * is disclosure for its own sake. Everything else (the venue card, the
+   * organiser, the FAQ set, the policies) is genuinely long, and stays a row.
+   */
+  preview?: React.ReactNode;
+  /** The control under a preview. Defaults to "See all". */
+  previewCta?: string;
 }
 
 export function EventDisclosures({ items }: { items: Disclosure[] }) {
@@ -50,17 +64,38 @@ export function EventDisclosures({ items }: { items: Disclosure[] }) {
 
   return (
     <>
-      <DisclosureList>
-        {items.map((item) => (
-          <DisclosureRow
-            key={item.key}
-            icon={item.icon}
-            label={item.label}
-            value={item.value}
-            onClick={() => setOpenKey(item.key)}
-          />
-        ))}
-      </DisclosureList>
+      <div className="flex flex-col gap-6">
+        {items
+          .filter((item) => item.preview)
+          .map((item) => (
+            <section key={item.key} className="flex flex-col gap-3">
+              <h3 className="text-h4">{item.label}</h3>
+              {item.preview}
+              <button
+                type="button"
+                onClick={() => setOpenKey(item.key)}
+                className="inline-flex w-fit items-center gap-1 rounded-lg text-label text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                {item.previewCta ?? 'See all'}
+                <ChevronRight className="size-4" aria-hidden />
+              </button>
+            </section>
+          ))}
+
+        <DisclosureList>
+          {items
+            .filter((item) => !item.preview)
+            .map((item) => (
+              <DisclosureRow
+                key={item.key}
+                icon={item.icon}
+                label={item.label}
+                value={item.value}
+                onClick={() => setOpenKey(item.key)}
+              />
+            ))}
+        </DisclosureList>
+      </div>
 
       {/* ONE sheet, keyed by the active row.
           The `key` matters: without it React reuses the same instance across
