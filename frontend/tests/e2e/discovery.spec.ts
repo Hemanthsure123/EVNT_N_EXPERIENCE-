@@ -116,6 +116,31 @@ async function settleForAxe(page: Page) {
     .catch(() => undefined);
 }
 
+/**
+ * Wait out the overlays that open BY THEMSELVES, and close them.
+ *
+ * `LocationPrompt` is a modal on a 2.5s timer. A modal correctly inerts the
+ * background, so while it is up the page's `sr-only` h1 is not in the
+ * accessibility tree at all — and any assertion racing that timer passes on a
+ * fast machine and fails on a slow CI runner at the widest viewport, where
+ * there is most to render. That is exactly the shape the layout tests were
+ * failing in, intermittently, at 1440 only.
+ *
+ * The fix is to stop racing: wait until it has had its chance to appear, then
+ * close it, then assert. Nothing here asserts the prompt EXISTS — a page that
+ * never shows one simply falls through.
+ */
+async function dismissAutoOverlays(page: Page) {
+  for (const name of ['Essential only', 'Not now']) {
+    const button = page.getByRole('button', { name });
+    await button.waitFor({ state: 'visible', timeout: 3500 }).catch(() => undefined);
+    if (await button.isVisible().catch(() => false)) {
+      await button.click();
+      await button.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => undefined);
+    }
+  }
+}
+
 async function axeClean(page: Page, label: string) {
   await settleForAxe(page);
 
@@ -317,6 +342,7 @@ test.describe('home', () => {
     test(`lays out at ${width}px with no horizontal overflow`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto('/');
+      await dismissAutoOverlays(page);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - window.innerWidth,
@@ -563,15 +589,22 @@ test.describe('the browse page', () => {
     await expect(page).toHaveURL(/\/events$/);
   });
 
-  test('filters that do not fit collapse into More, never into a scrollbar', async ({ page }) => {
+  test('filters that do not fit are still reachable, and never a scrollbar', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 900 });
     await page.goto('/events');
+    await dismissAutoOverlays(page);
 
-    const more = page.getByRole('button', { name: /More filters/ });
-    await expect(more).toBeVisible();
+    // The `More filters` control is GONE — a second button opening the same
+    // panel as the `Filters` button two rows up. What the test guards is
+    // unchanged and is the part that matters: a chip that does not fit is
+    // trimmed rather than pushed into a horizontal scrollbar, AND everything
+    // trimmed is still reachable through the panel.
+    await expect(page.getByRole('button', { name: /More filters/ })).toHaveCount(0);
 
-    // Everything trimmed is still reachable — More opens the full set.
-    await more.click();
+    const toolbar = page.getByRole('button', { name: /^All filters/ });
+    await expect(toolbar).toBeVisible();
+    await toolbar.click();
+
     // `exact`, or this also matches the "Nightlife Collective" organiser facet.
     await expect(
       page
@@ -608,19 +641,23 @@ test.describe('the browse page', () => {
     expect(await columns()).toBe(1);
   });
 
-  test('grid and list are both available, and the choice sticks', async ({ page }) => {
+  test('the results are one grid, and there is no view to choose', async ({ page }) => {
+    // This asserted a grid/list toggle and that the choice persisted. The
+    // toggle is GONE — two presentations of the same list is a preference
+    // nobody was setting, and the control cost a slot in a row that was
+    // already over budget.
+    //
+    // What replaces it is the property that has to stay true: results render
+    // as one grid, and no control offers a second way to see them.
     await page.goto('/events');
-    await page.getByRole('button', { name: 'List view' }).click();
-    await expect(page.getByRole('button', { name: 'List view' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    await dismissAutoOverlays(page);
 
-    await page.reload();
-    await expect(page.getByRole('button', { name: 'List view' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    const cards = page.locator('main ul li a[href^="/events/"]');
+    await expect(cards.first()).toBeVisible();
+
+    for (const name of [/Grid view/i, /List view/i]) {
+      await expect(page.getByRole('button', { name })).toHaveCount(0);
+    }
   });
 
   test('shows no rating, interest count or verified badge anywhere', async ({ page }) => {
@@ -824,6 +861,7 @@ test.describe('layout and navigation', () => {
   test('rails and grids share one left edge at desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto('/');
+    await dismissAutoOverlays(page);
 
     // "All Events", not "Trending near you": the trending rail is no longer on
     // the front page (its cards showed the same events as the grid, under a

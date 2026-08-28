@@ -97,7 +97,13 @@ export function AutoRail({
         onFocusCapture={() => setHeld(true)}
         onBlurCapture={() => setHeld(false)}
         className={cn(
-          '-mx-4 flex snap-x snap-mandatory gap-5 overflow-x-auto px-4 pb-2',
+          // `scroll-pl-*` MATCHING the padding. Without it the browser snaps
+          // the first card's start to the SCROLLPORT edge, which ignores
+          // padding — so the rail silently sat at `scrollLeft: 24` on load and
+          // the first card was a padding-width left of the heading above it.
+          // Measured, not guessed: the alignment spec caught exactly 24px.
+          '-mx-4 flex snap-x snap-mandatory scroll-pl-4 gap-5 overflow-x-auto px-4 pb-2',
+          'lg:scroll-pl-6',
           '[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
           'lg:-mx-6 lg:px-6',
         )}
@@ -115,7 +121,11 @@ export function AutoRail({
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         )}
       >
-        {playing ? <Pause className="size-4" aria-hidden /> : <Play className="size-4" aria-hidden />}
+        {playing ? (
+          <Pause className="size-4" aria-hidden />
+        ) : (
+          <Play className="size-4" aria-hidden />
+        )}
         {playing ? `Pause ${label.toLowerCase()}` : `Play ${label.toLowerCase()}`}
       </button>
     </div>
