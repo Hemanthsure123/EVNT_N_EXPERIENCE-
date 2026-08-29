@@ -92,10 +92,10 @@ export function SavedEvents() {
         // The reserved height matches the PORTRAIT card the discovery language
         // uses now (3:4 image with the text block below it), so the grid does
         // not jump when the real cards land.
-        <ul className="grid gap-block sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: savedIds?.length || 3 }, (_, index) => (
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
+          {Array.from({ length: savedIds?.length || 4 }, (_, index) => (
             <li key={index}>
-              <Skeleton className="h-[28rem] w-full rounded-xl" />
+              <Skeleton className="h-[20rem] w-full rounded-xl" />
             </li>
           ))}
         </ul>
@@ -116,18 +116,15 @@ export function SavedEvents() {
           />
         </div>
       ) : (
-        <ul className="grid gap-block sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
           {events.map((event) => (
             <li
               key={event.id}
               className="flex animate-fade-rise flex-col gap-2 motion-reduce:animate-none"
             >
-              {/* Three-up at xl, two at sm, one below — the `sizes` the
-                  grid actually resolves to, so the browser never fetches a
-                  poster wider than the slot. */}
               <EventCard
                 event={event}
-                sizes="(min-width: 1280px) 30vw, (min-width: 640px) 45vw, 100vw"
+                sizes="(min-width: 1024px) 20vw, (min-width: 640px) 33vw, 45vw"
                 className={event.is_available === false ? 'opacity-70' : undefined}
               />
               {event.is_available === false ? (

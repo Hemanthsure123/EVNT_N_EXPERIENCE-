@@ -64,7 +64,7 @@ import { cn } from '@/lib/utils/cn';
  *
  * ── ONE PRIMARY ACTION PER CARD, AND IT IS "SHOW CODE" ────────────────────
  *
- * "Show code" is the near-black `--cta` pill; "Event details" is the quiet
+ * "Show code" is the near-black `--cta` pill; the rest are quiet
  * outline pill beside it. That ranking is the whole point of the card — a
  * person opening this page in a queue is doing exactly one thing. The status
  * FILTERS above are state, not action, so they wear the warm `--nav-active`
@@ -537,9 +537,6 @@ function BookingCard({
           <Send className="size-4" aria-hidden />
           Share receipt
         </button>
-        <Link href={`/events/${group.eventId}`} className={quietPillClass}>
-          Event details
-        </Link>
         {refundable ? (
           <button
             type="button"

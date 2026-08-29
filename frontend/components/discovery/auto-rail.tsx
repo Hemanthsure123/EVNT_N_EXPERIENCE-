@@ -1,7 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import { Pause, Play } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -15,10 +14,19 @@ import { cn } from '@/lib/utils/cn';
  * for anyone who reads slowly, and actively hostile to anyone with a
  * vestibular disorder. So there are three stops, and all three are real:
  *
- *   1. A visible pause/play button.
- *   2. Hover and keyboard FOCUS both pause it — focus especially, or tabbing
+ *   1. Hover and keyboard FOCUS both pause it — focus especially, or tabbing
  *      to a card would move the card out from under the focus ring.
- *   3. `prefers-reduced-motion: reduce` means it never starts at all.
+ *   2. `prefers-reduced-motion: reduce` means it never starts at all, which is
+ *      the one that matters most for a vestibular disorder.
+ *   3. Touching the rail stops the timer PERMANENTLY (below).
+ *
+ * A visible pause button was here and was removed on request, to match the
+ * reference design, which has none. That is a real reduction: the three
+ * remaining stops are all implicit, and somebody who wants it still cannot
+ * see that stopping is possible. It is defensible because the rail carries
+ * short card titles rather than prose, and because reduced-motion — the
+ * accessibility case with teeth — is honoured outright. If auto-motion ever
+ * moves onto something you have to READ, put the button back.
  *
  * ── WHY `scrollBy`, NOT A TRANSFORM ANIMATION ─────────────────────────────
  *
@@ -111,23 +119,6 @@ export function AutoRail({
         {children}
       </ul>
 
-      <button
-        type="button"
-        onClick={() => setPlaying((on) => !on)}
-        aria-pressed={!playing}
-        className={cn(
-          'inline-flex h-9 w-fit items-center gap-2 self-end rounded-full border border-border bg-surface px-pill text-label text-muted-foreground',
-          'transition-colors duration-fast hover:bg-muted hover:text-foreground',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        )}
-      >
-        {playing ? (
-          <Pause className="size-4" aria-hidden />
-        ) : (
-          <Play className="size-4" aria-hidden />
-        )}
-        {playing ? `Pause ${label.toLowerCase()}` : `Play ${label.toLowerCase()}`}
-      </button>
     </div>
   );
 }

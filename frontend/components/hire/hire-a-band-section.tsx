@@ -1,13 +1,9 @@
 import * as React from 'react';
-import Link from 'next/link';
 import { Sparkles } from 'lucide-react';
-import { PERFORMER_TYPE_LABELS, type PerformerType } from '@/lib/api/enquiries';
 import { SpotHireABand } from '@/components/illustrations/spots';
 import { Cta } from '@/components/discovery/cta';
 import { Reveal } from '@/components/discovery/reveal';
 import { Container } from '@/components/shell/container';
-import { PerformerScene } from '@/components/illustrations/performer-scenes';
-import { cn } from '@/lib/utils/cn';
 
 /**
  * Hire a Band, on the landing page.
@@ -56,17 +52,7 @@ import { cn } from '@/lib/utils/cn';
  * category tiles carry.
  */
 
-/** The eight the brief names. `other` is a real type but a poor entry point. */
-const ENTRY_TYPES: PerformerType[] = [
-  'band',
-  'dj',
-  'singer',
-  'instrumentalist',
-  'comedian',
-  'anchor',
-  'dance_crew',
-  'magician',
-];
+
 
 export function HireABandSection() {
   return (
@@ -91,7 +77,7 @@ export function HireABandSection() {
                 New on Curatix
               </span>
               <h2 className="text-h3 font-extrabold tracking-tight sm:text-h2 lg:text-h1">
-                Hire a band for your own event
+                Hire a band, DJ or performer for your own event
               </h2>
             </div>
 
@@ -99,54 +85,6 @@ export function HireABandSection() {
                 a desktop copy — two SVGs is two things to keep in step. */}
             <SpotHireABand className="h-20 w-auto shrink-0 sm:h-28 lg:h-44" />
           </div>
-        </Reveal>
-
-        <Reveal>
-          <ul className="mt-6 grid grid-cols-2 gap-2 sm:mt-10 sm:grid-cols-4 sm:gap-3">
-            {ENTRY_TYPES.map((type) => (
-              <li key={type}>
-                <Link
-                  href={`/hire?type=${type}`}
-                  className={cn(
-                    // A ROW under `sm` (artwork, then label) and a stacked card
-                    // above it. `min-h-control` is the 44px touch floor, which
-                    // the old `p-4` card met by accident and a compact row
-                    // would otherwise miss.
-                    'group flex h-full min-h-control items-center gap-2 rounded-xl border border-border bg-surface p-2',
-                    'sm:min-h-0 sm:flex-col sm:items-start sm:gap-2 sm:rounded-2xl sm:p-4 sm:shadow-sm',
-                    'transition-[border-color,transform,box-shadow] duration-base ease-spring',
-                    'hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg',
-                    'active:translate-y-0 active:scale-[0.98] active:duration-fast',
-                    'motion-reduce:transform-none motion-reduce:transition-none',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                  )}
-                >
-                  {/* A SCENE, not a glyph on a squircle. A grid of squircles
-                      is the iOS app-icon idiom — the exact thing the category
-                      tiles were rebuilt to stop being, and for the same reason
-                      here: a turntable on a rounded square is a symbol for a
-                      DJ, not a picture of one.
-
-                      It keeps its 4:3 box rather than being squared off: these
-                      are composed scenes with a horizon, and cropping one to a
-                      square cuts the ground out from under the figures. The
-                      card's own hover no longer moves it — the reaction is
-                      INSIDE the drawing now (the mic lifts, the ball turns),
-                      which is what `illo-r-*` exists for. */}
-                  <PerformerScene
-                    type={type}
-                    className="h-10 w-[3.3rem] shrink-0 sm:h-14 sm:w-full"
-                  />
-                  {/* Wrapped, never truncated. "Instrumentalist" is 15
-                      characters in a half-width column on a 320px phone — an
-                      ellipsis there turns the label into a guess. */}
-                  <span className="min-w-0 text-caption font-medium leading-tight sm:text-body-sm">
-                    {PERFORMER_TYPE_LABELS[type]}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
         </Reveal>
 
         <Reveal>

@@ -70,6 +70,28 @@ const FOOTER_ROUTES = [
   '/cookies',
 ];
 
+/**
+ * The BOTTOM NAV's four destinations.
+ *
+ * Separate from the footer list because the failure mode is worse. The bottom
+ * bar is the ONLY navigation on a phone, so a tab pointing at a route that
+ * does not exist does not degrade — it removes the whole feature from mobile.
+ *
+ * That happened: the Saved tab shipped pointing at `/saved`, which has never
+ * existed (the page is `/account/saved`), and nothing failed. The footer guard
+ * above could not catch it, because the footer does not link to Saved.
+ */
+const BOTTOM_NAV_ROUTES = ['/', '/events', '/account/saved', '/hire'];
+
+describe('every route the bottom nav links to actually exists', () => {
+  it.each(BOTTOM_NAV_ROUTES)('%s resolves to a page file', (route) => {
+    expect(
+      pageFileFor(route),
+      `${route} is in the mobile bottom nav but has no page file`,
+    ).not.toBeNull();
+  });
+});
+
 describe('every route the footer links to actually exists', () => {
   it.each(FOOTER_ROUTES)('%s resolves to a page file', (route) => {
     expect(

@@ -52,17 +52,24 @@ export interface HeroCarouselProps {
 
 export function HeroCarousel({ events, label }: HeroCarouselProps) {
   const [index, setIndex] = React.useState(0);
+  const [isPaused, setIsPaused] = React.useState(false);
   const count = events.length;
 
   const go = React.useCallback(
     (next: number) => {
       if (count === 0) return;
-      // Wraps both ways. A carousel that dead-ends makes the chevron a control
-      // that sometimes does nothing, which reads as broken rather than bounded.
       setIndex(((next % count) + count) % count);
     },
     [count],
   );
+
+  React.useEffect(() => {
+    if (count <= 1 || isPaused) return;
+    const timer = setInterval(() => {
+      setIndex((prev) => (prev + 1) % count);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [count, isPaused]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'ArrowRight') {
@@ -85,9 +92,6 @@ export function HeroCarousel({ events, label }: HeroCarouselProps) {
         <Container className="pb-3 pt-5">
           <h2 className="text-body font-bold tracking-tight text-foreground">{label}</h2>
         </Container>
-        {/* Native scroll-snap rather than a JS carousel: momentum, rubber-band
-            and assistive scrolling all come free, and a peeking neighbour
-            tells a thumb there is more without a row of dots to interpret. */}
         <ul className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {events.map((event, i) => (
             <li key={event.id} className="w-[76%] shrink-0 snap-center">
@@ -101,6 +105,10 @@ export function HeroCarousel({ events, label }: HeroCarouselProps) {
       <div
         className="relative isolate hidden overflow-hidden border-b border-border md:block"
         onKeyDown={onKeyDown}
+        onMouseEnter={() => setIsPaused(true)}
+        onMouseLeave={() => setIsPaused(false)}
+        onFocus={() => setIsPaused(true)}
+        onBlur={() => setIsPaused(false)}
       >
         <Backdrop event={active} />
 

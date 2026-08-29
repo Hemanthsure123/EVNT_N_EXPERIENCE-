@@ -29,7 +29,7 @@ describe('isActive', () => {
   });
 
   it('marks nothing when the route is outside the bar', () => {
-    for (const href of ['/', '/events', '/saved', '/hire']) {
+    for (const href of ['/', '/events', '/account/saved', '/hire']) {
       expect(isActive('/booking/8f1c/review', href)).toBe(false);
     }
   });

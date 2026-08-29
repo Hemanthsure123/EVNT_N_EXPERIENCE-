@@ -127,179 +127,138 @@ export function AccountMenu() {
         />
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-80 p-2">
-        <div className="flex items-center gap-3 px-2.5 pb-2.5 pt-2">
-          {/* The identity card is always the PERSON, whatever scope is active —
-              it answers "who am I signed in as", which the scope cannot change. */}
+      <PopoverContent align="end" className="w-80 p-3.5 flex flex-col gap-2 rounded-2xl shadow-xl border border-border bg-surface">
+        <div className="flex items-center gap-3 px-2 py-1">
+          {/* The identity card is always the PERSON, whatever scope is active */}
           <IdentityAvatar name={name} imageUrl={avatarUrl} size="md" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-body-sm font-semibold">{name}</p>
-            <p className="truncate text-caption text-foreground-subtle">{user?.email}</p>
+            <p className="truncate text-body-sm font-bold text-foreground">{name}</p>
+            <p className="truncate text-caption text-muted-foreground">{user?.email}</p>
           </div>
         </div>
 
-        {/* Verification is shown ONLY when the server says so. There is no
-            email-verification endpoint yet, so an "unverified" pill here would
-            be a claim about a check nobody runs. Staff is a real flag. */}
         {isAdmin ? (
-          <p className="mx-2.5 mb-2 inline-flex w-fit items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-caption font-medium text-secondary-foreground">
-            <ShieldCheck className="size-3" aria-hidden />
-            Platform operator
-          </p>
+          <div className="px-2 pb-1">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1 text-caption font-medium text-foreground">
+              <ShieldCheck className="size-3.5 text-muted-foreground" aria-hidden />
+              Platform operator
+            </span>
+          </div>
         ) : null}
 
         {ready && (isOrganizer || isAdmin) ? (
           <>
             <Divider />
-            <p className="px-2.5 pb-1 pt-2 text-caption font-semibold uppercase tracking-wide text-foreground-subtle">
-              Switch to
-            </p>
-            <ScopeRow
-              active={active.kind === 'personal'}
-              icon={<UserIcon className="size-4" aria-hidden />}
-              label="Personal account"
-              hint="Your tickets and orders"
-              onSelect={() => {
-                switchTo({ kind: 'personal' });
-                close();
-                router.push('/account');
-              }}
-            />
-            {organizations.map((organization) => (
+            <GroupLabel>SWITCH TO</GroupLabel>
+            <div className="flex flex-col gap-1.5">
               <ScopeRow
-                key={organization.id}
-                active={
-                  active.kind === 'organization' && active.organization.id === organization.id
-                }
-                icon={<Building2 className="size-4" aria-hidden />}
-                label={organization.name}
-                hint={
-                  organization.verified_level === 'verified' ? 'Verified organiser' : 'Organiser'
-                }
+                active={active.kind === 'personal'}
+                icon={<UserIcon className="size-4" aria-hidden />}
+                label="Personal account"
+                hint="Your tickets and orders"
                 onSelect={() => {
-                  switchTo({ kind: 'organization', organization });
+                  switchTo({ kind: 'personal' });
                   close();
-                  router.push('/dashboard');
+                  router.push('/account');
                 }}
               />
-            ))}
+              {organizations.map((organization) => (
+                <ScopeRow
+                  key={organization.id}
+                  active={
+                    active.kind === 'organization' && active.organization.id === organization.id
+                  }
+                  icon={<Building2 className="size-4" aria-hidden />}
+                  label={organization.name}
+                  hint={
+                    organization.verified_level === 'verified' ? 'Verified organiser' : 'Organiser'
+                  }
+                  onSelect={() => {
+                    switchTo({ kind: 'organization', organization });
+                    close();
+                    router.push('/dashboard');
+                  }}
+                />
+              ))}
+            </div>
           </>
         ) : null}
 
         <Divider />
 
-        {/* Destinations follow the ACTIVE scope. An organizer in personal
-            scope still gets one way back — hiding it entirely would strand
-            them — but the dashboard is not the headline when they are
-            wearing the attendee hat. */}
-        <MenuLink href="/account" icon={UserIcon} onNavigate={close}>
-          Profile
-        </MenuLink>
-        <MenuLink href="/account/tickets" icon={Ticket} onNavigate={close}>
-          My tickets
-        </MenuLink>
-        {isOrganizer ? (
-          <MenuLink href="/dashboard" icon={LayoutDashboard} onNavigate={close}>
-            Organizer dashboard
+        <div className="flex flex-col gap-1.5">
+          <MenuLink href="/account" icon={UserIcon} onNavigate={close}>
+            Profile
           </MenuLink>
-        ) : (
-          // The inverse of the row above, and the ONLY route to becoming an
-          // organizer. Shown to people who are not one precisely because they
-          // are its audience — gating it on already having an organization
-          // would hide the door behind itself.
-          <MenuLink href="/account/organizer" icon={Building2} onNavigate={close}>
-            Host events
+          <MenuLink href="/account/tickets" icon={Ticket} onNavigate={close}>
+            My tickets
           </MenuLink>
-        )}
-        {isAdmin ? (
-          <MenuLink href="/admin" icon={ShieldCheck} onNavigate={close}>
-            Operator console
-          </MenuLink>
-        ) : null}
+          {isOrganizer ? (
+            <MenuLink href="/dashboard" icon={LayoutDashboard} onNavigate={close}>
+              Organizer dashboard
+            </MenuLink>
+          ) : (
+            <MenuLink href="/account/organizer" icon={Building2} onNavigate={close}>
+              Host events
+            </MenuLink>
+          )}
+          {isAdmin ? (
+            <MenuLink href="/admin" icon={ShieldCheck} onNavigate={close}>
+              Operator console
+            </MenuLink>
+          ) : null}
+        </div>
 
         <Divider />
 
-        {/* ── LABELLED GROUPS, AND ONLY WHERE SOMETHING BACKS THEM ─────────
-            The note here used to say a dedicated support surface did not
-            exist. It does — `/support`, `/help` and `/about` are all real
-            routes — so the entries are real too.
-            
-            What is still ABSENT is deliberate: no "Payment settings" (nothing
-            stores a payment method; cards never touch this platform, Razorpay
-            holds them), no "Chat with us" (there is no chat) and no "Share
-            feedback" (there is no endpoint). Each appears in the reference
-            design and each would be a menu row that goes nowhere. */}
-        <GroupLabel>Support</GroupLabel>
-        <MenuLink href="/help" icon={CircleHelp} onNavigate={close}>
-          Help centre
-        </MenuLink>
-        <MenuLink href="/support" icon={LifeBuoy} onNavigate={close}>
-          Contact support
-        </MenuLink>
+        <GroupLabel>SUPPORT</GroupLabel>
+        <div className="flex flex-col gap-1.5">
+          <MenuLink href="/help" icon={CircleHelp} onNavigate={close}>
+            Help centre
+          </MenuLink>
+          <MenuLink href="/support" icon={LifeBuoy} onNavigate={close}>
+            Contact support
+          </MenuLink>
+        </div>
 
         <Divider />
 
-        <GroupLabel>More</GroupLabel>
-        <MenuLink href="/account/settings" icon={Settings} onNavigate={close}>
-          Settings
-        </MenuLink>
-        <MenuLink href="/about" icon={Info} onNavigate={close}>
-          About us
-        </MenuLink>
-        <button
-          type="button"
-          onClick={() => {
-            close();
-            void signOut().then(() => router.push('/'));
-          }}
-          className={rowClass}
-        >
-          <LogOut className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          Sign out
-        </button>
+        <GroupLabel>MORE</GroupLabel>
+        <div className="flex flex-col gap-1.5">
+          <MenuLink href="/account/settings" icon={Settings} onNavigate={close}>
+            Settings
+          </MenuLink>
+          <MenuLink href="/about" icon={Info} onNavigate={close}>
+            About us
+          </MenuLink>
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              void signOut().then(() => router.push('/'));
+            }}
+            className={rowClass}
+          >
+            <LogOut className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="min-w-0 flex-1 truncate font-medium">Sign out</span>
+          </button>
+        </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-// `min-h-control` (44px) rather than padding alone: this menu is a thumb
-// target on a phone as often as a cursor target on a desktop.
-/**
- * A row in the account menu, as a CARD rather than a dropdown line.
- *
- * The reference design's account panel is a stack of generously-padded rounded
- * rows, each with its icon on the left and a chevron on the right, grouped
- * under quiet section labels. That reads as a set of DESTINATIONS you are
- * choosing between; a tight 28px dropdown line reads as a menu of commands.
- * The distinction matters here because almost every row IS a destination —
- * profile, tickets, dashboard, console, help, settings.
- *
- * `min-h-11` is the 44px touch floor, which the old `py-2` row missed on a
- * phone. The chevron is drawn by `MenuLink` (links go somewhere) and omitted
- * for the sign-out button (it does not).
- */
 const rowClass = cn(
-  'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-body-sm',
-  'transition-colors duration-fast hover:bg-muted',
+  'flex min-h-12 w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left text-body-sm',
+  'bg-muted/40 transition-colors duration-fast hover:bg-muted/80',
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 );
 
-// `border-strong`, not `border`: this rule has to actually separate two groups
-// of rows, and a 1.27:1 hairline on a white popover reads as nothing.
-/**
- * A section heading inside the menu.
- *
- * `aria-hidden` and NOT a `<h*>`: this popover has `role="menu"`, whose only
- * valid children are menu items and separators. A heading in there is dropped
- * by some screen readers and announced out of order by others, and the
- * `<Divider role="separator">` above it already conveys the grouping. It is a
- * visual affordance, so it is exposed visually and nowhere else.
- */
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
     <div
       aria-hidden
-      className="px-3 pb-1 pt-2 text-caption uppercase tracking-wide text-muted-foreground"
+      className="px-2 pb-1 pt-1 text-caption font-bold uppercase tracking-wider text-muted-foreground"
     >
       {children}
     </div>
@@ -307,7 +266,7 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
 }
 
 function Divider() {
-  return <div className="my-1.5 h-px bg-border-strong" role="separator" />;
+  return <div className="my-1 h-px bg-border/60" role="separator" />;
 }
 
 function ScopeRow({
@@ -327,29 +286,24 @@ function ScopeRow({
     <button
       type="button"
       onClick={onSelect}
-      // `menuitemradio` is the honest role: these are mutually exclusive
-      // scopes, and a screen reader should announce which one is current.
       role="menuitemradio"
       aria-checked={active}
-      // The warm "you are here" pill, not the near-black CTA fill — switching
-      // scope is state, and a black row here would compete with the one real
-      // action a screen is allowed to have.
       className={cn(
         rowClass,
-        active && 'bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover',
+        active
+          ? 'border border-border-strong bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
+          : 'bg-muted/40 text-foreground hover:bg-muted/80',
       )}
     >
-      <span
-        className={cn('shrink-0', active ? 'text-nav-active-foreground' : 'text-muted-foreground')}
-      >
+      <span className={cn('shrink-0', active ? 'text-nav-active-foreground' : 'text-muted-foreground')}>
         {icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{label}</span>
+        <span className="block truncate font-bold text-body-sm">{label}</span>
         <span
           className={cn(
             'block truncate text-caption',
-            active ? 'text-nav-active-foreground/75' : 'text-foreground-subtle',
+            active ? 'text-nav-active-foreground/80' : 'text-muted-foreground',
           )}
         >
           {hint}
@@ -374,11 +328,8 @@ function MenuLink({
   return (
     <Link href={href} onClick={onNavigate} className={rowClass}>
       <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="min-w-0 flex-1 truncate">{children}</span>
-      {/* A chevron because the row GOES somewhere. The sign-out button below
-          deliberately has none: it performs an action and stays put, and an
-          affordance that says "forward" on it would be a small lie. */}
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 flex-1 truncate font-medium">{children}</span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden />
     </Link>
   );
 }

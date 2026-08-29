@@ -23,7 +23,12 @@ export function SiteBottomNav() {
       items={[
         { href: '/', label: 'Home', icon: <Home className="size-5" /> },
         { href: '/events', label: 'Events', icon: <CalendarDays className="size-5" /> },
-        { href: '/saved', label: 'Saved', icon: <Heart className="size-5" /> },
+        // `/account/saved`, NOT `/saved`. This replaced the deleted Cities tab
+        // and was written from memory: `/saved` has never existed, so the
+        // mobile Saved tab 404'd from the moment it shipped. The bottom nav is
+        // the ONLY route to saved events on a phone, so it took the whole
+        // feature with it.
+        { href: '/account/saved', label: 'Saved', icon: <Heart className="size-5" /> },
         { href: '/hire', label: 'Hire', icon: <Music4 className="size-5" /> },
       ]}
     />

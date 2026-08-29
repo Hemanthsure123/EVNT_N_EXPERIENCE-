@@ -474,8 +474,28 @@
      any change to the chrome silently desynchronised them. These are that
      arithmetic, expressed once. */
   --bottom-nav-height: 4rem; /* 64px -- matches BottomNav's h-16 */
-  --sticky-top: calc(var(--header-height) + 1rem);
-  --sticky-top-lg: calc(var(--header-height-lg) + 1rem);
+
+  /* ── THE HEADER'S REAL HEIGHT, MEASURED ────────────────────────────────
+     `--sticky-top` used to be `--header-height + 1rem`, i.e. the identity ROW
+     plus a rung. Then the header grew a SECOND row -- the full-width search
+     field -- and the token did not. So every sticky bar on the site pinned
+     itself ~80px from the top of a ~128px header and sat half-hidden behind
+     it. The browse page's filter row is where it showed worst: a sliver of
+     chips under the search field.
+
+     Deriving it from `--header-height` again would just wait for the next
+     change to the chrome. `Header` MEASURES itself with a ResizeObserver and
+     writes the real value here, so the offset tracks whatever the header
+     actually is -- condensed or at rest, one row or two.
+
+     The literals below are the SSR fallback, used for the first paint and if
+     JS never runs: the identity row plus the search row's 3.5rem. They are
+     deliberately a little generous, because a sticky bar sitting slightly too
+     low is invisible and one sitting too high is the bug this replaces. */
+  --header-total: calc(var(--header-height) + 3.5rem);
+  --header-total-lg: calc(var(--header-height-lg) + 3.5rem);
+  --sticky-top: calc(var(--header-total) + 0.5rem);
+  --sticky-top-lg: calc(var(--header-total-lg) + 0.5rem);
 
   /* The ticket list's floor. A tier card is ~9rem; the scroll region between
      the pinned header and the pinned footer must never be shorter than one of

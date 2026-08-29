@@ -96,6 +96,8 @@ export interface HeaderProps {
 export function Header({ logo, nav, search, belowBar, actions, className }: HeaderProps) {
   const [scrolled, setScrolled] = React.useState(false);
 
+  const rootRef = React.useRef<HTMLElement>(null);
+
   React.useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
     onScroll();
@@ -103,9 +105,41 @@ export function Header({ logo, nav, search, belowBar, actions, className }: Head
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  /**
+   * ── PUBLISH THE HEADER'S REAL HEIGHT ────────────────────────────────────
+   *
+   * Every sticky bar on the site offsets itself by `--sticky-top`, which was
+   * arithmetic over `--header-height` — the identity ROW. When the header grew
+   * a second row for the search field, that arithmetic did not follow, so the
+   * browse page's filter bar pinned ~80px down a ~128px header and sat half
+   * behind it.
+   *
+   * Measuring removes the class of bug rather than this instance of it: the
+   * offset now tracks whatever the header actually is, including the condense
+   * on scroll and any future row. A `ResizeObserver` rather than a one-off
+   * read, because the height changes on scroll, on resize, and when a webfont
+   * lands and reflows the row.
+   */
+  React.useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const publish = () => {
+      const height = node.getBoundingClientRect().height;
+      if (height > 0) {
+        document.documentElement.style.setProperty('--header-total', `${height}px`);
+        document.documentElement.style.setProperty('--header-total-lg', `${height}px`);
+      }
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <RouteTransitionProvider>
       <header
+        ref={rootRef}
         className={cn(
           'sticky top-0 z-sticky border-b transition-[height,background-color,border-color,box-shadow] duration-base ease-out',
           // Glass only once scrolled: at rest there is nothing behind the header

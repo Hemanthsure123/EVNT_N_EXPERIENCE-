@@ -5,7 +5,6 @@ import { BriefForm } from '@/components/hire/brief-form';
 import { PerformerCard } from '@/components/hire/performer-card';
 import { SpotHireABand } from '@/components/illustrations/spots';
 import { Container } from '@/components/shell/container';
-import { PERFORMER_TYPE_LABELS, type PerformerType } from '@/lib/api/enquiries';
 import { fetchPerformersSafe } from '@/lib/api/performers';
 import { cn } from '@/lib/utils/cn';
 import { pageMetadata } from '@/lib/seo/metadata';
@@ -64,16 +63,6 @@ export const revalidate = 60;
 const MAX_ACTS_SHOWN = 8;
 
 /** The eight the brief names. `other` is a real type but a poor entry point. */
-const ENTRY_TYPES: PerformerType[] = [
-  'band',
-  'dj',
-  'singer',
-  'instrumentalist',
-  'comedian',
-  'anchor',
-  'dance_crew',
-  'magician',
-];
 
 const CHIP_CLASS =
   'inline-flex h-control shrink-0 items-center whitespace-nowrap rounded-full border border-border bg-surface px-4 text-label text-foreground transition-colors duration-fast hover:border-muted-foreground/40 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
@@ -101,15 +90,6 @@ export default async function HirePage() {
             <h1 className="max-w-3xl text-h3 font-extrabold leading-[1.1] tracking-tight text-foreground sm:text-h2 lg:text-display">
               Hire a band, DJ or performer for your own event
             </h1>
-            {/* The type chips. `?type=` is a param this route already reads, so
-                each one is a real URL rather than a client-side toggle. */}
-            <div className="-mx-4 mt-1 flex gap-2.5 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
-              {ENTRY_TYPES.map((type) => (
-                <Link key={type} href={`/hire?type=${type}`} className={CHIP_CLASS}>
-                  {PERFORMER_TYPE_LABELS[type]}
-                </Link>
-              ))}
-            </div>
           </div>
 
           {/* ── THE OTHER HALF OF A 1440px BAND ─────────────────────────

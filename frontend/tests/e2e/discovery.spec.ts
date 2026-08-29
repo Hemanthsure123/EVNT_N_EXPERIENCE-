@@ -67,12 +67,29 @@ async function settleForAxe(page: Page) {
     // BOUNDED, because the point is to trip every observer, not to render the
     // page frame by frame: the reveals fire well inside a dozen viewports and
     // an unbounded sweep of a long page is pure cost.
+    // ── STOP ON THE CONDITION, NOT ON A COUNT ───────────────────────────
+    //
+    // The cap was a flat 12 viewports. That is a guess about page height, and
+    // the event page outgrew it the moment it gained a gallery section: the
+    // sweep stopped before the bottom, the `Reveal` blocks down there never
+    // fired, and axe read their mid-fade blends as ~1.02:1 contrast failures.
+    // The test then failed for a reason that has nothing to do with contrast,
+    // and only in a full run, where the page is slow enough to still be
+    // fading.
+    //
+    // It now stops when every reveal has actually revealed, and keeps the cap
+    // only as a backstop against an infinitely-growing page.
     const height = await page.evaluate(() => window.innerHeight);
     const total = await page.evaluate(() => document.body.scrollHeight);
-    const steps = Math.min(Math.ceil(total / height), 12);
+    const steps = Math.min(Math.ceil(total / height) + 2, 30);
     for (let step = 1; step <= steps; step += 1) {
       await page.evaluate((top) => window.scrollTo(0, top), step * height);
       await page.waitForTimeout(40);
+      const settled = await page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('[data-revealed]'));
+        return nodes.length > 0 && nodes.every((n) => Number(getComputedStyle(n).opacity) === 1);
+      });
+      if (settled) break;
     }
     await page.evaluate(() => window.scrollTo(0, 0));
   }
@@ -315,27 +332,36 @@ test.describe('home', () => {
   // sufficient — a header can destroy itself internally without moving
   // `scrollWidth` by a pixel, and did. See "header nav never wraps or collides
   // with the search" below for the check that catches that.
-  test('the auto-advancing rail can be stopped, which is not optional', async ({ page }) => {
+  test('the auto-advancing rail respects reduced motion', async ({ page }) => {
+    // ── WHY THIS PROPERTY, AND NOT THE GESTURE ──────────────────────────
+    //
+    // The visible pause button was removed to match the reference design, so
+    // the remaining stops are hover, focus, a permanent handover on
+    // pointer/wheel, and this. The gesture ones resist a reliable test: the
+    // rail is full of links, so a real `mouse.down()` on it NAVIGATES, and a
+    // programmatic `scrollBy` fires no pointer event at all and correctly does
+    // not stop it. Both were tried; both tested the harness rather than the
+    // component.
+    //
+    // Reduced motion is the guarantee with teeth — it is the one that matters
+    // to somebody with a vestibular disorder — and it is deterministic.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
+    await dismissAutoOverlays(page);
 
-    // WCAG 2.2.2: anything moving automatically for more than five seconds
-    // needs a mechanism to pause it. Content that slides away mid-word is
-    // unusable for anyone who reads slowly and hostile to anyone with a
-    // vestibular disorder, so this is pinned rather than trusted.
     const rail = page.getByRole('list', { name: 'All events' });
-    await expect(rail).toBeVisible();
+    await rail.scrollIntoViewIfNeeded();
 
-    const pause = page.getByRole('button', { name: /Pause all events/i });
-    await expect(pause).toBeVisible();
-    await expect(pause).toHaveAttribute('aria-pressed', 'false');
+    // A real scroll container either way, so somebody can always move it
+    // themselves — which a transform marquee would have taken away.
+    expect(
+      await rail.evaluate((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowX)),
+    ).toBe(true);
 
-    await pause.click();
-    // The control reports its own state, so a screen reader can tell whether
-    // the thing was actually stopped.
-    await expect(page.getByRole('button', { name: /Play all events/i })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    // Two full intervals. It must not have moved a pixel on its own.
+    const before = await rail.evaluate((el) => el.scrollLeft);
+    await page.waitForTimeout(9000);
+    expect(await rail.evaluate((el) => el.scrollLeft)).toBe(before);
   });
 
   for (const width of [360, 768, 1024, 1280, 1440]) {
@@ -613,32 +639,38 @@ test.describe('the browse page', () => {
     ).toBeVisible();
   });
 
-  test('lays out 4 / 3 / 1 columns', async ({ page }) => {
-    const columns = async () => {
-      const tops = await page
-        .locator('main ul li')
-        .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
-      return tops.filter((top) => top === tops[0]).length;
+  test('cards keep a compact width whatever the result count', async ({ page }) => {
+    // This asserted a fixed 4 / 3 / 1 column ladder. A fixed COUNT divides
+    // whatever width is there, so a two-result page rendered two ~440px cards
+    // — a 3:4 poster of that width is 590px of image before a word of text.
+    // The grid sizes the CARD now, so what is worth pinning is the card,
+    // which is also the property somebody complains about when it is wrong.
+    const cardWidth = async () => {
+      const box = await page.locator('main ul li').first().boundingBox();
+      return Math.round(box!.width);
     };
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto('/events');
+    await dismissAutoOverlays(page);
     await expect(page.locator('main ul li').first()).toBeVisible();
-    // FOUR at `lg`, not three. The grid was made denser on purpose — three
-    // columns on a wide screen gave each card ~400px, and a 3:4 poster of that
-    // width is 533px of image before a word of text (see event-grid.tsx). A
-    // screenful now shows twelve events rather than six.
-    expect(await columns()).toBe(4);
 
-    // THREE at `sm`, not two: the grid is `sm:grid-cols-3 lg:grid-cols-4`, and
-    // 800px is past the 640px `sm` breakpoint. The two-column step is below
-    // that, and below `sm` the card becomes a compact ROW rather than a tile,
-    // so the ladder is 4 / 3 / 1 with no two-column state at all.
-    await page.setViewportSize({ width: 800, height: 900 });
-    expect(await columns()).toBe(3);
+    // Between the `minmax` bounds, whatever the viewport and however few
+    // results came back — the failure this replaces was a card stretching far
+    // past them on a sparse page.
+    expect(await cardWidth()).toBeGreaterThanOrEqual(180);
+    expect(await cardWidth()).toBeLessThanOrEqual(250);
 
+    await page.setViewportSize({ width: 1920, height: 900 });
+    expect(await cardWidth()).toBeLessThanOrEqual(250);
+
+    // Below `sm` the card becomes a compact ROW rather than a tile, so it is
+    // full width by design.
     await page.setViewportSize({ width: 390, height: 900 });
-    expect(await columns()).toBe(1);
+    const tops = await page
+      .locator('main ul li')
+      .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+    expect(tops.filter((top) => top === tops[0]).length).toBe(1);
   });
 
   test('the results are one grid, and there is no view to choose', async ({ page }) => {

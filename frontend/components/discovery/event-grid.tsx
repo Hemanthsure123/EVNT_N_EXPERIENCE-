@@ -89,7 +89,19 @@ export function EventGrid({
         // facts — see event-card.tsx), so one column there is already five
         // events per screen. Two columns of that row would be unreadable. The
         // density change starts where the card becomes a portrait tile.
-        'grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-5 lg:grid-cols-4 lg:gap-6 2xl:grid-cols-5',
+        // ── CARDS HAVE A WIDTH, NOT A COLUMN COUNT ─────────────────────────
+        //
+        // This was a fixed ladder (3 / 4 / 5 columns). A fixed count divides
+        // whatever width is available, so a page with TWO results rendered two
+        // cards ~440px wide — a 3:4 poster of that width is 590px of image
+        // before a word of text, which is what "the cards are too large" was
+        // describing. It only looked right when a page happened to be full.
+        //
+        // `auto-fill` + `minmax` fixes the CARD instead: every card is between
+        // 190 and 240px at every width and on every result count, and the grid
+        // simply fits as many as the row holds. Two results are two compact
+        // cards, not two posters.
+        'grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 sm:gap-5 lg:gap-6',
         className,
       )}
     >
@@ -128,7 +140,7 @@ export function EventGrid({
 export function EventGridSkeleton({ count = 6 }: { count?: number }) {
   return (
     <div
-      className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-5 lg:grid-cols-4 lg:gap-6 2xl:grid-cols-5"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:gap-5 lg:gap-6"
       aria-hidden
     >
       {Array.from({ length: count }, (_, i) => (
