@@ -67,7 +67,7 @@ export function HeaderSearchTrigger({ className }: { className?: string }) {
   const barRef = React.useRef<HTMLButtonElement>(null);
   // Capture-phase toggle. A bare `onClick` reads state Radix has already
   // changed — see the note on `triggerProps` in search-context.tsx.
-  const press = triggerProps(() => barRef.current);
+  const press = triggerProps(() => null);
   const motionAllowed = useMotionAllowed();
 
   /**

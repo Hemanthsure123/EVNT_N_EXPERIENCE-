@@ -53,12 +53,6 @@ export function SectionHeader({
   return (
     <div className={cn('flex flex-wrap items-end justify-between gap-x-6 gap-y-2', className)}>
       <div className="flex flex-col gap-1.5 sm:gap-2">
-        <span className="h-0.5 w-8 rounded-full bg-foreground sm:w-10" aria-hidden />
-        {/* Extrabold and tightly tracked, so every section heading on the
-            site matches the weight the hero and "All Events" set. The type
-            scale already carries the SIZE ladder; this is the one place the
-            weight is stated, so a section cannot drift lighter than its
-            neighbours. */}
         <h2 className="text-h4 font-extrabold tracking-tight sm:text-h3 md:text-h2">{title}</h2>
         {subtitle ? (
           <p className="text-caption text-muted-foreground sm:text-body-sm">{subtitle}</p>

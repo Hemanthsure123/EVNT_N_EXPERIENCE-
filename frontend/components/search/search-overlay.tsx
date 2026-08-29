@@ -362,7 +362,7 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           it read as a modal and hide the very context the user is searching
           within. Clicking outside still closes it either way (Radix). */}
       {open && !anchored ? (
-        <div className="fixed inset-0 z-modal bg-overlay/60 animate-in fade-in-0" aria-hidden />
+        <div className="fixed inset-0 z-modal bg-overlay/70 backdrop-blur-sm animate-in fade-in-0" aria-hidden />
       ) : null}
       {/* NO `onPointerDownOutside` GUARD, deliberately.
           One lived here, suppressing the dismissal when a press landed on the

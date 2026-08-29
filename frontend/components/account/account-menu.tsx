@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   CircleHelp,
+  FileText,
   Info,
   LayoutDashboard,
   LifeBuoy,
@@ -227,6 +228,9 @@ export function AccountMenu() {
         <div className="flex flex-col gap-1.5">
           <MenuLink href="/account/settings" icon={Settings} onNavigate={close}>
             Settings
+          </MenuLink>
+          <MenuLink href="/terms" icon={FileText} onNavigate={close}>
+            Terms & conditions
           </MenuLink>
           <MenuLink href="/about" icon={Info} onNavigate={close}>
             About us

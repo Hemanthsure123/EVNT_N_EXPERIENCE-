@@ -255,7 +255,7 @@ export function ResultsView({
   return (
     <div className="flex flex-col">
       {/* Desktop only, gutter and all — see "the count has one home" above. */}
-      <Container className="hidden pb-8 md:block">
+      <Container className="hidden pb-2 md:block">
         <MemoBanner eyebrow={bannerEyebrow} headline={bannerHeadline} backdrop={bannerBackdrop} />
       </Container>
 

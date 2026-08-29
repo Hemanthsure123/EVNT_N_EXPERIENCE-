@@ -192,7 +192,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
 
       {/* The `description` is deliberately NOT rendered — it goes to
           `generateMetadata` only. See the note at the top of this file. */}
-      <Container className="flex flex-col gap-stack pb-block pt-block">
+      <Container className="flex flex-col gap-2 pb-2 pt-4">
         <Breadcrumb items={breadcrumbs(filters, title)} />
         <h1 className="text-h2 md:text-h1">{title}</h1>
       </Container>

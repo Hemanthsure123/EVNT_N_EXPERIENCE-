@@ -148,7 +148,7 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             mean two different pictures of the same event depending on the
             phone, and `aspect-portrait` here is also the floor that stops a
             short card collapsing to the height of three lines of text. */}
-        <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden bg-muted sm:w-full">
+        <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden bg-muted sm:aspect-[4/3] sm:w-full">
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {event.poster_url ? (
             <Image
@@ -157,8 +157,6 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
               fill
               sizes={sizes}
               priority={priority}
-              // Below the fold the browser decides when to fetch; `priority`
-              // above it opts the LCP candidate out of exactly that.
               loading={priority ? undefined : 'lazy'}
               className={cn(
                 'object-cover transition-transform duration-slow ease-out',
@@ -167,35 +165,18 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
               )}
             />
           ) : (
-            // Real backends ship events with no poster; that's a design state,
-            // not a broken image. It is the category's PASTEL tint with the
-            // modelled clay object on it — the same pairing the category tiles
-            // wear — rather than a brand gradient, so a poster-less card reads
-            // as a designed card instead of an advert for the brand.
-            // Full-frame composed artwork rather than one centred icon.
-            // A single icon on a flat tint is fine as one card and wrong as a
-            // GRID — twenty poster-less events produced twenty identical
-            // tiles, which reads as a page that failed to load. The
-            // composition is seeded by the event id, so a screenful reads as a
-            // set of related covers. See `illustrations/poster.tsx`.
             <EventPosterArt slug={category?.slug ?? ''} seed={event.id} className={tint.surface} />
           )}
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 sm:gap-2 sm:p-card lg:p-card-lg">
-          {/* Status and kind, on a plain surface. Renders nothing at all when
-              the event has neither, so a card without them loses the row
-              rather than reserving an empty one — and on the compact row it
-              also disappears when only the CATEGORY chip would be left, since
-              that chip is hidden there and an empty flex row still costs a
-              gap. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 sm:gap-1.5 sm:p-3.5 lg:p-4">
           {badge || category ? (
-            <div className={cn('flex flex-wrap items-center gap-2', !badge && 'hidden sm:flex')}>
+            <div className={cn('flex flex-wrap items-center gap-1.5', !badge && 'hidden sm:flex')}>
               {badge ? <AvailabilityBadge badge={badge} /> : null}
               {category ? (
                 <span
                   className={cn(
-                    'hidden items-center gap-1.5 rounded-full px-2.5 py-0.5 text-caption sm:inline-flex',
+                    'hidden items-center gap-1 rounded-full px-2 py-0.5 text-caption sm:inline-flex',
                     tint.surface,
                     tint.ink,
                   )}
@@ -207,10 +188,7 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             </div>
           ) : null}
 
-          <h3 className="line-clamp-2 text-body font-semibold leading-tight text-foreground sm:text-body-lg">
-            {/* One stretched link makes the whole card the hit area, which
-                leaves the heart separately clickable inside it — nesting it in
-                an <a> would be invalid and unusable. */}
+          <h3 className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground sm:text-body">
             <Link
               href={eventPath(event)}
               className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
@@ -219,22 +197,22 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             </Link>
           </h3>
 
-          <p className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
-            <CalendarDays className="size-4 shrink-0" aria-hidden />
+          <p className="flex items-center gap-1.5 text-caption text-muted-foreground sm:text-body-sm">
+            <CalendarDays className="size-3.5 shrink-0" aria-hidden />
             <time dateTime={machineDate(event.starts_at)} className="truncate">
               {formatEventDateTime(event.starts_at)}
             </time>
           </p>
 
-          <p className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
-            <MapPin className="size-4 shrink-0" aria-hidden />
+          <p className="flex items-center gap-1.5 text-caption text-muted-foreground sm:text-body-sm">
+            <MapPin className="size-3.5 shrink-0" aria-hidden />
             <span className="truncate">
               {event.venue}, {event.city}
             </span>
           </p>
 
           <p className="hidden items-center gap-1.5 text-caption text-foreground-subtle sm:flex">
-            <Building2 className="size-3.5 shrink-0" aria-hidden />
+            <Building2 className="size-3 shrink-0" aria-hidden />
             <span className="truncate">{event.organization_name}</span>
           </p>
 

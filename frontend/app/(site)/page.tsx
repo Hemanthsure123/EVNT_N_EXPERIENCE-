@@ -116,7 +116,7 @@ export default async function HomePage() {
         {/* No subtitle. The eight tiles below say what they are, and a line
             explaining that categories exist for people who did not search is
             us narrating our own information architecture. */}
-        <SectionHeader title="Browse by mood" href="/events" linkLabel="All events" />
+        <SectionHeader title="Browse by mood" />
         <CategoryTiles categories={cms?.categories} />
       </Section>
 
