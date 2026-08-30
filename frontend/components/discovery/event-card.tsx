@@ -197,8 +197,8 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             </Link>
           </h3>
 
-          <p className="flex items-center gap-1.5 text-caption text-muted-foreground sm:text-body-sm">
-            <CalendarDays className="size-3.5 shrink-0" aria-hidden />
+          <p className="flex items-center gap-1.5 text-caption font-medium text-primary sm:font-normal sm:text-muted-foreground">
+            <CalendarDays className="hidden size-3.5 shrink-0 sm:block" aria-hidden />
             <time dateTime={machineDate(event.starts_at)} className="truncate">
               {formatEventDateTime(event.starts_at)}
             </time>

@@ -109,21 +109,34 @@ export function FilterToolbar({
   const toggle = <K extends keyof DiscoveryFilters>(key: K, value: DiscoveryFilters[K]) =>
     onChange({ ...filters, [key]: filters[key] === value ? null : value });
 
-  // Brief order: date -> price -> categories. Categories are last because
-  // they're the ones that should give way first when space runs out.
+  const isAllSelected = !filters.when && !filters.category && !filters.price && !filters.q;
+
   const items = React.useMemo<OverflowItem[]>(
     () => [
+      {
+        key: 'all-chip',
+        node: (
+          <Chip
+            selected={isAllSelected}
+            onClick={() => onChange(EMPTY_FILTERS)}
+            className={isAllSelected ? 'bg-primary text-primary-foreground font-medium' : undefined}
+          >
+            All
+          </Chip>
+        ),
+      },
       ...WHEN_CHIPS.map((chip) => ({
         key: `when-${chip.id}`,
         node: (
-          <Chip selected={filters.when === chip.id} onClick={() => toggle('when', chip.id)}>
+          <Chip
+            selected={filters.when === chip.id}
+            onClick={() => toggle('when', chip.id)}
+            className={filters.when === chip.id ? 'bg-primary text-primary-foreground font-medium' : undefined}
+          >
             {chip.label}
           </Chip>
         ),
       })),
-      // Beside the named windows, not instead of them: "Today" answers the
-      // common question in one tap, and the calendar answers the one the
-      // chips cannot express at all.
       {
         key: 'date-picker',
         node: (
@@ -131,8 +144,6 @@ export function FilterToolbar({
             from={filters.dateFrom}
             to={filters.dateTo}
             onApply={({ from, to }) =>
-              // Choosing explicit dates clears the named window, so the two
-              // never contradict each other in the URL.
               onChange({ ...filters, when: from ? null : filters.when, dateFrom: from, dateTo: to })
             }
           />
@@ -141,7 +152,11 @@ export function FilterToolbar({
       ...PRICE_CHIPS.map((chip) => ({
         key: `price-${chip.id}`,
         node: (
-          <Chip selected={filters.price === chip.id} onClick={() => toggle('price', chip.id)}>
+          <Chip
+            selected={filters.price === chip.id}
+            onClick={() => toggle('price', chip.id)}
+            className={filters.price === chip.id ? 'bg-primary text-primary-foreground font-medium' : undefined}
+          >
             {chip.label}
           </Chip>
         ),
@@ -152,6 +167,7 @@ export function FilterToolbar({
           <Chip
             selected={filters.category === category.slug}
             onClick={() => toggle('category', category.slug)}
+            className={filters.category === category.slug ? 'bg-primary text-primary-foreground font-medium' : undefined}
           >
             <category.icon className="size-3.5" aria-hidden />
             {category.label}
@@ -159,9 +175,8 @@ export function FilterToolbar({
         ),
       })),
     ],
-    // `toggle` closes over `filters`; listing it is what keeps the chips live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filters],
+    [filters, isAllSelected],
   );
 
   return (

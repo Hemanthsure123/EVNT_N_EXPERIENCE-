@@ -611,31 +611,27 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           {/* Not options — so deliberately OUTSIDE the listbox. */}
           {!isSearching ? (
             <div className="px-3 pb-2 pt-3">
-              <p className="pb-2 text-label uppercase tracking-wide text-foreground-subtle">
+              <p className="pb-3 text-label uppercase tracking-wide text-foreground-subtle">
                 Browse by category
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-3 gap-2.5 sm:flex sm:flex-wrap">
                 {CATEGORIES.map((category) => (
                   <button
                     key={category.slug}
                     type="button"
                     onClick={() => go(browseHref({ category: category.slug }))}
-                    // Transparent, not `bg-surface`: the panel is `bg-elevated`,
-                    // which in dark is one rung ABOVE surface — a surface-filled
-                    // chip on it reads as a hole rather than a chip.
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-transparent px-3 py-2 text-label text-foreground transition-colors duration-fast ease-out hover:border-border-strong hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-border bg-surface p-3.5 text-center transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline-flex sm:flex-row sm:items-center sm:gap-1.5 sm:rounded-full sm:border-border sm:bg-transparent sm:px-3 sm:py-2"
                   >
-                    {/* The clay artwork, not the lucide glyph the chip used
-                        to carry. Every other category affordance in the
-                        product — the home tiles, the landing banner — is this
-                        illustration, and a line icon here made the search
-                        panel the one surface with a second visual language
-                        for the same eight things. */}
-                    <ClayIcon slug={category.slug} className="size-6" />
-                    {category.label}
+                    <ClayIcon slug={category.slug} className="size-8 sm:size-6" />
+                    <span className="text-caption font-semibold leading-tight text-foreground sm:text-label sm:font-normal">
+                      {category.label}
+                    </span>
                   </button>
                 ))}
               </div>
+              <p className="mt-4 text-center text-caption text-muted-foreground sm:hidden">
+                Tap a suggestion to open it
+              </p>
             </div>
           ) : null}
 

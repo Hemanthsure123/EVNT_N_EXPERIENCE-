@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check, ChevronDown, Crosshair, Loader2, MapPin, Search, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, Crosshair, Loader2, MapPin, Search, X } from 'lucide-react';
 import {
   ALL_CITIES,
   type City,
@@ -493,7 +493,7 @@ export function CitySwitcher({ className }: { className?: string }) {
             {!searching ? (
               <nav
                 aria-label="Jump to letter"
-                className="flex w-7 shrink-0 flex-col items-center justify-center gap-px overflow-hidden border-l border-border py-2"
+                className="my-auto mr-1 flex flex-col items-center justify-center rounded-full border border-primary/20 bg-primary/5 px-1 py-2 text-caption font-medium text-primary shadow-xs"
               >
                 {groups.map((group) => (
                   <button
@@ -501,7 +501,7 @@ export function CitySwitcher({ className }: { className?: string }) {
                     type="button"
                     onClick={() => jumpToLetter(group.letter)}
                     aria-label={`Jump to ${group.letter}`}
-                    className="flex h-3.5 w-6 items-center justify-center rounded-sm text-caption leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-3.5 w-5 items-center justify-center rounded-full text-[10px] leading-none transition-colors hover:bg-primary/10"
                   >
                     {group.letter}
                   </button>
@@ -516,12 +516,13 @@ export function CitySwitcher({ className }: { className?: string }) {
               type="button"
               onClick={() => choose(null)}
               className={cn(
-                'inline-flex h-control w-full items-center justify-center rounded-full text-label text-muted-foreground transition-colors',
-                'hover:bg-muted hover:text-foreground',
+                'inline-flex h-control w-full items-center justify-center gap-2 rounded-2xl bg-cta text-label text-cta-foreground shadow-sm transition-colors',
+                'hover:bg-cta-hover active:bg-cta-active',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-elevated',
               )}
             >
-              Show events from all cities
+              <span>Show events from all cities</span>
+              <ArrowRight className="size-4 shrink-0" aria-hidden />
             </button>
           </div>
         </ModalContent>
@@ -562,9 +563,14 @@ function CityOption({
       // at. `mousemove` only fires when the pointer actually moved.
       onMouseMove={onHover}
       onClick={onSelect}
-      className={cn(ROW_CLASS, active ? 'bg-muted' : 'bg-transparent')}
+      className={cn(
+        ROW_CLASS,
+        selected ? 'bg-primary/10 font-medium' : active ? 'bg-muted' : 'bg-transparent',
+      )}
     >
-      <span className="min-w-0 flex-1 truncate text-body-sm text-foreground">{city.name}</span>
+      <span className={cn('min-w-0 flex-1 truncate text-body-sm', selected ? 'text-primary font-medium' : 'text-foreground')}>
+        {city.name}
+      </span>
       {/* The state is the disambiguator, not decoration — there is an Aurangabad
           in two states and a Bilaspur in three. */}
       <span className="shrink-0 truncate text-caption text-muted-foreground">{city.state}</span>
