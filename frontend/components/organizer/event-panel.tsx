@@ -2,14 +2,15 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { AlertTriangle, BarChart3, Clock, ExternalLink, Receipt, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { AlertTriangle, BarChart3, Clock, CopyPlus, ExternalLink, Loader2, Receipt, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent } from '@/components/ui/drawer';
 import { formatMoney } from '@/lib/discovery/format';
 import type { EventRow } from '@/lib/api/organizer';
 import { eventBadge } from '@/lib/organizer/event-status';
 import { useEventAnalytics, useInvalidateOrganizer } from '@/lib/organizer/queries';
-import { publishEvent } from '@/lib/api/organizer-writes';
+import { cloneEvent, publishEvent } from '@/lib/api/organizer-writes';
 import { CancelEventButton } from './cancel-event';
 import { describePublishFailure } from '@/lib/organizer/publish-error';
 import { submitBlockers } from '@/lib/organizer/submit-gate';
@@ -105,6 +106,7 @@ export function EventPanel({ row, onClose }: { row: EventRow | null; onClose: ()
                   Public page
                 </PanelAction>
               ) : null}
+              <CloneEventButton eventId={shown.id} onClose={onClose} />
               {/* Last, and quiet. It renders only for `live`/`paused` — the
                   states with somebody to tell — and it is the one control here
                   that spends money, so it is a ghost button behind a typed
@@ -403,5 +405,38 @@ function ModerationBanner({ row }: { row: EventRow }) {
         Resubmit for approval
       </Button>
     </div>
+  );
+}
+
+function CloneEventButton({ eventId, onClose }: { eventId: string; onClose: () => void }) {
+  const router = useRouter();
+  const invalidate = useInvalidateOrganizer();
+  const [cloning, setCloning] = React.useState(false);
+
+  const handleClone = async () => {
+    try {
+      setCloning(true);
+      const res = await cloneEvent(eventId);
+      await invalidate();
+      onClose();
+      router.push(`/dashboard/events?event=${res.id}`);
+    } catch (err) {
+      console.error('Failed to clone event', err);
+    } finally {
+      setCloning(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={handleClone}
+      disabled={cloning}
+      className={TOOLBAR_CONTROL}
+    >
+      {cloning ? <Loader2 className="size-4 animate-spin" /> : <CopyPlus className="size-4" />}
+      <span>{cloning ? 'Cloning...' : 'Clone Event'}</span>
+    </Button>
   );
 }

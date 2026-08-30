@@ -136,6 +136,12 @@ export const archiveEvent = (eventId: string) =>
 export const duplicateEvent = (eventId: string) =>
   api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/duplicate`, {});
 
+/**
+ * Clone a past or existing event into a fresh draft.
+ */
+export const cloneEvent = (eventId: string) =>
+  api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/clone`, {});
+
 /** What a cancellation actually did. A bare 200 would leave an organiser who
  *  just spent money with no idea how much. */
 export type CancelEventResult = {

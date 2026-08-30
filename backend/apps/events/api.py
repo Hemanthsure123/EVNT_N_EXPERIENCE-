@@ -292,18 +292,19 @@ class EventArchiveView(APIView):
 
 
 class EventDuplicateView(APIView):
-    """Copy an event into a fresh draft. Organizer-only.
+    """Copy an event into a fresh draft. Organizer-only."""
 
-    A POST that CREATES, so it answers 201 with the new event — the caller
-    needs the new id to navigate to, and returning the source would look like
-    nothing happened.
+    permission_classes = [IsAuthenticated]
 
-    The response deliberately carries no ticket types, because the clone has
-    none: they belong to `ticketing`, and dependencies point one way. The copy
-    cannot be published until the organizer adds a tier, which is the publish
-    check `ticketing` registers — the frontend says so on the way in rather
-    than letting them find out at the gate.
-    """
+    @extend_schema(request=None, responses={201: EventDetailSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        service = build_event_service()
+        event = service.duplicate_event(event_id=event_id, actor_id=cast(User, request.user).id)
+        return _no_store(Response(EventDetailSerializer(event).data, status=201))
+
+
+class EventCloneView(APIView):
+    """Clone an event into a fresh draft for an organizer."""
 
     permission_classes = [IsAuthenticated]
 

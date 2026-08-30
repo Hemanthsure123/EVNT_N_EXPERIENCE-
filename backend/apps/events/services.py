@@ -656,7 +656,23 @@ class EventService:
                 organization_id=source.organization_id,
                 fields={**fields, "title": title, "slug": event_slug(title)},
             )
-            self._events.copy_content_to(source_id=source.id, target_id=clone.id)
+            slot_map = self._events.copy_content_to(source_id=source.id, target_id=clone.id)
+
+            from apps.ticketing.repositories import TicketTypeRepository
+
+            tt_repo = TicketTypeRepository()
+            tt_repo.copy_ticket_types_to(
+                source_event_id=source.id,
+                target_event_id=clone.id,
+                slot_map=slot_map,
+            )
+
+            agg = tt_repo.aggregate_event_availability(clone.id)
+            self._events.set_ticketing_fields(
+                event_id=clone.id,
+                from_price_minor=agg["from_price_minor"],
+                tickets_available=agg["tickets_available"],
+            )
 
             uow.publish(
                 EVENT_CREATED,

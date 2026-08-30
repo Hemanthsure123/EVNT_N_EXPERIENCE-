@@ -501,7 +501,7 @@ export function CitySwitcher({ className }: { className?: string }) {
                     type="button"
                     onClick={() => jumpToLetter(group.letter)}
                     aria-label={`Jump to ${group.letter}`}
-                    className="flex h-3.5 w-5 items-center justify-center rounded-full text-[10px] leading-none transition-colors hover:bg-primary/10"
+                    className="flex h-3.5 w-5 items-center justify-center rounded-full text-caption leading-none transition-colors hover:bg-primary/10"
                   >
                     {group.letter}
                   </button>

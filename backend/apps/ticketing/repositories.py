@@ -217,6 +217,54 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             ]
         )
 
+    def copy_ticket_types_to(
+        self,
+        *,
+        source_event_id: uuid.UUID | str,
+        target_event_id: uuid.UUID | str,
+        slot_map: dict[str, str] | None = None,
+    ) -> None:
+        """Copy all active ticket types (and their sale phases) from source_event_id to target_event_id,
+        resetting sold=0 and reserved=0."""
+        slot_map = slot_map or {}
+        source_tiers = (
+            self.get_queryset()
+            .filter(event_id=source_event_id, deleted_at__isnull=True)
+            .prefetch_related("phases")
+        )
+        for src in source_tiers:
+            target_slot_id = slot_map.get(str(src.slot_id)) if src.slot_id else None
+            new_tt = TicketType.objects.create(
+                event_id=target_event_id,
+                slot_id=target_slot_id,
+                name=src.name,
+                description=src.description,
+                perks=list(src.perks or []),
+                position=src.position,
+                price_minor=src.price_minor,
+                quantity=src.quantity,
+                sold=0,
+                reserved=0,
+                sale_start=src.sale_start,
+                sale_end=src.sale_end,
+                max_per_order=src.max_per_order,
+            )
+            phases = list(src.phases.all())
+            if phases:
+                SalePhase.objects.bulk_create(
+                    [
+                        SalePhase(
+                            ticket_type_id=new_tt.id,
+                            name=p.name,
+                            price_minor=p.price_minor,
+                            ends_at=p.ends_at,
+                            quantity=p.quantity,
+                            position=p.position,
+                        )
+                        for p in phases
+                    ]
+                )
+
     def update_if_version_matches(
         self, *, ticket_type_id: uuid.UUID | str, expected_version: int, changes: dict
     ) -> bool:
