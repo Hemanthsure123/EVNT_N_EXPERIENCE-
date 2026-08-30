@@ -20,7 +20,6 @@ import {
   toServerQuery,
 } from '@/lib/discovery/filters';
 import { useOnline } from '@/lib/utils/use-online';
-import { CategoryBanner } from './category-banner';
 import { EventGrid, EventGridSkeleton } from './event-grid';
 import { FilterDrawer } from './filter-drawer';
 import { FilterToolbar } from './filter-toolbar';
@@ -86,7 +85,6 @@ const MAX_AUTO_PAGES = 5;
 /** The grid is the expensive subtree; skip it whenever its inputs are unchanged. */
 const MemoEventGrid = React.memo(EventGrid);
 /** Re-renders only when its own inputs change, not on every chip tap. */
-const MemoBanner = React.memo(CategoryBanner);
 const MemoToolbar = React.memo(FilterToolbar);
 
 export type ResultsViewProps = {
@@ -96,12 +94,6 @@ export type ResultsViewProps = {
   initialEvents: EventCardData[];
   initialNext: string | null;
   initialError: string | null;
-  /** Banner copy, resolved on the server from the filters. */
-  bannerEyebrow: string;
-  /** Optional: the unfiltered list carries a photograph and no sentence. */
-  bannerHeadline?: string;
-  /** Server-rendered backdrop `<Image>`, so the photo is in the initial HTML. */
-  bannerBackdrop?: React.ReactNode;
 };
 
 export function ResultsView({
@@ -110,9 +102,6 @@ export function ResultsView({
   initialEvents,
   initialNext,
   initialError,
-  bannerEyebrow,
-  bannerHeadline,
-  bannerBackdrop,
 }: ResultsViewProps) {
   const [filters, setFilters] = React.useState(initialFilters);
   // The grid lags the controls by a frame or two on purpose — see the note above.
@@ -254,11 +243,6 @@ export function ResultsView({
 
   return (
     <div className="flex flex-col">
-      {/* Desktop only, gutter and all — see "the count has one home" above. */}
-      <Container className="hidden pb-2 md:block">
-        <MemoBanner eyebrow={bannerEyebrow} headline={bannerHeadline} backdrop={bannerBackdrop} />
-      </Container>
-
       <MemoToolbar
         filters={filters}
         onChange={updateFilters}

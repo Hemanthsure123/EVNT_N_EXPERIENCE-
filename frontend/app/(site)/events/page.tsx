@@ -1,8 +1,5 @@
 import * as React from 'react';
-import Image from 'next/image';
 import type { Metadata } from 'next';
-import { Container } from '@/components/shell/container';
-import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { ResultsView } from '@/components/discovery/results-view';
 import { fetchEventsSafe } from '@/lib/api/events';
 import { categoryBySlug } from '@/lib/discovery/categories';
@@ -79,21 +76,6 @@ function describe(filters: DiscoveryFilters): {
   };
 }
 
-function breadcrumbs(filters: DiscoveryFilters, title: string): BreadcrumbItem[] {
-  const trail: BreadcrumbItem[] = [{ label: 'Home', href: '/' }];
-  if (filters.city) {
-    trail.push({ label: filters.city, href: browseHref({ city: filters.city }) });
-  }
-  if (filters.category) {
-    const category = categoryBySlug(filters.category);
-    if (category) trail.push({ label: category.label, href: `/categories/${category.slug}` });
-  }
-  // The last crumb is always the page you're on, and is never a link — so a
-  // trail that would otherwise end on a link gets the current view appended.
-  if (trail.length === 1 || filters.q || filters.when) trail.push({ label: title });
-  return trail;
-}
-
 /**
  * Where a filtered browse URL should consolidate its ranking.
  *
@@ -163,26 +145,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
   const filters = filtersFromSearchParams(searchParams);
   const query = toServerQuery(filters);
   const { events, next, error } = await fetchEventsSafe({ ...query, page_size: 20 });
-  const { title, bannerEyebrow, bannerHeadline, indexable } = describe(filters);
-
-  // The banner's photograph is the top result's own poster — a real image of
-  // something actually on this page, rather than stock. See category-banner.tsx.
-  const backdrop = events[0]?.poster_url ? (
-    <Image
-      src={events[0].poster_url}
-      alt=""
-      fill
-      // It's blurred under a heavy scrim, so a small source is plenty — asking
-      // for a full-width hero render here would be pure waste. And below `md`
-      // the banner is `display:none` (results-view.tsx), so the media condition
-      // resolves the preload to the smallest candidate in the srcset instead of
-      // a poster nobody on a phone will ever see. `priority` stays: on desktop
-      // the photograph is above the fold and this is still its preload.
-      sizes="(min-width: 768px) 640px, 1px"
-      priority
-      className="object-cover"
-    />
-  ) : null;
+  const { title, indexable } = describe(filters);
 
   return (
     <div className="flex flex-col">
@@ -190,22 +153,12 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
         <JsonLd data={eventItemListJsonLd(title, events.map(eventToJsonLd))} />
       ) : null}
 
-      {/* The `description` is deliberately NOT rendered — it goes to
-          `generateMetadata` only. See the note at the top of this file. */}
-      <Container className="flex flex-col gap-2 pb-2 pt-4">
-        <Breadcrumb items={breadcrumbs(filters, title)} />
-        <h1 className="text-h2 md:text-h1">{title}</h1>
-      </Container>
-
       <ResultsView
         initialFilters={filters}
         initialQuery={query}
         initialEvents={events}
         initialNext={next}
         initialError={error}
-        bannerEyebrow={bannerEyebrow}
-        bannerHeadline={bannerHeadline}
-        bannerBackdrop={backdrop}
       />
     </div>
   );
