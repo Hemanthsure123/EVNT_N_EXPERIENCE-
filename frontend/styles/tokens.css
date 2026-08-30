@@ -492,10 +492,8 @@
      JS never runs: the identity row plus the search row's 3.5rem. They are
      deliberately a little generous, because a sticky bar sitting slightly too
      low is invisible and one sitting too high is the bug this replaces. */
-  --header-total: calc(var(--header-height) + 3.5rem);
-  --header-total-lg: calc(var(--header-height-lg) + 3.5rem);
-  --sticky-top: calc(var(--header-total) + 0.5rem);
-  --sticky-top-lg: calc(var(--header-total-lg) + 0.5rem);
+  --sticky-top: var(--header-total);
+  --sticky-top-lg: var(--header-total-lg);
 
   /* The ticket list's floor. A tier card is ~9rem; the scroll region between
      the pinned header and the pinned footer must never be shorter than one of

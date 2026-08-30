@@ -186,7 +186,7 @@ export function Header({ logo, nav, search, belowBar, actions, className }: Head
           <div className="flex shrink-0 items-center justify-end gap-0.5 sm:gap-1">{actions}</div>
         </Container>
 
-        {belowBar ? <Container className="pb-3 pt-0">{belowBar}</Container> : null}
+        {belowBar ? <Container className="pb-1.5 pt-0">{belowBar}</Container> : null}
 
         <RouteProgress />
       </header>

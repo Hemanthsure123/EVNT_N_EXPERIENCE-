@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Ticket,
   User as UserIcon,
+  X,
 } from 'lucide-react';
 import { Drawer, DrawerClose, DrawerContent, DrawerTrigger } from '@/components/ui/drawer';
 import { IdentityAvatar } from '@/components/ui/avatar';
@@ -70,13 +71,18 @@ export function AccountMenu() {
         />
       </DrawerTrigger>
 
-      <DrawerContent side="right" bare className="w-full max-w-md bg-muted/40 border-l shadow-2xl flex flex-col h-full">
+      <DrawerContent side="right" bare className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
         {/* District Top Header Bar */}
-        <div className="flex items-center gap-3 border-b border-border bg-surface px-5 py-4 shrink-0">
+        <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+              <ArrowLeft className="size-5" aria-hidden />
+            </DrawerClose>
+            <h2 className="text-body-lg font-bold text-foreground">Profile</h2>
+          </div>
           <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-            <ArrowLeft className="size-5" aria-hidden />
+            <X className="size-5" aria-hidden />
           </DrawerClose>
-          <h2 className="text-body-lg font-bold text-foreground">Profile</h2>
         </div>
 
         {/* Scrollable Drawer Body */}

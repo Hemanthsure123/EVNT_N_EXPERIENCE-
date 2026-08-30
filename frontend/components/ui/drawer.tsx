@@ -18,8 +18,8 @@ const drawerVariants = cva(
         bottom:
           'inset-x-0 bottom-0 max-h-[90vh] rounded-t-2xl border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
         right:
-          'inset-y-0 right-0 h-full w-3/4 max-w-sm border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
-        left: 'inset-y-0 left-0 h-full w-3/4 max-w-sm border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
+          'inset-y-0 right-0 h-full w-full max-w-md border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+        left: 'inset-y-0 left-0 h-full w-full max-w-md border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
         /**
          * A bottom sheet where the thumb is, a left slide-over where there's
          * room for one. Same component, so the contents are written once.
@@ -53,12 +53,7 @@ export const DrawerContent = React.forwardRef<
 >(function DrawerContent({ className, children, side = 'bottom', hideClose, bare, ...props }, ref) {
   return (
     <DialogPrimitive.Portal>
-      {/* A plain scrim, NOT a backdrop-filter. A full-viewport blur is the most
-          expensive paint this app can ask for — it measurably lengthened the
-          open interaction on a throttled CPU — and over a dimmed page it is
-          nearly indistinguishable from the scrim alone. Real blur is reserved
-          for the two small persistent bars (see `.glass` in globals.css). */}
-      <DialogPrimitive.Overlay className="fixed inset-0 z-drawer bg-overlay/70 animate-in fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-drawer bg-black/60 backdrop-blur-sm animate-in fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(drawerVariants({ side }), className)}
