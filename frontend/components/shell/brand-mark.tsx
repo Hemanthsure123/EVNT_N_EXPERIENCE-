@@ -1,44 +1,10 @@
+/* eslint-disable local-rules/no-raw-values, @next/next/no-img-element */
 import * as React from 'react';
 import { BRAND_NAME } from '@/lib/brand';
 import { cn } from '@/lib/utils/cn';
 
 /**
- * The Curatix mark — a "CX" monogram, drawn as SVG rather than shipped as a
- * raster.
- *
- * ── WHY SVG AND NOT THE PNG ───────────────────────────────────────────────
- *
- * The supplied artwork is a PNG on a black field. Three things follow from
- * that which a vector does not suffer:
- *
- *  1. **Transparency is structural, not edited.** Knocking a background out of
- *     a raster leaves haloed anti-aliased edges wherever the mark meets the
- *     old colour — visible the moment it sits on the light theme's warm
- *     surface. There is nothing to knock out here; the strokes ARE the image.
- *  2. **It is sharp at every size.** The same file serves a 20px header, a
- *     512px PWA icon and a print sheet. A 1024px PNG scaled to 20 is mush and
- *     ~200KB for the privilege; this is under 1KB inline with no request.
- *  3. **It can react to the theme.** The strokes are `currentColor`, so the
- *     header, the footer's tinted band and a disabled state all recolour it
- *     without a second asset.
- *
- * If you want the exact supplied artwork instead, drop it at
- * `frontend/public/curatix-mark.svg` and this component can point at it — but
- * export it as SVG from the source file rather than tracing the PNG.
- *
- * ── THE MARK IS INK NOW, NOT A GRADIENT ───────────────────────────────────
- *
- * It used to be a violet→pink linear gradient, which put the loudest two
- * colours in the palette in the most prominent slot on every page. In a
- * light-first, image-forward product the photography carries the colour and
- * the chrome is quiet, so the strokes are `currentColor` — near-black in the
- * light header, near-white in dark, inherited wherever it is placed. That also
- * retires the `<defs>`/`useId` indirection this file used to need: SVG
- * gradient ids are DOCUMENT-global, so two marks on one page (header + footer,
- * i.e. every page) shared one definition unless each instance minted its own.
- * No gradient, no id, no collision.
- *
- * The one surviving brand colour is the full stop in `BrandLockup` below.
+ * The Curatix mark — a ticket stub with a location pin marker.
  */
 export function BrandMark({
   className,
@@ -48,55 +14,92 @@ export function BrandMark({
   /** Empty string marks it decorative, for use beside a visible wordmark. */
   title?: string;
 }) {
+  const id = React.useId();
+  const gradId = `curatix-mark-grad-${id.replace(/:/g, '')}`;
+
   return (
     <svg
-      viewBox="0 0 48 48"
+      viewBox="0 0 44 32"
       role={title ? 'img' : 'presentation'}
       aria-label={title || undefined}
       aria-hidden={title ? undefined : true}
-      className={cn('size-7 shrink-0', className)}
+      className={cn('h-7 w-auto shrink-0', className)}
     >
-      {/* The C: an open ring, drawn as a stroked arc so the counter stays
-          crisp at 20px where a filled shape would close up. */}
+      <defs>
+        <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1B5BFF" />
+          <stop offset="100%" stopColor="#9B1BFF" />
+        </linearGradient>
+      </defs>
+
+      {/* Ticket Body Stub */}
       <path
-        d="M30 12.5a14 14 0 1 0 0 23"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="4.5"
-        strokeLinecap="round"
+        d="M 14,2
+           C 6,2 2,8 2,16
+           C 2,24 6,30 14,30
+           L 36,30
+           C 36,28.5 37,27.5 38,27.5
+           C 39,27.5 40,28.5 40,30
+           L 42,30
+           C 42,24 38,21 38,16
+           C 38,11 42,8 42,2
+           L 40,2
+           C 40,3.5 39,4.5 38,4.5
+           C 37,4.5 36,3.5 36,2
+           Z"
+        fill={`url(#${gradId})`}
       />
-      {/* The X, overlapping the C's opening exactly as the supplied mark does. */}
+
+      {/* Perforation Dots */}
+      <circle cx="34" cy="8" r="1.1" fill="#FFFFFF" opacity="0.95" />
+      <circle cx="34" cy="13.3" r="1.1" fill="#FFFFFF" opacity="0.95" />
+      <circle cx="34" cy="18.6" r="1.1" fill="#FFFFFF" opacity="0.95" />
+      <circle cx="34" cy="24" r="1.1" fill="#FFFFFF" opacity="0.95" />
+
+      {/* Location Pin inside Ticket */}
       <path
-        d="M27 15.5 42 32.5M42 15.5 27 32.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="4.5"
-        strokeLinecap="round"
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M 16,7.5
+           C 11.3,7.5 7.5,11.3 7.5,16
+           C 7.5,20.5 11.5,24.5 16,28.5
+           C 20.5,24.5 24.5,20.5 24.5,16
+           C 24.5,11.3 20.7,7.5 16,7.5
+           Z
+           M 16,13.5
+           A 2.5,2.5 0 1,0 16,18.5
+           A 2.5,2.5 0 1,0 16,13.5
+           Z"
+        fill="#FFFFFF"
       />
     </svg>
   );
 }
 
 /**
- * Mark plus wordmark — what the header and the footer render.
- *
- * The word is TEXT, not part of the SVG: it stays selectable, searchable,
- * translatable and legible to a screen reader, and it inherits the type scale
- * instead of being a fixed-size picture of a word.
- *
- * The full stop is the product's ONE decorative use of the wayfinding violet.
- * It was pink-500, which is 3.52:1 on white — below AA for a text glyph, and
- * pink no longer exists in the semantic palette at all. `--accent` is the
- * deeper violet now: 7.10:1 in light, 10.05:1 in dark.
+ * Mark plus wordmark — renders the official Curatix logo assets:
+ * Light mode: /curatix-logo.png
+ * Dark mode: /curatix-logo-dark.png
  */
-export function BrandLockup({ className }: { className?: string }) {
+export function BrandLockup({
+  className,
+  collapsed = false,
+}: {
+  className?: string;
+  collapsed?: boolean;
+}) {
   return (
-    <span className={cn('inline-flex items-center gap-2', className)}>
-      <BrandMark title="" />
-      <span className="font-display text-h4 tracking-tight">
-        {BRAND_NAME}
-        <span className="text-accent">.</span>
-      </span>
+    <span className={cn('inline-flex items-center gap-2.5 shrink-0', className)}>
+      <img
+        src="/curatix-logo.png"
+        alt={BRAND_NAME}
+        className={cn('h-7 w-auto object-contain dark:hidden', collapsed && 'h-6')}
+      />
+      <img
+        src="/curatix-logo-dark.png"
+        alt={BRAND_NAME}
+        className={cn('hidden h-7 w-auto object-contain dark:block', collapsed && 'h-6')}
+      />
     </span>
   );
 }

@@ -20,7 +20,7 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { useScope } from '@/lib/identity/scope';
 import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib/organizer/nav';
 import { useSidebar } from '@/lib/organizer/use-sidebar';
-import { BrandMark } from '@/components/shell/brand-mark';
+import { BrandLockup, BrandMark } from '@/components/shell/brand-mark';
 import { SceneWelcome } from '@/components/illustrations/onboarding-scenes';
 import { SpotListing } from '@/components/illustrations/spots';
 import { cn } from '@/lib/utils/cn';
@@ -193,8 +193,11 @@ function Sidebar({
                 brand change under them. `BrandMark` is the one definition
                 (`components/shell/brand-mark.tsx`); it inherits `currentColor`,
                 so it takes the sidebar's ink without a second asset. */}
-            <BrandMark className="size-5 shrink-0 text-foreground" title="" />
-            <span className={cn('truncate', collapsed && 'lg:sr-only')}>Curatix</span>
+            {collapsed ? (
+              <BrandMark title="Curatix" className="h-6 w-auto" />
+            ) : (
+              <BrandLockup />
+            )}
           </Link>
           <Button
             variant="ghost"

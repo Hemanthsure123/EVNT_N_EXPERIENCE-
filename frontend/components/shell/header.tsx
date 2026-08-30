@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { BrandMark } from '@/components/shell/brand-mark';
+import { BrandLockup } from '@/components/shell/brand-mark';
 import { BRAND_NAME } from '@/lib/brand';
 import { cn } from '@/lib/utils/cn';
 import { Container } from './container';
@@ -159,18 +159,9 @@ export function Header({ logo, nav, search, belowBar, actions, className }: Head
               <Link
                 href="/"
                 aria-label={`${BRAND_NAME} — home`}
-                className="group inline-flex shrink-0 items-center gap-2 rounded-full py-1 pr-2 font-display text-h4 tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="group inline-flex shrink-0 items-center gap-2 rounded-full py-1 pr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
-                {/* `currentColor`, so the mark is the same ink as the wordmark
-                    beside it and flips with the theme — see brand-mark.tsx. */}
-                <BrandMark
-                  title=""
-                  className="size-7 transition-transform duration-base ease-spring group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-                />
-                <span className="transition-opacity duration-fast ease-out group-hover:opacity-80">
-                  {BRAND_NAME}
-                  <span className="text-accent">.</span>
-                </span>
+                <BrandLockup className="transition-opacity duration-fast ease-out group-hover:opacity-80" />
               </Link>
             )}
             {nav}

@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { BrandMark } from '@/components/shell/brand-mark';
+import { BrandLockup } from '@/components/shell/brand-mark';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { BRAND_NAME } from '@/lib/brand';
 import { AuthPanel } from './auth-panel';
@@ -122,13 +122,7 @@ export function SignInScreen() {
         // under the 44px touch floor for what is a real navigation target.
         className="inline-flex min-h-control items-center justify-center gap-2 self-center rounded-md px-2 transition-opacity duration-fast hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background"
       >
-        <BrandMark title="" className="size-9" />
-        <span className="font-display text-h3">
-          {BRAND_NAME}
-          {/* violet-700 on white is 7.10:1 — this used to be pink-500 at
-              3.52:1, a text glyph below AA. */}
-          <span className="text-accent">.</span>
-        </span>
+        <BrandLockup />
       </Link>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-md">

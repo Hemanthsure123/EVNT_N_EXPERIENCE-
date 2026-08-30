@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { ADMIN_SECTIONS, adminBreadcrumbs } from '@/lib/admin/nav';
-import { BrandMark } from '@/components/shell/brand-mark';
+import { BrandLockup } from '@/components/shell/brand-mark';
 import { cn } from '@/lib/utils/cn';
 import { AdminCommandPalette } from './command-palette';
 import { useAdminAttentionBadge } from './attention-panel';
@@ -213,8 +213,7 @@ function Sidebar({
                 brand change under them. `BrandMark` is the one definition
                 (`components/shell/brand-mark.tsx`); it inherits `currentColor`,
                 so it takes the sidebar's ink without a second asset. */}
-            <BrandMark className="size-5 shrink-0 text-foreground" title="" />
-            <span className="truncate">Curatix</span>
+            <BrandLockup />
           </Link>
           <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-caption text-secondary-foreground">
             Console

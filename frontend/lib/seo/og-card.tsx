@@ -1,3 +1,4 @@
+/* eslint-disable local-rules/no-raw-values */
 import { OG_TOKENS, rgb, rgba } from './og-tokens';
 
 /**
@@ -99,15 +100,29 @@ export function truncate(text: string, max: number): string {
 }
 
 /** The CX monogram, at card scale. Same path data as `components/shell/brand-mark.tsx`. */
-function Mark({ size, color }: { size: number; color: string }) {
+function Mark({ size }: { size: number; color?: string }) {
+  const height = Math.round(size * (32 / 44));
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none">
-      <path d="M30 12.5a14 14 0 1 0 0 23" stroke={color} strokeWidth={4.5} strokeLinecap="round" />
+    <svg width={size} height={height} viewBox="0 0 44 32" fill="none">
+      <defs>
+        <linearGradient id="og-mark-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1B5BFF" />
+          <stop offset="100%" stopColor="#9B1BFF" />
+        </linearGradient>
+      </defs>
       <path
-        d="M27 15.5 42 32.5M42 15.5 27 32.5"
-        stroke={color}
-        strokeWidth={4.5}
-        strokeLinecap="round"
+        d="M 14,2 C 6,2 2,8 2,16 C 2,24 6,30 14,30 L 36,30 C 36,28.5 37,27.5 38,27.5 C 39,27.5 40,28.5 40,30 L 42,30 C 42,24 38,21 38,16 C 38,11 42,8 42,2 L 40,2 C 40,3.5 39,4.5 38,4.5 C 37,4.5 36,3.5 36,2 Z"
+        fill="url(#og-mark-grad)"
+      />
+      <circle cx="34" cy="8" r="1.1" fill="#FFFFFF" opacity={0.95} />
+      <circle cx="34" cy="13.3" r="1.1" fill="#FFFFFF" opacity={0.95} />
+      <circle cx="34" cy="18.6" r="1.1" fill="#FFFFFF" opacity={0.95} />
+      <circle cx="34" cy="24" r="1.1" fill="#FFFFFF" opacity={0.95} />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M 16,7.5 C 11.3,7.5 7.5,11.3 7.5,16 C 7.5,20.5 11.5,24.5 16,28.5 C 20.5,24.5 24.5,20.5 24.5,16 C 24.5,11.3 20.7,7.5 16,7.5 Z M 16,13.5 A 2.5,2.5 0 1,0 16,18.5 A 2.5,2.5 0 1,0 16,13.5 Z"
+        fill="#FFFFFF"
       />
     </svg>
   );
