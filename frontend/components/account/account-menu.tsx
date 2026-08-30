@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   Building2,
@@ -35,6 +35,7 @@ export function AccountMenu() {
   const { user, signOut } = useAuth();
   const { isAdmin, isOrganizer, organizations, active, switchTo, ready } = useScope();
   const router = useRouter();
+  const pathname = usePathname() ?? '';
   const [open, setOpen] = React.useState(false);
 
   const name = user?.full_name || user?.email || 'Your account';
@@ -71,7 +72,7 @@ export function AccountMenu() {
         />
       </DrawerTrigger>
 
-      <DrawerContent side="right" bare className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
+      <DrawerContent side="right" bare hideClose className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
         {/* District Top Header Bar */}
         <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4 shrink-0">
           <div className="flex items-center gap-3">
@@ -125,6 +126,19 @@ export function AccountMenu() {
                     router.push('/account');
                   }}
                 />
+                {isAdmin ? (
+                  <ScopeRow
+                    active={pathname.startsWith('/admin')}
+                    icon={<ShieldCheck className="size-4" aria-hidden />}
+                    label="Operator console"
+                    hint="Platform administration"
+                    href="/admin"
+                    onSelect={() => {
+                      close();
+                      router.push('/admin');
+                    }}
+                  />
+                ) : null}
                 {organizations.map((organization) => (
                   <ScopeRow
                     key={organization.id}
@@ -221,27 +235,18 @@ function ScopeRow({
   icon,
   label,
   hint,
+  href,
   onSelect,
 }: {
   active: boolean;
   icon: React.ReactNode;
   label: string;
   hint: string;
+  href?: string;
   onSelect: () => void;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      role="menuitemradio"
-      aria-checked={active}
-      className={cn(
-        rowClass,
-        active
-          ? 'border border-border-strong bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
-          : 'text-foreground hover:bg-muted/60',
-      )}
-    >
+  const content = (
+    <>
       <span className={cn('shrink-0', active ? 'text-nav-active-foreground' : 'text-muted-foreground')}>
         {icon}
       </span>
@@ -257,6 +262,42 @@ function ScopeRow({
         </span>
       </span>
       {active ? <Check className="size-4 shrink-0 text-nav-active-foreground" aria-hidden /> : null}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        onClick={onSelect}
+        role="menuitemradio"
+        aria-checked={active}
+        className={cn(
+          rowClass,
+          active
+            ? 'border border-border-strong bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
+            : 'text-foreground hover:bg-muted/60',
+        )}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      role="menuitemradio"
+      aria-checked={active}
+      className={cn(
+        rowClass,
+        active
+          ? 'border border-border-strong bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
+          : 'text-foreground hover:bg-muted/60',
+      )}
+    >
+      {content}
     </button>
   );
 }

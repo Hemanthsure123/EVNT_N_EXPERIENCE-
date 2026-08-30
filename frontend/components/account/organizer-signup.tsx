@@ -448,6 +448,7 @@ function PayoutAccountButton({ organization }: { organization: Organization }) {
     mutationFn: () => linkPayoutAccount(organization.id),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['account', 'organizations'] });
+      void client.invalidateQueries({ queryKey: ['identity', 'organizations'] });
       toast.toast({
         title: linked ? 'Payout account updated' : 'Payout account added',
         description: 'Settlements for your events release to this account.',

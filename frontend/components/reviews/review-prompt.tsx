@@ -110,7 +110,7 @@ export function ReviewPrompt() {
 
   return (
     <Modal open={open} onOpenChange={(next: boolean) => !next && close()}>
-      <ModalContent className="sm:max-w-md">
+      <ModalContent hideClose className="sm:max-w-md">
         <div className="flex flex-col gap-stack">
           <div className="flex items-start gap-3">
             <EventThumb event={target} />

@@ -82,7 +82,9 @@ class OrganizationService:
         if org is None:
             raise OrganizationNotFoundError(str(organization_id))
         if str(org.owner_id) != str(actor_id):
-            raise NotOrganizationOwnerError()
+            user = self._users.get_by_id(actor_id)
+            if user is None or not user.is_staff:
+                raise NotOrganizationOwnerError()
         return org
 
     def create_organization(
