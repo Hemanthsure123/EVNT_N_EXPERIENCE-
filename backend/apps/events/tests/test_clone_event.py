@@ -71,6 +71,7 @@ def test_clone_event_flow_success(api_client, owner, organization, make_event, t
     cloned_tiers = TicketType.objects.filter(event=cloned_event)
     assert cloned_tiers.count() == 1
     cloned_tt = cloned_tiers.first()
+    assert cloned_tt is not None
     assert cloned_tt.name == "General Admission"
     assert cloned_tt.price_minor == 150000
     assert cloned_tt.quantity == 100
@@ -86,7 +87,9 @@ def test_clone_event_flow_success(api_client, owner, organization, make_event, t
     # Verify media copied
     cloned_media = EventMedia.objects.filter(event=cloned_event)
     assert cloned_media.count() == 1
-    assert cloned_media.first().url == "https://example.com/banner.jpg"
+    media_item = cloned_media.first()
+    assert media_item is not None
+    assert media_item.url == "https://example.com/banner.jpg"
 
 
 @pytest.mark.django_db

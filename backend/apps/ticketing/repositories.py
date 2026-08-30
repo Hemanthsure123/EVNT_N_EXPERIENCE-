@@ -224,8 +224,8 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         target_event_id: uuid.UUID | str,
         slot_map: dict[str, str] | None = None,
     ) -> None:
-        """Copy all active ticket types (and their sale phases) from source_event_id to target_event_id,
-        resetting sold=0 and reserved=0."""
+        """Copy all active ticket types (and their sale phases) from source_event_id
+        to target_event_id, resetting sold=0 and reserved=0."""
         slot_map = slot_map or {}
         source_tiers = (
             self.get_queryset()
