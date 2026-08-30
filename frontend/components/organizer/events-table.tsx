@@ -21,7 +21,7 @@ import type { EventRow } from '@/lib/api/organizer';
 import { STATUS_FILTERS } from '@/lib/organizer/event-status';
 import { canSubmit, submitBlockers } from '@/lib/organizer/submit-gate';
 import { useEventRows, useInvalidateOrganizer } from '@/lib/organizer/queries';
-import { archiveEvent, cloneEvent, duplicateEvent, publishEvent } from '@/lib/api/organizer-writes';
+import { archiveEvent, duplicateEvent, publishEvent } from '@/lib/api/organizer-writes';
 import { ApiError } from '@/lib/api/errors';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
