@@ -267,7 +267,7 @@ export function EventPageBody({
               immediately after the price, and sending them down the page to
               find either is what made this page a scroll. Everything else
               (organiser, FAQs, policies) stays in the body. */}
-          <div className="flex flex-col gap-3 lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1">
+          <div className="flex flex-col gap-3 lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1 lg:pt-4">
             <BookingCta
               eventId={event.id}
               tiers={tiers}
@@ -286,7 +286,7 @@ export function EventPageBody({
             {galleryImages.length ? (
               <section className="flex flex-col gap-4">
                 <SectionHeading>Gallery</SectionHeading>
-                <HeroGallery images={galleryImages} priority={false} />
+                <HeroGallery images={galleryImages} priority={false} hideMainImage />
               </section>
             ) : null}
 

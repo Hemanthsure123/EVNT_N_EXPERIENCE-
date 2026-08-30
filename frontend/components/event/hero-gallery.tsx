@@ -105,6 +105,7 @@ export function HeroGallery({
   images,
   categorySlug,
   priority = true,
+  hideMainImage = false,
   className,
 }: {
   images: GalleryImage[];
@@ -112,6 +113,7 @@ export function HeroGallery({
    *  media at all. */
   categorySlug?: string;
   priority?: boolean;
+  hideMainImage?: boolean;
   className?: string;
 }) {
   const [index, setIndex] = React.useState(0);
@@ -158,92 +160,101 @@ export function HeroGallery({
       <div className={cn('flex flex-col gap-2', className)}>
         {/* 16:9, always. See the note at the top of this file for the three
             shapes that came before it and what each one broke. */}
-        <div className="group/hero relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-muted">
-          <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
-          {!current ? (
-            <div
-              className={cn(
-                'absolute inset-0 flex items-center justify-center',
-                CATEGORY_TINT[categorySlug ?? ''] ?? 'bg-sunken',
-              )}
-              aria-hidden
-            >
-              <ClayIcon slug={categorySlug ?? ''} className="size-24 drop-shadow-lg" />
-            </div>
-          ) : null}
-          {current ? (
-            /* No blurred backdrop any more. It existed to fill the bars a
-               contained picture left behind, and a conforming image leaves
-               none — so it was a second full-size decode of the same file,
-               on the LCP element, for nothing. */
-            <Image
-              src={current.url}
-              alt={current.alt}
-              fill
-              priority={priority}
-              sizes="(min-width: 1024px) 832px, 100vw"
-              className="object-cover"
-            />
-          ) : null}
+        {!hideMainImage ? (
+          <div
+            onClick={() => current && setOpen(true)}
+            className={cn(
+              'group/hero relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-muted',
+              current && 'cursor-pointer',
+            )}
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
+            {!current ? (
+              <div
+                className={cn(
+                  'absolute inset-0 flex items-center justify-center',
+                  CATEGORY_TINT[categorySlug ?? ''] ?? 'bg-sunken',
+                )}
+                aria-hidden
+              >
+                <ClayIcon slug={categorySlug ?? ''} className="size-24 drop-shadow-lg" />
+              </div>
+            ) : null}
+            {current ? (
+              /* No blurred backdrop any more. It existed to fill the bars a
+                 contained picture left behind, and a conforming image leaves
+                 none — so it was a second full-size decode of the same file,
+                 on the LCP element, for nothing. */
+              <Image
+                src={current.url}
+                alt={current.alt}
+                fill
+                priority={priority}
+                sizes="(min-width: 1024px) 832px, 100vw"
+                className="object-cover"
+              />
+            ) : null}
 
-          {/* Prev/next ON the image. The filmstrip below already changes the
-              picture, but a strip is a jump-to control — stepping through in
-              order is the gesture people arrive with, and on a phone there is
-              no filmstrip visible without scrolling the row. */}
-          {images.length > 1 ? (
-            <>
-              {/* The same control the lightbox uses. `glass-media` is the one
-                  treatment that stays dark in both themes, which is what it
-                  has to do when what is behind it is an arbitrary photograph. */}
-              <LightboxArrow side="left" onClick={() => step(-1)} />
-              <LightboxArrow side="right" onClick={() => step(1)} />
-            </>
-          ) : null}
+            {/* Prev/next ON the image. The filmstrip below already changes the
+                picture, but a strip is a jump-to control — stepping through in
+                order is the gesture people arrive with, and on a phone there is
+                no filmstrip visible without scrolling the row. */}
+            {images.length > 1 ? (
+              <>
+                {/* The same control the lightbox uses. `glass-media` is the one
+                    treatment that stays dark in both themes, which is what it
+                    has to do when what is behind it is an arbitrary photograph. */}
+                <LightboxArrow side="left" onClick={() => step(-1)} />
+                <LightboxArrow side="right" onClick={() => step(1)} />
+              </>
+            ) : null}
 
-          {current ? (
-            <button
-              ref={openerRef}
-              type="button"
-              onClick={() => setOpen(true)}
-              aria-label={
-                images.length > 1
-                  ? `View all ${images.length} photos full size`
-                  : 'View photo full size'
-              }
-              className={cn(
-                'glass-media absolute bottom-4 right-4 inline-flex h-control items-center gap-2 rounded-full border px-pill text-label text-on-gradient shadow-sm',
-                'transition duration-fast ease-out hover:scale-105 active:scale-95',
-                'motion-reduce:transition-none motion-reduce:hover:scale-100',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-              )}
-            >
-              <Expand className="size-4" aria-hidden />
-              {images.length > 1 ? `${images.length} photos` : 'View photo'}
-            </button>
-          ) : null}
-        </div>
+            {current ? (
+              <button
+                ref={openerRef}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(true);
+                }}
+                aria-label={
+                  images.length > 1
+                    ? `View all ${images.length} photos full size`
+                    : 'View photo full size'
+                }
+                className={cn(
+                  'glass-media absolute bottom-4 right-4 inline-flex h-control items-center gap-2 rounded-full border px-pill text-label text-on-gradient shadow-sm',
+                  'transition duration-fast ease-out hover:scale-105 active:scale-95',
+                  'motion-reduce:transition-none motion-reduce:hover:scale-100',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                )}
+              >
+                <Expand className="size-4" aria-hidden />
+                {images.length > 1 ? `${images.length} photos` : 'View photo'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
-        {images.length > 1 ? (
-          <ul className="flex gap-2 overflow-x-auto pb-1">
+        {images.length > 0 && (hideMainImage || images.length > 1) ? (
+          <ul className="flex flex-wrap gap-2 overflow-x-auto pb-1">
             {images.map((image, position) => (
               <li key={image.url} className="shrink-0">
                 <button
                   type="button"
-                  onClick={() => setIndex(position)}
+                  onClick={() => {
+                    setIndex(position);
+                    setOpen(true);
+                  }}
                   aria-label={image.alt || `Photo ${position + 1}`}
                   aria-current={position === safeIndex}
                   className={cn(
-                    // 16:9 like the frame it drives. Square thumbnails of
-                    // widescreen pictures crop each one differently, so the
-                    // strip stopped being a preview of what pressing it shows.
-                    'relative block aspect-video w-24 overflow-hidden rounded-lg border transition sm:w-28',
+                    // 16:9 like the frame it drives. Clear, unblurred thumbnail cards.
+                    'relative block aspect-video w-24 overflow-hidden rounded-lg border transition sm:w-28 opacity-100 hover:scale-105',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                    // A selected hairline is one of the two sanctioned uses of
-                    // the wayfinding violet, and the ring is what makes it
-                    // survive being a 1px edge next to a busy photograph.
                     position === safeIndex
                       ? 'border-primary ring-2 ring-primary/30'
-                      : 'border-border opacity-70 hover:opacity-100',
+                      : 'border-border hover:border-primary/50',
                   )}
                 >
                   {/* Empty alt: the button already carries the description, and
@@ -322,12 +333,21 @@ export function HeroGallery({
   );
 }
 
-function LightboxArrow({ side, onClick }: { side: 'left' | 'right'; onClick: () => void }) {
+function LightboxArrow({
+  side,
+  onClick,
+}: {
+  side: 'left' | 'right';
+  onClick: (e: React.MouseEvent) => void;
+}) {
   const Icon = side === 'left' ? ChevronLeft : ChevronRight;
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick(e);
+      }}
       aria-label={side === 'left' ? 'Previous photo' : 'Next photo'}
       className={cn(
         'glass-media absolute top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full border text-on-gradient',

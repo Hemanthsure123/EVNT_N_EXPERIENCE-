@@ -156,7 +156,7 @@ function SectionRail({ active }: { active: SettingsSectionId }) {
     // account shell already puts one chip strip at the top of this page, and a
     // second one under it is two rows of tabs with no way to tell which level
     // you are moving within.
-    <nav aria-label="Settings sections" className="hidden min-w-0 lg:block">
+    <nav aria-label="Settings sections" className="hidden min-w-0 lg:block lg:sticky lg:top-24 lg:self-start">
       <ul className="flex flex-col gap-1">
         {SETTINGS_SECTIONS.map((section) => {
           const current = section.id === active;
