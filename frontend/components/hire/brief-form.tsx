@@ -732,7 +732,7 @@ function ActPicker({
       <legend className="mb-3 text-body-sm font-medium">Act</legend>
       <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {types.map((option) => (
-          <li key={option}>
+          <li key={option} className={option === 'other' ? 'col-span-2 sm:col-span-1' : undefined}>
             <button
               type="button"
               onClick={() => onChange(option)}

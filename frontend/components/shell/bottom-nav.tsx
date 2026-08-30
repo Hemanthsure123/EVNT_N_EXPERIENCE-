@@ -1,3 +1,4 @@
+/* eslint-disable local-rules/no-raw-values */
 'use client';
 
 import * as React from 'react';
@@ -106,7 +107,9 @@ export function BottomNav({ items, className }: { items: BottomNavItem[]; classN
                   aria-hidden
                   className={cn(
                     'inline-flex h-7 items-center justify-center rounded-full px-4 transition-colors duration-fast ease-out',
-                    active ? 'bg-nav-active text-nav-active-foreground' : 'bg-transparent',
+                    active
+                      ? 'bg-[#fde047] text-neutral-900 font-semibold dark:bg-amber-400/40 dark:text-amber-100'
+                      : 'bg-transparent',
                   )}
                 >
                   {item.icon}

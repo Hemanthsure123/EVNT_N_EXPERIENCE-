@@ -10,6 +10,7 @@ import type { Paginated } from '@/lib/api/types';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { useScope } from '@/lib/identity/scope';
 import { useSavedEventIds } from '@/lib/discovery/use-favourites';
+import { cn } from '@/lib/utils/cn';
 import { IdentityAvatar } from '@/components/ui';
 import { Panel, Skeleton } from '@/components/organizer/primitives';
 
@@ -91,11 +92,13 @@ export function AccountOverview() {
           value={tickets.isPending ? null : `${rows.length}${more ? '+' : ''}`}
           hint={ready > 0 ? `${ready} ready to use` : 'None ready to use'}
           href="/account/tickets"
+          className="row-span-2 flex flex-col justify-between sm:row-span-1"
         />
         <Stat
           label="Saved events"
           value={savedIds === null ? null : String(savedIds.length)}
           href="/account/saved"
+          icon={<Bookmark className="size-4 text-muted-foreground" />}
         />
         <Stat
           label="Member since"
@@ -176,37 +179,40 @@ function Stat({
   value,
   hint,
   href,
+  icon,
+  className,
 }: {
   label: string;
   value: string | null;
   /** Optional: several cards read better with the label alone. */
   hint?: string;
   href?: string;
+  icon?: React.ReactNode;
+  className?: string;
 }) {
   const body = (
-    <>
-      <p className="truncate text-caption font-medium uppercase tracking-wide text-foreground-subtle">
-        {label}
-      </p>
-      {value === null ? (
-        <Skeleton className="my-1 h-8 w-16" />
-      ) : (
-        <p className="mt-1 truncate text-h3 tabular-nums">{value}</p>
-      )}
-      {/* Guarded: an optional subtitle must not leave an empty element
-          reserving a line of vertical space. */}
-      {hint ? <p className="truncate text-caption text-muted-foreground">{hint}</p> : null}
-    </>
+    <div className="flex h-full flex-col justify-between">
+      <div>
+        <p className="truncate text-caption font-medium uppercase tracking-wide text-foreground-subtle">
+          {label}
+        </p>
+        {value === null ? (
+          <Skeleton className="my-1 h-8 w-16" />
+        ) : (
+          <p className="mt-1 truncate text-h3 tabular-nums font-bold">{value}</p>
+        )}
+      </div>
+      {hint ? <p className="mt-2 truncate text-caption text-muted-foreground">{hint}</p> : null}
+    </div>
   );
 
   return (
-    // A white card on a white canvas separates by hairline + shadow, never by
-    // value — see the elevation note in tokens.css.
-    <li className="rounded-xl border border-border bg-surface p-card shadow-sm">
+    <li className={cn('relative rounded-2xl border border-border bg-surface p-card shadow-sm', className)}>
+      {icon ? <div className="absolute right-3 top-3">{icon}</div> : null}
       {href ? (
         <Link
           href={href}
-          className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="block h-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {body}
         </Link>
@@ -232,18 +238,19 @@ function Shortcut({
   return (
     <Link
       href={href}
-      className="flex items-start gap-3 rounded-xl border border-border bg-surface p-card shadow-sm transition-shadow duration-fast hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
+      className="flex items-center gap-3.5 rounded-2xl border border-border bg-surface p-4 shadow-sm transition-shadow duration-fast hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
     >
       <span
         aria-hidden
-        className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary"
+        className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-secondary"
       >
-        <Icon className="size-4 text-secondary-foreground" />
+        <Icon className="size-5 text-secondary-foreground" />
       </span>
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block text-body-sm font-semibold">{title}</span>
         {body ? <span className="block text-caption text-muted-foreground">{body}</span> : null}
       </span>
+      <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
     </Link>
   );
 }

@@ -92,7 +92,7 @@ export function SavedEvents() {
         // The reserved height matches the PORTRAIT card the discovery language
         // uses now (3:4 image with the text block below it), so the grid does
         // not jump when the real cards land.
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
+        <ul className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
           {Array.from({ length: savedIds?.length || 4 }, (_, index) => (
             <li key={index}>
               <Skeleton className="h-[20rem] w-full rounded-xl" />
@@ -116,7 +116,7 @@ export function SavedEvents() {
           />
         </div>
       ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
+        <ul className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
           {events.map((event) => (
             <li
               key={event.id}

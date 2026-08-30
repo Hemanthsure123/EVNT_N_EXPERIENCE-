@@ -148,7 +148,7 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             mean two different pictures of the same event depending on the
             phone, and `aspect-portrait` here is also the floor that stops a
             short card collapsing to the height of three lines of text. */}
-        <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden bg-muted sm:aspect-[4/3] sm:w-full">
+        <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden rounded-xl bg-muted m-2 sm:m-0 sm:aspect-[4/3] sm:w-full sm:rounded-none">
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {event.poster_url ? (
             <Image
@@ -188,7 +188,7 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             </div>
           ) : null}
 
-          <h3 className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground sm:text-body">
+          <h3 className="line-clamp-2 pr-7 text-body-sm font-bold leading-snug text-foreground sm:pr-0 sm:text-body">
             <Link
               href={eventPath(event)}
               className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
@@ -219,21 +219,12 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
           <div className="mt-auto flex items-end justify-between gap-3 pt-1 sm:border-t sm:border-border sm:pt-4">
             <Price price={price} />
 
-            {/* The one control that genuinely has to live on the photograph —
-                at `sm` and up, where there IS a photograph to put it on. It
-                goes `absolute` there and anchors to the Card (which is
-                `relative` for exactly this), so it can sit in the footer's flow
-                on the compact row without a second copy of the control in the
-                DOM. Hover-revealed on pointer devices, permanent on touch —
-                where there is no hover, a hidden control is simply a missing
-                one. 44px on the row, because a shrinking card is not a licence
-                to shrink a target. */}
+            {/* The favourite button anchors to the top right of the card on mobile & desktop */}
             <FavouriteButton
               eventId={event.id}
               title={event.title}
               className={cn(
-                'relative z-10 size-11 shrink-0',
-                'sm:absolute sm:right-3 sm:top-3 sm:size-9',
+                'absolute right-2.5 top-2.5 z-10 size-11 shrink-0 sm:right-3 sm:top-3 sm:size-9',
                 'lg:opacity-0 lg:transition-opacity lg:duration-fast',
                 'lg:focus-visible:opacity-100 lg:group-focus-within/card:opacity-100 lg:group-hover/card:opacity-100',
                 'lg:motion-reduce:opacity-100',
