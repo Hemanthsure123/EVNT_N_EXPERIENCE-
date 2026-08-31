@@ -7,6 +7,7 @@ import { LocationPrompt } from '@/components/discovery/location-prompt';
 import { Showcase } from '@/components/discovery/showcase';
 import { Section, SectionHeader } from '@/components/discovery/section';
 import { SubscribeCard } from '@/components/discovery/subscribe-card';
+import { TrendingSection, SellingFastSection, RailSectionSkeleton } from '@/components/discovery/home-sections';
 import { WhyCuratix } from '@/components/discovery/why-curatix';
 import { HireABandSection } from '@/components/hire/hire-a-band-section';
 import { fetchHomepageSafe } from '@/lib/api/cms';
@@ -99,37 +100,36 @@ export default async function HomePage() {
           whatever the index returned; with nothing pinned the hero falls back
           to the soonest live events and RELABELS itself, so a visitor is never
           shown "Featured" that nobody featured. */}
+      {/* 1. Hero Carousel Showcase */}
       <Showcase collections={cms?.collections} />
 
-      {/* Asks for a location once, after the page has shown its worth — never
-          on load. Renders nothing once a city is known or the ask was closed. */}
-      <LocationPrompt />
-
-      {/* The grid streams behind its own boundary: the hero is the LCP element
-          and must not wait on a second list request to paint. The fallback
-          reserves the grid's real height, so the sections below never jump. */}
-      <Suspense fallback={<AllEventsSkeleton />}>
-        <AllEvents />
-      </Suspense>
-
-      <Section>
-        {/* No subtitle. The eight tiles below say what they are, and a line
-            explaining that categories exist for people who did not search is
-            us narrating our own information architecture. */}
+      {/* 2. Browse by Mood Horizontal Carousel (District App Layout) */}
+      <Section className="py-4 sm:py-6">
         <SectionHeader title="Browse by mood" />
         <CategoryTiles categories={cms?.categories} />
       </Section>
 
-      {/* The second product. Its own tinted band and its own rhythm, because
-          everything above sells a ticket to somebody else's event and this
-          sells a service for the visitor's own — rendered as another grid it
-          would be scrolled past as more of the same. */}
+      {/* 3. Trending Events Horizontal Rail */}
+      <Suspense fallback={<RailSectionSkeleton />}>
+        <TrendingSection />
+      </Suspense>
+
+      {/* 4. Selling Fast Scarcity Shelf */}
+      <Suspense fallback={null}>
+        <SellingFastSection />
+      </Suspense>
+
+      <LocationPrompt />
+
+      {/* 5. All Events Discovery Grid */}
+      <Suspense fallback={<AllEventsSkeleton />}>
+        <AllEvents />
+      </Suspense>
+
       <HireABandSection />
 
       <WhyCuratix />
 
-      {/* The one ask on the page, and it comes last — before the footer, after
-          every reason to say yes. */}
       <Section>
         <SubscribeCard />
       </Section>
