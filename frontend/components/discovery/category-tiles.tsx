@@ -42,19 +42,27 @@ import { Reveal } from './reveal';
  * two-line blurb measures ~210px, so eight of them were ~1,800px: four full
  * phone screens to look at eight words.
  *
- * Below `sm` the tile is therefore a COMPACT CHIP — a 48px plate on the left,
- * the label beside it, ~72px tall, two up. Eight of those are ~324px: one
- * comfortable thumb-scroll instead of four screens.
+ * Below `sm` it is therefore a TWO-ROW HORIZONTAL RAIL: `grid-rows-2` with
+ * `grid-flow-col`, so the eight moods fill top-to-bottom and then across, four
+ * columns of two. Two rows rather than one because eight tiles in a single row
+ * is a very long swipe for a set this small, and because two rows read as a
+ * BOARD you scan rather than a queue you page through.
  *
- * `flex-row-reverse` rather than reordering the markup: the label stays FIRST
- * in the DOM (so the link's accessible name still begins with it) while the
- * plate paints on the left, where a scanning eye expects the picture.
+ * THE COLUMN WIDTH IS PROPORTIONAL (`w-[42vw]`), not a fixed `w-44`. At 176px
+ * against a 390px phone the arithmetic left nothing peeking past the right
+ * edge, and a rail whose last visible item ends flush with the screen looks
+ * exactly like a grid that has stopped — so nobody swipes it. 42vw puts two
+ * full columns and a slice of the third on screen at every phone width, which
+ * is the only thing that says "there is more".
  *
- * THE BLURB IS GONE BELOW `sm`, and that is a decision rather than an
- * omission. At 89px of text width it is two or three wrapped lines of "Search
- * 'concert'" — a restatement of the label in worse words, which is exactly the
- * noise the chip is trying to remove. It comes back at `sm`, where the tile is
- * tall enough for it to be read rather than skipped.
+ * `scroll-pl-4` MATCHING `px-4`: snap aligns to the scrollport edge, which
+ * ignores padding, so without it the first column parks a padding-width left
+ * of the heading above it. Same measured fix as the All Events rail.
+ *
+ * The blurb stays clamped to one line below `sm` — the CMS path supplies no
+ * description at all (`HomepageCategory` has no such field), so a two-line clamp
+ * would make the same tile a different height depending on which data source
+ * answered.
  *
  * A Server Component: eight icons and eight links for zero client JS.
  */
@@ -111,19 +119,24 @@ export function CategoryTiles({
   return (
     <ul
       className={cn(
-        '-mx-4 flex gap-3 overflow-x-auto px-4 pb-3 snap-x snap-mandatory scrollbar-none sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4',
+        '-mx-4 grid grid-flow-col grid-rows-2 gap-3 overflow-x-auto overscroll-x-contain px-4 pb-3 snap-x snap-mandatory scroll-pl-4 scrollbar-none',
+        'sm:mx-0 sm:grid-flow-row sm:grid-rows-1 sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4 lg:scroll-pl-6',
         className
       )}
     >
       {tiles.map((category, index) => {
         const tint = categoryTint(category.slug);
         return (
-          <li key={category.slug} className="w-44 shrink-0 snap-start h-full sm:w-auto sm:shrink">
+          <li key={category.slug} className="h-full w-[42vw] shrink-0 snap-start sm:w-auto sm:shrink">
             <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
               <Link
                 href={`/categories/${category.slug}`}
                 className={cn(
                   'group flex h-full flex-col items-stretch justify-between gap-3 rounded-2xl border border-border bg-surface p-3.5 shadow-sm',
+                  // The >= sm tile is unchanged from before the mobile rework —
+                  // this work is mobile-only, and a denser phone tile must not
+                  // quietly shrink the desktop one.
+                  'sm:gap-4 sm:p-card',
                   'transition duration-base ease-spring hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lg',
                   // Touch press compression animation (scale 0.95 -> 1)
                   'active:translate-y-0 active:scale-95 active:duration-fast',
@@ -132,7 +145,7 @@ export function CategoryTiles({
                 )}
               >
                 <span className="flex min-w-0 flex-col gap-1">
-                  <span className="text-body font-bold leading-tight text-foreground">
+                  <span className="text-body font-bold leading-tight text-foreground sm:text-body-lg">
                     {category.label}
                   </span>
                   {category.blurb ? (
@@ -144,14 +157,17 @@ export function CategoryTiles({
 
                 <span
                   className={cn(
-                    'flex h-20 w-full shrink-0 items-center justify-center rounded-xl p-2 sm:h-24 sm:py-6',
+                    // `sm:h-auto`, not `sm:h-24`: 96px of box with `sm:py-6`
+                    // (24px each side) leaves 48px for a 64px scene, so the
+                    // artwork overflowed its plate at every width from 640px up.
+                    'flex h-20 w-full shrink-0 items-center justify-center rounded-xl p-2 sm:h-auto sm:py-6',
                     tint.surface,
                   )}
                   aria-hidden
                 >
                   <CategoryScene
                     slug={category.slug}
-                    className="h-16 w-full transition-transform duration-base ease-spring group-hover:scale-[1.05] group-active:-translate-y-1.5 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                    className="h-16 w-full transition-transform duration-base ease-spring group-hover:scale-[1.05] group-active:-translate-y-1.5 sm:h-24 motion-reduce:transition-none motion-reduce:group-hover:scale-100 motion-reduce:group-active:translate-y-0"
                   />
                 </span>
               </Link>

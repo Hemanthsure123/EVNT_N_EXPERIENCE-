@@ -121,13 +121,27 @@ export function EventGrid({
               enough (no full-width image to decode) that skipping the work
               buys little. */}
           <li className={cn('h-full', index >= 6 && 'sm:cv-card')}>
+            {/* `allEvents` + `index` are what make the mobile widget a DECK
+                rather than a single card blown up. Without them every tap
+                opened a one-event stack, so swiping left or right inside the
+                widget had nowhere to go — the gesture worked and simply never
+                changed anything, which reads as broken rather than as "you are
+                at the end". Passing the rendered page is also honest about the
+                bounds: you can swipe through exactly the events this grid is
+                showing you. */}
             {index < priorityCount ? (
               // Never reveal the LCP row: an element that starts at opacity 0
               // is not eligible to be the Largest Contentful Paint.
-              <EventCard event={event} sizes={GRID_SIZES} priority />
+              <EventCard
+                event={event}
+                sizes={GRID_SIZES}
+                priority
+                allEvents={events}
+                index={index}
+              />
             ) : (
               <Reveal className="h-full" delayMs={(index % STAGGER_STEPS) * STAGGER_MS}>
-                <EventCard event={event} sizes={GRID_SIZES} />
+                <EventCard event={event} sizes={GRID_SIZES} allEvents={events} index={index} />
               </Reveal>
             )}
           </li>

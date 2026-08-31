@@ -2,300 +2,454 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import {
-  CalendarDays,
-  Copy,
-  Globe,
-  Navigation,
-  Share2,
-  Ticket,
-  Users,
-  X,
-  Building2,
-  Ban,
-} from 'lucide-react';
+import Link from 'next/link';
+import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { EventCard as EventCardData } from '@/lib/api/types';
-import { formatEventDateTime } from '@/lib/discovery/format';
-import { FavouriteButton } from '@/components/discovery/favourite-button';
+import type { EventContent } from '@/lib/api/event-content';
+import type { EventCard as EventCardData, EventDetail } from '@/lib/api/types';
+import { formatEventDateTime, formatFromPrice } from '@/lib/discovery/format';
+import { selectSimilarEvents } from '@/lib/discovery/similar-events';
+import { eventPath } from '@/lib/events/ref';
+import {
+  AccessibilityNotes,
+  EventFaqs,
+  Faqs,
+  OrganizerPolicies,
+  Policies,
+  QuickFacts,
+  RunningOrder,
+  VenueCard,
+} from './sections';
 
-export type SubSheetType = 'venue' | 'schedule' | 'about' | 'things_to_know' | 'organiser' | null;
+/**
+ * The nested sheets the mobile event widget opens.
+ *
+ * ── EVERY WORD IN HERE USED TO BE A LITERAL ───────────────────────────────
+ *
+ * This file previously rendered, identically for every event on the platform:
+ * a description about "Quake Arena", the tagline "Feel the beat. Own the
+ * floor.", a schedule of "8:00 PM / 11:59 PM", five invented policies ("Kids
+ * not allowed", "Event will be in English"), a venue address in "Kondapur",
+ * a "3.9 ★" rating, "7.1 km away", and an "ongoing events" list containing the
+ * SAME event you were already looking at.
+ *
+ * None of it came from the API, because the widget never called the API. It now
+ * receives the real `EventDetail` and `EventContent`, and every sheet renders
+ * what the organiser actually wrote — or renders nothing.
+ *
+ * ── AND IT REUSES THE PAGE'S OWN SECTIONS ─────────────────────────────────
+ *
+ * The venue card, running order, fact grid, FAQ accordion and policy lists are
+ * imported from `sections.tsx` — the very components the desktop event page
+ * renders. There is no second copy to drift, which matters most for the two
+ * that are legal text. A hand-written mobile duplicate of the refund policy is
+ * how a platform ends up telling two customers two different things.
+ *
+ * They are token-styled (`text-foreground`, `bg-surface`…), and this surface is
+ * always dark regardless of the site theme — so the sheet root carries the
+ * `dark` class, which re-points those tokens at the dark palette for its whole
+ * subtree. That is why reuse is possible at all instead of a dark fork.
+ *
+ * ── HEADINGS START AT h3 ──────────────────────────────────────────────────
+ *
+ * The sheet's own title is the h2. A subsection using h2 as well would sit as a
+ * peer of the thing it belongs to, and the outline a screen-reader user
+ * navigates by would report two unrelated headings.
+ */
+
+export type SubSheetType =
+  | 'venue'
+  | 'schedule'
+  | 'about'
+  | 'things_to_know'
+  | 'organiser'
+  | 'faq'
+  | 'terms'
+  | null;
+
+const SHEET_TITLES: Record<NonNullable<SubSheetType>, string> = {
+  // NOT "Restaurant details". That was the reference design's word — that
+  // product sells restaurant bookings as well as tickets. This one does not.
+  venue: 'Venue details',
+  schedule: 'Schedule and timeline',
+  about: 'About this event',
+  things_to_know: 'Things to know',
+  organiser: 'About the organiser',
+  faq: 'Frequently asked questions',
+  terms: 'Terms and conditions',
+};
 
 export interface EventSubSheetsProps {
   sheetType: SubSheetType;
   onClose: () => void;
   event: EventCardData;
+  /** Null until the detail read lands; every sheet degrades to what the card
+   *  already knows rather than showing a spinner over an empty panel. */
+  detail: EventDetail | null;
+  content: EventContent | null;
+  /** The feed the widget was opened from, for the organiser's other events. */
+  pool?: readonly EventCardData[];
 }
 
-export function EventSubSheets({ sheetType, onClose, event }: EventSubSheetsProps) {
-  if (!sheetType) return null;
-
+export function EventSubSheets({
+  sheetType,
+  onClose,
+  event,
+  detail,
+  content,
+  pool = [],
+}: EventSubSheetsProps) {
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex flex-col justify-end">
-        {/* Dark Backdrop */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          className="absolute inset-0 bg-black/80 backdrop-blur-md"
-        />
+      {sheetType ? (
+        // `key` on the sheet, so React does not reuse one instance across two
+        // different disclosures and carry the previous sheet's scroll position
+        // into the next.
+        <div key={sheetType} className="fixed inset-0 z-modal flex flex-col justify-end sm:hidden">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-black/70 backdrop-blur-md"
+            aria-hidden
+          />
 
-        {/* Slide-Up Bottom Sheet Card */}
-        <motion.div
-          initial={{ y: '100%' }}
-          animate={{ y: 0 }}
-          exit={{ y: '100%' }}
-          transition={{ type: 'spring', stiffness: 350, damping: 32 }}
-          className="relative z-10 flex max-h-[85vh] w-full flex-col overflow-hidden rounded-t-3xl bg-neutral-900 text-white shadow-2xl border-t border-white/10"
-        >
-          {/* Sheet Drag Handle & Header */}
-          <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-white/10">
-            <h3 className="text-h4 font-bold text-white tracking-tight">
-              {sheetType === 'venue' && 'Restaurant details'}
-              {sheetType === 'schedule' && 'Schedule and timeline'}
-              {sheetType === 'about' && 'About this event'}
-              {sheetType === 'things_to_know' && 'Things to know'}
-              {sheetType === 'organiser' && 'About organiser'}
-            </h3>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close sheet"
-              className="flex size-9 items-center justify-center rounded-full bg-white/10 text-white transition-transform active:scale-90"
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label={SHEET_TITLES[sheetType]}
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', stiffness: 360, damping: 34 }}
+            className="dark relative z-10 flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-3xl border-t border-border bg-surface text-foreground shadow-2xl"
+          >
+            {/* Pinned header, scrolling body — a long policy set must never be
+                able to push its own close control off the screen. */}
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 pb-3 pt-4">
+              <h2 className="text-h4 font-bold tracking-tight text-foreground">
+                {SHEET_TITLES[sheetType]}
+              </h2>
+              {/* EXACTLY ONE close control on this surface. */}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-foreground transition-transform active:scale-90"
+              >
+                <X className="size-5" aria-hidden />
+              </button>
+            </div>
+
+            <div
+              className="flex-1 overflow-y-auto overscroll-contain px-5 pt-5"
+              style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
             >
-              <X className="size-5" />
-            </button>
-          </div>
-
-          {/* Sheet Scrollable Body Content */}
-          <div className="flex-1 overflow-y-auto p-5 text-neutral-200">
-            {sheetType === 'venue' && <VenueSheetContent event={event} />}
-            {sheetType === 'schedule' && <ScheduleSheetContent event={event} />}
-            {sheetType === 'about' && <AboutSheetContent event={event} />}
-            {sheetType === 'things_to_know' && <ThingsToKnowSheetContent />}
-            {sheetType === 'organiser' && <OrganiserSheetContent event={event} />}
-          </div>
-        </motion.div>
-      </div>
+              <SheetBody
+                sheetType={sheetType}
+                event={event}
+                detail={detail}
+                content={content}
+                pool={pool}
+              />
+            </div>
+          </motion.div>
+        </div>
+      ) : null}
     </AnimatePresence>
   );
 }
 
-function VenueSheetContent({ event }: { event: EventCardData }) {
-  const copyAddress = () => {
-    navigator.clipboard.writeText(`${event.venue}, ${event.city}`);
-  };
+function SheetBody({
+  sheetType,
+  event,
+  detail,
+  content,
+  pool,
+}: {
+  sheetType: NonNullable<SubSheetType>;
+  event: EventCardData;
+  detail: EventDetail | null;
+  content: EventContent | null;
+  pool: readonly EventCardData[];
+}) {
+  switch (sheetType) {
+    case 'venue':
+      return <VenueSheet event={event} detail={detail} />;
+    case 'schedule':
+      return <ScheduleSheet event={event} detail={detail} content={content} />;
+    case 'about':
+      return <AboutSheet event={event} detail={detail} />;
+    case 'things_to_know':
+      return <ThingsToKnowSheet detail={detail} />;
+    case 'organiser':
+      return <OrganiserSheet event={event} pool={pool} />;
+    case 'faq':
+      return <FaqSheet content={content} />;
+    case 'terms':
+      return <TermsSheet detail={detail} />;
+    default:
+      return null;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Venue                                                                      */
+/* -------------------------------------------------------------------------- */
+
+function VenueSheet({ event, detail }: { event: EventCardData; detail: EventDetail | null }) {
+  return (
+    <div className="flex flex-col gap-5 pb-2">
+      {detail ? (
+        // The page's own venue card: it renders a real map when the organiser
+        // pinned a place, and a stylised grid with a Directions link when they
+        // did not — never a coordinate it invented.
+        <VenueCard event={detail} />
+      ) : (
+        <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-card">
+          <p className="text-body-lg font-semibold text-foreground">{event.venue}</p>
+          <p className="text-body-sm text-muted-foreground">{event.city}</p>
+        </div>
+      )}
+
+      {detail?.accessibility_notes ? (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-body font-semibold text-foreground">Accessibility</h3>
+          <AccessibilityNotes notes={detail.accessibility_notes} />
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Schedule                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function ScheduleSheet({
+  event,
+  detail,
+  content,
+}: {
+  event: EventCardData;
+  detail: EventDetail | null;
+  content: EventContent | null;
+}) {
+  const timeline = content?.timeline ?? [];
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Venue Card */}
-      <div className="flex items-center gap-3.5 rounded-2xl bg-neutral-800/80 p-3.5 border border-white/10">
-        <div className="relative size-16 shrink-0 overflow-hidden rounded-xl bg-neutral-700">
-          {event.poster_url ? (
-            <Image src={event.poster_url} alt="" fill className="object-cover" />
-          ) : (
-            <Building2 className="m-auto size-8 text-neutral-400" />
-          )}
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-body font-bold text-white">
-            {event.venue}, {event.city}
-          </span>
-          {/* "View restaurant" is gone: this platform sells event tickets and
-              has no restaurant entity to view. It came from the reference
-              design, which is a dining product as well as a ticketing one. */}
-        </div>
-        {/* No "3.9 ★" — nothing stores a venue rating, so the badge was the
-            same number on every venue, in the place a real rating would be. */}
-      </div>
-
-      {/* ── ADDRESS: WHAT IS ACTUALLY KNOWN ──────────────────────────────
-          This read "CMC Enclave, Main Road, Kondapur, {city}" — a street
-          address invented in the source and rendered for EVERY venue. On a
-          ticketing product that is the most harmful thing on this sheet: it
-          is directions, and somebody would have driven to it.
-
-          There is no street-address column. What exists is the venue name and
-          the city, which is what the organiser supplied, so that is what this
-          shows. The distance line is gone for the same reason as the rating —
-          it needs coordinates most events do not carry. */}
-      <div className="flex flex-col gap-1 px-1">
-        <p className="text-body-sm text-neutral-300">
-          {event.venue}, {event.city}
+    <div className="flex flex-col gap-5 pb-2">
+      <div className="flex flex-col gap-1 rounded-xl border border-border bg-sunken p-card">
+        <p className="text-caption uppercase tracking-wide text-muted-foreground">Doors</p>
+        <p className="text-body font-semibold text-foreground">
+          {formatEventDateTime(event.starts_at)}
         </p>
+        {detail?.ends_at ? (
+          <p className="text-body-sm text-muted-foreground">
+            Ends {formatEventDateTime(detail.ends_at)}
+          </p>
+        ) : null}
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex items-center gap-3 pt-1">
-        <a
-          href={`https://maps.google.com/?q=${encodeURIComponent(event.venue + ' ' + event.city)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-neutral-800 px-3 text-caption font-bold text-white border border-white/10 active:scale-95 transition-transform"
-        >
-          <Navigation className="size-4" />
-          Get directions
-        </a>
-
-        <button
-          type="button"
-          onClick={copyAddress}
-          className="flex size-11 items-center justify-center rounded-xl bg-neutral-800 text-white border border-white/10 active:scale-95 transition-transform shrink-0"
-          aria-label="Copy address"
-        >
-          <Copy className="size-4.5" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigator.share?.({ title: event.venue, text: event.city })}
-          className="flex size-11 items-center justify-center rounded-xl bg-neutral-800 text-white border border-white/10 active:scale-95 transition-transform shrink-0"
-          aria-label="Share venue"
-        >
-          <Share2 className="size-4.5" />
-        </button>
-      </div>
+      {timeline.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-body font-semibold text-foreground">Running order</h3>
+          <RunningOrder entries={timeline} />
+        </section>
+      ) : (
+        // NOT a fabricated two-step timeline. This used to render "Event starts
+        // 8:00 PM / Event ends 11:59 PM" for every event on the platform,
+        // including ones that start at noon.
+        <p className="text-body-sm text-muted-foreground">
+          The organiser has not published a running order for this event.
+        </p>
+      )}
     </div>
   );
 }
 
-function ScheduleSheetContent({ event }: { event: EventCardData }) {
-  return (
-    <div className="flex flex-col gap-6">
-      {/* Date Header */}
-      <div className="flex items-center gap-2 text-body font-bold text-white">
-        <CalendarDays className="size-5 text-amber-400" />
-        <span>{formatEventDateTime(event.starts_at)}</span>
-      </div>
+/* -------------------------------------------------------------------------- */
+/* About                                                                      */
+/* -------------------------------------------------------------------------- */
 
-      {/* Vertical Dot & Line Timeline */}
-      <div className="relative pl-6 flex flex-col gap-8">
-        <div className="absolute left-2.5 top-3 bottom-3 w-0.5 bg-neutral-700" />
+function AboutSheet({ event, detail }: { event: EventCardData; detail: EventDetail | null }) {
+  const summary = detail?.short_description?.trim();
+  const description = detail?.description?.trim();
 
-        {/* Timeline Item 1 */}
-        <div className="relative flex items-center justify-between">
-          <div className="absolute -left-6 size-3 rounded-full bg-amber-400 ring-4 ring-neutral-900" />
-          <span className="text-body-sm font-semibold text-white">Event starts</span>
-          <span className="text-body-sm font-bold text-neutral-300">8:00 PM</span>
-        </div>
-
-        {/* Timeline Item 2 */}
-        <div className="relative flex items-center justify-between">
-          <div className="absolute -left-6 size-3 rounded-full bg-neutral-600 ring-4 ring-neutral-900" />
-          <span className="text-body-sm font-semibold text-white">Event ends</span>
-          <span className="text-body-sm font-bold text-neutral-300">11:59 PM</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AboutSheetContent({ event }: { event: EventCardData }) {
-  return (
-    <div className="flex flex-col gap-4 leading-relaxed">
-      <p className="text-body font-bold text-white">Feel the beat. Own the floor.</p>
-      <p className="text-body-sm text-neutral-300">
-        {event.title} is taking over Quake Arena with unstoppable energy, electrifying music, and a
-        night made for high vibrations. Prepare for a landmark sonic experience with top-tier sound,
-        laser visuals, and curated crowd atmosphere.
+  if (!summary && !description) {
+    return (
+      <p className="pb-2 text-body-sm text-muted-foreground">
+        The organiser has not written a description for {event.title} yet.
       </p>
-      <p className="text-body-sm text-neutral-400">
-        Entry is strictly reserved for ticket holders aged 21 and above. Gates open at 6:30 PM. Early
-        arrival is advised to ensure smooth check-in and security compliance.
-      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4 pb-2 leading-relaxed">
+      {summary ? <p className="text-body font-semibold text-foreground">{summary}</p> : null}
+      {description ? (
+        // `whitespace-pre-line`, so the organiser's own paragraphing survives.
+        <p className="whitespace-pre-line text-body-sm text-muted-foreground">{description}</p>
+      ) : null}
     </div>
   );
 }
 
-function ThingsToKnowSheetContent() {
-  const policies = [
-    { icon: Globe, label: 'Event will be in English' },
-    { icon: Users, label: 'Ticket needed for ages 21 and above' },
-    { icon: Ticket, label: 'Entry allowed for ages 21 and above' },
-    { icon: Ban, label: 'Kids not allowed' },
-    { icon: Ban, label: 'Pets not allowed' },
-  ];
+/* -------------------------------------------------------------------------- */
+/* Things to know                                                             */
+/* -------------------------------------------------------------------------- */
+
+function ThingsToKnowSheet({ detail }: { detail: EventDetail | null }) {
+  if (!detail) {
+    return <p className="pb-2 text-body-sm text-muted-foreground">Loading event details…</p>;
+  }
 
   return (
-    <div className="flex flex-col gap-4">
-      <span className="text-caption font-bold tracking-wider text-neutral-400 uppercase">
-        EVENT INFO
-      </span>
+    <div className="flex flex-col gap-6 pb-2">
+      {/* The same component the page renders, unlimited here and limited to
+          four on the widget itself. One source, two lengths — a hand-written
+          preview drifts from the full list the first time a fact is added. */}
+      <QuickFacts event={detail} />
 
-      <div className="flex flex-col divide-y divide-white/10">
-        {policies.map((p, idx) => {
-          const Icon = p.icon;
-          return (
-            <div key={idx} className="flex items-center gap-3.5 py-3.5">
-              <Icon className="size-5 text-neutral-400 shrink-0" />
-              <span className="text-body-sm font-medium text-white">{p.label}</span>
-            </div>
-          );
-        })}
-      </div>
+      {detail.accessibility_notes ? (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-body font-semibold text-foreground">Accessibility</h3>
+          <AccessibilityNotes notes={detail.accessibility_notes} />
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function OrganiserSheetContent({ event }: { event: EventCardData }) {
+/* -------------------------------------------------------------------------- */
+/* Organiser                                                                  */
+/* -------------------------------------------------------------------------- */
+
+function OrganiserSheet({
+  event,
+  pool,
+}: {
+  event: EventCardData;
+  pool: readonly EventCardData[];
+}) {
+  const initial = (event.organization_name || '?').trim().charAt(0).toUpperCase();
+  // Their OTHER events — the previous version listed the event you were already
+  // looking at, under the heading "Ongoing events".
+  const others = React.useMemo(
+    () => selectSimilarEvents(event, pool, { limit: 6 }).filter(
+      (candidate) => candidate.organization_id === event.organization_id,
+    ),
+    [event, pool],
+  );
+
   return (
-    <div className="flex flex-col gap-6">
-      {/* Organiser Summary Card */}
-      {/* ── THE ORGANISER, AS FAR AS IT IS ACTUALLY KNOWN ───────────────────
-          Three statistics stood here — "69% Liked (117 ratings)", "20+ Hosted
-          events", "5 months Hosting" — and the avatar was a hard-coded "H".
-          None of them came from data: they were literals, so every organiser
-          on the platform showed the same 69% and the same 117 ratings, in the
-          shape of a trust signal somebody uses to decide whether to hand over
-          money.
-
-          There is no review model and no hosted-event count on this payload.
-          What the payload has is the name, so that is what this shows, with a
-          real initial. When `performers`/reviews grow the columns, this is
-          where they render. */}
-      <div className="flex items-center gap-4 rounded-2xl bg-neutral-800/80 p-4 border border-white/10">
-        <div className="size-16 shrink-0 rounded-full bg-purple-600/30 text-purple-400 flex items-center justify-center font-bold text-h3">
-          {(event.organization_name || '?').trim().charAt(0).toUpperCase()}
-        </div>
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-body-sm font-bold text-white leading-tight">
-            {event.organization_name}
-          </span>
-          <span className="text-caption text-neutral-400">Organiser</span>
+    <div className="flex flex-col gap-6 pb-2">
+      <div className="flex items-center gap-4 rounded-2xl border border-border bg-sunken p-4">
+        <span
+          className="flex size-14 shrink-0 items-center justify-center rounded-full bg-muted text-h4 font-bold text-foreground"
+          aria-hidden
+        >
+          {initial}
+        </span>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="text-body font-semibold text-foreground">{event.organization_name}</p>
+          {/* NO like percentage, rating count, hosted-event tally or "hosting
+              for N years". There is no review model and no hosted-event column
+              on this payload — those numbers were literals, identical for every
+              organiser, in the exact spot somebody reads to decide whether to
+              hand over money. */}
+          <p className="text-caption text-muted-foreground">Event organiser</p>
         </div>
       </div>
 
-      {/* Ongoing Events Divider */}
-      <div className="flex items-center gap-3 text-caption font-bold tracking-wider text-neutral-400 uppercase">
-        <div className="flex-1 h-px bg-white/10" />
-        <span>ONGOING EVENTS</span>
-        <div className="flex-1 h-px bg-white/10" />
-      </div>
+      {others.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-body font-semibold text-foreground">
+            More from {event.organization_name}
+          </h3>
+          <ul className="flex flex-col gap-3">
+            {others.map((other) => (
+              <li key={other.id}>
+                <Link
+                  href={eventPath(other)}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 transition-colors active:bg-muted"
+                >
+                  <span className="relative size-14 shrink-0 overflow-hidden rounded-lg bg-muted">
+                    {other.poster_url ? (
+                      <Image src={other.poster_url} alt="" fill sizes="56px" className="object-cover" />
+                    ) : null}
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-body-sm font-semibold text-foreground">
+                      {other.title}
+                    </span>
+                    <span className="truncate text-caption text-muted-foreground">
+                      {formatEventDateTime(other.starts_at)}
+                    </span>
+                    <span className="truncate text-caption text-muted-foreground">
+                      {other.venue}, {other.city}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-caption font-semibold tabular-nums text-foreground">
+                    {formatFromPrice(other.from_price)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
+}
 
-      {/* Ongoing Events Compact List */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3 rounded-2xl bg-neutral-800/60 p-3 border border-white/10">
-          <div className="relative size-16 shrink-0 overflow-hidden rounded-xl bg-neutral-700">
-            {event.poster_url ? (
-              <Image src={event.poster_url} alt="" fill className="object-cover" />
-            ) : (
-              <Ticket className="m-auto size-8 text-neutral-400" />
-            )}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-caption font-semibold text-amber-400">
-              {formatEventDateTime(event.starts_at)}
-            </span>
-            <span className="truncate text-body-sm font-bold text-white">{event.title}</span>
-            <span className="truncate text-caption text-neutral-400">
-              {event.venue} | Kondapur, {event.city}
-            </span>
-          </div>
-          <FavouriteButton eventId={event.id} title={event.title} className="size-8 rounded-full bg-white/10 text-white" />
-        </div>
-      </div>
+/* -------------------------------------------------------------------------- */
+/* FAQ and terms                                                              */
+/* -------------------------------------------------------------------------- */
+
+function FaqSheet({ content }: { content: EventContent | null }) {
+  const faqs = content?.faqs ?? [];
+
+  return (
+    <div className="flex flex-col gap-6 pb-2">
+      {faqs.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-body font-semibold text-foreground">About this event</h3>
+          {/* Native <details>/<summary> accordion, expanding inline. Reused, so
+              the plus-to-minus animation and the keyboard behaviour are the
+              page's rather than a second implementation of both. */}
+          <EventFaqs faqs={faqs} />
+        </section>
+      ) : null}
+
+      <section className="flex flex-col gap-3">
+        <h3 className="text-body font-semibold text-foreground">Booking and entry</h3>
+        <Faqs />
+      </section>
+    </div>
+  );
+}
+
+function TermsSheet({ detail }: { detail: EventDetail | null }) {
+  const organiserPolicies = detail?.policies ?? [];
+
+  return (
+    <div className="flex flex-col gap-6 pb-2">
+      {organiserPolicies.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className="text-body font-semibold text-foreground">The organiser&rsquo;s terms</h3>
+          <OrganizerPolicies policies={organiserPolicies} />
+        </section>
+      ) : null}
+
+      <section className="flex flex-col gap-3">
+        <h3 className="text-body font-semibold text-foreground">Platform policies</h3>
+        {/* True of every event and not an organiser's to edit, which is exactly
+            why these are hard-coded and the ones above are not. */}
+        <Policies />
+      </section>
     </div>
   );
 }

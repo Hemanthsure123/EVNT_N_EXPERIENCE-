@@ -119,7 +119,11 @@ export function FilterToolbar({
   const toggle = <K extends keyof DiscoveryFilters>(key: K, value: DiscoveryFilters[K]) =>
     onChange({ ...filters, [key]: filters[key] === value ? null : value });
 
-  const isAllSelected = !filters.when && !filters.category && !filters.price && !filters.q;
+  // "All" is about the FILTERS, not the search box. A visitor who typed
+  // "jazz" and applied no filters is looking at all of their results, so the
+  // chip should read as selected — and pressing it must not silently delete
+  // what they typed (see below).
+  const isAllSelected = !filters.when && !filters.category && !filters.price;
 
   const items = React.useMemo<OverflowItem[]>(
     () => [
@@ -128,7 +132,12 @@ export function FilterToolbar({
         node: (
           <Chip
             selected={isAllSelected}
-            onClick={() => onChange(EMPTY_FILTERS)}
+            // `q` is PRESERVED, like every other clear-all path on this page
+            // (filter-toolbar.tsx's own desktop Clear, and the drawer's).
+            // Dropping it meant that on a phone — the only place this chip
+            // renders — tapping "All" wiped the visitor's search term with no
+            // undo and no indication that it had happened.
+            onClick={() => onChange({ ...EMPTY_FILTERS, q: filters.q })}
             className={isAllSelected ? 'bg-primary text-primary-foreground font-medium' : undefined}
           >
             All

@@ -804,6 +804,81 @@ const CARD_FIELDS = [
  * real serializer never omits a field: "the organizer did not say" is `""` or
  * `null` on the wire, and the frontend distinguishes that from missing.
  */
+/**
+ * Gallery, FAQs and running order for one event.
+ *
+ * Deterministic by INDEX, not random: an e2e spec has to be able to say "the
+ * second event has a gallery and the first does not" and have that be true on
+ * every run. Odd indices carry content, even ones carry none — so both the
+ * populated and the genuinely-empty branch are reachable from a fixed URL.
+ *
+ * Gallery images reuse the fixture's own generated posters, so they are real
+ * PNGs that `next/image` can optimise rather than external URLs a test machine
+ * may not be able to reach.
+ */
+function buildContent(event, index, all) {
+  if (index % 2 === 0) {
+    return { media: [], faqs: [], timeline: [], slots: [] };
+  }
+
+  const neighbours = [all[(index + 1) % all.length], all[(index + 2) % all.length]];
+  const start = Date.parse(event.starts_at);
+
+  return {
+    media: [
+      {
+        id: fixtureId(41000 + index),
+        kind: 'gallery',
+        url: event.poster_url,
+        alt_text: `${event.title} on stage`,
+        caption: '',
+        position: 0,
+      },
+      ...neighbours.map((other, n) => ({
+        id: fixtureId(41100 + index * 7 + n),
+        kind: 'gallery',
+        url: other.poster_url,
+        alt_text: `The crowd at ${event.venue}`,
+        caption: '',
+        position: n + 1,
+      })),
+    ],
+    faqs: [
+      {
+        id: fixtureId(42000 + index),
+        question: 'Is there parking at the venue?',
+        answer: `Paid parking is available beside ${event.venue}. Spaces are limited on busy nights.`,
+        position: 0,
+      },
+      {
+        id: fixtureId(42100 + index),
+        question: 'Can I re-enter after leaving?',
+        answer: 'Re-entry is not permitted once you have been scanned in.',
+        position: 1,
+      },
+    ],
+    timeline: [
+      {
+        id: fixtureId(43000 + index),
+        kind: 'doors',
+        label: 'Doors open',
+        description: '',
+        starts_at: new Date(start - 45 * 60_000).toISOString(),
+        position: 0,
+      },
+      {
+        id: fixtureId(43100 + index),
+        kind: 'main',
+        label: 'Main set',
+        description: '',
+        starts_at: event.starts_at,
+        position: 1,
+      },
+    ],
+    slots: [],
+  };
+}
+
 const DETAIL_FIELDS = [
   'id',
   'slug',
@@ -1352,6 +1427,28 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // GET /api/v1/events/{id}/content -> gallery, FAQs, running order, sessions.
+  //
+  // Added when the mobile event widget started reading it. Before this the
+  // fixture 404'd the route, `fetchEventContentSafe` swallowed it and returned
+  // empty, and every content-driven section was silently absent — so an e2e
+  // suite could not tell "the organiser published nothing" from "the gallery is
+  // broken". Both are now reachable: odd-indexed events get content, even ones
+  // get none, which is the real distribution and exercises both branches.
+  const contentMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/content\/?$/);
+  if (contentMatch) {
+    const all = buildEvents();
+    const index = all.findIndex((e) => e.id === contentMatch[1]);
+    if (index === -1) {
+      sendJson(req, res, 404, {
+        error: { code: 'event_not_found', message: 'Event not found.', details: {} },
+      });
+      return;
+    }
+    sendJson(req, res, 200, buildContent(all[index], index, all), DETAIL_CACHE_CONTROL);
+    return;
+  }
+
   const tiersMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/ticket-types\/?$/);
   if (tiersMatch) {
     const event = buildEvents().find((e) => e.id === tiersMatch[1]);
@@ -1369,7 +1466,9 @@ const server = createServer((req, res) => {
 
   const detailMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/?$/);
   if (detailMatch) {
-    const event = buildEvents().find((e) => e.id === detailMatch[1]);
+    const all = buildEvents();
+    const index = all.findIndex((e) => e.id === detailMatch[1]);
+    const event = index === -1 ? undefined : all[index];
     if (!event) {
       sendJson(req, res, 404, {
         error: { code: 'event_not_found', message: 'Event not found.', details: {} },
@@ -1382,6 +1481,28 @@ const server = createServer((req, res) => {
       200,
       {
         ...DETAIL_DEFAULTS,
+        // Optional content columns, deterministic by index for the same reason
+        // `buildContent` is: a spec must be able to assert that one event states
+        // an age policy and another states none. Every one of these is `''` or
+        // `[]` on the real API until an organiser fills it in, and the blank
+        // case is the one the UI must handle by omitting a row, so half the
+        // fixture leaves them blank.
+        ...(index % 2 === 1
+          ? {
+              short_description: `${event.title} — a night at ${event.venue}.`,
+              language: 'English',
+              age_restriction: '18+',
+              duration_minutes: 180,
+              accessibility_notes: 'Step-free access from the main entrance.',
+              policies: [
+                {
+                  title: 'Entry',
+                  body: 'Carry a valid photo ID. Entry is refused without one.',
+                },
+                { title: 'Refunds', body: 'Tickets are non-refundable unless the event is cancelled.' },
+              ],
+            }
+          : {}),
         created_at: event.starts_at,
         ...Object.fromEntries(
           Object.entries(project(event, DETAIL_FIELDS)).filter(([, v]) => v !== undefined),

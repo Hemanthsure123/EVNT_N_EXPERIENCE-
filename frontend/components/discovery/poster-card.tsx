@@ -7,12 +7,13 @@ import { EventPosterArt } from '@/components/illustrations/poster';
 import type { EventCard as EventCardModel } from '@/lib/api/types';
 import { availabilityBadge } from '@/lib/discovery/availability';
 import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
-import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
+import { formatFromPrice } from '@/lib/discovery/format';
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
 import { FavouriteButton } from './favourite-button';
+import { DateBadge } from './date-badge';
 
 /**
  * ── THE POSTER IS THE CARD ────────────────────────────────────────────────
@@ -83,7 +84,17 @@ export function PosterCard({
   };
 
   return (
-    <article className={cn('group/poster relative flex h-full flex-col gap-3', className)}>
+    <article
+      className={cn(
+        'group/poster relative flex h-full flex-col gap-3',
+        // Touch compression. The pattern already exists on EventCard and the
+        // mood tiles; the two home-page cards were the ones without it, so the
+        // busiest surface on the phone was the one that felt dead on press.
+        'transition-transform duration-fast active:scale-[0.98]',
+        'motion-reduce:transition-none motion-reduce:active:scale-100',
+        className,
+      )}
+    >
       <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
         {event.poster_url ? (
           <Image
@@ -112,6 +123,11 @@ export function PosterCard({
         <div className="absolute right-2 top-2 z-10">
           <FavouriteButton eventId={event.id} title={event.title} />
         </div>
+
+        {/* BOTTOM-left. The top-left is the availability badge's and the
+            top-right is the heart's, and three overlays in two corners is how a
+            card starts hiding its own artwork. */}
+        <DateBadge startsAt={event.starts_at} className="bottom-2 left-2" />
       </div>
 
       <div className="flex min-w-0 flex-col gap-1">
@@ -133,12 +149,11 @@ export function PosterCard({
           </button>
         </h3>
 
-        <p className="truncate text-body-sm text-muted-foreground">
-          <time dateTime={machineDate(event.starts_at)}>
-            {formatEventDateTime(event.starts_at)}
-          </time>
-        </p>
-
+        {/* The date is NOT a text line here any more — it is the badge on the
+            artwork above. Four stacked grey lines under a title (date, venue,
+            city, price) is most of the card's height spent on the two things
+            read last, and the date is the one that gets truncated first on a
+            phone. */}
         <p className="truncate text-body-sm text-muted-foreground">
           {event.venue}
           {event.city ? ` | ${event.city}` : ''}

@@ -12,6 +12,7 @@ import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discove
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
+import { DateBadge } from './date-badge';
 import { categoryTint } from './category-tint';
 
 /**
@@ -66,6 +67,10 @@ export function HeroCarousel({ events, label }: HeroCarouselProps) {
 
   React.useEffect(() => {
     if (count <= 1 || isPaused) return;
+    // The banner this advances is `hidden md:block`. Unguarded, the timer
+    // re-rendered the WHOLE carousel — every mobile slide included — once every
+    // four seconds on a phone, to move something with `display: none`.
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches) return;
     const timer = setInterval(() => {
       setIndex((prev) => (prev + 1) % count);
     }, 4000);
@@ -280,7 +285,28 @@ function MobileFeaturedCarousel({
       </Container>
       <ul
         ref={containerRef}
-        className="flex snap-x snap-mandatory items-center gap-3.5 overflow-x-auto px-[14vw] py-4 scrollbar-none scroll-smooth [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        aria-label={label}
+        className={cn(
+          // `relative`, because `handleScroll` compares `child.offsetLeft`
+          // against this element's `scrollLeft`. `offsetLeft` is measured from
+          // the nearest POSITIONED ancestor, so without this the two are in
+          // different coordinate spaces and the active card is only correct by
+          // the accident of this rail sitting at page-x 0.
+          'relative flex snap-x snap-mandatory items-center gap-3.5 overflow-x-auto scroll-smooth',
+          // 16vw each side + a 68vw card = exactly 100vw, so the FIRST and LAST
+          // cards can reach the centre like every other one. It was `px-[14vw]`
+          // against a card capped at `max-w-64`: a vw padding and a px cap stop
+          // agreeing as the phone widens, so card one sat ~12px left of centre
+          // at 390px and ~27px off on a Pro Max. The cap is gone and both
+          // numbers are now the same unit.
+          'px-[16vw]',
+          // py-6, not py-4: the active card is scaled 5% and lifted 6px, which
+          // is ~9px of ink above its box, and `overflow-x-auto` also clips
+          // vertically — so `shadow-xl` and the ring were being cut off and the
+          // elevation read flatter than it was drawn.
+          'py-6',
+          'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        )}
       >
         {events.map((event, i) => {
           const isActive = i === activeIndex;
@@ -288,7 +314,11 @@ function MobileFeaturedCarousel({
             <li
               key={event.id}
               className={cn(
-                'w-[68vw] max-w-64 shrink-0 snap-center transition-all duration-300 ease-out',
+                'w-[68vw] shrink-0 snap-center transition-all duration-300 ease-out',
+                // Every other animated surface in this repo pairs its
+                // transition with this guard; the largest moving element on the
+                // mobile home page was the one place that did not.
+                'motion-reduce:transition-none motion-reduce:transform-none',
                 isActive
                   ? 'scale-105 -translate-y-1.5 opacity-100 z-10'
                   : 'scale-95 translate-y-1 opacity-75 z-0',
@@ -296,7 +326,7 @@ function MobileFeaturedCarousel({
             >
               <div
                 className={cn(
-                  'rounded-2xl transition-all duration-300',
+                  'rounded-2xl transition-all duration-300 motion-reduce:transition-none',
                   isActive ? 'shadow-xl ring-2 ring-primary/40' : 'shadow-sm',
                 )}
               >
@@ -324,12 +354,27 @@ function HeroPosterTile({
   const { openDeck } = useEventDeck();
   const price = formatFromPrice(event.from_price);
   return (
-    <div
+    // A BUTTON, not a div with onClick. A div is not focusable, so the
+    // `focus-visible:ring` classes below could never fire, the card was
+    // unreachable by keyboard, and a screen reader announced no control at all
+    // on the biggest thing on the mobile home page.
+    <button
+      type="button"
       onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
-      className="group/tile flex h-full flex-col gap-2.5 rounded-2xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      className="group/tile flex h-full w-full flex-col gap-2.5 rounded-2xl text-left transition-transform duration-fast active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none motion-reduce:active:scale-100"
     >
-      <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
-        <Poster event={event} priority={priority} sizes="76vw" />
+      {/* `aspect-poster` (4/5), not `aspect-portrait` (3/4). The token was added
+          for exactly this carousel and was orphaned — nothing referenced it —
+          while the card used the taller ratio, which pushed the price line down
+          under the bottom navigation bar on a 664px-tall phone. 4/5 is ~24px
+          shorter at this width, which is the difference between reading the
+          price and not. */}
+      <div className="relative aspect-poster w-full overflow-hidden rounded-2xl bg-muted">
+        {/* `68vw` because that is exactly what the card is (see the track's
+            padding). It said `76vw`, which asked the browser for a source a
+            size larger than anything ever painted. */}
+        <Poster event={event} priority={priority} sizes="68vw" />
+        <DateBadge startsAt={event.starts_at} className="left-2 top-2" />
       </div>
       <div className="flex flex-col gap-0.5 px-0.5 pb-1">
         <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
@@ -341,7 +386,7 @@ function HeroPosterTile({
           </p>
         ) : null}
       </div>
-    </div>
+    </button>
   );
 }
 

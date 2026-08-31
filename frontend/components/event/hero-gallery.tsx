@@ -239,7 +239,13 @@ export function HeroGallery({
         {images.length > 0 && (hideMainImage || images.length > 1) ? (
           <ul className="flex flex-wrap gap-2 overflow-x-auto pb-1">
             {images.map((image, position) => (
-              <li key={image.url} className="shrink-0">
+              // Keyed by POSITION as well as url. Two `EventMedia` rows may
+              // legitimately point at the same stored object — an organiser
+              // adding the same photograph to a gallery twice, or a duplicated
+              // event whose media was copied — and a bare url key then throws
+              // "Encountered two children with the same key", after which React
+              // may drop or duplicate a thumbnail.
+              <li key={`${image.url}#${position}`} className="shrink-0">
                 <button
                   type="button"
                   onClick={() => {
