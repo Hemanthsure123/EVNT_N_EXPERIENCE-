@@ -5,16 +5,19 @@ import Image from 'next/image';
 import Link from 'next/link';
 import {
   ArrowLeft,
-  CalendarDays,
   ChevronRight,
   Clock,
-  MapPin,
+  Globe,
   Share2,
   Ticket,
+  Users,
+  Ban,
+  Building2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { PanInfo } from 'framer-motion';
 import { FavouriteButton } from '@/components/discovery/favourite-button';
+import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice } from '@/lib/discovery/format';
@@ -26,19 +29,20 @@ import { cn } from '@/lib/utils/cn';
  *
  * - Floating horizontal carousel stack where selected event sits in focus
  *   with adjacent cards peeking on left and right edges.
- * - Swipe left -> next event, Swipe right -> previous event.
- * - Vertical drag upward -> expands widget to 100% full screen.
- * - Vertical drag downward -> collapses/dismisses back to feed.
- * - NO "Peek" or "Full Screen" text/buttons.
+ * - Draggable top handle pill for gesture-based expansion (up to 100% full screen, down to collapse).
+ * - Exact reference section hierarchy & sub-sheet modal triggers (Venue, Schedule, About, Things to Know, Organiser).
+ * - Sticky bottom EMI banner + Book tickets action bar.
  */
 export function EventWidgetDeck() {
   const { isOpen, events, currentIndex, closeDeck, setCurrentIndex } = useEventDeck();
   const [expanded, setExpanded] = React.useState(false);
   const [direction, setDirection] = React.useState(0);
+  const [activeSubSheet, setActiveSubSheet] = React.useState<SubSheetType>(null);
 
   React.useEffect(() => {
     if (!isOpen) {
       setExpanded(false);
+      setActiveSubSheet(null);
     }
   }, [isOpen]);
 
@@ -101,7 +105,7 @@ export function EventWidgetDeck() {
   };
 
   return (
-    <div className="fixed inset-0 z-modal flex flex-col justify-start pt-3 sm:hidden">
+    <div className="fixed inset-0 z-modal flex flex-col justify-start pt-2 sm:hidden">
       {/* Dark Layered Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -138,31 +142,36 @@ export function EventWidgetDeck() {
             }}
             transition={{ type: 'spring', stiffness: 320, damping: 30 }}
             className={cn(
-              'relative flex w-[90vw] max-w-sm flex-col overflow-hidden bg-surface text-foreground shadow-2xl transition-all duration-300 ease-out',
+              'relative flex w-[92vw] max-w-sm flex-col overflow-hidden bg-neutral-900 text-white shadow-2xl transition-all duration-300 ease-out',
               expanded
                 ? 'fixed inset-0 max-w-none w-full h-[100dvh] rounded-none z-50'
-                : 'h-[80vh] max-h-[82vh] rounded-3xl border border-white/10 mt-1',
+                : 'h-[84vh] max-h-[86vh] rounded-3xl border border-white/10 mt-1',
             )}
           >
+            {/* Top Drag Handle Pill Bar */}
+            <div className="flex w-full justify-center pt-2.5 pb-1 bg-neutral-900 shrink-0">
+              <div className="h-1.5 w-12 rounded-full bg-neutral-600/60" />
+            </div>
+
             {/* Top Poster Image Area */}
-            <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-muted">
+            <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-neutral-800">
               {currentEvent.poster_url ? (
                 <Image
                   src={currentEvent.poster_url}
                   alt={currentEvent.title}
                   fill
                   priority
-                  sizes="90vw"
+                  sizes="92vw"
                   className="object-cover"
                 />
               ) : (
-                <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+                <div className="flex h-full w-full items-center justify-center bg-neutral-800 text-neutral-400">
                   <Ticket className="size-12" />
                 </div>
               )}
 
               {/* Overlaid Top Header Actions */}
-              <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3 bg-gradient-to-b from-black/60 to-transparent z-20">
+              <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3 bg-gradient-to-b from-black/70 via-black/30 to-transparent z-20">
                 <button
                   type="button"
                   onClick={closeDeck}
@@ -184,90 +193,173 @@ export function EventWidgetDeck() {
                     aria-label="Share event"
                     className="flex size-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-md transition-transform active:scale-90"
                   >
-                    <Share2 className="size-4" />
+                    <Share2 className="size-4.5" />
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Scrollable Event Content Details */}
-            <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-4.5 bg-surface">
-              {/* Category Chips */}
-              {category ? (
-                <div className="flex flex-wrap gap-1.5">
-                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-caption font-medium text-muted-foreground">
-                    {category.label}
-                  </span>
-                </div>
-              ) : null}
+            {/* Scrollable Reference Content Hierarchy Details */}
+            <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-5 bg-neutral-900 text-neutral-100 pb-28">
+              {/* Category Pills */}
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-neutral-800 px-3 py-1 text-caption font-semibold text-neutral-300 border border-white/10">
+                  {category ? category.label : 'DJ Nights'}
+                </span>
+                <span className="rounded-full bg-neutral-800 px-3 py-1 text-caption font-semibold text-neutral-300 border border-white/10">
+                  Nightlife
+                </span>
+              </div>
 
-              {/* Title & Date */}
+              {/* Event Title & Accent Date */}
               <div className="flex flex-col gap-1">
-                <h2 className="text-h3 font-extrabold leading-snug tracking-tight text-foreground">
+                <h2 className="text-h3 font-extrabold leading-snug tracking-tight text-white">
                   {currentEvent.title}
                 </h2>
-                <p className="flex items-center gap-1.5 text-body-sm font-semibold text-primary mt-0.5">
-                  <CalendarDays className="size-4 shrink-0" aria-hidden />
-                  <time dateTime={currentEvent.starts_at}>
-                    {formatEventDateTime(currentEvent.starts_at)}
-                  </time>
+                <p className="text-body-sm font-bold text-amber-400 mt-0.5">
+                  {formatEventDateTime(currentEvent.starts_at)}
                 </p>
               </div>
 
-              {/* Venue & Location Row */}
-              <div className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3 border border-border/40">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                  <MapPin className="size-4" aria-hidden />
+              {/* Venue Row */}
+              <button
+                type="button"
+                onClick={() => setActiveSubSheet('venue')}
+                className="flex items-center gap-3.5 rounded-2xl bg-neutral-800/80 p-3.5 border border-white/10 text-left transition-colors hover:bg-neutral-800"
+              >
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-neutral-700/80 text-neutral-300">
+                  <Building2 className="size-5" aria-hidden />
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-body-sm font-bold text-foreground">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-body-sm font-bold text-white">
                     {currentEvent.venue}, {currentEvent.city}
                   </span>
-                  <span className="text-caption text-muted-foreground">7.9 km away</span>
-                </div>
-                <ChevronRight className="size-4 text-muted-foreground shrink-0" aria-hidden />
-              </div>
-
-              {/* Gates / Timeline Schedule Row */}
-              <div className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3 border border-border/40">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                  <Clock className="size-4" aria-hidden />
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-body-sm font-bold text-foreground">
-                    Gates open at 6:30 PM
+                  <span className="text-caption font-semibold text-neutral-400">
+                    <span className="text-lime-400">Rated 3.9</span> | 7.1 km away
                   </span>
-                  <span className="text-caption text-muted-foreground">View full schedule & timeline</span>
                 </div>
-                <ChevronRight className="size-4 text-muted-foreground shrink-0" aria-hidden />
+                <ChevronRight className="size-5 text-neutral-400 shrink-0" aria-hidden />
+              </button>
+
+              {/* Schedule / Timeline Row */}
+              <button
+                type="button"
+                onClick={() => setActiveSubSheet('schedule')}
+                className="flex items-center gap-3.5 rounded-2xl bg-neutral-800/80 p-3.5 border border-white/10 text-left transition-colors hover:bg-neutral-800"
+              >
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-neutral-700/80 text-neutral-300">
+                  <Clock className="size-5" aria-hidden />
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-body-sm font-bold text-white">Starts at 8 PM</span>
+                  <span className="text-caption text-neutral-400">View full schedule & timeline</span>
+                </div>
+                <ChevronRight className="size-5 text-neutral-400 shrink-0" aria-hidden />
+              </button>
+
+              {/* About the Event Section */}
+              <div className="flex flex-col gap-2 pt-1">
+                <h3 className="text-body font-extrabold text-white">About the event</h3>
+                <p className="text-body-sm text-neutral-300 font-medium">Feel the beat. Own the floor.</p>
+                <p className="text-body-sm text-neutral-400 line-clamp-2">
+                  {currentEvent.title} is taking over Quake Arena with unstoppable energy, electrifying
+                  music, and a night made for high vibrations...
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubSheet('about')}
+                  className="flex items-center gap-1 text-body-sm font-bold text-white hover:underline self-start pt-0.5"
+                >
+                  Read more <ChevronRight className="size-4 text-neutral-400" />
+                </button>
               </div>
 
-              {/* Sticky Bottom Booking Action Pill */}
-              <div className="mt-auto pt-3">
-                <div className="flex items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-muted/40 p-3">
-                  <div className="flex flex-col">
-                    <span className="text-caption font-semibold text-emerald-600 dark:text-emerald-400">
-                      General Sale
-                    </span>
-                    <span className="text-body-sm font-extrabold text-foreground tabular-nums">
-                      {price === 'Free' ? 'Free entry' : `${price} onwards`}
-                    </span>
+              {/* Things to Know Section */}
+              <div className="flex flex-col gap-3 pt-2">
+                <h3 className="text-body font-extrabold text-white">Things to Know</h3>
+                <div className="flex flex-col gap-3 text-body-sm text-neutral-300">
+                  <div className="flex items-center gap-3">
+                    <Globe className="size-4.5 text-neutral-400 shrink-0" />
+                    <span>Event will be in English</span>
                   </div>
-
-                  <Link
-                    href={eventPath(currentEvent)}
-                    onClick={closeDeck}
-                    className="inline-flex h-11 items-center justify-center rounded-full bg-cta px-6 text-label font-bold text-cta-foreground shadow-md transition-transform active:scale-95"
-                  >
-                    Book tickets
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <Users className="size-4.5 text-neutral-400 shrink-0" />
+                    <span>Ticket needed for ages 21 and above</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Ticket className="size-4.5 text-neutral-400 shrink-0" />
+                    <span>Entry allowed for ages 21 and above</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Ban className="size-4.5 text-neutral-400 shrink-0" />
+                    <span>Kids not allowed</span>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubSheet('things_to_know')}
+                  className="flex items-center gap-1 text-body-sm font-bold text-white hover:underline self-start pt-1"
+                >
+                  See all <ChevronRight className="size-4 text-neutral-400" />
+                </button>
+              </div>
+
+              {/* Organised By Section */}
+              <div className="flex flex-col gap-3 pt-2">
+                <h3 className="text-body font-extrabold text-white">Organised By</h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubSheet('organiser')}
+                  className="flex items-center gap-3.5 rounded-2xl bg-neutral-800/80 p-3.5 border border-white/10 text-left transition-colors hover:bg-neutral-800"
+                >
+                  <div className="size-12 rounded-full bg-purple-600/30 text-purple-300 flex items-center justify-center font-bold text-body">
+                    H
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-body-sm font-bold text-white">
+                      {currentEvent.organization_name || 'HIGHSTREET HOSPITALITY LLP'}
+                    </span>
+                    <span className="text-caption text-neutral-400">69% Liked • 20+ Events</span>
+                  </div>
+                  <ChevronRight className="size-5 text-neutral-400 shrink-0" aria-hidden />
+                </button>
+              </div>
+            </div>
+
+            {/* Sticky Bottom Booking Action Surface */}
+            <div className="absolute inset-x-0 bottom-0 z-30 flex flex-col overflow-hidden rounded-b-3xl bg-neutral-900 p-3.5 border-t border-white/10 shadow-2xl">
+              {/* EMI Offer Top Pill */}
+              <div className="mb-2.5 flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-900/90 to-purple-900/90 px-3 py-1.5 border border-purple-500/30">
+                <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-indigo-950 font-black text-xs">
+                  %
+                </div>
+                <span className="text-caption font-bold text-white">
+                  EMI available on orders over ₹4,000
+                </span>
+              </div>
+
+              {/* Price & Primary CTA */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col">
+                  <span className="text-h4 font-extrabold text-white tabular-nums">
+                    {price === 'Free' ? 'Free entry' : `${price}`}
+                  </span>
+                  <span className="text-caption font-semibold text-neutral-400">onwards</span>
+                </div>
+
+                <Link
+                  href={eventPath(currentEvent)}
+                  onClick={closeDeck}
+                  className="inline-flex h-12 items-center justify-center rounded-full bg-white px-7 text-body-sm font-extrabold text-neutral-950 shadow-lg transition-transform active:scale-95 hover:bg-neutral-100"
+                >
+                  Book tickets
+                </Link>
               </div>
             </div>
           </motion.div>
         </AnimatePresence>
 
-        {/* Adjacent Peeking Cards (Left & Right Indicators) */}
+        {/* Adjacent Peeking Cards Navigation Indicators */}
         {currentIndex > 0 ? (
           <button
             type="button"
@@ -275,7 +367,7 @@ export function EventWidgetDeck() {
             aria-label="Previous event"
             className="absolute left-1 top-1/2 -translate-y-1/2 opacity-60 transition-opacity hover:opacity-100"
           >
-            <div className="h-64 w-6 rounded-r-2xl bg-surface/40 backdrop-blur-sm border-r border-y border-white/20" />
+            <div className="h-64 w-5 rounded-r-2xl bg-neutral-800/60 backdrop-blur-sm border-r border-y border-white/20" />
           </button>
         ) : null}
 
@@ -286,9 +378,16 @@ export function EventWidgetDeck() {
             aria-label="Next event"
             className="absolute right-1 top-1/2 -translate-y-1/2 opacity-60 transition-opacity hover:opacity-100"
           >
-            <div className="h-64 w-6 rounded-l-2xl bg-surface/40 backdrop-blur-sm border-l border-y border-white/20" />
+            <div className="h-64 w-5 rounded-l-2xl bg-neutral-800/60 backdrop-blur-sm border-l border-y border-white/20" />
           </button>
         ) : null}
+
+        {/* Unified Sub-Sheets Modal Overlay */}
+        <EventSubSheets
+          sheetType={activeSubSheet}
+          onClose={() => setActiveSubSheet(null)}
+          event={currentEvent}
+        />
       </div>
     </div>
   );
