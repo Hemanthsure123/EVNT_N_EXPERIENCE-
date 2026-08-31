@@ -88,19 +88,8 @@ export function HeroCarousel({ events, label }: HeroCarouselProps) {
 
   return (
     <section aria-roledescription="carousel" aria-label={label}>
-      {/* ── PHONE: the peeking rail ────────────────────────────────────── */}
-      <div className="md:hidden">
-        <Container className="pb-3 pt-5">
-          <h2 className="text-body font-bold tracking-tight text-foreground">{label}</h2>
-        </Container>
-        <ul className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {events.map((event, i) => (
-            <li key={event.id} className="w-[76%] shrink-0 snap-center">
-              <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* ── PHONE: 3-Card Peeking Raised Carousel ──────────────────────── */}
+      <MobileFeaturedCarousel events={events} label={label} />
 
       {/* ── DESKTOP: the banner ────────────────────────────────────────── */}
       <div
@@ -240,6 +229,84 @@ function PriceLine({ event }: { event: EventCardModel }) {
     <p className="text-body-lg font-semibold text-foreground">
       {price === 'Free' ? 'Free entry' : `${price} onwards`}
     </p>
+  );
+}
+
+function MobileFeaturedCarousel({
+  events,
+  label,
+}: {
+  events: EventCardModel[];
+  label: string;
+}) {
+  const containerRef = React.useRef<HTMLUListElement>(null);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+
+  const handleScroll = React.useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const children = Array.from(el.children) as HTMLElement[];
+    if (children.length === 0) return;
+
+    const containerCenter = el.scrollLeft + el.clientWidth / 2;
+    let closestIndex = 0;
+    let minDistance = Infinity;
+
+    children.forEach((child, idx) => {
+      const childCenter = child.offsetLeft + child.clientWidth / 2;
+      const distance = Math.abs(containerCenter - childCenter);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = idx;
+      }
+    });
+
+    setActiveIndex(closestIndex);
+  }, []);
+
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
+
+  return (
+    <div className="overflow-x-hidden md:hidden">
+      <Container className="pb-3 pt-5">
+        <h2 className="text-body font-bold tracking-tight text-foreground">{label}</h2>
+      </Container>
+      <ul
+        ref={containerRef}
+        className="flex snap-x snap-mandatory items-center gap-3.5 overflow-x-auto px-[14vw] py-4 scrollbar-none scroll-smooth [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {events.map((event, i) => {
+          const isActive = i === activeIndex;
+          return (
+            <li
+              key={event.id}
+              className={cn(
+                'w-[68vw] max-w-64 shrink-0 snap-center transition-all duration-300 ease-out',
+                isActive
+                  ? 'scale-105 -translate-y-1.5 opacity-100 z-10'
+                  : 'scale-95 translate-y-1 opacity-75 z-0',
+              )}
+            >
+              <div
+                className={cn(
+                  'rounded-2xl transition-all duration-300',
+                  isActive ? 'shadow-xl ring-2 ring-primary/40' : 'shadow-sm',
+                )}
+              >
+                <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
