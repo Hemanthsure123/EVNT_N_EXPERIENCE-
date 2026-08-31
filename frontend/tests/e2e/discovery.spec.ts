@@ -545,7 +545,7 @@ test.describe('browse and results', () => {
   test('passes axe with the filter panel open', async ({ page }) => {
     await page.goto('/events');
     await page.getByRole('button', { name: /^All filters/ }).click();
-    await expect(page.getByRole('heading', { name: 'All filters' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Filter by' })).toBeVisible();
     await axeClean(page, 'results (filter panel)');
   });
 });
@@ -590,11 +590,11 @@ test.describe('the browse page', () => {
 
   test('has no permanent sidebar; the full filter set is a slide-over', async ({ page }) => {
     await page.goto('/events');
-    await expect(page.getByRole('heading', { name: 'All filters' })).toBeHidden();
+    await expect(page.getByRole('heading', { name: 'Filter by' })).toBeHidden();
 
     await page.getByRole('button', { name: /^All filters/ }).click();
-    const panel = page.getByRole('dialog', { name: 'All filters' });
-    await expect(panel.getByRole('heading', { name: 'All filters' })).toBeVisible();
+    const panel = page.getByRole('dialog', { name: 'Filter by' });
+    await expect(panel.getByRole('heading', { name: 'Filter by' })).toBeVisible();
 
     // Draft-then-apply: choosing changes nothing until Apply is pressed.
     await panel.getByRole('button', { name: 'Comedy' }).click();
@@ -605,12 +605,17 @@ test.describe('the browse page', () => {
     await expect(panel).toBeHidden();
   });
 
-  test('the drawer can reset everything it applied', async ({ page }) => {
+  // The panel is titled "Filter by" and its reset reads "Clear all" — a
+  // deliberate copy change, not a weakened assertion: the heading names the
+  // action the panel performs, and "Clear all" says what it clears where
+  // "Reset" could as easily have meant reverting to the last applied set.
+  // The CONTROL that opens it is still "All filters".
+  test('the drawer can clear everything it applied', async ({ page }) => {
     await page.goto('/events?category=comedy&when=today');
     await page.getByRole('button', { name: /^All filters/ }).click();
-    const panel = page.getByRole('dialog', { name: 'All filters' });
+    const panel = page.getByRole('dialog', { name: 'Filter by' });
 
-    await panel.getByRole('button', { name: 'Reset' }).click();
+    await panel.getByRole('button', { name: 'Clear all' }).click();
     await panel.getByRole('button', { name: 'Apply' }).click();
     await expect(page).toHaveURL(/\/events$/);
   });
@@ -634,7 +639,7 @@ test.describe('the browse page', () => {
     // `exact`, or this also matches the "Nightlife Collective" organiser facet.
     await expect(
       page
-        .getByRole('dialog', { name: 'All filters' })
+        .getByRole('dialog', { name: 'Filter by' })
         .getByRole('button', { name: 'Nightlife', exact: true }),
     ).toBeVisible();
   });
@@ -1007,7 +1012,7 @@ test.describe('the sort dropdown floats above everything', () => {
     await page.goto('/events');
     // Sort lives in the filter panel below `md`, where the toolbar has no room.
     await page.getByRole('button', { name: /^All filters/ }).click();
-    const panel = page.getByRole('dialog', { name: 'All filters' });
+    const panel = page.getByRole('dialog', { name: 'Filter by' });
     await panel.getByRole('button', { name: 'Price: low to high' }).click();
     await panel.getByRole('button', { name: 'Apply' }).click();
     await expect(page).toHaveURL(/sort=price-asc/);
