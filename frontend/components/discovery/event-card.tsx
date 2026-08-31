@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
 import { FavouriteButton } from './favourite-button';
+import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
 
 /**
  * The unit of discovery. A Server Component — it holds no state, so it renders
@@ -106,15 +107,8 @@ export type EventCardProps = {
 };
 
 export function EventCard({ event, sizes, priority = false, className }: EventCardProps) {
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const badge = availabilityBadge(event);
-  // The COLUMN first; inference only where it is still blank.
-  //
-  // Inference was the only option before `Event.category` existed, and it was
-  // wrong in both directions: it matched a concert whose description mentioned
-  // a comedian, and missed a stand-up night whose copy never said "comedy".
-  // It stays as a fallback rather than being deleted, because a catalogue
-  // predating the column is mostly blank and a keyword guess is better than no
-  // chip at all — but a stored value always wins over a guess.
   const category = categoryBySlug(event.category) ?? inferCategory(event);
   const price = formatFromPrice(event.from_price);
   const CategoryIcon = category?.icon;
@@ -122,32 +116,20 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
 
   return (
     <div className={cn('group/card relative h-full', className)}>
+      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
       <Card
         interactive
         className={cn(
-          // The row on a phone, the portrait card from `sm` — see the note
-          // above. `items-stretch` (the flex default) is what makes the 96px
-          // poster fill the row's full height when the text runs longer than
-          // the 3:4 box it reserves.
           'flex h-full flex-row overflow-hidden sm:flex-col',
-          // `relative` so the save control's `sm:absolute` anchors HERE and
-          // not to whichever ancestor happens to be positioned. Without it the
-          // anchor silently changes on hover — a `translate` makes this card a
-          // containing block — and the heart jogs by the border width every
-          // time a pointer crosses it.
           'relative',
           'transition duration-base ease-spring',
-          // A neutral lift, not the old violet halo — `shadow-glow` is a
-          // deeper `shadow-lg` now, and a coloured glow would tint the white
-          // page around every hovered card.
+          // Desktop hover lift & image zoom trigger
           'group-hover/card:-translate-y-1 group-hover/card:shadow-lg',
+          // Tactile touch compression on tap
+          'active:scale-[0.98] active:duration-fast',
           'motion-reduce:transform-none motion-reduce:transition-none',
         )}
       >
-        {/* 3:4 at every width. Only the WIDTH changes — a second crop would
-            mean two different pictures of the same event depending on the
-            phone, and `aspect-portrait` here is also the floor that stops a
-            short card collapsing to the height of three lines of text. */}
         <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden rounded-xl bg-muted m-2 sm:m-0 sm:aspect-[4/3] sm:w-full sm:rounded-none">
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {event.poster_url ? (
@@ -159,8 +141,8 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
               priority={priority}
               loading={priority ? undefined : 'lazy'}
               className={cn(
-                'object-cover transition-transform duration-slow ease-out',
-                'group-hover/card:scale-[1.06]',
+                'object-cover transition-transform duration-300 ease-out',
+                'group-hover/card:scale-105',
                 'motion-reduce:transition-none motion-reduce:group-hover/card:scale-100',
               )}
             />
@@ -189,12 +171,21 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
           ) : null}
 
           <h3 className="line-clamp-2 pr-7 text-body-sm font-bold leading-snug text-foreground sm:pr-0 sm:text-body">
+            {/* Desktop link navigation */}
             <Link
               href={eventPath(event)}
-              className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
+              className="hidden sm:inline after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
             >
               {event.title}
             </Link>
+            {/* Mobile tap trigger for District Peek Sheet */}
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="sm:hidden text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none"
+            >
+              {event.title}
+            </button>
           </h3>
 
           <p className="flex items-center gap-1.5 text-caption font-medium text-primary sm:font-normal sm:text-muted-foreground">

@@ -103,6 +103,16 @@ export function FilterToolbar({
   /** e.g. "24+ events" — announced politely as the results change. */
   resultLabel: string;
 }) {
+  const [isFilterMinimised, setIsFilterMinimised] = React.useState(false);
+
+  const handleChipsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const scrollLeft = e.currentTarget.scrollLeft;
+    if (scrollLeft > 15 && !isFilterMinimised) {
+      setIsFilterMinimised(true);
+    } else if (scrollLeft <= 15 && isFilterMinimised) {
+      setIsFilterMinimised(false);
+    }
+  };
   const chips = activeFilterChips(filters);
   const activeCount = chips.length + (filters.sort === 'soonest' ? 0 : 1);
 
@@ -182,21 +192,7 @@ export function FilterToolbar({
   return (
     <div
       className={cn(
-        // ── THE OFFSET IS THE HEADER'S HEIGHT, NOT A NUMBER ──────────────
-        //
-        // This was `top-14` — 56px, hard-coded — and the header became TWO
-        // rows (identity, then the full-width search field). So the bar stuck
-        // 56px from the top, which is INSIDE the header: most of it sat behind
-        // the search row and only a sliver showed. It is not that the bar
-        // stopped being sticky; it stuck to the wrong place.
-        //
-        // `--sticky-top` is the header's own height, so the two cannot drift
-        // apart again. `z-[999]` is one BELOW the header's `z-sticky` (1000):
-        // on equal z the later element in the DOM wins, which is what let this
-        // bar paint over the header's bottom edge.
         'sticky top-sticky-top z-[999] border-y border-border lg:top-sticky-top-lg',
-        // One real backdrop-filter on the page's one sticky bar — the same
-        // exception the site header gets. Cards use `.glass-media` instead.
         'glass',
       )}
     >
@@ -207,28 +203,26 @@ export function FilterToolbar({
             onClick={onOpenFilters}
             aria-label={activeCount ? `All filters, ${activeCount} applied` : 'All filters'}
             className={cn(
-              // `px-pill` rather than a picked number — the pill padding token
-              // every call to action in the product shares.
-              'inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-pill text-label',
-              'transition duration-fast ease-out active:scale-95',
+              'inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3 text-label',
+              'transition-all duration-300 ease-out active:scale-95',
               'motion-reduce:transition-none motion-reduce:active:scale-100',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-              // THE BLACK PILL once anything is applied — this is the browse
-              // page's one primary action, and `--cta` is what makes it the
-              // same object as every other primary action in the product.
               activeCount
                 ? 'border-cta bg-cta text-cta-foreground hover:bg-cta-hover'
                 : 'border-border bg-surface text-foreground hover:bg-muted',
             )}
           >
-            <SlidersHorizontal className="size-4" aria-hidden />
-            Filters
+            <SlidersHorizontal className="size-4 shrink-0" aria-hidden />
+            <span
+              className={cn(
+                'inline-block transition-all duration-300 ease-out overflow-hidden whitespace-nowrap',
+                isFilterMinimised ? 'max-w-0 opacity-0 -ml-1' : 'max-w-xs opacity-100'
+              )}
+            >
+              Filters
+            </span>
             {activeCount ? (
-              // `cta-foreground/20`, NOT `on-gradient/20`. The pill inverts to
-              // near-WHITE in dark theme, and white-at-20% on white is nothing
-              // at all; this tints with whatever the label's colour is, so the
-              // counter is a readable chip in both themes.
-              <span className="inline-flex size-5 items-center justify-center rounded-full bg-cta-foreground/20 text-caption tabular-nums">
+              <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-cta-foreground/20 text-caption tabular-nums">
                 {activeCount}
               </span>
             ) : null}
@@ -236,16 +230,26 @@ export function FilterToolbar({
 
           <span className="hidden h-6 w-px shrink-0 bg-border sm:block" aria-hidden />
 
-          <OverflowRow
-            items={items}
-            gapPx={ROW_GAP_PX}
-            // NO "more filters" control. There is already a `Filters` button,
-            // two rows up and always visible, that opens the same panel — two
-            // buttons for one destination is two things to read and one of
-            // them redundant. Overflowing chips simply do not render; the
-            // panel is where the full set lives.
-            renderMore={() => null}
-          />
+          {/* Mobile Horizontal Scrollable Chip Container with Scroll Minimization Listener */}
+          <div
+            onScroll={handleChipsScroll}
+            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none snap-x snap-mandatory py-0.5 sm:hidden"
+          >
+            {items.map((item) => (
+              <div key={item.key} className="shrink-0 snap-start">
+                {item.node}
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop OverflowRow */}
+          <div className="hidden min-w-0 flex-1 sm:block">
+            <OverflowRow
+              items={items}
+              gapPx={ROW_GAP_PX}
+              renderMore={() => null}
+            />
+          </div>
 
           <span className="hidden h-6 w-px shrink-0 bg-border xl:block" aria-hidden />
 

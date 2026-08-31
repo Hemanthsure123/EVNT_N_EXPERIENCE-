@@ -111,63 +111,47 @@ export function CategoryTiles({
   return (
     <ul
       className={cn(
-        '-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 snap-x snap-mandatory scrollbar-none sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4',
-        'grid grid-rows-2 auto-cols-40 grid-flow-col sm:grid-rows-none sm:auto-cols-auto sm:grid-flow-row',
+        '-mx-4 flex gap-3 overflow-x-auto px-4 pb-3 snap-x snap-mandatory scrollbar-none sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4',
         className
       )}
     >
       {tiles.map((category, index) => {
         const tint = categoryTint(category.slug);
         return (
-          <li key={category.slug} className="snap-start h-full">
+          <li key={category.slug} className="w-44 shrink-0 snap-start h-full sm:w-auto sm:shrink">
             <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
               <Link
                 href={`/categories/${category.slug}`}
                 className={cn(
-                  'group flex h-full items-center gap-3 rounded-xl border border-border bg-surface p-3 shadow-sm',
-                  // The chip below `sm`, the considered card from `sm` up. One
-                  // element, two shapes — see the note above.
-                  'flex-row-reverse sm:flex-col sm:items-stretch sm:gap-4 sm:p-card',
+                  'group flex h-full flex-col items-stretch justify-between gap-3 rounded-2xl border border-border bg-surface p-3.5 shadow-sm',
                   'transition duration-base ease-spring hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lg',
-                  // Press cancels the lift and scales in — tactile responsive touch
-                  'active:translate-y-0 active:scale-[0.95] active:duration-fast',
+                  // Touch press compression animation (scale 0.95 -> 1)
+                  'active:translate-y-0 active:scale-95 active:duration-fast',
                   'motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                 )}
               >
-                {/* The words come first, and the accessible name therefore
-                    still STARTS with the category label — the artwork beside
-                    it is decorative and contributes nothing to it. */}
-                <span className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-none">
-                  <span className="text-body-sm font-semibold leading-tight text-foreground sm:text-body-lg">
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="text-body font-bold leading-tight text-foreground">
                     {category.label}
                   </span>
-                  {/* Absent rather than empty when there is no blurb — an empty
-                      span still costs the parent's `gap-1` and would push the
-                      artwork band down on the CMS-backed tiles only, so a row
-                      would line up inconsistently for no visible reason. */}
                   {category.blurb ? (
-                    <span className="hidden text-caption text-muted-foreground sm:line-clamp-2">
+                    <span className="text-caption text-muted-foreground line-clamp-1">
                       {category.blurb}
                     </span>
                   ) : null}
                 </span>
 
-                {/* The pastel plate. A 48px square beside the label on a phone;
-                    from `sm` a full-width band, with `mt-auto` so tiles whose
-                    blurb wraps to two lines still line their artwork up across
-                    the row. */}
                 <span
                   className={cn(
-                    'flex size-12 shrink-0 items-center justify-center rounded-lg',
-                    'sm:mt-auto sm:h-auto sm:w-full sm:py-6',
+                    'flex h-20 w-full shrink-0 items-center justify-center rounded-xl p-2 sm:h-24 sm:py-6',
                     tint.surface,
                   )}
                   aria-hidden
                 >
                   <CategoryScene
                     slug={category.slug}
-                    className="h-12 w-full transition-transform duration-base ease-spring group-hover:scale-[1.03] group-active:-translate-y-1 motion-reduce:transition-none motion-reduce:group-hover:scale-100 sm:h-24"
+                    className="h-16 w-full transition-transform duration-base ease-spring group-hover:scale-[1.05] group-active:-translate-y-1.5 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
                   />
                 </span>
               </Link>
