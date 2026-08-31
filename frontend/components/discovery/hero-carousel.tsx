@@ -11,7 +11,7 @@ import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
-import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { categoryTint } from './category-tint';
 
 /**
@@ -96,7 +96,7 @@ export function HeroCarousel({ events, label }: HeroCarouselProps) {
         <ul className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {events.map((event, i) => (
             <li key={event.id} className="w-[76%] shrink-0 snap-center">
-              <HeroPosterTile event={event} priority={i === 0} />
+              <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
             </li>
           ))}
         </ul>
@@ -243,31 +243,38 @@ function PriceLine({ event }: { event: EventCardModel }) {
   );
 }
 
-function HeroPosterTile({ event, priority }: { event: EventCardModel; priority?: boolean }) {
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+function HeroPosterTile({
+  event,
+  priority,
+  allEvents,
+  index = 0,
+}: {
+  event: EventCardModel;
+  priority?: boolean;
+  allEvents?: EventCardModel[];
+  index?: number;
+}) {
+  const { openDeck } = useEventDeck();
   const price = formatFromPrice(event.from_price);
   return (
-    <>
-      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
-      <div
-        onClick={() => setSheetOpen(true)}
-        className="group/tile flex h-full flex-col gap-2.5 rounded-2xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      >
-        <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
-          <Poster event={event} priority={priority} sizes="76vw" />
-        </div>
-        <div className="flex flex-col gap-0.5 px-0.5 pb-1">
-          <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
-            {event.title}
-          </p>
-          {price ? (
-            <p className="text-caption text-muted-foreground">
-              {price === 'Free' ? 'Free' : `${price} onwards`}
-            </p>
-          ) : null}
-        </div>
+    <div
+      onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
+      className="group/tile flex h-full flex-col gap-2.5 rounded-2xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    >
+      <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
+        <Poster event={event} priority={priority} sizes="76vw" />
       </div>
-    </>
+      <div className="flex flex-col gap-0.5 px-0.5 pb-1">
+        <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
+          {event.title}
+        </p>
+        {price ? (
+          <p className="text-caption text-muted-foreground">
+            {price === 'Free' ? 'Free' : `${price} onwards`}
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

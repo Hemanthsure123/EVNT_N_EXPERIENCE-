@@ -51,7 +51,7 @@ import { FavouriteButton } from './favourite-button';
  * young catalogue have no poster, so this is the common case, not the
  * fallback.
  */
-import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 
 export interface PosterCardProps {
   event: EventCardModel;
@@ -60,6 +60,8 @@ export interface PosterCardProps {
   /** LCP candidates only — everything else must not compete for bandwidth. */
   priority?: boolean;
   className?: string;
+  allEvents?: EventCardModel[];
+  index?: number;
 }
 
 export function PosterCard({
@@ -67,16 +69,21 @@ export function PosterCard({
   sizes = '(min-width: 1024px) 33vw, (min-width: 640px) 45vw, 90vw',
   priority = false,
   className,
+  allEvents,
+  index = 0,
 }: PosterCardProps) {
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const { openDeck } = useEventDeck();
   const badge = availabilityBadge(event);
   const category = categoryBySlug(event.category) ?? inferCategory(event);
   const price = formatFromPrice(event.from_price);
   const tint = categoryTint(category?.slug);
 
+  const handleMobileTap = () => {
+    openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index);
+  };
+
   return (
     <article className={cn('group/poster relative flex h-full flex-col gap-3', className)}>
-      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
       <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
         {event.poster_url ? (
           <Image
@@ -116,10 +123,10 @@ export function PosterCard({
           >
             {event.title}
           </Link>
-          {/* Mobile tap trigger for District Peek Sheet */}
+          {/* Mobile tap trigger for District Event Deck */}
           <button
             type="button"
-            onClick={() => setSheetOpen(true)}
+            onClick={handleMobileTap}
             className="sm:hidden text-left after:absolute after:inset-0 after:rounded-2xl focus-visible:outline-none"
           >
             {event.title}

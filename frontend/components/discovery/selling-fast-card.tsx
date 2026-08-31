@@ -25,12 +25,12 @@ import { Countdown } from './countdown';
  * signal, so it renders nothing on its own judgement.
  */
 
-import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 
 const CARD_SIZES = '(min-width: 768px) 320px, 70vw';
 
 export function SellingFastCard({ event }: { event: EventCardData }) {
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const { openDeck } = useEventDeck();
   const signal = demandSignal(event);
   if (!signal) return null;
 
@@ -39,17 +39,15 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
   const tint = categoryTint(category?.slug);
 
   return (
-    <>
-      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
-      <div
-        onClick={() => setSheetOpen(true)}
-        className={cn(
-          'group/urgent flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-md cursor-pointer sm:cursor-auto',
-          'transition duration-base ease-spring hover:-translate-y-1 hover:shadow-lg',
-          'motion-reduce:hover:translate-y-0',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        )}
-      >
+    <div
+      onClick={() => openDeck([event], 0)}
+      className={cn(
+        'group/urgent flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-md cursor-pointer sm:cursor-auto',
+        'transition duration-base ease-spring hover:-translate-y-1 hover:shadow-lg',
+        'motion-reduce:hover:translate-y-0',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+      )}
+    >
       <div className="relative aspect-card w-full shrink-0 overflow-hidden bg-muted">
         <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
         {event.poster_url ? (
@@ -118,6 +116,5 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
         </div>
       </div>
     </div>
-  </>
-);
+  );
 }

@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
 import { FavouriteButton } from './favourite-button';
-import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 
 /**
  * The unit of discovery. A Server Component — it holds no state, so it renders
@@ -104,19 +104,31 @@ export type EventCardProps = {
   /** Set on the LCP candidate only (the first row of cards). */
   priority?: boolean;
   className?: string;
+  allEvents?: EventCardData[];
+  index?: number;
 };
 
-export function EventCard({ event, sizes, priority = false, className }: EventCardProps) {
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+export function EventCard({
+  event,
+  sizes,
+  priority = false,
+  className,
+  allEvents,
+  index = 0,
+}: EventCardProps) {
+  const { openDeck } = useEventDeck();
   const badge = availabilityBadge(event);
   const category = categoryBySlug(event.category) ?? inferCategory(event);
   const price = formatFromPrice(event.from_price);
   const CategoryIcon = category?.icon;
   const tint = categoryTint(category?.slug);
 
+  const handleMobileTap = () => {
+    openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index);
+  };
+
   return (
     <div className={cn('group/card relative h-full', className)}>
-      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
       <Card
         interactive
         className={cn(
@@ -178,10 +190,10 @@ export function EventCard({ event, sizes, priority = false, className }: EventCa
             >
               {event.title}
             </Link>
-            {/* Mobile tap trigger for District Peek Sheet */}
+            {/* Mobile tap trigger for District Event Deck */}
             <button
               type="button"
-              onClick={() => setSheetOpen(true)}
+              onClick={handleMobileTap}
               className="sm:hidden text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none"
             >
               {event.title}

@@ -25,19 +25,11 @@ import { SITE_NAME, SITE_URL } from '@/lib/seo/metadata';
  * overlay (header, hero and ⌘K all drive one instance, code-split until first
  * opened).
  */
-export default async function SiteLayout({ children }: { children: React.ReactNode }) {
-  // Server-fetched and ISR'd alongside the homepage. Announcements are the
-  // same for every visitor, so they belong in the HTML rather than behind a
-  // client request that would land after first paint.
-  const announcements = await fetchAnnouncementsSafe('home');
+import { EventDeckProvider } from '@/lib/discovery/event-deck-context';
+import { EventWidgetDeck } from '@/components/event/event-widget-deck';
 
-  // The operator's suggested searches, for the header bar's rolling hint AND
-  // the panel's suggestion group — one read, one list.
-  //
-  // This costs NO extra request: the home page reads the same URL with the same
-  // options, so Next memoises it within the render pass and serves it from the
-  // data cache across requests. Fetching it in the client instead would put a
-  // round trip in front of a hint that is identical for everybody.
+export default async function SiteLayout({ children }: { children: React.ReactNode }) {
+  const announcements = await fetchAnnouncementsSafe('home');
   const cms = await fetchHomepageSafe();
   const terms = (cms?.popular_searches ?? []).map((row) => ({
     label: row.label,
@@ -47,76 +39,41 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
   return (
     <LocationProvider>
       <SearchProvider terms={terms}>
-        {/* ── WHO IS SAYING THIS ────────────────────────────────────────
-            Every page declared what it was ABOUT and no page declared the
-            PUBLISHER. `Organization` is what ties the domain to a name and a
-            logo in a knowledge panel, and it belongs once, on the public shell
-            — not in the root layout, which also wraps `/admin`, `/dashboard`
-            and `/studio`, all of them `noindex`.
-
-            `sameAs` carries only handles that are actually configured. An
-            unset one is dropped rather than emitted as an empty string: a
-            `sameAs` pointing nowhere is a reason for Google to distrust the
-            whole block, and inventing profiles is the fabrication this
-            codebase refuses everywhere else. */}
-        <JsonLd
-          data={organizationJsonLd({
-            name: SITE_NAME,
-            url: SITE_URL,
-            logo: `${SITE_URL}/icon`,
-            sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
-          })}
-        />
-        {/* The first focusable thing on every page, so it wears the product's
-            primary action: the near-black pill (near-white in dark), fully
-            rounded. `focus:z-tooltip` keeps it above the sticky header — a skip
-            link rendered underneath the chrome it skips is not a skip link. */}
-        <a
-          href="#main"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-full focus:bg-cta focus:px-pill focus:py-2.5 focus:text-label focus:text-cta-foreground focus:shadow-lg"
-        >
-          Skip to content
-        </a>
-        {/* One wrapper around everything the shell renders, so the search
-            palette can hide it from assistive tech with a single attribute —
-            see the `modal={false}` note in components/search/search-overlay. */}
-        <div id="site-shell">
-          <div className="flex min-h-dvh flex-col">
-            <AnnouncementBar announcements={announcements} />
-            <SiteHeader />
-            {/* Bottom padding clears the mobile bottom nav — its row height
-                (`--bottom-nav-height`, 4rem) PLUS the iOS safe-area inset the
-                bar pads itself with, or the last section sits under the home
-                indicator. Both halves have to move together; see the note in
-                bottom-nav.tsx. */}
-            <main
-              id="main"
-              className="flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"
-            >
-              {children}
-            </main>
-            <SiteFooter className="pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0" />
+        <EventDeckProvider>
+          <JsonLd
+            data={organizationJsonLd({
+              name: SITE_NAME,
+              url: SITE_URL,
+              logo: `${SITE_URL}/icon`,
+              sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
+            })}
+          />
+          <a
+            href="#main"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-full focus:bg-cta focus:px-pill focus:py-2.5 focus:text-label focus:text-cta-foreground focus:shadow-lg"
+          >
+            Skip to content
+          </a>
+          <div id="site-shell">
+            <div className="flex min-h-dvh flex-col">
+              <AnnouncementBar announcements={announcements} />
+              <SiteHeader />
+              <main
+                id="main"
+                className="flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"
+              >
+                {children}
+              </main>
+              <SiteFooter className="pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0" />
+            </div>
+            <SiteBottomNav />
+            <CookieConsent />
+            <Onboarding />
+            <ReviewPrompt />
+            <FavouritesSync />
+            <EventWidgetDeck />
           </div>
-          <SiteBottomNav />
-          <CookieConsent />
-          {/* The welcome flow. Renders nothing unless somebody has verified
-              their address and has not yet ANSWERED it — where skipping counts
-              as answering. It sits here rather than on a route of its own so
-              it can open wherever the person happens to land after verifying,
-              which is usually mid-way through booking something. */}
-          <Onboarding />
-          {/* The post-event review prompt. Renders nothing unless somebody has
-              an unreviewed event inside the window AND has not already
-              dismissed that one — see the component for why a dismissal is
-              permanent and why that is safe (the tickets page keeps the
-              opportunity open indefinitely). Sits beside Onboarding for the
-              same reason: it must be able to open wherever the person lands,
-              not on a route of its own. */}
-          <ReviewPrompt />
-          {/* Renders nothing. Mirrors saved events to the account once signed in,
-              and merges whatever was saved while logged out. */}
-          <FavouritesSync />
-        </div>
+        </EventDeckProvider>
       </SearchProvider>
     </LocationProvider>
   );
