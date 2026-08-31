@@ -234,8 +234,16 @@ export function EventWidgetDeck() {
                   <span className="truncate text-body-sm font-bold text-white">
                     {currentEvent.venue}, {currentEvent.city}
                   </span>
+                  {/* NO rating and NO distance. Neither exists: there is no
+                      venue-rating column on this platform, and a distance
+                      needs the visitor's coordinates AND the event's, which
+                      most events do not have (`latitude`/`longitude` are
+                      nullable exactly because inventing one is worse than
+                      omitting it). "Rated 3.9 | 7.1 km away" was a literal,
+                      identical on every event, presented as a measurement of
+                      THIS venue. */}
                   <span className="text-caption font-semibold text-neutral-400">
-                    <span className="text-lime-400">Rated 3.9</span> | 7.1 km away
+                    Venue details
                   </span>
                 </div>
                 <ChevronRight className="size-5 text-neutral-400 shrink-0" aria-hidden />
@@ -317,9 +325,13 @@ export function EventWidgetDeck() {
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-body-sm font-bold text-white">
-                      {currentEvent.organization_name || 'HIGHSTREET HOSPITALITY LLP'}
+                      {currentEvent.organization_name}
                     </span>
-                    <span className="text-caption text-neutral-400">69% Liked • 20+ Events</span>
+                    {/* NO "69% Liked • 20+ Events". Nothing stores a like
+                        ratio or a hosted-event count on this payload, so both
+                        were literals that would have read as measurements of
+                        THIS organiser to every visitor. The reference design
+                        shows them because that platform has the columns. */}
                   </div>
                   <ChevronRight className="size-5 text-neutral-400 shrink-0" aria-hidden />
                 </button>
@@ -328,16 +340,16 @@ export function EventWidgetDeck() {
 
             {/* Sticky Bottom Booking Action Surface */}
             <div className="absolute inset-x-0 bottom-0 z-30 flex flex-col overflow-hidden rounded-b-3xl bg-neutral-900 p-3.5 border-t border-white/10 shadow-2xl">
-              {/* EMI Offer Top Pill */}
-              <div className="mb-2.5 flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-900/90 to-purple-900/90 px-3 py-1.5 border border-purple-500/30">
-                <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-indigo-950 font-black text-xs">
-                  %
-                </div>
-                <span className="text-caption font-bold text-white">
-                  EMI available on orders over ₹4,000
-                </span>
-              </div>
+              {/* ── NO EMI BANNER ──────────────────────────────────────────
+                  "EMI available on orders over ₹4,000" was hard-coded here.
+                  This platform has no EMI arrangement and no column that says
+                  whether one applies — it is a claim about somebody's money,
+                  made on the checkout surface, backed by nothing. It is the
+                  single worst thing on this screen to invent, so it is gone
+                  rather than softened.
 
+                  If EMI is ever offered, it comes from the payment provider's
+                  response and renders only when that says so. */}
               {/* Price & Primary CTA */}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex flex-col">
@@ -347,8 +359,23 @@ export function EventWidgetDeck() {
                   <span className="text-caption font-semibold text-neutral-400">onwards</span>
                 </div>
 
+                {/* ── STRAIGHT TO THE TICKET SCREEN, NEVER BACK TO A DETAIL PAGE ──
+                    This was `eventPath(currentEvent)` — `/events/{slug}-{uuid}`,
+                    the standalone event page. So on mobile the flow was:
+
+                      feed -> widget -> OLD EVENT PAGE -> Book tickets -> booking
+
+                    which put a second, duplicate event-detail experience in the
+                    middle of the one the widget exists to BE, and threw away the
+                    widget's state (the active event, the drag position, the
+                    feed's scroll offset) on the way through.
+
+                    The widget IS the mobile event page. Book tickets therefore
+                    goes where it says it goes — the existing ticket-selection
+                    screen, with the CURRENT event's id, using the existing
+                    booking flow and API. No new booking UI, no duplicate. */}
                 <Link
-                  href={eventPath(currentEvent)}
+                  href={`/booking/${currentEvent.id}`}
                   onClick={closeDeck}
                   className="inline-flex h-12 items-center justify-center rounded-full bg-white px-7 text-body-sm font-extrabold text-neutral-950 shadow-lg transition-transform active:scale-95 hover:bg-neutral-100"
                 >

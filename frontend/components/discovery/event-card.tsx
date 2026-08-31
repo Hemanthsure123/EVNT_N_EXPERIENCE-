@@ -1,3 +1,23 @@
+'use client';
+
+/*
+ * `'use client'` because this card calls `useEventDeck()` (below) to open the
+ * mobile event widget. Without it, the hook is not a function in the server
+ * bundle and every STATICALLY PRERENDERED page that renders a grid of these
+ * dies during export:
+ *
+ *   TypeError: (0 , E.o) is not a function
+ *   Export encountered errors on following paths:
+ *     /(site)/categories/[slug]/page: /categories/comedy   ...and 7 more
+ *
+ * `/events` survived it because that route is dynamic — the crash only showed
+ * on the eight prerendered category pages, which is why it read as a category
+ * bug rather than a card one.
+ *
+ * `poster-card.tsx` and `selling-fast-card.tsx` were given this directive in
+ * fbe4185 for exactly this reason. This card wires the same hook and was
+ * missed.
+ */
 import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';

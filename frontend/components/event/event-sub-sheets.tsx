@@ -13,7 +13,6 @@ import {
   X,
   Building2,
   Ban,
-  ChevronRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { EventCard as EventCardData } from '@/lib/api/types';
@@ -104,21 +103,28 @@ function VenueSheetContent({ event }: { event: EventCardData }) {
           <span className="truncate text-body font-bold text-white">
             {event.venue}, {event.city}
           </span>
-          <span className="flex items-center gap-1 text-caption text-neutral-400">
-            View restaurant <ChevronRight className="size-3" />
-          </span>
+          {/* "View restaurant" is gone: this platform sells event tickets and
+              has no restaurant entity to view. It came from the reference
+              design, which is a dining product as well as a ticketing one. */}
         </div>
-        <span className="rounded-lg bg-lime-600 px-2.5 py-1 text-caption font-bold text-white shrink-0">
-          3.9 ★
-        </span>
+        {/* No "3.9 ★" — nothing stores a venue rating, so the badge was the
+            same number on every venue, in the place a real rating would be. */}
       </div>
 
-      {/* Address */}
+      {/* ── ADDRESS: WHAT IS ACTUALLY KNOWN ──────────────────────────────
+          This read "CMC Enclave, Main Road, Kondapur, {city}" — a street
+          address invented in the source and rendered for EVERY venue. On a
+          ticketing product that is the most harmful thing on this sheet: it
+          is directions, and somebody would have driven to it.
+
+          There is no street-address column. What exists is the venue name and
+          the city, which is what the organiser supplied, so that is what this
+          shows. The distance line is gone for the same reason as the rating —
+          it needs coordinates most events do not carry. */}
       <div className="flex flex-col gap-1 px-1">
         <p className="text-body-sm text-neutral-300">
-          CMC Enclave, Main Road, Kondapur, {event.city}
+          {event.venue}, {event.city}
         </p>
-        <p className="text-caption text-neutral-400">7.1 km away</p>
       </div>
 
       {/* Action Buttons */}
@@ -237,29 +243,27 @@ function OrganiserSheetContent({ event }: { event: EventCardData }) {
   return (
     <div className="flex flex-col gap-6">
       {/* Organiser Summary Card */}
-      <div className="rounded-2xl bg-neutral-800/80 p-4 border border-white/10 flex items-center justify-between gap-4">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <div className="size-16 rounded-full bg-purple-600/30 text-purple-400 flex items-center justify-center font-bold text-h3">
-            H
-          </div>
-          <span className="text-caption font-bold text-white max-w-28 leading-tight">
-            {event.organization_name || 'HIGHSTREET HOSPITALITY LLP'}
-          </span>
-        </div>
+      {/* ── THE ORGANISER, AS FAR AS IT IS ACTUALLY KNOWN ───────────────────
+          Three statistics stood here — "69% Liked (117 ratings)", "20+ Hosted
+          events", "5 months Hosting" — and the avatar was a hard-coded "H".
+          None of them came from data: they were literals, so every organiser
+          on the platform showed the same 69% and the same 117 ratings, in the
+          shape of a trust signal somebody uses to decide whether to hand over
+          money.
 
-        <div className="flex flex-col gap-2 min-w-0 border-l border-white/10 pl-4">
-          <div>
-            <p className="text-body font-extrabold text-white">69%</p>
-            <p className="text-caption text-neutral-400">Liked (117 ratings)</p>
-          </div>
-          <div>
-            <p className="text-body font-extrabold text-white">20+</p>
-            <p className="text-caption text-neutral-400">Hosted events</p>
-          </div>
-          <div>
-            <p className="text-body font-extrabold text-white">5 months</p>
-            <p className="text-caption text-neutral-400">Hosting</p>
-          </div>
+          There is no review model and no hosted-event count on this payload.
+          What the payload has is the name, so that is what this shows, with a
+          real initial. When `performers`/reviews grow the columns, this is
+          where they render. */}
+      <div className="flex items-center gap-4 rounded-2xl bg-neutral-800/80 p-4 border border-white/10">
+        <div className="size-16 shrink-0 rounded-full bg-purple-600/30 text-purple-400 flex items-center justify-center font-bold text-h3">
+          {(event.organization_name || '?').trim().charAt(0).toUpperCase()}
+        </div>
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-body-sm font-bold text-white leading-tight">
+            {event.organization_name}
+          </span>
+          <span className="text-caption text-neutral-400">Organiser</span>
         </div>
       </div>
 
