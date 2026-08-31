@@ -4,7 +4,6 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  ArrowLeft,
   Building2,
   Check,
   ChevronRight,
@@ -75,13 +74,8 @@ export function AccountMenu() {
       <DrawerContent side="right" bare hideClose className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
         {/* District Top Header Bar */}
         <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4 shrink-0">
-          <div className="flex items-center gap-3">
-            <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-              <ArrowLeft className="size-5" aria-hidden />
-            </DrawerClose>
-            <h2 className="text-body-lg font-bold text-foreground">Profile</h2>
-          </div>
-          <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+          <h2 className="text-body-lg font-bold text-foreground">Profile</h2>
+          <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <X className="size-5" aria-hidden />
           </DrawerClose>
         </div>
@@ -97,7 +91,7 @@ export function AccountMenu() {
               {isAdmin ? (
                 <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-caption font-medium text-foreground">
                   <ShieldCheck className="size-3.5 text-muted-foreground" aria-hidden />
-                  Platform operator
+                  Operator Console
                 </span>
               ) : null}
             </div>

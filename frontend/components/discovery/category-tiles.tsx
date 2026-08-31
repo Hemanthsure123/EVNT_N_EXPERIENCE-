@@ -110,12 +110,16 @@ export function CategoryTiles({
 
   return (
     <ul
-      className={cn('grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4', className)}
+      className={cn(
+        '-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 snap-x snap-mandatory scrollbar-none sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4',
+        'grid grid-rows-2 auto-cols-40 grid-flow-col sm:grid-rows-none sm:auto-cols-auto sm:grid-flow-row',
+        className
+      )}
     >
       {tiles.map((category, index) => {
         const tint = categoryTint(category.slug);
         return (
-          <li key={category.slug}>
+          <li key={category.slug} className="snap-start h-full">
             <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
               <Link
                 href={`/categories/${category.slug}`}
@@ -125,9 +129,8 @@ export function CategoryTiles({
                   // element, two shapes — see the note above.
                   'flex-row-reverse sm:flex-col sm:items-stretch sm:gap-4 sm:p-card',
                   'transition duration-base ease-spring hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lg',
-                  // Press cancels the lift and scales in — the beat the whole
-                  // landing page was missing. See `discovery/cta.tsx`.
-                  'active:translate-y-0 active:scale-[0.98] active:duration-fast',
+                  // Press cancels the lift and scales in — tactile responsive touch
+                  'active:translate-y-0 active:scale-[0.95] active:duration-fast',
                   'motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                 )}
@@ -162,14 +165,9 @@ export function CategoryTiles({
                   )}
                   aria-hidden
                 >
-                  {/* A SCENE, not a glyph on a plate. The clay icon that used
-                      to sit here was a rounded square with a symbol on it —
-                      which is the app-icon idiom, and a grid of eight read as
-                      emoji rather than as illustration. See
-                      `illustrations/category-scenes.tsx`. */}
                   <CategoryScene
                     slug={category.slug}
-                    className="h-12 w-full transition-transform duration-base ease-spring group-hover:scale-[1.03] motion-reduce:transition-none motion-reduce:group-hover:scale-100 sm:h-24"
+                    className="h-12 w-full transition-transform duration-base ease-spring group-hover:scale-[1.03] group-active:-translate-y-1 motion-reduce:transition-none motion-reduce:group-hover:scale-100 sm:h-24"
                   />
                 </span>
               </Link>

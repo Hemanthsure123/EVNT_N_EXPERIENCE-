@@ -80,12 +80,32 @@ export const BOTTOM_NAV_CLEARANCE =
  */
 export function BottomNav({ items, className }: { items: BottomNavItem[]; className?: string }) {
   const pathname = usePathname();
+  const [hidden, setHidden] = React.useState(false);
+  const lastScrollY = React.useRef(0);
+
+  React.useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      if (currentScrollY > lastScrollY.current + 10 && currentScrollY > 60) {
+        setHidden(true);
+      } else if (currentScrollY < lastScrollY.current - 10) {
+        setHidden(false);
+      }
+      lastScrollY.current = currentScrollY;
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   return (
     <nav
       aria-label="Primary"
       className={cn(
         'fixed inset-x-0 bottom-0 z-sticky border-t border-border bg-surface/90 backdrop-blur-glass md:hidden',
         'pb-[env(safe-area-inset-bottom)]',
+        'transition-transform duration-300 ease-out',
+        hidden ? 'translate-y-full' : 'translate-y-0',
         className,
       )}
     >
