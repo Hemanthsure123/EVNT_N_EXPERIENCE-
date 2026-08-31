@@ -11,6 +11,7 @@ import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
+import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
 import { categoryTint } from './category-tint';
 
 /**
@@ -242,28 +243,31 @@ function PriceLine({ event }: { event: EventCardModel }) {
   );
 }
 
-/** One slide on a phone: poster, title, from-price. */
 function HeroPosterTile({ event, priority }: { event: EventCardModel; priority?: boolean }) {
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const price = formatFromPrice(event.from_price);
   return (
-    <Link
-      href={eventPath(event)}
-      className="group/tile flex h-full flex-col gap-2.5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-    >
-      <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
-        <Poster event={event} priority={priority} sizes="76vw" />
-      </div>
-      <div className="flex flex-col gap-0.5 px-0.5 pb-1">
-        <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
-          {event.title}
-        </p>
-        {price ? (
-          <p className="text-caption text-muted-foreground">
-            {price === 'Free' ? 'Free' : `${price} onwards`}
+    <>
+      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
+      <div
+        onClick={() => setSheetOpen(true)}
+        className="group/tile flex h-full flex-col gap-2.5 rounded-2xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
+        <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
+          <Poster event={event} priority={priority} sizes="76vw" />
+        </div>
+        <div className="flex flex-col gap-0.5 px-0.5 pb-1">
+          <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
+            {event.title}
           </p>
-        ) : null}
+          {price ? (
+            <p className="text-caption text-muted-foreground">
+              {price === 'Free' ? 'Free' : `${price} onwards`}
+            </p>
+          ) : null}
+        </div>
       </div>
-    </Link>
+    </>
   );
 }
 

@@ -49,6 +49,8 @@ import { FavouriteButton } from './favourite-button';
  * young catalogue have no poster, so this is the common case, not the
  * fallback.
  */
+import { EventPreviewSheet } from '@/components/event/event-preview-sheet';
+
 export interface PosterCardProps {
   event: EventCardModel;
   /** `sizes` for the poster. Pass the grid's real column widths. */
@@ -64,14 +66,15 @@ export function PosterCard({
   priority = false,
   className,
 }: PosterCardProps) {
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const badge = availabilityBadge(event);
-  // The stored column first; the keyword guess only where it is still blank.
   const category = categoryBySlug(event.category) ?? inferCategory(event);
   const price = formatFromPrice(event.from_price);
   const tint = categoryTint(category?.slug);
 
   return (
     <article className={cn('group/poster relative flex h-full flex-col gap-3', className)}>
+      <EventPreviewSheet event={event} open={sheetOpen} onOpenChange={setSheetOpen} />
       <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
         {event.poster_url ? (
           <Image
@@ -91,18 +94,12 @@ export function PosterCard({
           <EventPosterArt slug={category?.slug ?? ''} seed={event.id} className={tint.surface} />
         )}
 
-        {/* Over the artwork, not under the title: "3 tickets left" is the one
-            fact that changes what somebody does next, and it has to be read
-            before the name of the event rather than after it. */}
         {badge ? (
           <div className="absolute left-3 top-3">
             <AvailabilityBadge badge={badge} />
           </div>
         ) : null}
 
-        {/* Separately clickable inside the stretched link below — which is
-            exactly why the link is on the TITLE and not wrapped round the
-            whole article. */}
         <div className="absolute right-2 top-2 z-10">
           <FavouriteButton eventId={event.id} title={event.title} />
         </div>
@@ -110,12 +107,21 @@ export function PosterCard({
 
       <div className="flex min-w-0 flex-col gap-1">
         <h3 className="line-clamp-2 text-body font-bold leading-snug tracking-tight text-foreground">
+          {/* Desktop link navigation */}
           <Link
             href={eventPath(event)}
-            className="after:absolute after:inset-0 after:rounded-2xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
+            className="hidden sm:inline after:absolute after:inset-0 after:rounded-2xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
           >
             {event.title}
           </Link>
+          {/* Mobile tap trigger for District Peek Sheet */}
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            className="sm:hidden text-left after:absolute after:inset-0 after:rounded-2xl focus-visible:outline-none"
+          >
+            {event.title}
+          </button>
         </h3>
 
         <p className="truncate text-body-sm text-muted-foreground">
