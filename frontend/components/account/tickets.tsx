@@ -24,7 +24,7 @@ import {
 import { RefundRequestDialog, type RefundTarget } from './refund-request';
 import { ShareReceiptDialog } from './share-receipt';
 import { PendingReviewCard } from '@/components/reviews/review-prompt';
-import { Drawer, DrawerContent } from '@/components/ui/drawer';
+import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
 import { TicketQrCode } from '@/components/booking/qr-code';
 import {
   EmptyState,
@@ -631,7 +631,13 @@ function TicketSheet({
           <>
             <header className="flex items-start gap-3 border-b border-border p-card">
               <div className="min-w-0 flex-1">
-                <h2 className="truncate text-h4">{ticket.event_title}</h2>
+                {/* `DrawerTitle`, not a bare `h2`. This is a Radix Dialog, and
+                    without a `Dialog.Title` descendant it has NO accessible
+                    name — a screen reader announces an unnamed dialog on the
+                    surface that holds the QR code somebody is about to present
+                    at a gate — and Radix logs an error on every open. It
+                    already renders `text-h4`, so nothing moves. */}
+                <DrawerTitle className="truncate">{ticket.event_title}</DrawerTitle>
                 <p className="truncate text-body-sm text-muted-foreground">
                   {ticket.ticket_type_name}
                   {many ? ` · Ticket ${safe + 1} of ${tickets.length}` : ''}

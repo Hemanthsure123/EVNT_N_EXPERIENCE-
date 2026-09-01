@@ -43,10 +43,53 @@ export function StickyActionBar({
   children: React.ReactNode;
   className?: string;
 }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  // ── THE BAR PUBLISHES ITS HEIGHT ──────────────────────────────────────
+  //
+  // Two independently-positioned fixed elements at the bottom of a phone
+  // screen will collide, and this one collided with the cookie notice: the
+  // notice sits at `bottom-16` with a higher stacking order, so on the ticket
+  // step it landed exactly on "Continue" and swallowed every press. A visitor
+  // who had not yet answered the cookie question could not check out at all,
+  // and nothing on screen explained why the button did nothing.
+  //
+  // Rather than fight it with z-index — which would just hide the notice
+  // behind the bar — the bar measures itself onto the document root, and
+  // anything else pinned to the bottom edge stacks above it. One variable, set
+  // by the element that knows the answer.
+  React.useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty('--sticky-action-height', `${node.offsetHeight}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--sticky-action-height');
+    };
+  }, []);
+
   return (
     <div
+      ref={ref}
       className={cn(
-        'glass fixed inset-x-0 bottom-bottom-nav z-sticky border-t px-4 py-3 shadow-lg md:bottom-0',
+        // ── THE BAR OWNS ITS OWN INSET ──────────────────────────────────
+        // It sat at `bottom-bottom-nav`, which is the nav's HEIGHT and nothing
+        // else — so on a phone with a gesture bar the whole control sat inside
+        // the system's 34px, and "Pay" was under the home indicator. Sitting on
+        // another element's height is also fragile in the other direction: the
+        // moment the nav hides on scroll, a bar positioned against it is
+        // floating above nothing.
+        //
+        // `bottom-0` plus its own padding puts it on the screen's real edge and
+        // lifts its CONTENT clear of both the nav and the inset — one element
+        // responsible for its own clearance.
+        'glass fixed inset-x-0 bottom-0 z-sticky border-t px-4 pt-3 shadow-lg',
+        'pb-[calc(var(--bottom-nav-height)_+_0.75rem_+_env(safe-area-inset-bottom))]',
+        'md:pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]',
         className,
       )}
     >

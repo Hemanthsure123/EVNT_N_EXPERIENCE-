@@ -114,9 +114,24 @@ export function SummaryCard({ className }: { className?: string }) {
         </div>
       </dl>
 
+      {/* ── THE MONEY HALF IS DESKTOP-ONLY ─────────────────────────────────
+          From `lg` this card sits BESIDE the step, so the lines and the total
+          are a running summary of what the step is asking about. Below `lg` it
+          stacks ABOVE the step, and every step body already lists exactly the
+          same lines and the same total — so a phone showed the order twice,
+          the second copy pushing the actual controls a screen further down.
+
+          What stays on a phone is the half the step body does NOT repeat: the
+          poster, the title, the date, the venue and the hold countdown. What
+          this order costs is answered by the sticky bar at the bottom of the
+          screen, which is on top of the thumb rather than above the fold. */}
       {/* The one part that changes between steps. `AnimatePresence` with a
           `layout` parent is what turns "content swapped" into "card grew". */}
-      <motion.div layout={reduced ? false : true} transition={EASE_OUT} className="flex flex-col">
+      <motion.div
+        layout={reduced ? false : true}
+        transition={EASE_OUT}
+        className="hidden flex-col lg:flex"
+      >
         <AnimatePresence initial={false} mode="popLayout">
           {lines.length ? (
             <motion.ul
@@ -159,7 +174,7 @@ export function SummaryCard({ className }: { className?: string }) {
         </AnimatePresence>
       </motion.div>
 
-      <div className="flex flex-col gap-1 border-t border-border pt-stack-lg">
+      <div className="hidden flex-col gap-1 border-t border-border pt-stack-lg lg:flex">
         <div className="flex items-baseline justify-between gap-4">
           <span className="text-body font-semibold text-foreground">Total</span>
           <AnimatedNumber
@@ -193,7 +208,9 @@ export function SummaryCard({ className }: { className?: string }) {
         <HoldTimer expiresAt={booking.hold_expires_at} />
       ) : null}
 
-      <TrustList marks={CHECKOUT_TRUST} className="border-t border-border pt-stack-lg" />
+      {/* Also desktop-only: every step body ends with its own `TrustStrip`,
+          so on a phone this was the same four marks twice on one screen. */}
+      <TrustList marks={CHECKOUT_TRUST} className="hidden border-t border-border pt-stack-lg lg:flex" />
     </motion.aside>
   );
 }

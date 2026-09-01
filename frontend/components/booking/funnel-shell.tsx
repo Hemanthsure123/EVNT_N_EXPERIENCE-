@@ -54,7 +54,18 @@ function FunnelLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col">
-      <Container className="flex flex-col gap-block-lg py-block lg:gap-section lg:py-block-lg">
+      {/* Clearance for the sticky action bar, which is `fixed` and therefore
+          takes no space in the flow. Without it the last section of every step
+          — the trust marks on review, the delivery block — sat underneath the
+          bar and could not be read at any scroll position. The number is the
+          bar's own stack: the bottom nav, its padding, its content and the
+          safe-area inset. */}
+      <Container
+        className={cn(
+          'flex flex-col gap-block-lg py-block lg:gap-section lg:py-block-lg',
+          'pb-[calc(var(--bottom-nav-height)_+_7rem_+_env(safe-area-inset-bottom))] lg:pb-block-lg',
+        )}
+      >
         <div className="flex flex-col gap-block">
           {/* A ghost pill, not a text link: at `text-label` the hit area was
               16px tall on a phone. `-ml-3` pulls the pill's own padding back so
@@ -79,15 +90,22 @@ function FunnelLayout({ children }: { children: React.ReactNode }) {
               when the columns collapse, and is placed into column two at `lg`. */}
           <SummaryCard className="lg:sticky lg:top-sticky-top-lg lg:col-start-2 lg:row-start-1" />
 
-          <main
+          {/* A SECTION, not a second `<main>`. The site shell already renders
+              `<main id="main">` around every page, so this nested one made two
+              main landmarks on the busiest authenticated route — invalid HTML,
+              and a screen reader offering two "main content" targets on the
+              screen where money is about to move. The id is kept because the
+              step transitions and the skip target reference it. */}
+          <section
             id="funnel-main"
+            aria-label="Booking step"
             // Keyed on the step so a fresh subtree mounts per screen; the
             // summary beside it is deliberately NOT keyed and stays alive.
             key={step}
             className="flex min-w-0 flex-col gap-block-lg lg:col-start-1 lg:row-start-1"
           >
             {children}
-          </main>
+          </section>
         </div>
       </Container>
     </div>

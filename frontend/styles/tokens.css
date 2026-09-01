@@ -488,12 +488,19 @@
      writes the real value here, so the offset tracks whatever the header
      actually is -- condensed or at rest, one row or two.
 
-     The literals below are the SSR fallback, used for the first paint and if
-     JS never runs: the identity row plus the search row's 3.5rem. They are
-     deliberately a little generous, because a sticky bar sitting slightly too
-     low is invisible and one sitting too high is the bug this replaces. */
-  --sticky-top: var(--header-total);
-  --sticky-top-lg: var(--header-total-lg);
+     THE FALLBACKS ARE THE POINT, and they were missing. `--header-total` is
+     written only at runtime by `Header`'s ResizeObserver, so before that
+     effect runs `var(--header-total)` is an INVALID value — which makes
+     `--sticky-top` invalid, which makes `top: var(--sticky-top)` compute to
+     `top: auto`, which makes `position: sticky` do nothing at all. Every
+     sticky rail on the site was inert for the first paint, and permanently
+     inert if JS never ran.
+
+     The literals are the identity row plus the search row's 3.5rem, and they
+     are deliberately a little generous: a sticky bar sitting slightly too low
+     is invisible, and one sitting too high is the bug this replaces. */
+  --sticky-top: var(--header-total, 7.5rem);
+  --sticky-top-lg: var(--header-total-lg, 8rem);
 
   /* The ticket list's floor. A tier card is ~9rem; the scroll region between
      the pinned header and the pinned footer must never be shorter than one of

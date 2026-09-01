@@ -6,6 +6,8 @@ import { Onboarding } from '@/components/account/onboarding';
 import { ReviewPrompt } from '@/components/reviews/review-prompt';
 import { CookieConsent } from '@/components/consent/cookie-consent';
 import { FavouritesSync } from '@/components/account/favourites-sync';
+import { BOTTOM_NAV_CLEARANCE } from '@/components/shell/bottom-nav';
+import { cn } from '@/lib/utils/cn';
 import { SiteFooter } from '@/components/shell/site-footer';
 import { SiteBottomNav } from '@/components/shell/site-bottom-nav';
 import { SiteHeader } from '@/components/shell/site-header';
@@ -60,11 +62,11 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
               <SiteHeader />
               <main
                 id="main"
-                className="flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"
+                className={cn('flex-1', BOTTOM_NAV_CLEARANCE)}
               >
                 {children}
               </main>
-              <SiteFooter className="pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0" />
+              <SiteFooter className={BOTTOM_NAV_CLEARANCE} />
             </div>
             <SiteBottomNav />
             <CookieConsent />

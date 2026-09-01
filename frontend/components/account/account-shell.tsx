@@ -135,15 +135,22 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="grid gap-block-lg py-block-lg lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-section-lg lg:py-section">
-      {/* STICKY FROM `lg`. The nav scrolled away with the page, so on a long
-          Tickets or Saved list the only way back to another section was to
-          scroll the whole page up again. It is a rail, not content — the one
-          thing on this screen that should always be reachable.
+      {/* STICKY AT EVERY WIDTH. The nav scrolled away with the page, so on a
+          long Tickets or Saved list the only way back to another section was
+          to scroll the whole page up again. It is a rail, not content — the
+          one thing on this screen that should always be reachable.
+
+          It was `lg:sticky` only, which is backwards: the phone is where the
+          lists are longest and where scrolling back is most expensive. Below
+          `lg` the chip strip pins under the header with its own background,
+          because a transparent bar with the list running visibly through it
+          is worse than no bar.
+
           `self-start` matters: a grid item stretches to the row height by
           default, and a full-height item has nothing to stick to. */}
       <nav
         aria-label="Account sections"
-        className="min-w-0 lg:sticky lg:top-sticky-top-lg lg:self-start"
+        className="sticky top-sticky-top z-sticky -mx-4 min-w-0 self-start border-b border-border bg-background px-4 pt-2 lg:top-sticky-top-lg lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:pt-0"
       >
         {/* Horizontal below lg, vertical above — the same responsive rail the
             wizard uses, so the pattern is learned once. `-mx-1 px-1` lets the

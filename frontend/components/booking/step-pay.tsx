@@ -14,7 +14,6 @@ import { resolveProvider } from '@/lib/booking/payment-provider';
 import { openCheckout, resolveKeyId } from '@/lib/booking/razorpay';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
-import { eventPath } from '@/lib/events/ref';
 import { CTA_PILL_LG, PILL } from './cta';
 import { useBooking } from './booking-context';
 import { Rise, StepTransition } from './motion';
@@ -149,9 +148,11 @@ export function PayStep() {
             </p>
           </div>
           <Button asChild size="lg" className={CTA_PILL_LG}>
-            {/* The event page, not the old picker step — that route is now a
-                redirect and would bounce through review. */}
-            <Link href={eventPath(event)}>Choose tickets</Link>
+            {/* The TICKET SCREEN. This pointed at the event page, from the
+                window when `/booking/{id}` was a redirect; it is a real picker
+                again, and sending somebody out to the standalone event page to
+                re-pick is the one move this funnel is not supposed to make. */}
+            <Link href={`/booking/${event.id}`}>Choose tickets</Link>
           </Button>
         </div>
       </StepTransition>

@@ -8,9 +8,9 @@ import { fetchEventDetail } from '@/lib/api/events';
 import { useSavedEventIds } from '@/lib/discovery/use-favourites';
 import { fetchSavedEvents } from '@/lib/api/saved-events';
 import { useAuth } from '@/lib/auth/auth-provider';
-import { EventCard } from '@/components/discovery/event-card';
+import { EventCard, EventCardSkeleton } from '@/components/discovery/event-card';
 import type { EventCard as EventCardData } from '@/lib/api/types';
-import { EmptyState, Skeleton } from '@/components/organizer/primitives';
+import { EmptyState } from '@/components/organizer/primitives';
 
 /**
  * Saved events.
@@ -89,13 +89,22 @@ export function SavedEvents() {
       </header>
 
       {loading ? (
-        // The reserved height matches the PORTRAIT card the discovery language
-        // uses now (3:4 image with the text block below it), so the grid does
-        // not jump when the real cards land.
+        // ── THE SKELETON IS THE CARD, NOT A GUESS AT ITS HEIGHT ──────────
+        //
+        // This reserved a flat 20rem per item, described as matching "the
+        // portrait card". Below `sm` the card is not a portrait card — it is a
+        // ~150px compact ROW — so every placeholder was ~170px too tall and the
+        // list collapsed by that much per item the moment the real cards
+        // landed. Four saved events is most of a phone screen of jump, on the
+        // one list somebody opens to find something they already chose.
+        //
+        // `EventCardSkeleton` is the same component's own placeholder, so it is
+        // the right height at every breakpoint by construction and cannot drift
+        // from the card again.
         <ul className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
           {Array.from({ length: savedIds?.length || 4 }, (_, index) => (
             <li key={index}>
-              <Skeleton className="h-[20rem] w-full rounded-xl" />
+              <EventCardSkeleton />
             </li>
           ))}
         </ul>
@@ -117,14 +126,25 @@ export function SavedEvents() {
         </div>
       ) : (
         <ul className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-5 lg:gap-6">
-          {events.map((event) => (
+          {events.map((event, index) => (
             <li
               key={event.id}
               className="flex animate-fade-rise flex-col gap-2 motion-reduce:animate-none"
             >
               <EventCard
                 event={event}
-                sizes="(min-width: 1024px) 20vw, (min-width: 640px) 33vw, 45vw"
+                // `96px` below `sm`, because that is the compact row's
+                // thumbnail — not `45vw`, which asks a 390px phone for a 176px
+                // source (352px at DPR 2) to paint a 96px box. Roughly twice
+                // the bytes per card, on the list most likely to be opened on a
+                // poor connection.
+                sizes="(min-width: 1024px) 20vw, (min-width: 640px) 33vw, 96px"
+                // The saved set is the deck's pool, so swiping inside the
+                // widget steps through the events actually saved. Without
+                // these it opened a one-event stack and the gesture had
+                // nowhere to go.
+                allEvents={events}
+                index={index}
                 className={event.is_available === false ? 'opacity-70' : undefined}
               />
               {event.is_available === false ? (

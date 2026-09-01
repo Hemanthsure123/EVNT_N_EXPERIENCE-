@@ -36,7 +36,12 @@ export const ModalContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          'fixed left-1/2 top-1/2 z-modal grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-elevated p-6 text-foreground shadow-xl',
+          // `w-[calc(100%-2rem)]`, not `w-full`. At `w-full` a centred dialog is
+          // exactly as wide as the screen on a phone, so its rounded corners and
+          // its border sit off the edge and it reads as a page that replaced the
+          // one underneath rather than a panel over it. A 1rem gutter each side is
+          // what makes it look summoned.
+          'fixed left-1/2 top-1/2 z-modal grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-elevated p-6 text-foreground shadow-xl',
           // A dialog scales from its own centre because it HAS no origin on the
           // page — it was summoned. A panel anchored to a control does have
           // one, and must not use this; `SearchOverlay` overrides both halves.

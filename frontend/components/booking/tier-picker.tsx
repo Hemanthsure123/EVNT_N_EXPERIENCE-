@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Minus, Plus } from 'lucide-react';
+import { Check, Minus, Plus } from 'lucide-react';
 import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
@@ -185,6 +185,39 @@ function TierCard({
               can still have phase seats left — and "Only 3 left at this price"
               under "No tickets left in this tier" is a contradiction. */}
           {phase && !disabled ? <PhaseNotes phase={phase} nextPrice={tier.next_price} /> : null}
+
+          {/* ── WHAT THE TIER IS ────────────────────────────────────────────
+              The organiser writes `description` and `perks`, the event page's
+              panel has rendered both for months, and this screen — the one
+              where somebody actually picks — showed a name, a price and a
+              stock count. A ticket here is not exchangeable, so buying the
+              wrong tier is the most expensive mistake available on this
+              platform, and "Male Entry" against "Meet and Greet" was all there
+              was to tell two apart.
+
+              Blank is the norm and stays absent: most tiers are
+              self-describing, and an empty paragraph under every one of them
+              is worse than none. */}
+          {tier.description ? (
+            <p className="text-caption text-muted-foreground">{tier.description}</p>
+          ) : null}
+          {tier.perks.length ? (
+            // Ticks rather than prose: somebody comparing two tiers wants the
+            // difference, not two paragraphs to diff by eye. Same shape as the
+            // event page's panel, so the two screens describe a tier
+            // identically.
+            <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-0.5">
+              {tier.perks.map((perk) => (
+                <li
+                  key={perk}
+                  className="inline-flex items-center gap-1 text-caption text-muted-foreground"
+                >
+                  <Check className="size-3 shrink-0 text-success-subtle-foreground" aria-hidden />
+                  {perk}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
 
         <p className="shrink-0 text-right">
@@ -222,13 +255,41 @@ function TierCard({
           )}
         </span>
 
-        <Stepper
-          label={tier.name}
-          value={quantity}
-          max={max}
-          disabled={disabled}
-          onChange={onChange}
-        />
+        {/* ── ADD, THEN A STEPPER ─────────────────────────────────────────
+            A minus button that cannot go below zero is a control that does
+            nothing, sitting beside the number it cannot change — on every tier
+            the buyer has not chosen. One `Add` pill says what the row is FOR;
+            the stepper appears once there is a quantity to step.
+
+            The pill keeps the stepper's 44px height, so committing to a tier
+            does not make the touch target move or shrink under the thumb. */}
+        {selected ? (
+          <Stepper
+            label={tier.name}
+            value={quantity}
+            max={max}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(() => 1)}
+            // NOT "Add one X ticket" — that is the stepper's plus button, and
+            // two different controls answering to one name is how a screen
+            // reader user, or a test, presses the wrong one.
+            aria-label={`Add ${tier.name}`}
+            className={cn(
+              'inline-flex h-control min-w-24 items-center justify-center rounded-full border border-border-strong px-5',
+              'text-body-sm font-semibold text-foreground transition-colors duration-fast',
+              'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+            )}
+          >
+            Add
+          </button>
+        )}
       </div>
     </motion.div>
   );

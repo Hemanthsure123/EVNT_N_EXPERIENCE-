@@ -1233,7 +1233,11 @@ test.describe('the event page', () => {
     // The funnel's `TierPicker`, not the event page's old `TicketPanel` — two
     // components with two vocabularies. Each tier offers an add control named
     // for the tier it belongs to, which is also what makes them countable.
-    const tiers = page.getByRole('button', { name: /Add one .+ ticket/ });
+    //
+    // `Add {tier}` — the pill on an unchosen tier. The negative lookahead
+    // excludes the stepper's plus (`Add one {tier} ticket`), which only exists
+    // after something has been added and would otherwise double-count a tier.
+    const tiers = page.getByRole('button', { name: /^Add (?!one ).+/ });
     expect(await tiers.count()).toBeGreaterThan(0);
 
     // The client re-verifies inventory rather than trusting the server payload.
@@ -1249,52 +1253,58 @@ test.describe('the event page', () => {
     // possible state for a test: green often enough to look fine, red often
     // enough to train people to re-run it.
     //
-    // The budget is raised rather than the walk shortened, because shortening
-    // it is how this test quietly stops running: if every candidate it checks
-    // happens to be sold out, it asserts nothing.
-    test.setTimeout(120_000);
+    // The walk is gone (see below) so most of that cost is too, but the
+    // increment loop below still presses up to fifteen times against a live
+    // inventory read, which is slower under a full-suite load than alone.
+    test.setTimeout(90_000);
 
-    // Walk the results until an event with a sellable tier turns up. Skipping
-    // when the first card happens to be sold out would mean this test quietly
-    // never runs — which is the same as not having it.
-    await page.goto('/events');
-    const cards = page.locator('main ul li a[href^="/events/"]');
-    const hrefs = (await cards.evaluateAll((links) =>
-      links.map((a) => (a as HTMLAnchorElement).getAttribute('href')),
-    )) as string[];
-
-    // The picker is a SCREEN now, so each candidate costs an extra press:
-    // event page -> Book tickets -> the list of tier types.
-    let plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
-    let found = false;
-    for (const href of hrefs.slice(0, 8)) {
-      await page.goto(href);
-      const book = page.getByRole('link', { name: /^(Book tickets|See ticket types)$/ }).first();
-      // A sold-out event's CTA reads "See ticket types" and still goes to the
-      // same screen; one with no tiers at all has no link to press.
-      if ((await book.count()) === 0) continue;
-      await book.click();
-      plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
-      // ── WAIT, DO NOT SNAPSHOT ──────────────────────────────────────────
-      //
-      // This asked `plus.count()` immediately after `goto`. `count()` is a
-      // SNAPSHOT — the one locator method that does not auto-wait — and the
-      // ticket panel is a client island fed by an UNCACHED tier read, so on a
-      // loaded machine it has not rendered yet. All eight events then read as
-      // zero and the test failed as "no event has a sellable tier" while the
-      // fixture was serving six perfectly sellable ones. Passing alone and
-      // failing in a full run is exactly the shape a missing wait produces.
-      const appeared = await plus
-        .first()
-        .waitFor({ state: 'attached', timeout: 4000 })
-        .then(() => true)
-        .catch(() => false);
-      if (appeared) {
-        found = true;
-        break;
+    // ── ASK THE API WHICH EVENT IS SELLABLE, DO NOT WALK EIGHT OF THEM ──
+    //
+    // This used to open up to eight events in turn — two navigations each,
+    // plus a wait per candidate to see whether a tier had rendered — and then
+    // press Add and wait again for the stepper. Sixteen navigations and up to
+    // ~14s of waiting per candidate, inside a 120s budget: it passed alone and
+    // timed out in a full run, which is the worst state a test can be in.
+    //
+    // The tiers endpoint answers the same question in one request, and answers
+    // it BETTER: the walk could only report "none of the eight I happened to
+    // try", where this reports "the fixture is serving nothing sellable",
+    // which is a real failure rather than an inconclusive one.
+    const target = await page.evaluate(async (api) => {
+      const list = (await (await fetch(`${api}/events?page_size=40`)).json()) as {
+        data: { id: string; slug?: string; tickets_available: number | null }[];
+      };
+      for (const event of list.data) {
+        if (!event.tickets_available) continue;
+        const tiers = (await (await fetch(`${api}/events/${event.id}/ticket-types`)).json()) as {
+          data: { available: number; is_on_sale: boolean; max_per_order: number }[];
+        };
+        const sellable = tiers.data.find(
+          (tier) => tier.is_on_sale && tier.available > 0 && tier.max_per_order > 0,
+        );
+        if (sellable) return event.id;
       }
-    }
-    expect(found, 'no event in the first page has a sellable tier').toBe(true);
+      return null;
+    }, 'http://localhost:8000/api/v1');
+    expect(target, 'the fixture is serving no event with a sellable tier').not.toBeNull();
+
+    await page.goto(`/booking/${target}`);
+
+    // ── THE PICKER ASKS BEFORE IT COUNTS ────────────────────────────────
+    //
+    // A tier with nothing chosen offers one `Add {tier}` pill; the `− N +`
+    // stepper (whose plus is named `Add one {tier} ticket`) appears only once
+    // there is a quantity to step. Before, every unchosen tier carried a minus
+    // that could not go below zero — a control doing nothing, beside a number
+    // it could not change.
+    //
+    // So a spec that wants to increment presses Add first. The two names are
+    // deliberately distinct: two controls answering to one name is how a
+    // screen reader user, or a test, presses the wrong one.
+    const addPill = page.getByRole('button', { name: /^Add (?!one ).+/ }).first();
+    const plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
+    await addPill.click();
+    await plus.waitFor({ state: 'attached' });
 
     for (let i = 0; i < 15; i += 1) {
       if (await plus.isDisabled()) break;

@@ -33,6 +33,7 @@ import { useBooking } from './booking-context';
 import { Rise, StepTransition } from './motion';
 import { PosterFrame } from './poster-frame';
 import { StickyActionBar } from './sticky-action-bar';
+import { YourDetailsSheet } from './your-details-sheet';
 import { CHECKOUT_TRUST, TrustStrip } from './trust';
 
 /**
@@ -76,23 +77,28 @@ export function ReviewStep() {
   const [reserving, setReserving] = React.useState(false);
   const attempted = React.useRef(false);
 
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
   /**
-   * Back to the EVENT PAGE, not to a funnel step.
+   * Back to the TICKET SCREEN — `/booking/{id}` — and this has now been both
+   * ways, which is the point.
    *
-   * This pointed at `/booking/{id}` — the old step 1 — so "Change" sent
-   * somebody to a second copy of the picker rather than to the page they chose
-   * on. That step is gone; the event page is where session, tier and quantity
-   * are decided, beside the poster and the line-up that inform the choice.
+   * It first pointed here, then was moved to the event page when the picker
+   * lived there, and the picker has since moved BACK to its own screen (a tier
+   * carries live availability, a per-order maximum and a sale window, and a
+   * 22rem sidebar beside a poster is the worst place to read any of them).
+   * This link was not moved back with it, so "Change" walked out of the funnel
+   * and onto the standalone event page — the one surface this flow is not
+   * supposed to touch on a phone, and from which the only way forward was to
+   * start again.
    *
-   * The selection rides along in the query string so the panel opens on what
-   * they already had rather than resetting it.
+   * The selection rides along in the query string, so the picker opens on what
+   * was already chosen rather than resetting it.
    */
-  // One canonical event URL for this screen — used by the picker link, the
-  // empty-selection bounce and the "View event" pill, so all three agree and
-  // none of them lands on a redirect.
+  const pickerHref = `/booking/${event.id}${query}`;
+  // The event page still has one link from here — the "View event" pill, which
+  // is a deliberate way OUT of the funnel rather than a step within it.
   const eventHref = eventPath(event);
-  const pickerHref = `${eventHref}${query}`;
   const payHref = booking
     ? `/booking/${event.id}/pay?${new URLSearchParams({
         [SELECTION_PARAM]: serialiseSelection(selection),
@@ -106,16 +112,15 @@ export function ReviewStep() {
   }, [status, router, event.id, query]);
 
   // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker,
-  // which is the EVENT PAGE.
+  // which is step 1 of this funnel again.
   //
-  // This pointed at `/booking/{id}`, which was the picker step and is now a
-  // redirect to this very screen — so an empty selection would have bounced
-  // review -> entry -> review forever. The picker moved; this had to move with
-  // it, and a redirect that lands on its own source is the specific way that
-  // refactor goes wrong.
+  // `/booking/{id}` was briefly a redirect to THIS screen, which is why this
+  // was moved to the event page: an empty selection would otherwise have
+  // bounced review -> entry -> review forever. It is a real picker again, so
+  // the bounce lands on a screen that can actually take a selection.
   React.useEffect(() => {
-    if (status !== 'unknown' && !selection.length) router.replace(eventHref);
-  }, [status, selection.length, router, eventHref]);
+    if (status !== 'unknown' && !selection.length) router.replace(pickerHref);
+  }, [status, selection.length, router, pickerHref]);
 
   React.useEffect(() => {
     if (status !== 'authenticated' || !selection.length || booking || attempted.current) return;
@@ -185,6 +190,11 @@ export function ReviewStep() {
         phase_name: line.phaseName,
       }));
   const total = booking?.total_amount ?? totals.total;
+  // The lines added up. Derived from the SAME rows the list renders, so the
+  // subtotal and the rows can never disagree — computing it from the selection
+  // instead would drift the moment the server priced a line differently (a
+  // sale phase lapsing between choosing and reserving does exactly that).
+  const orderAmount = lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
 
   if (error) {
     return (
@@ -319,7 +329,25 @@ export function ReviewStep() {
                 </li>
               ))}
             </ul>
-            <div className="flex items-baseline justify-between gap-4 border-t border-border p-card">
+            {/* ── ORDER AMOUNT, THEN TOTAL ───────────────────────────────
+                The order amount is the lines added up. It is here because on a
+                multi-tier order the total was the only number on the screen,
+                with nothing to check it against.
+
+                There is deliberately NO "fees and charges" row and no "offers"
+                block, however much the reference design has both. The platform
+                fee is taken OUT of this total, not added on top — so a
+                "charges" line would add a number the customer is not paying —
+                and there is no coupon endpoint, so an offers row could only
+                ever open something empty. Both are stated as the caption
+                below instead, which is the true version. */}
+            <div className="flex items-baseline justify-between gap-4 border-t border-border px-card pb-2 pt-card">
+              <span className="text-body-sm text-muted-foreground">Order amount</span>
+              <span className="text-body-sm tabular-nums text-muted-foreground">
+                {formatFromPrice(orderAmount)}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 px-card pb-card">
               <span className="text-body font-semibold text-foreground">Total</span>
               <span className="text-h3 tabular-nums text-foreground">{formatFromPrice(total)}</span>
             </div>
@@ -334,12 +362,27 @@ export function ReviewStep() {
       {user ? (
         <Rise index={4}>
           <section className="flex flex-col gap-stack-lg" aria-labelledby="delivery-heading">
-            <h2 id="delivery-heading" className="text-h3">
-              Delivery
-            </h2>
+            <div className="flex items-baseline justify-between gap-4">
+              <h2 id="delivery-heading" className="text-h3">
+                Delivery
+              </h2>
+              {/* The ticket is issued in this name. Without an edit here the
+                  only way to correct it was to leave the funnel for account
+                  settings and start again — losing the inventory hold. */}
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(true)}
+                className="shrink-0 text-body-sm font-semibold text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Edit
+              </button>
+            </div>
             <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-card shadow-sm lg:p-card-lg">
               <p className="text-body-sm text-foreground">{user.full_name || 'Your account'}</p>
               <p className="text-body-sm text-muted-foreground">{user.email}</p>
+              {user.phone ? (
+                <p className="text-body-sm text-muted-foreground">{user.phone}</p>
+              ) : null}
               <p className="mt-2 text-caption text-muted-foreground">
                 QR tickets are emailed here the moment payment is confirmed, and are always in your
                 account.
@@ -367,13 +410,19 @@ export function ReviewStep() {
         total={total}
         caption={`${lines.reduce((sum, line) => sum + line.quantity, 0)} ticket(s) reserved`}
       >
+        {/* "Continue", not "Pay". The desktop control on this same screen says
+            "Proceed to payment", and the two disagreeing about what the same
+            link does is worse on the money path than anywhere else — this one
+            opens the payment step, it does not take payment. */}
         <Button size="lg" asChild className={cn(CTA_PILL_LG, 'shrink-0')}>
           <Link href={payHref}>
-            Pay
+            Continue
             <ArrowRight className="size-4" aria-hidden />
           </Link>
         </Button>
       </StickyActionBar>
+
+      <YourDetailsSheet open={detailsOpen} onOpenChange={setDetailsOpen} />
     </StepTransition>
   );
 }

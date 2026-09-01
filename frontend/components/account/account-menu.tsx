@@ -20,7 +20,7 @@ import {
   User as UserIcon,
   X,
 } from 'lucide-react';
-import { Drawer, DrawerClose, DrawerContent, DrawerTrigger } from '@/components/ui/drawer';
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { IdentityAvatar } from '@/components/ui/avatar';
 import { avatarUrlOf, resolveMediaUrl } from '@/lib/api/profile';
 import { useAuth } from '@/lib/auth/auth-provider';
@@ -74,7 +74,12 @@ export function AccountMenu() {
       <DrawerContent side="right" bare hideClose className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
         {/* District Top Header Bar */}
         <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4 shrink-0">
-          <h2 className="text-body-lg font-bold text-foreground">Profile</h2>
+          {/* `DrawerTitle`, not a bare `h2`. This is a Radix Dialog: without a
+              `Dialog.Title` descendant it has NO accessible name, so a screen
+              reader announces an unnamed dialog where the account, the scope
+              switcher and Sign out live — and Radix logs an error on every
+              open. */}
+          <DrawerTitle className="text-body-lg font-bold text-foreground">Profile</DrawerTitle>
           <DrawerClose className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <X className="size-5" aria-hidden />
           </DrawerClose>

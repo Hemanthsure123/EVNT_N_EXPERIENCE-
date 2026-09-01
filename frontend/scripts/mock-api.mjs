@@ -731,6 +731,10 @@ function userPayload(user) {
     id: user.id,
     email: user.email,
     full_name: user.full_name,
+    // A real nullable column (`User.phone`), and the booking review renders it.
+    // Absent from this payload, a number saved through the details sheet
+    // disappeared on the next read — which looks exactly like a failed save.
+    phone: user.phone ?? '',
     is_organizer: false,
     // Matches `UserSerializer` — the operator console and the header's account
     // menu both branch on it. Granted here only to an address that asks for it
@@ -1289,6 +1293,25 @@ const server = createServer((req, res) => {
     const user = authenticate(req);
     if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
     sendJson(req, res, 200, userPayload(user));
+    return;
+  }
+
+  // PATCH /api/v1/auth/me — the profile edit.
+  //
+  // Added when the booking funnel's "Your details" sheet started using it. The
+  // fixture 404'd the route, so the sheet's Confirm failed silently against
+  // everything except a real backend, and an e2e run could not tell a broken
+  // save from an unimplemented one. Returns the whole profile, exactly as the
+  // real view does — the client swaps the object wholesale rather than
+  // patching a field, so a partial response would leave a half-updated user.
+  if (path === '/api/v1/auth/me' && req.method === 'PATCH') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    void readBody(req).then((body) => {
+      if (typeof body.full_name === 'string') user.full_name = body.full_name;
+      if (typeof body.phone === 'string') user.phone = body.phone;
+      sendJson(req, res, 200, userPayload(user));
+    });
     return;
   }
 

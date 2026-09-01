@@ -202,7 +202,13 @@ export function EventCard({
             </div>
           ) : null}
 
-          <h3 className="line-clamp-2 pr-7 text-body-sm font-bold leading-snug text-foreground sm:pr-0 sm:text-body">
+          {/* `pr-11`, not `pr-7`. The favourite button is `right-2.5 size-11`,
+              so its LEFT edge is 54px in from the card's right edge — while
+              `pr-7` plus the container's `p-3` ended the text box at 40px. The
+              last ~14px of the title's first line ran underneath the glass
+              circle on every compact row, which is the shape the Saved list is
+              made of. 12px of container padding plus 44px clears it. */}
+          <h3 className="line-clamp-2 pr-11 text-body-sm font-bold leading-snug text-foreground sm:pr-0 sm:text-body">
             {/* Desktop link navigation */}
             <Link
               href={eventPath(event)}

@@ -243,6 +243,20 @@ test.describe('the booking funnel', () => {
     await signedIn(page);
 
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
+
+    // ── WAIT FOR THE RESERVATION, THEN PRESS ────────────────────────────
+    //
+    // Review reserves inventory on mount, and "Proceed to payment" only
+    // carries `?booking=` once that POST has answered. Pressed before it
+    // lands, the link goes to `/pay` WITHOUT a booking, the pay step has
+    // nothing to pay for, and it bounces straight back to review — which
+    // surfaced here as an `h1` that stubbornly read "Review your booking".
+    //
+    // Waiting on the URL rather than a spinner, because the booking id in the
+    // query IS the evidence that the reservation exists. Under a full-suite
+    // load that POST is simply slower, which is why this passed alone and
+    // failed in a run.
+    await page.waitForURL(/[?&]booking=/, { timeout: 20_000 });
     await page.getByRole('link', { name: /Proceed to payment/ }).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
 
@@ -393,7 +407,9 @@ test.describe('the booking funnel', () => {
     await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
 
-    const add = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
+    // `Add {tier}`, the pill on an unchosen tier — not `Add one {tier} ticket`,
+    // which is the stepper's plus and only exists once a quantity is set.
+    const add = page.getByRole('button', { name: /^Add (?!one ).+/ }).first();
     await add.scrollIntoViewIfNeeded();
     await add.click();
 

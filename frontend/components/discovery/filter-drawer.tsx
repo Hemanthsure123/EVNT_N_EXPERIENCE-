@@ -302,6 +302,24 @@ export function FilterDrawer({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} modal={false}>
+      {/* ── THE SCRIM, BY HAND ──────────────────────────────────────────────
+          `modal={false}` is a measured performance decision (see the note at
+          the top of this file), but it also means Radix draws no overlay at
+          all — so this panel opened over a fully lit, fully sharp page. On a
+          phone, where it covers the whole screen, that reads as the page
+          having been replaced rather than covered, and the grid behind it
+          stayed visibly, distractingly legible through the gap at the top.
+
+          Same scrim the search overlay hand-rolls for its own non-modal case,
+          so the two dimmed backgrounds on this site are the same colour and
+          the same blur. `aria-hidden`, because it is decoration: the panel
+          itself is what assistive tech should find. */}
+      {open ? (
+        <div
+          className="fixed inset-0 z-drawer bg-overlay/60 backdrop-blur-sm animate-in fade-in-0"
+          aria-hidden
+        />
+      ) : null}
       <DrawerContent
         ref={panelRef}
         onKeyDown={(event) => trapTab(event, panelRef.current)}

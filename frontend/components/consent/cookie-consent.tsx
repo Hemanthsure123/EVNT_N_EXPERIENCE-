@@ -26,6 +26,16 @@ export function CookieConsent() {
     <div
       role="dialog"
       aria-label="Cookie preferences"
+      // `--sticky-action-height` is published by `StickyActionBar` while the
+      // booking funnel is on screen, and is 0px everywhere else. Without it
+      // this notice sat directly on top of the funnel's Continue button and
+      // ate every press — a checkout that could not be completed until the
+      // cookie question was answered, with nothing saying so.
+      // `margin-bottom`, not `bottom`: an inline `bottom` would override the
+      // `md:bottom-0` beside it at every width, and the desktop position would
+      // silently move. A margin lifts the notice by the bar's height without
+      // touching where it is anchored.
+      style={{ marginBottom: 'var(--sticky-action-height, 0px)' }}
       className="fixed inset-x-0 bottom-16 z-drawer px-4 pb-4 md:bottom-0"
     >
       <div className="mx-auto flex max-w-container flex-col gap-4 rounded-xl border border-border bg-elevated p-4 shadow-xl sm:flex-row sm:items-center sm:justify-between">

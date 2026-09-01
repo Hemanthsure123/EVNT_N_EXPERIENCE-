@@ -101,11 +101,21 @@ export function BottomNav({ items, className }: { items: BottomNavItem[]; classN
   return (
     <nav
       aria-label="Primary"
+      aria-hidden={hidden || undefined}
       className={cn(
         'fixed inset-x-0 bottom-0 z-sticky border-t border-border bg-surface/90 backdrop-blur-glass md:hidden',
+        // Somebody who asked for less motion should not get a bar sliding in
+        // and out of the bottom of every scroll.
+        'motion-reduce:transition-none',
         'pb-[env(safe-area-inset-bottom)]',
         'transition-transform duration-300 ease-out',
         hidden ? 'translate-y-full' : 'translate-y-0',
+        // A bar translated off the bottom of the screen is still IN the page:
+        // its four links keep their tab stops and stay in the accessibility
+        // tree, so tabbing from the last visible control jumped to a nav
+        // nobody could see. `pointer-events-none` matters too — the transform
+        // leaves its hit area reachable in some engines during the slide.
+        hidden && 'pointer-events-none',
         className,
       )}
     >

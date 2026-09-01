@@ -4,7 +4,14 @@ import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Ticket } from 'lucide-react';
-import { animate, motion, useDragControls, useMotionValue, useReducedMotion } from 'framer-motion';
+import {
+  animate,
+  motion,
+  useDragControls,
+  useMotionValue,
+  useMotionValueEvent,
+  useReducedMotion,
+} from 'framer-motion';
 import type { PanInfo } from 'framer-motion';
 import { FavouriteButton } from '@/components/discovery/favourite-button';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
@@ -136,6 +143,7 @@ export function EventWidgetDeck() {
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const ctaRef = React.useRef<HTMLDivElement>(null);
   const trackRef = React.useRef<HTMLDivElement>(null);
+  const sheetRef = React.useRef<HTMLDivElement>(null);
   /** True for the first positioning pass of an open, so the deck does not
    *  slide sideways into place while it is sliding up. */
   const justOpenedRef = React.useRef(true);
@@ -166,6 +174,27 @@ export function EventWidgetDeck() {
   const stride = cardWidth + gap;
   const railPadding = Math.round((viewport.width - cardWidth) / 2);
   const restingX = React.useCallback((index: number) => -index * stride, [stride]);
+
+  /**
+   * ── THE CARD IS AS TALL AS WHAT YOU CAN SEE ────────────────────────────
+   *
+   * The sheet is a full-viewport element translated DOWN by `y`, so at any
+   * snap below full screen its bottom edge sits `y` pixels past the bottom of
+   * the screen. A card of `100dvh` inside it therefore hangs off the bottom by
+   * exactly that much — and the sticky "Book tickets" bar, anchored to the
+   * card's bottom, went with it. At the resting snap the primary call to
+   * action was 113px below the visible area: present in the DOM, clickable by
+   * a test that scrolls, and invisible to a person.
+   *
+   * So the card's height is `100dvh - y`, published as a CSS variable written
+   * straight from the motion value. One `setProperty` per frame on one
+   * element, inherited by the cards — no React render, and the bottom of the
+   * card is the bottom of the screen at every snap and all the way through a
+   * drag.
+   */
+  useMotionValueEvent(y, 'change', (value) => {
+    sheetRef.current?.style.setProperty('--deck-y', `${Math.max(value, 0)}px`);
+  });
 
   /** Writes the track's position. `settle` turns the CSS transition on. */
   const applyTrack = React.useCallback(
@@ -437,7 +466,12 @@ export function EventWidgetDeck() {
         // nothing above it.
         dragElastic={{ top: 0.02, bottom: 0.55 }}
         onDragEnd={handleSheetDragEnd}
-        style={{ y }}
+        ref={sheetRef}
+        // The variable is seeded here rather than in a class, because the
+        // project's lint rule (correctly) refuses raw px in Tailwind arbitrary
+        // values — and this one is not a design token, it is a live readout of
+        // the sheet's own translate.
+        style={{ y, ...({ '--deck-y': '0px' } as React.CSSProperties) }}
         className="absolute inset-x-0 top-0 h-[100dvh] overflow-hidden"
       >
         {/* The TRACK. Positioned by hand — see the note at the top. */}
@@ -451,8 +485,12 @@ export function EventWidgetDeck() {
             return (
               <div
                 key={event.id}
-                style={{ width: cardWidth, marginRight: index === events.length - 1 ? 0 : gap }}
-                className="h-full shrink-0"
+                style={{
+                  width: cardWidth,
+                  marginRight: index === events.length - 1 ? 0 : gap,
+                  height: 'calc(100dvh - var(--deck-y, 0px))',
+                }}
+                className="shrink-0"
                 aria-hidden={active ? undefined : true}
               >
                 <div
