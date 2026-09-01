@@ -254,10 +254,12 @@ def test_the_amount_falls_back_to_the_booking_total_when_no_payment_row_resolves
     _confirm_and_notify(booking_service, buyer=buyer, event=event, tier=tier, quantity=2)
 
     payment = _ticket_delivery_context(contexts)["payment"]
-    assert payment["amount_display"] == "₹1000.00"
-    # The platform fee is 10 paise per ticket in this fixture — shown as
-    # INCLUDED in the total, never added to it.
-    assert payment["platform_fee_display"] == "₹0.20"
+    # 2 x ₹500 of tickets plus the 1% now charged on top.
+    assert payment["amount_display"] == "₹1010.00"
+    # The fee is 1% of the ticket subtotal and IS part of the total above —
+    # a receipt that showed the fee beside a total which excluded it would not
+    # add up. It used to be 10 paise per ticket, deducted rather than charged.
+    assert payment["platform_fee_display"] == "₹10.00"
     assert "reference" not in payment
     assert "paid_at" not in payment
     assert "status_label" not in payment
@@ -291,7 +293,7 @@ def test_a_resolved_payment_row_wins_over_the_fallback(
 
     payment = _ticket_delivery_context(contexts)["payment"]
     assert payment["reference"] == "pay_receipt_1"
-    assert payment["amount_display"] == "₹500.00"
+    assert payment["amount_display"] == "₹505.00"
     assert payment["status_label"]
     assert payment["paid_at"]
 

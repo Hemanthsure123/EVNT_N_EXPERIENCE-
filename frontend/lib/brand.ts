@@ -55,7 +55,7 @@ export const REGISTERED_ADDRESS = process.env.NEXT_PUBLIC_REGISTERED_ADDRESS ?? 
 export const GSTIN = process.env.NEXT_PUBLIC_GSTIN ?? '';
 
 // The platform fee is NOT here. It is a flat per-ticket amount in paise and
-// already lives in `lib/booking/selection.ts` as `PLATFORM_FEE_PER_TICKET`,
+// already lives in `lib/booking/selection.ts` as `PLATFORM_FEE_BPS`,
 // mirroring the backend's setting of the same name. /pricing imports that one
 // — a second copy is how the pricing page and the checkout end up quoting
 // different numbers for the same fee.

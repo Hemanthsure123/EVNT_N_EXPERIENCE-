@@ -61,7 +61,7 @@ the last takes minutes.
 - [ ] `NEXT_PUBLIC_MEDIA_BASE_URL` matches `S3_PUBLIC_BASE_URL`. Mismatched,
       every poster fails silently.
 - [ ] `ALLOW_REMOTE_TEST_DATABASE` is blank.
-- [ ] **Business values reviewed, not accepted**: `PLATFORM_FEE_PER_TICKET`,
+- [ ] **Business values reviewed, not accepted**: `PLATFORM_FEE_BPS` (basis points of the ticket subtotal, ADDED to what the customer pays), `DONATION_MAX_MINOR`,
       `SETTLEMENT_REFUND_WINDOW_HOURS`, `BOOKING_HOLD_MINUTES`,
       `CHECKIN_WINDOW_OPENS_BEFORE_MINUTES`, `CHECKIN_WINDOW_GRACE_AFTER_MINUTES`.
 

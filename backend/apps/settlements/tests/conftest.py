@@ -199,7 +199,11 @@ def booking_service(fake_payment) -> BookingService:
         cache=LocMemCacheAdapter(),
         qr_secret=QR_SECRET,
         hold_minutes=10,
-        platform_fee_per_ticket=10,
+        # 100 bps = 1%, matching the shipped default. The fee is ADDED to the
+        # total here as in production, so a test's expected total is
+        # subtotal + 1% and not the bare ticket price.
+        platform_fee_bps=100,
+        donation_max_minor=100_000,
     )
 
 

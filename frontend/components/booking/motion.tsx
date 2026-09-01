@@ -76,6 +76,11 @@ export function StepTransition({
   return (
     <motion.div
       key={stepKey}
+      // A stable hook for measuring where the step's CONTENT ends. The action
+      // bar is `position: fixed` and a sibling of this, so "the last child of
+      // the section" is the bar itself — which makes any assertion about
+      // content clearing the bar trivially and uselessly true.
+      data-step={stepKey}
       initial={reduced || !hasNavigated ? false : { opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       transition={EASE_OUT_SLOW}

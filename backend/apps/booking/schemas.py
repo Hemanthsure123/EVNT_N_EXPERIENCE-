@@ -17,6 +17,22 @@ class BookingItemRequestSerializer(serializers.Serializer):
 class CreateBookingRequestSerializer(serializers.Serializer):
     event_id = serializers.UUIDField()
     items = BookingItemRequestSerializer(many=True, allow_empty=False)
+    # An optional donation, in minor units, added to what the customer pays.
+    # `min_value=0` here and a configured ceiling in the service: the boundary
+    # rejects the nonsensical, the service owns the policy — a maximum that
+    # lives in settings does not belong in a serializer that cannot read it.
+    donation_minor = serializers.IntegerField(min_value=0, required=False, default=0)
+
+
+class SetDonationRequestSerializer(serializers.Serializer):
+    """The donation on a live hold, in minor units. `0` clears it.
+
+    The ceiling is enforced in the service, not here: a maximum that lives in
+    settings does not belong in a serializer that cannot read it, and stating
+    the same bound in two places is how the two eventually disagree.
+    """
+
+    donation_minor = serializers.IntegerField(min_value=0)
 
 
 class AttendeeAssignmentSerializer(serializers.Serializer):
@@ -56,6 +72,7 @@ class BookingItemSerializer(serializers.ModelSerializer):
 class BookingSummarySerializer(serializers.ModelSerializer):
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
+    donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
 
     class Meta:
         model = Booking
@@ -65,6 +82,7 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             "status",
             "total_amount",
             "platform_fee",
+            "donation",
             "hold_expires_at",
             "payment_order_id",
             "created_at",
@@ -98,6 +116,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
     event_title = serializers.CharField(source="event.title", read_only=True)
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
+    donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
     items = BookingItemSerializer(many=True, read_only=True)
     # Empty until the booking is paid — tickets don't exist before that.
     tickets = BookingTicketSerializer(many=True, read_only=True)
@@ -111,6 +130,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "status",
             "total_amount",
             "platform_fee",
+            "donation",
             "hold_expires_at",
             "payment_order_id",
             "items",

@@ -31,3 +31,24 @@ export function createBooking(
 
 export const fetchBooking = (bookingId: string) =>
   api.get<Booking>(`/bookings/${encodeURIComponent(bookingId)}`);
+
+/**
+ * Set (or clear, with `0`) the donation on a live hold.
+ *
+ * Its own call rather than a field on `createBooking`, because the reservation
+ * happens when the review screen opens — the countdown has to be counting
+ * something — and the donation is chosen while reading that screen.
+ *
+ * The backend moves the amount under the booking's row lock WITHOUT touching
+ * the reservation, and re-issues the payment order for the new total. It never
+ * releases and re-reserves: a tier could be gone by the time a second reserve
+ * ran, so choosing to give ₹15 would be able to cost somebody their seats.
+ *
+ * No `Idempotency-Key`: this is idempotent by construction. It sets an absolute
+ * amount rather than applying a delta, and setting the same amount twice is a
+ * no-op that does not even re-issue the order.
+ */
+export const setBookingDonation = (bookingId: string, donationMinor: number) =>
+  api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/donation`, {
+    donation_minor: donationMinor,
+  });

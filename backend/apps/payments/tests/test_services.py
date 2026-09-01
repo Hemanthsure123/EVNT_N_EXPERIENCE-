@@ -171,8 +171,16 @@ def test_create_order_carries_the_route_split(a_booking, fake_payment):
     assert isinstance(transfer, OrderTransfer)
     assert transfer.account_id == "fake_linked_account_test"
     # organizer share = total (100000) - platform fee (20)
-    assert transfer.amount_minor == a_booking.total_amount_minor - a_booking.platform_fee_minor
-    assert transfer.amount_minor == 99980
+    assert (
+        transfer.amount_minor
+        == a_booking.total_amount_minor
+        - a_booking.platform_fee_minor
+        - a_booking.donation_amount_minor
+    )
+    # The ticket subtotal exactly: 2 x 50000. The customer paid 101000, of which
+    # the platform's 1% stays behind. Before the fee moved on top this was
+    # 99980 — the organizer absorbing a deduction they now don't.
+    assert transfer.amount_minor == 100000
     assert transfer.on_hold is True  # held until settlements releases it after the event
 
 

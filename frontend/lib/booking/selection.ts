@@ -74,20 +74,53 @@ export type SelectionLine = {
 export type SelectionTotals = {
   lines: SelectionLine[];
   ticketCount: number;
-  /** What the customer pays. There is nothing added on top of this. */
+  /**
+   * What the TICKETS cost — the "Order amount" line on the checkout.
+   *
+   * This used to be the whole charge, because the fee was deducted from the
+   * organizer's share rather than added to the customer's bill. It is now one
+   * of three terms; `grandTotal` is what a card is debited for. Anything that
+   * renders `total` as the price somebody pays is now understating it.
+   */
   total: number;
   /**
-   * The platform's cut, taken OUT of the total at settlement — NOT a surcharge.
-   * Shown for transparency, never added. Adding it would overstate the price by
-   * exactly the fee, which on a checkout is not a rounding error, it's a lie.
+   * The platform's fee, 1% of `total`, and PART OF `grandTotal`.
+   *
+   * The old comment here said the opposite — "taken OUT at settlement, NOT a
+   * surcharge, adding it would be a lie". That was true of a flat per-ticket fee
+   * deducted from the organizer. The fee is charged on top now, the organizer
+   * receives the full ticket subtotal, and the number that would be a lie is a
+   * total that leaves it out.
    */
   platformFee: number;
+  /** What the customer actually pays: tickets + fee (+ any donation). */
+  grandTotal: number;
   /** True when a line asks for more than that tier still has. */
   overAvailable: boolean;
 };
 
-/** Matches the backend's `PLATFORM_FEE_PER_TICKET` (paise). */
-export const PLATFORM_FEE_PER_TICKET = 10;
+/**
+ * Matches the backend's `PLATFORM_FEE_BPS`. 100 basis points = 1%.
+ *
+ * Basis points and integer arithmetic on both sides, rounded half up, so this
+ * estimate and the amount the lock actually bills agree to the paise. A float
+ * percentage here would disagree with Python's integer division on exactly the
+ * orders where a customer would notice.
+ */
+export const PLATFORM_FEE_BPS = 100;
+
+/** The platform fee on a ticket subtotal, in whole paise. */
+export const platformFeeFor = (subtotalMinor: number) =>
+  Math.floor((subtotalMinor * PLATFORM_FEE_BPS + 5_000) / 10_000);
+
+/**
+ * Mirrors the backend's `DONATION_MAX_MINOR`.
+ *
+ * The server is what actually enforces it — this copy only stops the UI
+ * offering an amount that would be refused, which is a better experience than a
+ * 400 but is not a security boundary and must never be mistaken for one.
+ */
+export const DONATION_MAX_MINOR = 100_000;
 
 /**
  * THIS IS AN ESTIMATE, AND IT HAS TO MATCH WHAT THE LOCK WILL CHARGE.
@@ -121,11 +154,18 @@ export function totalsFor(selection: Selection, tiers: TicketTier[]): SelectionT
     });
   }
   const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
+  const total = lines.reduce((sum, line) => sum + line.subtotal, 0);
+  const platformFee = platformFeeFor(total);
   return {
     lines,
     ticketCount,
-    total: lines.reduce((sum, line) => sum + line.subtotal, 0),
-    platformFee: PLATFORM_FEE_PER_TICKET * ticketCount,
+    total,
+    platformFee,
+    // No donation term here on purpose: a donation is chosen on the review
+    // screen, after this estimate has done its job. The screen that offers it
+    // adds it to this number, and the BOOKING's own `total_amount` supersedes
+    // all of it the moment one exists.
+    grandTotal: total + platformFee,
     overAvailable: lines.some((line) => line.quantity > line.tier.available),
   };
 }

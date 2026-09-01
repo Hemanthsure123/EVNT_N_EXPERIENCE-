@@ -24,12 +24,22 @@ def handle_payment_confirmed(payload: dict) -> None:
         return
     booking = payment.booking
     build_settlement_service().apply_confirmed(
-        event=booking.event, amount=payment.amount_minor, fee=booking.platform_fee_minor
+        event=booking.event,
+        amount=payment.amount_minor,
+        fee=booking.platform_fee_minor,
+        donation=booking.donation_amount_minor,
     )
 
 
 def handle_payment_refunded(payload: dict) -> None:
-    """PaymentRefunded → refunds += amount, net -= amount for the event."""
+    """PaymentRefunded → refunds += amount, net -= amount for the event.
+
+    The amount comes off the EVENT, not off `payment.amount_minor`. A refund is
+    no longer necessarily the whole payment — a donation stays with the platform
+    when a real ticket is refunded — so re-deriving it here would subtract money
+    from the organizer's net that the customer never got back. The fallback
+    keeps an outbox row written before this field existed replayable.
+    """
     from apps.payments.repositories import PaymentRepository
     from config.di import build_settlement_service
 
@@ -38,5 +48,6 @@ def handle_payment_refunded(payload: dict) -> None:
         logger.warning("settlements.refunded.payment_missing", extra=payload)
         return
     build_settlement_service().apply_refund(
-        event=payment.booking.event, amount=payment.amount_minor
+        event=payment.booking.event,
+        amount=int(payload.get("amount_minor") or payment.amount_minor),
     )

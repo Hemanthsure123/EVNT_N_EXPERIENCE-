@@ -45,8 +45,20 @@ class Booking(models.Model):
         max_length=20, choices=BookingStatus.choices, default=BookingStatus.RESERVED
     )
     hold_expires_at = models.DateTimeField()
+    # What the customer is charged: ticket subtotal + platform fee + donation.
+    # This is the number the payment order is created for and the number the
+    # webhook amount-checks against, so nothing may be added to a charge without
+    # being added here.
     total_amount_minor = models.PositiveIntegerField()
+    # The platform's cut, ADDED to the total rather than deducted from the
+    # organizer's share (see PLATFORM_FEE_BPS). Included in total_amount_minor.
     platform_fee_minor = models.PositiveIntegerField()
+    # An optional donation the buyer chose to add. Included in
+    # total_amount_minor, retained by the platform (excluded from the
+    # organizer's Route transfer), and NOT returned by an ordinary refund —
+    # a donation is given, not paid for. The one exception is a booking that
+    # never issued a ticket at all; see `refundable_amount_minor`.
+    donation_amount_minor = models.PositiveIntegerField(default=0)
     # Set after commit, outside the reserve transaction (the external payment
     # order call must never happen under a DB lock).
     payment_order_id = models.CharField(max_length=255, blank=True, default="")

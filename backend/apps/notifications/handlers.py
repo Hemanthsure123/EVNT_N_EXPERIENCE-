@@ -139,9 +139,11 @@ def handle_booking_confirmed(payload: dict) -> None:
     if payment is not None:
         payment_context: dict[str, str] = {
             "amount_display": _amount_display(payment.amount_minor),
-            # INCLUDED in the total, never added to it — the platform takes its
-            # fee OUT at settlement, and the receipt has to say so or it reads
-            # as a surcharge.
+            # PART OF the amount above, not a second charge beside it. The fee
+            # is now added to what the customer pays (1% of the ticket
+            # subtotal), so a receipt listing it as its own line would look
+            # like a figure to add on — the label says "Includes" for that
+            # reason, and the two numbers must never be summed.
             "platform_fee_display": _amount_display(booking.platform_fee_minor),
             "reference": payment.rzp_payment_id,
             "paid_at": format_when(payment.updated_at),

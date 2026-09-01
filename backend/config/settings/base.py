@@ -365,10 +365,35 @@ else:
 RAZORPAY_KEY_ID = env.str("RAZORPAY_KEY_ID", default="")
 RAZORPAY_KEY_SECRET = env.str("RAZORPAY_KEY_SECRET", default="")
 RAZORPAY_WEBHOOK_SECRET = env.str("RAZORPAY_WEBHOOK_SECRET", default="")
-# Platform's per-ticket fee, in MINOR units (paise) — kept integer like every
-# other money value. The organizer receives (total - platform_fee) at
-# settlement; the platform never holds their funds beyond that split.
-PLATFORM_FEE_PER_TICKET = env.int("PLATFORM_FEE_PER_TICKET", default=10)
+# ── THE PLATFORM FEE IS A PERCENTAGE, AND IT IS ADDED ON TOP ──────────────
+#
+# It was `PLATFORM_FEE_PER_TICKET` — a flat 10 paise per ticket DEDUCTED from
+# the organizer's share, so the customer paid exactly the ticket price and the
+# organizer received a little less. It is now a percentage of the ticket
+# subtotal ADDED to what the customer pays, which is how every ticketing
+# platform in this market presents it and what the checkout now shows as a
+# "Fees and charges" line.
+#
+# Two consequences worth stating where the number lives:
+#   * the ORGANIZER is better off — they now receive the full ticket subtotal,
+#     where before the fee came out of it;
+#   * `booking.total_amount_minor` includes the fee, so the payments webhook's
+#     amount check (captured == total) keeps working untouched. The security
+#     guard is not weakened by this change; it simply checks a bigger number.
+#
+# BASIS POINTS, not a float. 100 bps = 1%. Money is integer paise everywhere in
+# this codebase and a percentage stored as 0.01 would be the one place a float
+# rounding error could reach a charged amount.
+PLATFORM_FEE_BPS = env.int("PLATFORM_FEE_BPS", default=100)
+
+# Optional donation collected with a booking (currently: feeding stray dogs).
+# Retained by the platform exactly like the fee — excluded from the organizer's
+# Route transfer, or the event organizer would receive the donation.
+#
+# The cap exists because the amount comes from the client: an endpoint that
+# charges whatever number it is handed is an unbounded write against somebody's
+# card. ₹1,000 is far above the offered chips and far below anything alarming.
+DONATION_MAX_MINOR = env.int("DONATION_MAX_MINOR", default=100_000)
 
 # Booking hold window: how long a reservation is held awaiting payment before
 # the sweeper auto-releases it. Short, so unpaid holds don't starve inventory.

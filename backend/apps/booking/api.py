@@ -26,6 +26,7 @@ from .schemas import (
     BookingDetailSerializer,
     BookingSummarySerializer,
     CreateBookingRequestSerializer,
+    SetDonationRequestSerializer,
     ShareReceiptRequestSerializer,
     ShareReceiptResponseSerializer,
     TicketSerializer,
@@ -58,6 +59,7 @@ class BookingCreateView(APIView):
             user_id=cast(User, request.user).id,
             event_id=data["event_id"],
             items=list(data["items"]),
+            donation_minor=data.get("donation_minor", 0),
             idempotency_key=idempotency_key,
         )
 
@@ -112,6 +114,33 @@ class BookingCancelView(APIView):
         service = build_booking_service()
         booking = service.cancel_booking(
             booking_id=booking_id, actor_id=cast(User, request.user).id
+        )
+        return _no_store(Response(BookingSummarySerializer(booking).data))
+
+
+class BookingDonationView(APIView):
+    """Set or clear the donation on a live hold.
+
+    A separate endpoint rather than a field on create, because the checkout
+    reserves inventory when the review screen opens (the countdown has to be
+    counting something) and the donation is chosen while reading that screen.
+    The service does the work under the booking's row lock and re-issues the
+    payment order for the new amount — leaving a stale order in place would make
+    the customer pay one number while the webhook checked another.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=SetDonationRequestSerializer, responses={200: BookingSummarySerializer})
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = SetDonationRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_booking_service()
+        booking = service.set_donation(
+            booking_id=booking_id,
+            actor_id=cast(User, request.user).id,
+            donation_minor=payload.validated_data["donation_minor"],
         )
         return _no_store(Response(BookingSummarySerializer(booking).data))
 

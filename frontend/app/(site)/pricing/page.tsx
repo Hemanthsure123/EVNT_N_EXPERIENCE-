@@ -12,7 +12,7 @@ import {
   type Faq,
 } from '@/components/pages/page-shell';
 import { BRAND_NAME } from '@/lib/brand';
-import { PLATFORM_FEE_PER_TICKET } from '@/lib/booking/selection';
+import { PLATFORM_FEE_BPS, platformFeeFor } from '@/lib/booking/selection';
 import { formatMoney } from '@/lib/discovery/format';
 import { pageMetadata } from '@/lib/seo/metadata';
 
@@ -23,20 +23,22 @@ import { pageMetadata } from '@/lib/seo/metadata';
  *
  * ── THE FEE IS IMPORTED, NOT TYPED ────────────────────────────────────────
  *
- * `PLATFORM_FEE_PER_TICKET` comes from `lib/booking/selection.ts`, which is the
- * same constant the CHECKOUT computes with and which mirrors the backend's
- * setting of the same name. Writing "₹0.10 per ticket" as prose here would
- * create a second source of truth for a number that appears on a pricing page
- * and on a payment screen — and the failure mode is that somebody changes the
- * setting, the checkout follows, and the pricing page quietly starts lying
- * about the fee. Nobody would notice for months.
+ * `PLATFORM_FEE_BPS` and `platformFeeFor` come from `lib/booking/selection.ts`,
+ * which is the same module the CHECKOUT computes with and which mirrors the
+ * backend's setting of the same name. Writing "1%" as prose here would create a
+ * second source of truth for a number that appears on a pricing page and on a
+ * payment screen — and the failure mode is that somebody changes the setting,
+ * the checkout follows, and the pricing page quietly starts lying about the fee.
+ * Nobody would notice for months.
  *
- * ── AND IT IS A FLAT PER-TICKET FEE, NOT A PERCENTAGE ─────────────────────
+ * ── IT IS 1% OF THE TICKET PRICE, AND THE ATTENDEE PAYS IT ────────────────
  *
- * Worth stating because every comparable platform charges a percentage plus a
- * fixed amount, so a reader arrives expecting one. The backend really does
- * charge `PLATFORM_FEE_PER_TICKET * quantity` (`apps/booking/services.py`),
- * with no percentage component anywhere. The page says so and shows the working.
+ * This page previously described a flat per-ticket fee DEDUCTED from the
+ * organizer's share, and said so at length as a differentiator. Both halves
+ * changed: it is a percentage now, and it is added at checkout rather than taken
+ * out of the sale. The organizer receives the full ticket price as a result,
+ * which is the honest thing to lead with — but the old "your attendee pays
+ * exactly the price you set" claim is gone, because it is no longer true.
  *
  * ── WHAT IS NOT CLAIMED ───────────────────────────────────────────────────
  *
@@ -50,7 +52,7 @@ import { pageMetadata } from '@/lib/seo/metadata';
 export const metadata: Metadata = {
   ...pageMetadata(
     'Pricing',
-    `What it costs to sell tickets on ${BRAND_NAME} — a flat per-ticket fee taken out of the sale, never added on top.`,
+    `What it costs to sell tickets on ${BRAND_NAME} — 1% of the ticket price, paid by the attendee at checkout. You receive the full price you set.`,
   ),
   alternates: { canonical: '/pricing' },
 };
@@ -68,8 +70,8 @@ const FAQS: readonly Faq[] = [
     q: 'Is there a listing fee, or a monthly charge?',
     a: (
       <p>
-        No. Listing is free, however many events you run. The only charge is the per-ticket fee, and
-        it only applies to tickets that actually sell.
+        No. Listing is free, however many events you run. The only charge is the percentage on each
+        ticket, and it only applies to tickets that actually sell.
       </p>
     ),
   },
@@ -77,9 +79,9 @@ const FAQS: readonly Faq[] = [
     q: 'What about free events?',
     a: (
       <p>
-        A free ticket costs you nothing. The fee comes out of the sale amount, and there is no sale
-        amount — so a free event on {BRAND_NAME} is genuinely free, including check-in and the
-        attendee list.
+        A free ticket costs nothing, to you or to your attendee. The fee is a percentage of the
+        ticket price and a percentage of zero is zero — so a free event on {BRAND_NAME} is
+        genuinely free, including check-in and the attendee list.
       </p>
     ),
   },
@@ -87,10 +89,10 @@ const FAQS: readonly Faq[] = [
     q: 'Who pays the fee — me or the attendee?',
     a: (
       <p>
-        You do, out of the ticket price. The attendee pays exactly the price you set. We
-        deliberately do not add a booking fee at checkout: a price that grows at the last step is
-        the single most common reason a checkout is abandoned, and it makes your event look more
-        expensive than you priced it.
+        The attendee, at checkout. It appears as its own line beside the order amount before they
+        pay, so it is visible rather than discovered. You receive the full ticket price you set —
+        this used to work the other way round, with a flat fee taken out of your share, and the
+        change means the amount reaching your account is now exactly the number on your ticket.
       </p>
     ),
   },
@@ -119,9 +121,11 @@ const FAQS: readonly Faq[] = [
     q: 'What happens to the fee if I refund an attendee?',
     a: (
       <p>
-        A refund returns the full amount the attendee paid, our fee included. We do not keep a fee
-        on a ticket that ended up refunded, and a refund issued before payout simply reduces what is
-        released to you.
+        A refund returns what the attendee paid for the ticket, our fee included. We do not keep a
+        fee on a ticket that ended up refunded, and a refund issued before payout simply reduces
+        what is released to you. A charitable donation added at checkout is the one thing that
+        stays — unless the booking never issued a ticket at all, in which case everything comes
+        back.
       </p>
     ),
   },
@@ -139,15 +143,18 @@ const FAQS: readonly Faq[] = [
 
 export default function PricingPage() {
   const gross = EXAMPLE_TICKET_PRICE * EXAMPLE_QUANTITY;
-  const fee = PLATFORM_FEE_PER_TICKET * EXAMPLE_QUANTITY;
-  const net = gross - fee;
+  const fee = platformFeeFor(gross);
+  // The organizer receives the ticket subtotal; the fee is paid by the attendee
+  // on top of it, so `net` is `gross` and the "You receive" row says so.
+  const net = gross;
+  const feePercent = PLATFORM_FEE_BPS / 100;
 
   return (
     <StaticPage>
       <PageHeader
         eyebrow="For organizers"
-        title="One fee. Taken out, never added on."
-        lead={`${formatMoney(PLATFORM_FEE_PER_TICKET)} per ticket sold. No listing fee, no monthly charge, and nothing at all for a free event.`}
+        title="One fee. You keep the price you set."
+        lead={`${feePercent}% of the ticket price, paid by your attendee at checkout. No listing fee, no monthly charge, and nothing at all for a free event.`}
         illustration={<SpotPayout />}
       />
 
@@ -158,22 +165,20 @@ export default function PricingPage() {
             Platform fee
           </span>
           <div className="flex flex-wrap items-baseline gap-3">
-            <span className="text-display tabular-nums text-foreground">
-              {formatMoney(PLATFORM_FEE_PER_TICKET)}
-            </span>
-            <span className="text-body-lg text-muted-foreground">per ticket sold</span>
+            <span className="text-display tabular-nums text-foreground">{feePercent}%</span>
+            <span className="text-body-lg text-muted-foreground">of the ticket price</span>
           </div>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
           {[
             {
-              title: 'A flat amount, not a percentage',
-              body: 'The fee is the same whether a ticket is ₹200 or ₹20,000. Nearly every other platform takes a percentage, so a high-value ticket costs you far more there than here.',
+              title: 'You receive the full ticket price',
+              body: 'The fee is added at checkout and paid by the attendee, so the amount that reaches your account is the price you set — not that price with something taken out of it.',
             },
             {
-              title: 'Taken out of the sale',
-              body: 'Your attendee pays exactly the price you set. Nothing is added at checkout, so your event never looks more expensive than you priced it.',
+              title: 'Shown, never buried',
+              body: 'It appears on the checkout as its own line before anyone pays, next to the order amount and the total. Nobody discovers it after the fact.',
             },
             {
               title: 'Only on tickets that sell',
@@ -201,14 +206,14 @@ export default function PricingPage() {
         <dl className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
           {[
             {
-              label: 'Your attendees pay',
+              label: 'Ticket sales',
               value: formatMoney(gross),
               note: `${EXAMPLE_QUANTITY} × ${formatMoney(EXAMPLE_TICKET_PRICE)}`,
             },
             {
-              label: `${BRAND_NAME} fee`,
-              value: `− ${formatMoney(fee)}`,
-              note: `${EXAMPLE_QUANTITY} × ${formatMoney(PLATFORM_FEE_PER_TICKET)}`,
+              label: `${BRAND_NAME} fee, paid by your attendees`,
+              value: formatMoney(fee),
+              note: `${feePercent}% of ${formatMoney(gross)}, added at checkout`,
             },
           ].map((row) => (
             <div key={row.label} className="flex items-baseline justify-between gap-4 px-card py-4">

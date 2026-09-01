@@ -527,7 +527,7 @@ are **not integration gaps** and live in `frontend/BACKLOG.md`, items 1–78.
 | `RAZORPAY_ROUTE_ENABLED` | Route must be enabled on the account (Razorpay support) |
 
 Consumed by `core/adapters/razorpay/adapter.py` via `payment_port()`.
-Business decision required: **`PLATFORM_FEE_PER_TICKET`** (minor units).
+Business decision required: **`PLATFORM_FEE_BPS`** (basis points of the ticket subtotal; 100 = 1%, charged ON TOP of the ticket price rather than deducted from the organizer's share).
 
 ### Email
 
@@ -776,7 +776,7 @@ disposable.
 17b. **Delete or rename `docker-compose.override.yml` on the production host.**
     Compose loads it automatically, and a stray copy points production at
     containers that are not running.
-18. Set `PLATFORM_FEE_PER_TICKET`, `SETTLEMENT_REFUND_WINDOW_HOURS`,
+18. Set `PLATFORM_FEE_BPS`, `DONATION_MAX_MINOR`, `SETTLEMENT_REFUND_WINDOW_HOURS`,
     `BOOKING_HOLD_MINUTES`, `CHECKIN_WINDOW_*` — **business decisions, not
     defaults to accept silently.**
 

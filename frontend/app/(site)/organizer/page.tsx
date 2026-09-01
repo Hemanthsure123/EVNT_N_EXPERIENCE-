@@ -21,8 +21,7 @@ import {
   type Faq,
 } from '@/components/pages/page-shell';
 import { BRAND_NAME } from '@/lib/brand';
-import { PLATFORM_FEE_PER_TICKET } from '@/lib/booking/selection';
-import { formatMoney } from '@/lib/discovery/format';
+import { PLATFORM_FEE_BPS } from '@/lib/booking/selection';
 import { pageMetadata } from '@/lib/seo/metadata';
 
 /**
@@ -67,7 +66,7 @@ import { pageMetadata } from '@/lib/seo/metadata';
 export const metadata: Metadata = {
   ...pageMetadata(
     'List your event',
-    `Sell tickets on ${BRAND_NAME} — ${formatMoney(PLATFORM_FEE_PER_TICKET)} per ticket, no listing fee, and your money held by the payment provider rather than by us.`,
+    `Sell tickets on ${BRAND_NAME} — ${PLATFORM_FEE_BPS / 100}% per ticket paid by your attendee, no listing fee, and your money held by the payment provider rather than by us.`,
   ),
   alternates: { canonical: '/organizer' },
 };
@@ -110,9 +109,9 @@ const FAQS: readonly Faq[] = [
     q: 'What does it cost?',
     a: (
       <p>
-        {formatMoney(PLATFORM_FEE_PER_TICKET)} per ticket sold, taken out of the sale rather than
-        added to your attendee&apos;s price. No listing fee, no monthly charge, nothing for a free
-        event. Full detail, with a worked example, is on the{' '}
+        {PLATFORM_FEE_BPS / 100}% of each ticket sold, added at checkout and paid by your
+        attendee — so the amount that reaches you is the price you set. No listing fee, no monthly
+        charge, nothing for a free event. Full detail, with a worked example, is on the{' '}
         <Link href="/pricing">pricing page</Link>.
       </p>
     ),
@@ -174,7 +173,7 @@ export default function OrganizerLandingPage() {
       <PageHeader
         eyebrow="For organizers"
         title="Sell tickets without wondering where the money is."
-        lead={`List an event in an afternoon, take payments the same day, and get paid after it happens. ${formatMoney(PLATFORM_FEE_PER_TICKET)} per ticket sold — nothing else.`}
+        lead={`List an event in an afternoon, take payments the same day, and get paid after it happens. ${PLATFORM_FEE_BPS / 100}% per ticket, paid by your attendee — nothing else.`}
         illustration={<SpotListing />}
       >
         <div className="flex flex-wrap items-center gap-3 pt-1">

@@ -73,12 +73,12 @@ class SettlementService:
 
     # --- running totals (fast DISPLAY; event-driven) -----------------------
 
-    def apply_confirmed(self, *, event, amount: int, fee: int) -> None:
-        """PaymentConfirmed → gross += amount, platform_fee += fee. Creates the
-        settlement on the first payment for the event (stamping its release
-        time from the event's end + refund window)."""
+    def apply_confirmed(self, *, event, amount: int, fee: int, donation: int = 0) -> None:
+        """PaymentConfirmed → gross += amount, platform_fee += fee, donations +=
+        donation. Creates the settlement on the first payment for the event
+        (stamping its release time from the event's end + refund window)."""
         self._settlements.ensure_for_event(event.id, releasable_at=self._releasable_at(event))
-        self._settlements.add_confirmed(event.id, amount=amount, fee=fee)
+        self._settlements.add_confirmed(event.id, amount=amount, fee=fee, donation=donation)
 
     def apply_refund(self, *, event, amount: int) -> None:
         """PaymentRefunded → refunds += amount, net -= amount. If the settlement
@@ -156,10 +156,14 @@ class SettlementService:
             # AUTHORITATIVE recompute from the payment records (source of truth),
             # under the lock — the running totals never decide the payout.
             agg = self._payments.aggregate_event_settlement(s.event_id)
-            net = agg["gross"] - agg["platform_fee"] - agg["refunds"]
-            s.gross, s.platform_fee, s.refunds, s.net = (
+            # `gross` is what was CAPTURED, which now includes the platform's
+            # fee and any donations. Both are the platform's to keep and neither
+            # is the organizer's, so both come out before the payout.
+            net = agg["gross"] - agg["platform_fee"] - agg["donations"] - agg["refunds"]
+            s.gross, s.platform_fee, s.donations, s.refunds, s.net = (
                 agg["gross"],
                 agg["platform_fee"],
+                agg["donations"],
                 agg["refunds"],
                 net,
             )

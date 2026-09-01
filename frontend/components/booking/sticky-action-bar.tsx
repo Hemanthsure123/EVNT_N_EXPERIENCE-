@@ -8,11 +8,17 @@ import { AnimatedNumber } from './motion';
 /**
  * The mobile action bar: what it costs, and the one thing to press.
  *
- * It sits above the site's bottom nav rather than over it, and it is the ONLY
- * primary action rendered below `lg` — the desktop button is hidden at those
- * widths. Two live "Continue" buttons on one screen is the duplicated-CTA
- * problem the brief calls out, and on a checkout it also means two places a
- * double-tap can fire from.
+ * It is the ONE primary action on either checkout screen, at every width. It
+ * used to be `lg:hidden` with a separate desktop button above the fold; two
+ * live buttons doing the same thing on one screen is two places a double-tap
+ * can fire from, which on a money path is not a cosmetic duplication.
+ *
+ * ── AND IT NO LONGER STACKS ON A BOTTOM NAV ───────────────────────────────
+ *
+ * The checkout left the site layout, so there is no tab bar underneath it any
+ * more. What remains is the phone's own gesture inset, which the bar still pads
+ * for itself — a Pay button under the home indicator is a button nobody can
+ * press.
  *
  * ── IT IS GLASS BECAUSE IT IS GENUINELY FLOATING ──────────────────────────
  *
@@ -23,23 +29,25 @@ import { AnimatedNumber } from './motion';
  * actually draws the bar's edge on a white canvas, and `shadow-lg` gives it the
  * lift that says it is above the page rather than part of it.
  *
- * ── THE 768–1023px GAP, FIXED ─────────────────────────────────────────────
- *
- * Every caller renders this `lg:hidden`, so it is on screen from 0 to 1023px.
- * It was pinned at `bottom-16` to clear the site's bottom nav — but that nav is
- * `md:hidden`, so from 768px up the bar floated 64px above an empty strip of
- * page. The offset is now the nav's own height token, dropped to flush at `md`
- * where the nav stops existing: `bottom-bottom-nav md:bottom-0`. Changing the
- * nav's height now moves this with it instead of desynchronising it.
  */
 export function StickyActionBar({
   total,
   caption,
+  leading,
   children,
   className,
 }: {
   total: number;
   caption: string;
+  /**
+   * Replaces the default amount-and-caption block on the left.
+   *
+   * The ticket screen wants the total there (it is the running figure somebody
+   * is building up). The review screen does not: the total has already been
+   * itemised twice above, and the left of that bar is where naming the payment
+   * provider is worth more than repeating a number.
+   */
+  leading?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
@@ -88,20 +96,21 @@ export function StickyActionBar({
         // lifts its CONTENT clear of both the nav and the inset — one element
         // responsible for its own clearance.
         'glass fixed inset-x-0 bottom-0 z-sticky border-t px-4 pt-3 shadow-lg',
-        'pb-[calc(var(--bottom-nav-height)_+_0.75rem_+_env(safe-area-inset-bottom))]',
-        'md:pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]',
+        'pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]',
         className,
       )}
     >
-      <div className="mx-auto flex w-full max-w-container items-center gap-4">
-        <div className="flex min-w-0 flex-col">
-          <AnimatedNumber
-            value={total}
-            format={(value) => formatFromPrice(value) ?? '—'}
-            className="text-h4 text-foreground"
-          />
-          <span className="truncate text-caption text-muted-foreground">{caption}</span>
-        </div>
+      <div className="mx-auto flex w-full max-w-2xl items-center gap-4 sm:px-2">
+        {leading ?? (
+          <div className="flex min-w-0 flex-col">
+            <AnimatedNumber
+              value={total}
+              format={(value) => formatFromPrice(value) ?? '—'}
+              className="text-h4 text-foreground"
+            />
+            <span className="truncate text-caption text-muted-foreground">{caption}</span>
+          </div>
+        )}
         <div className="ml-auto flex shrink-0 items-center">{children}</div>
       </div>
     </div>

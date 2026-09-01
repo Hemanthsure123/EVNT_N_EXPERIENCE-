@@ -97,7 +97,8 @@ class BookingService:
         cache: CachePort,
         qr_secret: str,
         hold_minutes: int,
-        platform_fee_per_ticket: int,
+        platform_fee_bps: int,
+        donation_max_minor: int,
     ) -> None:
         self._bookings = bookings
         self._tickets = tickets
@@ -108,7 +109,8 @@ class BookingService:
         self._cache = cache
         self._qr_secret = qr_secret
         self._hold_minutes = hold_minutes
-        self._platform_fee_per_ticket = platform_fee_per_ticket
+        self._platform_fee_bps = platform_fee_bps
+        self._donation_max_minor = donation_max_minor
 
     # --- ShareReceipt ------------------------------------------------------
 
@@ -230,10 +232,12 @@ class BookingService:
         user_id: uuid.UUID | str,
         event_id: uuid.UUID | str,
         items: list[dict],
+        donation_minor: int = 0,
         idempotency_key: str | None = None,
     ) -> BookingCreationResult:
         if not items:
             raise InvalidBookingItemsError("At least one item is required.")
+        donation_minor = self._validate_donation(donation_minor)
 
         event = self._events.get_published_by_id(event_id)
         if event is None:
@@ -262,12 +266,41 @@ class BookingService:
                 existing = self._bookings.get_by_idempotency_key(user_id, idempotency_key)
                 if existing is not None:
                     return self._creation_result(self._ensure_payment_order(existing))
-                booking = self._reserve_and_insert(user_id, event_id, requested, idempotency_key)
+                booking = self._reserve_and_insert(
+                    user_id, event_id, requested, donation_minor, idempotency_key
+                )
         else:
-            booking = self._reserve_and_insert(user_id, event_id, requested, None)
+            booking = self._reserve_and_insert(user_id, event_id, requested, donation_minor, None)
 
         # OUTSIDE the transaction/lock: the external payment-order call.
         return self._creation_result(self._ensure_payment_order(booking))
+
+    def _validate_donation(self, donation_minor: int) -> int:
+        """A donation is optional, whole paise, and bounded.
+
+        The amount arrives from the client, so this is the only thing standing
+        between a chip on a checkout screen and an arbitrary charge on somebody's
+        card. Rejected rather than clamped: silently charging ₹1,000 when a
+        request asked for ₹100,000 is worse than refusing, because the caller
+        would have no way to know what it actually did.
+        """
+        if donation_minor < 0:
+            raise InvalidBookingItemsError("A donation cannot be negative.")
+        if donation_minor > self._donation_max_minor:
+            raise InvalidBookingItemsError(
+                f"A donation may not exceed {self._donation_max_minor} paise."
+            )
+        return int(donation_minor)
+
+    def _platform_fee_for(self, subtotal_minor: int) -> int:
+        """The platform's fee on a ticket subtotal, in whole paise.
+
+        Integer arithmetic end to end, rounded half up — `subtotal * bps / 10000`
+        as a float would put a binary rounding error directly into an amount
+        somebody is charged. The fee is computed on the TICKET subtotal only:
+        the platform does not take a cut of a donation.
+        """
+        return (subtotal_minor * self._platform_fee_bps + 5_000) // 10_000
 
     def _validate_items(self, items: list[dict], tiers: dict) -> list[tuple[uuid.UUID | str, int]]:
         seen: set[str] = set()
@@ -294,12 +327,11 @@ class BookingService:
         user_id,
         event_id,
         requested: list[tuple[uuid.UUID | str, int]],
+        donation_minor: int,
         idempotency_key: str | None,
     ) -> Booking:
         booking_id = uuid.uuid4()
         hold_expires_at = timezone.now() + timedelta(minutes=self._hold_minutes)
-        total_quantity = sum(q for _, q in requested)
-        platform_fee = self._platform_fee_per_ticket * total_quantity
 
         try:
             with UnitOfWork() as uow:
@@ -337,7 +369,23 @@ class BookingService:
                     assert outcome.unit_price_minor is not None
                     priced.append((tier_id, quantity, outcome.unit_price_minor, outcome.phase_name))
 
-                total_amount = sum(q * price for _, q, price, _ in priced)
+                # ── WHAT THE CUSTOMER PAYS ───────────────────────────────
+                #
+                # subtotal   what the tickets cost, at the prices the LOCK
+                #            decided (see above) — this is the organizer's money
+                # + fee      the platform's percentage, ADDED rather than
+                #            deducted from the organizer's share
+                # + donation optional, retained by the platform
+                # = total    the number the payment order is created for and the
+                #            number the webhook amount-checks against
+                #
+                # The fee is computed INSIDE the transaction, from the same
+                # locked prices as the subtotal. Computing it earlier from the
+                # unlocked read would let a sale phase change between the two
+                # and bill a percentage of a price nobody was charged.
+                subtotal = sum(q * price for _, q, price, _ in priced)
+                platform_fee = self._platform_fee_for(subtotal)
+                total_amount = subtotal + platform_fee + donation_minor
 
                 booking = self._bookings.create(
                     id=booking_id,
@@ -346,6 +394,7 @@ class BookingService:
                     hold_expires_at=hold_expires_at,
                     total_amount_minor=total_amount,
                     platform_fee_minor=platform_fee,
+                    donation_amount_minor=donation_minor,
                     idempotency_key=idempotency_key,
                 )
                 self._bookings.create_items(
@@ -406,16 +455,28 @@ class BookingService:
         return booking
 
     def _build_transfers(self, booking: Booking) -> list[OrderTransfer] | None:
-        """The Route split for this order: the organizer's share (total minus
-        the platform fee) transferred to their linked account, ON HOLD until
-        `settlements` releases it after the event. The platform fee is retained
-        by simply not transferring it — the platform never holds the
-        organizer's funds. No linked account yet → no split (the fee/hold
-        policy for that case is a settlements concern)."""
+        """The Route split for this order: the organizer's share transferred to
+        their linked account, ON HOLD until `settlements` releases it after the
+        event. The platform's own money — the fee and any donation — is retained
+        by simply not transferring it, so the platform never holds the
+        organizer's funds. No linked account yet → no split (the fee/hold policy
+        for that case is a settlements concern).
+
+        BOTH subtractions matter and for different reasons. The fee is the
+        platform's cut. The DONATION is somebody else's money entirely: leave it
+        in and the event organizer is paid the charity's share, which is the
+        kind of mistake that is invisible in every test that only checks the
+        arithmetic adds up.
+
+        What is left is exactly the ticket subtotal, which is why the organizer
+        is better off under a fee that is added on top than under one deducted.
+        """
         account_id = self._events.get_organizer_payout_account(booking.event_id)
         if not account_id:
             return None
-        organizer_amount = booking.total_amount_minor - booking.platform_fee_minor
+        organizer_amount = (
+            booking.total_amount_minor - booking.platform_fee_minor - booking.donation_amount_minor
+        )
         return [OrderTransfer(account_id=account_id, amount_minor=organizer_amount, on_hold=True)]
 
     def _creation_result(self, booking: Booking) -> BookingCreationResult:
@@ -454,6 +515,75 @@ class BookingService:
             )
 
         return booking
+
+    # --- SetDonation -------------------------------------------------------
+
+    def set_donation(
+        self, *, booking_id: uuid.UUID | str, actor_id: uuid.UUID | str, donation_minor: int
+    ) -> Booking:
+        """Set (or clear) the donation on a live hold, and re-issue its payment
+        order for the new amount.
+
+        ── WHY THIS IS NOT PART OF `create_booking` ──────────────────────────
+
+        The checkout reserves inventory the moment the review screen opens — the
+        countdown has to be counting something — but the donation is chosen
+        afterwards, while reading that screen. So the amount changes after the
+        booking exists, and something has to move it.
+
+        ── AND WHY IT DOES NOT TOUCH INVENTORY ───────────────────────────────
+
+        A donation is not a ticket. Re-reserving to change it would put a live
+        hold through a release-and-reserve cycle over a decision that has
+        nothing to do with stock — and the tier could be gone by the time the
+        second reserve ran, so choosing to give ₹15 could cost somebody their
+        seats. The line items and the ticket subtotal are untouched here; only
+        the donation and the total move.
+
+        ── THE ORDER HAS TO BE RE-ISSUED ─────────────────────────────────────
+
+        `total_amount_minor` is the number the payment order is created for AND
+        the number the webhook amount-checks against, so leaving a stale order
+        in place would guarantee a mismatch — the customer would pay the old
+        amount, the check would refuse it, and they would be auto-refunded a
+        payment that was in every other sense fine. The external call happens
+        AFTER the transaction commits, never under the row lock.
+
+        Only while the hold is live: a paid booking's amount is settled, and a
+        cancelled or expired one has nothing to pay.
+        """
+        if donation_minor < 0:
+            raise InvalidBookingItemsError("A donation cannot be negative.")
+        if donation_minor > self._donation_max_minor:
+            raise InvalidBookingItemsError(
+                f"A donation may not exceed {self._donation_max_minor} paise."
+            )
+
+        with UnitOfWork():
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None:
+                raise BookingNotFoundError(str(booking_id))
+            if str(booking.user_id) != str(actor_id):
+                raise NotBookingOwnerError()
+            if booking.status != BookingStatus.RESERVED:
+                raise BookingNotCancellableError(booking.status)
+            if booking.donation_amount_minor == donation_minor:
+                return booking  # nothing to do, and no order to churn
+
+            # The ticket subtotal + fee, recovered from the row rather than
+            # recomputed from the tiers: those prices were decided under a lock
+            # that is long released, and re-reading them now could bill a
+            # different sale phase than the one this hold actually got.
+            without_donation = booking.total_amount_minor - booking.donation_amount_minor
+            booking.donation_amount_minor = donation_minor
+            booking.total_amount_minor = without_donation + donation_minor
+            # Dropped so `_ensure_payment_order` issues a new one for the new
+            # amount. The abandoned order is never handed to a browser again and
+            # expires at the provider on its own.
+            booking.payment_order_id = ""
+            self._bookings.save(booking)
+
+        return self._ensure_payment_order(booking)
 
     # --- ReleaseExpired (the sweeper / reliability backstop) ---------------
 
@@ -603,6 +733,38 @@ class BookingService:
                 "booking.tickets_voided", extra={"booking_id": str(booking_id), "count": voided}
             )
         return voided
+
+    def refundable_amount_minor(self, *, booking_id: uuid.UUID | str) -> int:
+        """How much of this booking may be returned to the customer.
+
+        ── A DONATION IS GIVEN, NOT PAID FOR ──────────────────────────────────
+
+        Refunding a ticket returns the ticket price and the platform fee charged
+        on it. It does NOT return the donation: the buyer gave that away
+        deliberately, and it has already been counted as the platform's own
+        money rather than the organizer's.
+
+        ── EXCEPT WHEN NOTHING WAS EVER DELIVERED ────────────────────────────
+
+        Two refund paths exist for transactions that issued no ticket at all —
+        a hold that lapsed before the webhook landed, and a captured amount that
+        did not match the booking. In both, the purchase failed entirely and the
+        customer very likely never registered that a donation was taken. Keeping
+        it there would be money retained for a transaction that delivered
+        nothing, which is the exact outcome the whole payments module exists to
+        make impossible. So those refund in full.
+
+        The test is the booking's STATE, not the refund's `reason` string: a
+        booking is PAID only once `confirm_booking` has issued its tickets, so
+        "did this deliver" is a fact on the row rather than a label a future
+        caller has to remember to pass correctly.
+        """
+        booking = self._bookings.get_amounts_for_refund(booking_id)
+        if booking is None:
+            raise BookingNotFoundError(str(booking_id))
+        if booking.status != BookingStatus.PAID:
+            return booking.total_amount_minor
+        return booking.total_amount_minor - booking.donation_amount_minor
 
     # --- AssignAttendees (who each ticket is for) --------------------------
 

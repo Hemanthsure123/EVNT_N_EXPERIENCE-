@@ -300,9 +300,17 @@ export type BookingItem = {
 /**
  * A booking (backend BookingSummary/BookingDetailSerializer).
  *
- * `total_amount` is what the customer pays. `platform_fee` is the platform's cut
- * taken OUT of that total at settlement — NOT a surcharge on top of it. Adding
- * it to the total on screen would overstate the price by exactly the fee.
+ * `total_amount` is what the customer pays, and it CONTAINS the other two:
+ *
+ *     total_amount = ticket subtotal + platform_fee + donation
+ *
+ * This comment used to say the opposite — that the fee was taken out of the
+ * total at settlement and adding it on screen would overstate the price. That
+ * was true of a flat per-ticket fee deducted from the organizer's share. The fee
+ * is charged on top now, the organizer receives the full ticket subtotal, and
+ * the mistake to avoid has inverted: **never add `platform_fee` or `donation` to
+ * `total_amount`**, because they are already inside it. The ticket subtotal is
+ * `total_amount - platform_fee - donation`.
  *
  * `hold_expires_at` is a real deadline: the backend's sweeper releases the
  * reserved inventory when it passes.
@@ -314,6 +322,8 @@ export type Booking = {
   status: 'reserved' | 'paid' | 'cancelled' | 'expired';
   total_amount: number;
   platform_fee: number;
+  /** Optional charitable donation the buyer added. Included in `total_amount`. */
+  donation: number;
   hold_expires_at: string | null;
   payment_order_id: string | null;
   items?: BookingItem[];

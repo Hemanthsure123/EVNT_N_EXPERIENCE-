@@ -3,46 +3,39 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import {
-  AlertTriangle,
-  CalendarDays,
-  Loader2,
-  MapPin,
-  Navigation,
-  Pencil,
-} from 'lucide-react';
+import { AlertTriangle, Loader2, Ticket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { createBooking } from '@/lib/api/bookings';
+import { createBooking, setBookingDonation } from '@/lib/api/bookings';
 import { ApiError } from '@/lib/api/errors';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { rememberProvider } from '@/lib/booking/payment-provider';
 import { rememberKeyId } from '@/lib/booking/razorpay';
 import {
+  DONATION_MAX_MINOR,
   SELECTION_PARAM,
   idempotencyKeyFor,
   serialiseSelection,
   toBookingItems,
 } from '@/lib/booking/selection';
-import { inferCategory } from '@/lib/discovery/categories';
-import { formatEventDateLong, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
-import { cn } from '@/lib/utils/cn';
-import { eventPath } from '@/lib/events/ref';
-import { CTA_PILL_LG, PILL_MD } from './cta';
+import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
+import { CTA_PILL_LG } from './cta';
 import { useBooking } from './booking-context';
+import { DonationCard, RuleHeading } from './donation-card';
+import { FunnelScreen } from './funnel-shell';
+import { HoldTimer } from './hold-timer';
 import { Rise, StepTransition } from './motion';
 import { PosterFrame } from './poster-frame';
-import { PaymentSection } from './payment-section';
+import { PaymentSection, PayUsing } from './payment-section';
 import { StickyActionBar } from './sticky-action-bar';
 import { YourDetailsSheet } from './your-details-sheet';
-import { CHECKOUT_TRUST, TrustStrip } from './trust';
 
 /**
- * Step 3 — review, and the moment inventory is actually taken.
+ * Screen 2 — review, pay, and the moment inventory is actually taken.
  *
  * THIS IS THE FIRST WRITE IN THE FUNNEL. Everything before it was a selection in
  * a query string; `POST /bookings` takes a per-tier row lock, decrements
- * availability and starts a hold timer. Reserving here rather than on step 1 is
- * deliberate: holding stock while someone is still browsing tiers — or worse,
+ * availability and starts a hold timer. Reserving here rather than on screen 1
+ * is deliberate: holding stock while someone is still browsing tiers — or worse,
  * while they are creating an account — would take tickets off sale for people
  * who are ready to buy, and the hold would routinely expire before payment.
  *
@@ -53,19 +46,25 @@ import { CHECKOUT_TRUST, TrustStrip } from './trust';
  * original booking, so every one of those paths converges on one reservation.
  *
  * If the reserve FAILS — a tier sold out while the account was being created —
- * that is said plainly, with a route back to the picker. It is the one failure
- * on this flow that is genuinely likely, and the one that is most infuriating to
- * meet as a generic error.
+ * that is said plainly, with a route back to the picker.
  *
- * ── THE EVENT ROW IS A ROW AT EVERY WIDTH ─────────────────────────────────
+ * ── AND IT IS THE LAST SCREEN ─────────────────────────────────────────────
  *
- * The poster used to be `w-full` below `sm` with a 3:2 frame, so on a 390px
- * phone the first thing on the review screen was a 260px-tall box — and since
- * most events in this catalogue have no `poster_url`, that box was usually an
- * empty grey gradient. It is now a fixed portrait thumbnail (`aspect-portrait`,
- * the discovery language's 3:4) beside the details at every width, and a
- * `PosterFrame`, so the no-poster case shows the event's category tile instead
- * of a rectangle that reads as a failed image.
+ * There used to be a fourth step at `/pay` whose entire job was to restate the
+ * order this screen had just shown — the same lines, the same total, the same
+ * fee note — and then offer a button. A whole navigation and a second chance to
+ * abandon, in exchange for a summary somebody had already read. The button is on
+ * the summary now. Nothing about the payment itself changed: no card UI on this
+ * origin, the browser's success callback is not treated as proof, and the
+ * confirmation screen still polls the BACKEND until it says `paid`.
+ *
+ * ── THE ORDER OF THE PAGE ─────────────────────────────────────────────────
+ *
+ * Countdown, event, tickets, payment summary, donation, ticket details, pay.
+ * That is cost-of-missing-it, descending: the hold is the only thing here with a
+ * deadline, the order is what is being bought, the total is what it costs — and
+ * the donation sits AFTER the total rather than inside it, because an amount
+ * nobody has agreed to has no business moving the number they are checking.
  */
 export function ReviewStep() {
   const { event, selection, totals, booking, setBooking, setPaymentKeyId, setPaymentProvider } =
@@ -76,47 +75,29 @@ export function ReviewStep() {
   const [error, setError] = React.useState<{ message: string; recoverable: boolean } | null>(null);
   const [reserving, setReserving] = React.useState(false);
   const attempted = React.useRef(false);
-
   const [detailsOpen, setDetailsOpen] = React.useState(false);
+
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
   /**
    * Back to the TICKET SCREEN — `/booking/{id}` — and this has now been both
    * ways, which is the point.
    *
    * It first pointed here, then was moved to the event page when the picker
-   * lived there, and the picker has since moved BACK to its own screen (a tier
-   * carries live availability, a per-order maximum and a sale window, and a
-   * 22rem sidebar beside a poster is the worst place to read any of them).
-   * This link was not moved back with it, so "Change" walked out of the funnel
-   * and onto the standalone event page — the one surface this flow is not
-   * supposed to touch on a phone, and from which the only way forward was to
-   * start again.
-   *
-   * The selection rides along in the query string, so the picker opens on what
-   * was already chosen rather than resetting it.
+   * lived there, and the picker has since moved BACK to its own screen. This
+   * link was not moved back with it, so "Change" walked out of the funnel and
+   * onto the standalone event page — the one surface this flow is not supposed
+   * to touch on a phone. The selection rides along in the query, so the picker
+   * opens on what was already chosen.
    */
   const pickerHref = `/booking/${event.id}${query}`;
-  // The event page still has one link from here — the "View event" pill, which
-  // is a deliberate way OUT of the funnel rather than a step within it.
-  const eventHref = eventPath(event);
 
-  // No session, no reservation: the booking belongs to a user.
-  //
-  // Back to the PICKER, which is where the sign-in sheet lives now. This sent
-  // people to `/booking/{id}/login`, a screen that no longer exists — and the
-  // selection rides along in the query, so the picker reopens on the same
-  // tickets and one press of Continue raises the sheet.
+  // No session, no reservation: the booking belongs to a user. Back to the
+  // PICKER, which is where the sign-in sheet lives now.
   React.useEffect(() => {
-    if (status === 'anonymous') router.replace(`/booking/${event.id}${query}`);
-  }, [status, router, event.id, query]);
+    if (status === 'anonymous') router.replace(pickerHref);
+  }, [status, router, pickerHref]);
 
-  // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker,
-  // which is step 1 of this funnel again.
-  //
-  // `/booking/{id}` was briefly a redirect to THIS screen, which is why this
-  // was moved to the event page: an empty selection would otherwise have
-  // bounced review -> entry -> review forever. It is a real picker again, so
-  // the bounce lands on a screen that can actually take a selection.
+  // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker.
   React.useEffect(() => {
     if (status !== 'unknown' && !selection.length) router.replace(pickerHref);
   }, [status, selection.length, router, pickerHref]);
@@ -139,14 +120,13 @@ export function ReviewStep() {
         // `provider` is newer than the hand-written response type in
         // lib/api/types.ts (which this file does not own); reading it as an
         // optional widening keeps the type honest without pretending the field
-        // has always been there. An older backend simply reports nothing and
-        // `resolveProvider` falls back to the real provider.
+        // has always been there.
         const provider = (result.payment as { provider?: string }).provider ?? '';
         setPaymentProvider(provider);
         rememberProvider(provider);
         // Put the booking id in the URL. Context alone would lose it on a
-        // refresh at the payment step — the one place someone is most likely to
-        // reload, and the one place losing it means reserving a second time.
+        // refresh — the one place someone is most likely to reload, and the one
+        // place losing it means reserving a second time.
         const params = new URLSearchParams(window.location.search);
         params.set('booking', result.booking.id);
         window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
@@ -166,19 +146,39 @@ export function ReviewStep() {
     })();
   }, [status, selection, booking, event.id, setBooking, setPaymentKeyId, setPaymentProvider]);
 
-  const category = inferCategory(event);
-  const directions = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    `${event.venue}, ${event.city}`,
-  )}`;
+  // ── THE DONATION ────────────────────────────────────────────────────────
+  //
+  // Written to the BOOKING, never held only in local state, because
+  // `total_amount` is the number the payment order is created for AND the number
+  // the webhook amount-checks against. A donation that existed only on screen
+  // would put one figure on the pay button and charge another — and the check
+  // would then refuse a payment that was in every other sense fine.
+  //
+  // The write does not touch the reservation (see `set_donation`), so changing
+  // one's mind about ₹15 can never cost somebody their seats.
+  const [donationPending, setDonationPending] = React.useState(false);
+  const donation = booking?.donation ?? 0;
+  const changeDonation = (minor: number) => {
+    if (!booking || minor === donation) return;
+    setDonationPending(true);
+    void (async () => {
+      try {
+        setBooking(await setBookingDonation(booking.id, minor));
+      } catch {
+        // Left exactly as it was. A donation that silently failed and then
+        // appeared on screen anyway is the worst outcome available here: the
+        // amount shown must always be the amount that will be charged.
+      } finally {
+        setDonationPending(false);
+      }
+    })();
+  };
+
   // `POST /bookings` returns a SUMMARY — no line items (only `GET /bookings/{id}`
   // carries them). So the lines come from the selection that was just sent,
-  // which is the same data by construction. Reading `booking.items` alone
-  // rendered an empty ticket list against the real backend.
-  //
-  // `unit_price` is the tier's EFFECTIVE price, not its face price: a line
-  // synthesised at the face price showed a reserved order costing more than the
-  // booking beside it actually did. `phase_name` comes along for the same reason
-  // it exists on the server's own item — a lower number needs its label.
+  // which is the same data by construction. `unit_price` is the tier's EFFECTIVE
+  // price: a line synthesised at the face price showed a reserved order costing
+  // more than the booking beside it actually did.
   const lines = booking?.items?.length
     ? booking.items
     : totals.lines.map((line) => ({
@@ -188,248 +188,249 @@ export function ReviewStep() {
         unit_price: line.unitPrice,
         phase_name: line.phaseName,
       }));
-  const total = booking?.total_amount ?? totals.total;
-  // The lines added up. Derived from the SAME rows the list renders, so the
-  // subtotal and the rows can never disagree — computing it from the selection
-  // instead would drift the moment the server priced a line differently (a
-  // sale phase lapsing between choosing and reserving does exactly that).
+  const total = booking?.total_amount ?? totals.grandTotal;
+  const fee = booking?.platform_fee ?? totals.platformFee;
+  // The lines added up, from the SAME rows the list renders — so the order
+  // amount and the rows can never disagree.
   const orderAmount = lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
+  const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
 
   if (error) {
     return (
-      <StepTransition stepKey="review-error" className="flex flex-col gap-block">
-        <div className="flex flex-col items-start gap-stack-lg rounded-xl border border-destructive-subtle bg-destructive-subtle p-card-lg">
-          <AlertTriangle className="size-6 text-destructive-subtle-foreground" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <h1 className="text-h3 text-destructive-subtle-foreground">
-              {error.recoverable ? 'Those tickets just went' : 'We could not hold your tickets'}
-            </h1>
-            <p className="text-body-sm text-destructive-subtle-foreground">{error.message}</p>
+      <FunnelScreen title="Review your booking">
+        <StepTransition stepKey="review-error" className="flex flex-col gap-4">
+          <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-destructive-subtle bg-destructive-subtle p-card-lg">
+            <AlertTriangle className="size-6 text-destructive-subtle-foreground" aria-hidden />
+            <div className="flex flex-col gap-1">
+              <h2 className="text-h3 text-destructive-subtle-foreground">
+                {error.recoverable ? 'Those tickets just went' : 'We could not hold your tickets'}
+              </h2>
+              <p className="text-body-sm text-destructive-subtle-foreground">{error.message}</p>
+            </div>
+            <Button asChild size="lg" className={CTA_PILL_LG}>
+              <Link href={pickerHref}>Choose different tickets</Link>
+            </Button>
           </div>
-          <Button asChild size="lg" className={CTA_PILL_LG}>
-            <Link href={pickerHref}>Choose different tickets</Link>
-          </Button>
-        </div>
-      </StepTransition>
+        </StepTransition>
+      </FunnelScreen>
     );
   }
 
   if (reserving || !booking) {
     return (
-      <StepTransition stepKey="review-loading" className="flex flex-col gap-block">
-        <p
-          role="status"
-          className="inline-flex items-center gap-2 text-body-sm text-muted-foreground"
-        >
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          Holding your tickets…
-        </p>
-        <div className="flex flex-col gap-stack-lg" aria-hidden>
-          <div className="skeleton h-40 w-full rounded-xl" />
-          <div className="skeleton h-32 w-full rounded-xl" />
-          <div className="skeleton h-24 w-full rounded-xl" />
-        </div>
-      </StepTransition>
+      <FunnelScreen title="Review your booking">
+        <StepTransition stepKey="review-loading" className="flex flex-col gap-4">
+          <p
+            role="status"
+            className="inline-flex items-center gap-2 text-body-sm text-muted-foreground"
+          >
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+            Holding your tickets…
+          </p>
+          <div className="flex flex-col gap-4" aria-hidden>
+            <div className="skeleton h-20 w-full rounded-2xl" />
+            <div className="skeleton h-44 w-full rounded-2xl" />
+            <div className="skeleton h-32 w-full rounded-2xl" />
+          </div>
+        </StepTransition>
+      </FunnelScreen>
     );
   }
 
   return (
-    <StepTransition stepKey="review" className="flex flex-col gap-section">
-      <Rise>
-        <header className="flex flex-col gap-stack">
-          <h1 className="text-h2 md:text-h1">Review your booking</h1>
-        </header>
-      </Rise>
-
-      <Rise index={2}>
-        <section className="flex flex-col gap-stack-lg" aria-labelledby="event-heading">
-          <h2 id="event-heading" className="text-h3">
-            Event
-          </h2>
-          <div className="flex gap-stack-lg rounded-xl border border-border bg-surface p-card shadow-sm sm:gap-card lg:p-card-lg">
+    <FunnelScreen
+      title="Review your booking"
+      banner={
+        booking.status === 'reserved' && booking.hold_expires_at ? (
+          // Full-width, directly under the header, because it is the only thing
+          // on this screen with a deadline. It used to sit inside the order
+          // summary card, where it competed with a poster for attention.
+          <HoldTimer expiresAt={booking.hold_expires_at} variant="bar" />
+        ) : undefined
+      }
+    >
+      <StepTransition stepKey="review" className="flex flex-col gap-4">
+        {/* ── THE EVENT, ONCE ─────────────────────────────────────────────
+            A thumbnail and two lines. The full card — organiser, View event,
+            Directions — was here AND in the summary card above it, so the same
+            event was drawn twice on one screen. Those controls are ways OUT of a
+            checkout; they belong on the event page, one press of Back away. */}
+        <Rise>
+          <div className="flex items-center gap-3">
             <PosterFrame
               event={event}
-              sizes="(min-width: 640px) 128px, 80px"
-              className="aspect-portrait w-20 sm:w-32"
-              iconClassName="size-10 sm:size-14"
+              sizes="64px"
+              className="aspect-square w-16 shrink-0 rounded-xl"
+              iconClassName="size-7"
             />
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
-              {category ? (
-                <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-caption text-muted-foreground">
-                  <category.icon className="size-3" aria-hidden />
-                  {category.label}
-                </span>
-              ) : null}
-              <h3 className="text-body-lg font-semibold text-foreground">{event.title}</h3>
-              <p className="flex items-center gap-2 text-body-sm text-muted-foreground">
-                <CalendarDays className="size-4 shrink-0" aria-hidden />
-                {formatEventDateLong(event.starts_at)} · {formatEventTime(event.starts_at)}
-              </p>
-              <p className="flex items-center gap-2 text-body-sm text-muted-foreground">
-                <MapPin className="size-4 shrink-0" aria-hidden />
+            <div className="flex min-w-0 flex-col">
+              <h2 className="truncate text-body-lg font-semibold text-foreground">{event.title}</h2>
+              <p className="truncate text-body-sm text-muted-foreground">
                 {event.venue}, {event.city}
               </p>
-              <p className="text-caption text-muted-foreground">
-                Organised by {event.organization_name}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button variant="outline" asChild className={PILL_MD}>
-                  <Link href={eventHref}>View event</Link>
-                </Button>
-                <Button variant="ghost" asChild className={PILL_MD}>
-                  <a href={directions} target="_blank" rel="noopener noreferrer">
-                    <Navigation className="size-4" aria-hidden />
-                    Directions
-                    <span className="sr-only">(opens Google Maps in a new tab)</span>
-                  </a>
-                </Button>
-              </div>
             </div>
           </div>
-        </section>
-      </Rise>
+        </Rise>
 
-      <Rise index={3}>
-        <section className="flex flex-col gap-stack-lg" aria-labelledby="tickets-heading">
-          <div className="flex items-center justify-between gap-4">
-            <h2 id="tickets-heading" className="text-h3">
-              Tickets
-            </h2>
-            <Button variant="ghost" asChild className={PILL_MD}>
-              <Link href={pickerHref}>
-                <Pencil className="size-3.5" aria-hidden />
-                Change
-              </Link>
-            </Button>
-          </div>
+        {/* ── WHAT IS BEING BOUGHT ────────────────────────────────────────── */}
+        <Rise index={1}>
+          <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+            <div className="flex items-baseline gap-2 px-card py-card">
+              <span className="text-body font-semibold text-foreground">
+                {formatEventDate(event.starts_at)}
+              </span>
+              <span aria-hidden className="text-border-strong">
+                |
+              </span>
+              <span className="text-body font-semibold text-foreground">
+                {formatEventTime(event.starts_at)}
+              </span>
+            </div>
 
-          <div className="flex flex-col rounded-xl border border-border bg-surface shadow-sm">
-            <ul className="flex flex-col divide-y divide-border">
+            <div className="border-t border-border px-card pt-card">
+              <p className="text-caption text-muted-foreground">
+                {ticketCount} {ticketCount === 1 ? 'ticket' : 'tickets'}
+              </p>
+            </div>
+
+            <ul className="flex flex-col px-card pb-card pt-2">
               {lines.map((line) => (
                 <li
                   key={line.ticket_type_id}
-                  className="flex items-baseline justify-between gap-4 p-card"
+                  className="flex items-start justify-between gap-4 py-2"
                 >
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-body-sm font-medium text-foreground">
-                      {line.ticket_type_name}
+                  <div className="flex min-w-0 flex-col items-start gap-0.5">
+                    <span className="text-body text-foreground">
+                      {line.quantity} x {line.ticket_type_name}
                     </span>
-                    <span className="text-caption text-muted-foreground">
-                      {formatFromPrice(line.unit_price)} × {line.quantity}
-                      {/* The phase that priced it, named — otherwise the only
-                          explanation on screen for a unit price below the tier's
-                          list price is that something went wrong. */}
-                      {line.phase_name ? ` · ${line.phase_name}` : ''}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-body-sm tabular-nums text-foreground">
+                    {/* "Change", not "Remove". Dropping one line of a LIVE hold
+                        means cancelling the reservation and re-reserving the
+                        rest — a new booking id and a fresh countdown. The picker
+                        does exactly that, with the selection already loaded, in
+                        one press: a second write path for the same operation
+                        would be a second place for it to go wrong, on the money
+                        path, for no gain. */}
+                    <Link
+                      href={pickerHref}
+                      className="text-caption text-muted-foreground underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground"
+                    >
+                      Change
+                    </Link>
+                    {/* The phase that priced it, named — otherwise the only
+                        explanation on screen for a unit price below the tier's
+                        list price is that something went wrong. */}
+                    {line.phase_name ? (
+                      <span className="text-caption text-muted-foreground">{line.phase_name}</span>
+                    ) : null}
+                  </div>
+                  <span className="shrink-0 text-body tabular-nums text-foreground">
                     {formatFromPrice(line.unit_price * line.quantity)}
                   </span>
                 </li>
               ))}
             </ul>
-            {/* ── ORDER AMOUNT, THEN TOTAL ───────────────────────────────
-                The order amount is the lines added up. It is here because on a
-                multi-tier order the total was the only number on the screen,
-                with nothing to check it against.
 
-                There is deliberately NO "fees and charges" row and no "offers"
-                block, however much the reference design has both. The platform
-                fee is taken OUT of this total, not added on top — so a
-                "charges" line would add a number the customer is not paying —
-                and there is no coupon endpoint, so an offers row could only
-                ever open something empty. Both are stated as the caption
-                below instead, which is the true version. */}
-            <div className="flex items-baseline justify-between gap-4 border-t border-border px-card pb-2 pt-card">
-              <span className="text-body-sm text-muted-foreground">Order amount</span>
-              <span className="text-body-sm tabular-nums text-muted-foreground">
-                {formatFromPrice(orderAmount)}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between gap-4 px-card pb-card">
-              <span className="text-body font-semibold text-foreground">Total</span>
-              <span className="text-h3 tabular-nums text-foreground">{formatFromPrice(total)}</span>
-            </div>
-            <p className="border-t border-border px-card py-3 text-caption text-muted-foreground">
-              Includes a {formatFromPrice(booking.platform_fee)} platform fee. No booking surcharge,
-              no taxes added at payment.
+            <p className="flex items-center gap-2.5 border-t border-border px-card py-3 text-body-sm text-muted-foreground">
+              <Ticket className="size-4 shrink-0" aria-hidden />
+              M-Ticket: entry using the QR code in your account
             </p>
           </div>
-        </section>
-      </Rise>
-
-      {user ? (
-        <Rise index={4}>
-          <section className="flex flex-col gap-stack-lg" aria-labelledby="delivery-heading">
-            <div className="flex items-baseline justify-between gap-4">
-              <h2 id="delivery-heading" className="text-h3">
-                Delivery
-              </h2>
-              {/* The ticket is issued in this name. Without an edit here the
-                  only way to correct it was to leave the funnel for account
-                  settings and start again — losing the inventory hold. */}
-              <button
-                type="button"
-                onClick={() => setDetailsOpen(true)}
-                className="shrink-0 text-body-sm font-semibold text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Edit
-              </button>
-            </div>
-            <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-card shadow-sm lg:p-card-lg">
-              <p className="text-body-sm text-foreground">{user.full_name || 'Your account'}</p>
-              <p className="text-body-sm text-muted-foreground">{user.email}</p>
-              {user.phone ? (
-                <p className="text-body-sm text-muted-foreground">{user.phone}</p>
-              ) : null}
-              <p className="mt-2 text-caption text-muted-foreground">
-                QR tickets are emailed here the moment payment is confirmed, and are always in your
-                account.
-              </p>
-            </div>
-          </section>
         </Rise>
-      ) : null}
 
-      <Rise index={5}>
-        <TrustStrip marks={CHECKOUT_TRUST} />
-      </Rise>
+        {/* ── WHAT IT COSTS ───────────────────────────────────────────────── */}
+        <Rise index={2}>
+          <RuleHeading>Payment summary</RuleHeading>
+        </Rise>
+        <Rise index={2}>
+          <div className="flex flex-col overflow-hidden rounded-2xl border border-border bg-surface">
+            <div className="flex flex-col gap-2 px-card py-card">
+              <SummaryRow label="Order amount" value={orderAmount} />
+              {/* ── THE FEE IS ITS OWN LINE, AND IT IS ADDED ──────────────
+                  This screen used to state the opposite in a caption:
+                  "includes a ₹0.10 platform fee, no booking surcharge". True of
+                  a flat fee DEDUCTED from the organizer's share. It is 1%
+                  charged on top now, so it is a row between the order amount and
+                  the total — a charge the customer pays that is not on its own
+                  line is the definition of a hidden fee. */}
+              <SummaryRow label="Fees and charges" value={fee} />
+              {donation > 0 ? <SummaryRow label="Donation" value={donation} /> : null}
+            </div>
+            <div className="flex items-baseline justify-between gap-4 border-t border-border px-card py-card">
+              <span className="text-body font-semibold text-foreground">Grand total</span>
+              <span className="text-h4 tabular-nums text-foreground">{formatFromPrice(total)}</span>
+            </div>
+          </div>
+        </Rise>
 
-      {/* ── PAYING HAPPENS HERE ─────────────────────────────────────────────
-          There used to be a fourth step at `/pay` whose entire job was to
-          restate the order — the same lines, the same total, the same
-          platform-fee note this screen had shown one press earlier — and then
-          offer a button. A whole navigation and a second chance to abandon, in
-          exchange for showing somebody a summary they had just read.
+        {/* ── AN OFFER, AFTER THE TOTAL ───────────────────────────────────── */}
+        <Rise index={3}>
+          <DonationCard
+            value={donation}
+            onChange={changeDonation}
+            disabled={donationPending}
+            maxMinor={DONATION_MAX_MINOR}
+          />
+        </Rise>
 
-          The button moved to the summary. Nothing about the payment itself
-          changed, including every guard: no card UI on this origin, the
-          browser's success callback is not treated as proof, and the
-          confirmation screen still polls the BACKEND until it says `paid`. */}
-      <Rise index={5}>
-        <div className="hidden justify-end lg:flex">
-          <PaymentSection event={event} active={booking} layout="full" />
-        </div>
-      </Rise>
+        {/* ── WHO IT IS FOR ───────────────────────────────────────────────── */}
+        {user ? (
+          <>
+            <Rise index={4}>
+              <RuleHeading>Ticket details</RuleHeading>
+            </Rise>
+            <Rise index={4}>
+              <div className="flex flex-col gap-1 rounded-2xl border border-border bg-surface p-card">
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-body font-semibold text-foreground">
+                    {user.full_name || 'Your account'}
+                  </p>
+                  {/* The ticket is issued in this name. Without an edit here the
+                      only way to correct it was to leave the funnel for account
+                      settings and start again — losing the inventory hold. */}
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen(true)}
+                    className="shrink-0 text-body-sm font-semibold text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Edit
+                  </button>
+                </div>
+                {user.phone ? (
+                  <p className="text-body-sm text-muted-foreground">{user.phone}</p>
+                ) : null}
+                <p className="text-body-sm text-muted-foreground">{user.email}</p>
+                <p className="mt-2 border-t border-border pt-3 text-caption text-muted-foreground">
+                  QR tickets are emailed here the moment payment is confirmed, and are always in
+                  your account.
+                </p>
+              </div>
+            </Rise>
+          </>
+        ) : null}
+        {/* ── WHY THE BUTTON DOES WHAT IT DOES ────────────────────────────
+            The action is in the bar; its explanation is here, where there is
+            room to read it. Rendering only the bar left a deployment with no
+            provider showing a button labelled "Simulate" and nothing at all
+            saying why — the exact thing `payment-section` exists to prevent. */}
+        <Rise index={5}>
+          <PaymentSection event={event} active={booking} layout="notice" />
+        </Rise>
+      </StepTransition>
 
-      <StickyActionBar
-        className={cn('lg:hidden')}
-        total={total}
-        // Not "ticket(s)". This line sits beside the amount somebody is about
-        // to be charged, and a parenthesised plural reads as a form field that
-        // was never finished — the one impression to avoid at the moment of
-        // payment.
-        caption={(() => {
-          const count = lines.reduce((sum, line) => sum + line.quantity, 0);
-          return `${count} ${count === 1 ? 'ticket' : 'tickets'} reserved`;
-        })()}
-      >
-        {/* The same action as the block above, with no explanatory copy —
-            the sticky bar is where a thumb is, not where an argument goes. */}
+      <StickyActionBar total={total} caption="Total" leading={<PayUsing />}>
         <PaymentSection event={event} active={booking} layout="compact" />
       </StickyActionBar>
 
       <YourDetailsSheet open={detailsOpen} onOpenChange={setDetailsOpen} />
-    </StepTransition>
+    </FunnelScreen>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <span className="text-body-sm text-muted-foreground">{label}</span>
+      <span className="text-body-sm tabular-nums text-foreground">{formatFromPrice(value)}</span>
+    </div>
   );
 }

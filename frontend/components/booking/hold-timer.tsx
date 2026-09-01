@@ -37,7 +37,24 @@ import { cn } from '@/lib/utils/cn';
 
 const WARN_AT_SECONDS = 120;
 
-export function HoldTimer({ expiresAt, className }: { expiresAt: string; className?: string }) {
+export function HoldTimer({
+  expiresAt,
+  variant = 'card',
+  className,
+}: {
+  expiresAt: string;
+  /**
+   * `card` — a bordered pill inside a column of content.
+   * `bar`  — full width, flush under the checkout header, no rounding.
+   *
+   * The bar exists because the deadline is the only thing on the review screen
+   * that runs out. Inside a card it read as one more fact about the order; as a
+   * band across the top it reads as the state of the screen, which is what it
+   * is.
+   */
+  variant?: 'card' | 'bar';
+  className?: string;
+}) {
   const target = React.useMemo(() => Date.parse(expiresAt), [expiresAt]);
   const [left, setLeft] = React.useState<number | null>(null);
 
@@ -62,12 +79,13 @@ export function HoldTimer({ expiresAt, className }: { expiresAt: string; classNa
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-body-sm',
+        'flex items-center gap-2.5 px-3 py-2.5 text-body-sm',
+        variant === 'card' ? 'rounded-lg border' : 'justify-center border-b',
         expired
           ? 'border-destructive-subtle bg-destructive-subtle text-destructive-subtle-foreground'
           : warning
             ? 'border-warning-subtle bg-warning-subtle text-warning-subtle-foreground'
-            : 'border-primary/20 bg-primary/10 text-foreground',
+            : 'border-border bg-sunken text-foreground',
         className,
       )}
       // Polite and coarse: announcing every second would make the page unusable
@@ -83,7 +101,16 @@ export function HoldTimer({ expiresAt, className }: { expiresAt: string; classNa
         <span>Your hold has expired — these tickets have been released.</span>
       ) : (
         <span>
-          Tickets held for <span className="font-semibold tabular-nums">{label}</span>
+          Complete your booking in{' '}
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              !warning && 'text-success-subtle-foreground',
+            )}
+          >
+            {label}
+          </span>{' '}
+          mins
         </span>
       )}
     </div>

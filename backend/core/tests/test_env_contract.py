@@ -186,7 +186,7 @@ def env_example() -> dict[str, list[bool]]:
 
 def test_every_variable_the_backend_reads_is_declared(backend_reads, env_example):
     """An undeclared variable silently falls back to a default — which for
-    `SECRET_KEY` is a hard failure, but for `PLATFORM_FEE_PER_TICKET` is
+    `SECRET_KEY` is a hard failure, but for `PLATFORM_FEE_BPS` is
     charging the wrong fee with no error at all."""
     missing = sorted(name for name in backend_reads if name not in env_example)
     assert not missing, f"read by code but absent from .env.example: {missing}\n" + "\n".join(

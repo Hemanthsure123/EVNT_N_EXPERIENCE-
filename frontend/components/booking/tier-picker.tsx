@@ -1,65 +1,51 @@
 'use client';
 
 import * as React from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
 import { Check, Minus, Plus } from 'lucide-react';
 import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
-import { tierRank, unitPriceFor } from '@/lib/discovery/tiers';
+import { unitPriceFor } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
-import { EASE_OUT } from './motion';
 import { useBooking } from './booking-context';
 
 /**
  * Choosing tickets.
  *
- * BADGES ARE EARNED, NOT ASSIGNED. "Best value" goes to the tier with the lowest
- * price per ticket that is actually buyable — arithmetic, not marketing — and
- * "Selling fast" only appears when a tier is genuinely near the end of its
- * stock. Neither is decorative, because the moment one of them is, none of them
- * are believed.
+ * ── ONE CARD OF ROWS, NOT A STACK OF CARDS ────────────────────────────────
  *
- * A LIVE SALE PHASE PRICES THE ROW. The big number is `effective_price` — what
- * the reserve will actually be billed — with the face price struck through under
- * it and the phase's own name on a pill, so a total lower than the list price
- * explains itself. The subtotal multiplies the same number, because a subtotal
- * that disagrees with the price above it is the funnel's worst possible bug.
+ * Every tier used to be its own bordered card with its own padding, shadow rung
+ * and internal divider — four tiers filled a phone screen and a half, so
+ * comparing the second against the fourth meant scrolling between them. They
+ * are rows in one card now, separated by hairlines: name and price on the left,
+ * the control on the right, four of them visible at once.
  *
- * Sold-out tiers stay VISIBLE and disabled. Knowing the ₹499 tier is gone is
+ * That is a density change, not a content one. Everything a row EARNED is still
+ * on it and still earned:
+ *
+ * BADGES ARE EARNED, NOT ASSIGNED. "Best value" goes to the tier with the
+ * lowest price per ticket that is actually buyable — arithmetic, not marketing
+ * — and "Selling fast" only appears when a tier is genuinely near the end of
+ * its stock. Neither is decorative, because the moment one of them is, none of
+ * them are believed.
+ *
+ * A LIVE SALE PHASE PRICES THE ROW. The price shown is `effective_price` — what
+ * the reserve will actually be billed — with the face price struck through
+ * beside it and the phase's own name on a pill, so a total lower than the list
+ * price explains itself.
+ *
+ * SOLD-OUT TIERS STAY VISIBLE and disabled. Knowing the ₹499 tier is gone is
  * what makes the ₹1,099 one make sense; hiding it just makes the event look
- * expensive.
+ * expensive. The row is dimmed by TEXT TOKEN rather than by `opacity` on the
+ * whole row — compositing `--muted-foreground` down lands around 2.9:1 on
+ * white, a contrast failure that dark theme happens to hide.
  *
- * Each row is a labelled group containing a radio-like selector and a stepper,
- * rather than one giant button: the quantity control has to be operable without
- * re-selecting the tier, and nesting a button inside a button is invalid anyway.
+ * ── ADD, THEN A STEPPER ───────────────────────────────────────────────────
  *
- * ── SELECTION IS INK, NOT VIOLET ──────────────────────────────────────────
- *
- * A chosen tier is a near-black hairline plus a soft neutral ring and a lift —
- * the same ink the CTA is made of, so choosing and pressing read as one
- * decision. It was `border-primary` + a violet `shadow-glow`, which on a white
- * canvas tinted the page around the card and put brand colour on a state.
- * "Best value" moved to the butter/cream of the active-nav language for the
- * same reason: it is a quiet recommendation, not a promotion.
- *
- * ── RANK IS EXPRESSED IN THE MECHANISM EACH THEME ACTUALLY HAS ────────────
- *
- * `tierRank` gave the top tier `bg-elevated` — which is a real step in dark and
- * a NO-OP in light, where `--elevated`, `--surface` and the canvas are all pure
- * white. So the ladder simply did not exist in the theme that is now the
- * primary one. It is now carried by SHADOW in light (top `shadow-md`, mid
- * `shadow-sm`, entry flat — shadow is how light theme separates) and by VALUE
- * in dark (`bg-elevated` still applies, and is still a measurable rung there).
- * Both are on the card at once; each theme reads the one that works in it.
- *
- * ── SOLD OUT IS DIMMER TEXT, NOT A DIMMED CARD ────────────────────────────
- *
- * An unavailable tier was the whole card at `opacity-60`, which composites
- * `--muted-foreground` down to roughly 2.9:1 on white — a WCAG AA failure that
- * dark theme happened to hide. It is now a `bg-sunken` well with every text
- * token at full strength (7.1:1 and up) and the price struck through, so the
- * state is legible instead of just faint.
+ * A minus that cannot go below zero is a control doing nothing beside a number
+ * it cannot change, on every tier the buyer has not chosen. One `Add` pill says
+ * what the row is FOR; the stepper replaces it once there is a quantity to
+ * step, at the same height, so the touch target does not move under the thumb.
  */
 
 /** At or below this many left, a tier is genuinely close to gone. */
@@ -80,19 +66,24 @@ export function TierPicker({ className }: { className?: string }) {
 
   if (!tiers.length) {
     return (
-      <p className="rounded-xl border border-dashed border-border p-card-lg text-body-sm text-muted-foreground">
+      <p className="rounded-2xl border border-dashed border-border p-card-lg text-body-sm text-muted-foreground">
         Ticket tiers for this event haven&apos;t been published yet.
       </p>
     );
   }
 
   return (
-    <ul className={cn('flex flex-col gap-stack-lg', className)} aria-label="Ticket types">
-      {tiers.map((tier, index) => (
+    <ul
+      aria-label="Ticket types"
+      className={cn(
+        'flex flex-col divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface',
+        className,
+      )}
+    >
+      {tiers.map((tier) => (
         <li key={tier.id}>
-          <TierCard
+          <TierRow
             tier={tier}
-            rank={tierRank(index, tiers.length)}
             bestValue={tier.id === bestValueId}
             quantity={selection.find((line) => line.tierId === tier.id)?.quantity ?? 0}
             onChange={(update) => setQuantity(tier.id, update)}
@@ -103,74 +94,101 @@ export function TierPicker({ className }: { className?: string }) {
   );
 }
 
-function TierCard({
+function TierRow({
   tier,
-  rank,
   bestValue,
   quantity,
   onChange,
 }: {
   tier: TicketTier;
-  rank: ReturnType<typeof tierRank>;
   bestValue: boolean;
   quantity: number;
   onChange: (next: (current: number) => number) => void;
 }) {
-  const reduced = useReducedMotion();
   const soldOut = tier.available <= 0;
   const disabled = soldOut || !tier.is_on_sale;
   const selected = quantity > 0;
   const max = Math.max(Math.min(tier.max_per_order, tier.available), 0);
   const sellingFast = !soldOut && tier.available <= SELLING_FAST_AT;
   const groupId = `tier-${tier.id}`;
-  // What one ticket costs right now. The face price is kept only to strike it
-  // through beside the phase price — every arithmetic below uses this one.
   const phase = tier.current_phase;
   const unitPrice = unitPriceFor(tier);
 
+  // Every secondary fact about the row, so the common case — a name, a price
+  // and a button, which is what most tiers are — stays two lines tall.
+  const badges = (
+    <>
+      {phase ? <PhaseBadge name={phase.name} /> : null}
+      {bestValue ? (
+        <span className="rounded-full bg-nav-active px-2 py-0.5 text-caption text-nav-active-foreground">
+          Best value
+        </span>
+      ) : null}
+      {sellingFast ? (
+        <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-caption text-warning-subtle-foreground">
+          Selling fast
+        </span>
+      ) : null}
+      {soldOut ? (
+        <span className="rounded-full bg-destructive-subtle px-2 py-0.5 text-caption text-destructive-subtle-foreground">
+          Sold out
+        </span>
+      ) : null}
+    </>
+  );
+
   return (
-    <motion.div
-      layout={reduced ? false : 'position'}
-      transition={EASE_OUT}
-      whileHover={disabled || reduced ? undefined : { y: -2 }}
-      aria-labelledby={`${groupId}-name`}
+    <div
       role="group"
-      className={cn(
-        'relative flex flex-col gap-stack-lg rounded-xl border bg-surface p-card lg:p-card-lg',
-        'transition-[border-color,box-shadow] duration-base ease-out',
-        // Dark theme reads this rung; in light it resolves to the same white as
-        // the card, which is why the shadows below exist.
-        rank === 'top' && !disabled && 'bg-elevated',
-        !selected && !disabled && (rank === 'top' ? 'shadow-md' : rank === 'mid' && 'shadow-sm'),
-        selected
-          ? 'border-foreground shadow-md ring-1 ring-foreground/10'
-          : 'border-border hover:border-border-strong hover:shadow-md',
-        disabled && 'border-border bg-sunken shadow-none hover:border-border hover:shadow-none',
-      )}
+      aria-labelledby={`${groupId}-name`}
+      className={cn('flex items-start gap-4 p-card', disabled && 'bg-sunken')}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 id={`${groupId}-name`} className="text-body-lg font-semibold text-foreground">
-              {tier.name}
-            </h3>
-            {phase ? <PhaseBadge name={phase.name} /> : null}
-            {bestValue ? (
-              <span className="rounded-full bg-nav-active px-2.5 py-0.5 text-caption text-nav-active-foreground">
-                Best value
-              </span>
-            ) : null}
-            {sellingFast ? (
-              <span className="rounded-full bg-warning-subtle px-2.5 py-0.5 text-caption text-warning-subtle-foreground">
-                Selling fast
-              </span>
-            ) : null}
-            {soldOut ? (
-              <span className="rounded-full bg-destructive-subtle px-2.5 py-0.5 text-caption text-destructive-subtle-foreground">
-                Sold out
-              </span>
-            ) : null}
-          </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h3
+            id={`${groupId}-name`}
+            className={cn(
+              'text-body font-semibold text-foreground',
+              // Dimmed by TOKEN, never by opacity on the row — see the note above.
+              soldOut && 'text-muted-foreground',
+            )}
+          >
+            {tier.name}
+          </h3>
+          {badges}
+        </div>
+
+        <p className="flex flex-wrap items-baseline gap-2">
+          <span
+            className={cn(
+              'text-body font-semibold tabular-nums text-foreground',
+              soldOut && 'text-muted-foreground line-through',
+            )}
+          >
+            {formatFromPrice(unitPrice)}
+          </span>
+          {/* The face price, struck, only while a phase is actually off it. A
+              sold-out tier already strikes the price for a different reason, so
+              this would be two strikes saying two different things. */}
+          {phase && !soldOut ? (
+            <span className="text-caption tabular-nums text-muted-foreground line-through">
+              {formatFromPrice(tier.price)}
+            </span>
+          ) : null}
+          {/* Only once there is arithmetic worth showing. At quantity 1 the
+              subtotal IS the price already on this line, so printing it again
+              is a row that repeats itself. */}
+          {quantity > 1 ? (
+            <span className="text-caption tabular-nums text-muted-foreground">
+              × {quantity} = {formatFromPrice(unitPrice * quantity)}
+            </span>
+          ) : null}
+        </p>
+
+        {/* ── EVERYTHING BELOW IS CONDITIONAL, AND USUALLY ABSENT ──────────
+            A tier that is on sale, in stock and self-describing renders none of
+            it, which is what keeps the list four rows to a screen. */}
+        {disabled || tier.available <= SELLING_FAST_AT || tier.max_per_order < tier.available ? (
           <p className="text-caption text-muted-foreground">
             {soldOut
               ? 'No tickets left in this tier'
@@ -180,89 +198,39 @@ function TierCard({
                   ? `Only ${tier.available} left · up to ${tier.max_per_order} per order`
                   : `Up to ${tier.max_per_order} per order`}
           </p>
-          {/* Not on a tier nobody can buy: `remaining` counts seats inside the
-              phase's threshold and `available` counts stock, so a sold-out tier
-              can still have phase seats left — and "Only 3 left at this price"
-              under "No tickets left in this tier" is a contradiction. */}
-          {phase && !disabled ? <PhaseNotes phase={phase} nextPrice={tier.next_price} /> : null}
+        ) : null}
 
-          {/* ── WHAT THE TIER IS ────────────────────────────────────────────
-              The organiser writes `description` and `perks`, the event page's
-              panel has rendered both for months, and this screen — the one
-              where somebody actually picks — showed a name, a price and a
-              stock count. A ticket here is not exchangeable, so buying the
-              wrong tier is the most expensive mistake available on this
-              platform, and "Male Entry" against "Meet and Greet" was all there
-              was to tell two apart.
+        {/* Not on a tier nobody can buy: `remaining` counts seats inside the
+            phase's threshold and `available` counts stock, so a sold-out tier
+            can still have phase seats left — and "Only 3 left at this price"
+            under "No tickets left in this tier" is a contradiction. */}
+        {phase && !disabled ? <PhaseNotes phase={phase} nextPrice={tier.next_price} /> : null}
 
-              Blank is the norm and stays absent: most tiers are
-              self-describing, and an empty paragraph under every one of them
-              is worse than none. */}
-          {tier.description ? (
-            <p className="text-caption text-muted-foreground">{tier.description}</p>
-          ) : null}
-          {tier.perks.length ? (
-            // Ticks rather than prose: somebody comparing two tiers wants the
-            // difference, not two paragraphs to diff by eye. Same shape as the
-            // event page's panel, so the two screens describe a tier
-            // identically.
-            <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-0.5">
-              {tier.perks.map((perk) => (
-                <li
-                  key={perk}
-                  className="inline-flex items-center gap-1 text-caption text-muted-foreground"
-                >
-                  <Check className="size-3 shrink-0 text-success-subtle-foreground" aria-hidden />
-                  {perk}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-
-        <p className="shrink-0 text-right">
-          <span
-            className={cn(
-              'block text-h4 tabular-nums text-foreground',
-              soldOut && 'text-muted-foreground line-through',
-            )}
-          >
-            {formatFromPrice(unitPrice) === 'Free' ? 'Free' : formatFromPrice(unitPrice)}
-          </span>
-          {/* The face price, struck, only while a phase is actually off it. A
-              sold-out tier already strikes the price above for a different
-              reason, so this line would be two strikes saying two things. */}
-          {phase && !soldOut ? (
-            <span className="block text-caption tabular-nums text-muted-foreground line-through">
-              {formatFromPrice(tier.price)}
-            </span>
-          ) : null}
-          <span className="text-caption text-muted-foreground">per ticket</span>
-        </p>
+        {/* ── WHAT THE TIER IS ────────────────────────────────────────────
+            The organiser writes `description` and `perks`. A ticket here is not
+            exchangeable, so buying the wrong tier is the most expensive mistake
+            available on this platform, and "Male Entry" against "Meet and
+            Greet" is not enough to tell two apart. Blank is the norm and stays
+            absent — an empty line under every row is worse than none. */}
+        {tier.description ? (
+          <p className="text-caption text-muted-foreground">{tier.description}</p>
+        ) : null}
+        {tier.perks.length ? (
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-0.5">
+            {tier.perks.map((perk) => (
+              <li
+                key={perk}
+                className="inline-flex items-center gap-1 text-caption text-muted-foreground"
+              >
+                <Check className="size-3 shrink-0 text-success-subtle-foreground" aria-hidden />
+                {perk}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
-      <div className="flex items-center justify-between gap-4 border-t border-border pt-stack-lg">
-        <span className="text-body-sm text-muted-foreground">
-          {selected ? (
-            <>
-              Subtotal{' '}
-              <span className="font-semibold tabular-nums text-foreground">
-                {formatFromPrice(unitPrice * quantity)}
-              </span>
-            </>
-          ) : (
-            'Choose a quantity'
-          )}
-        </span>
-
-        {/* ── ADD, THEN A STEPPER ─────────────────────────────────────────
-            A minus button that cannot go below zero is a control that does
-            nothing, sitting beside the number it cannot change — on every tier
-            the buyer has not chosen. One `Add` pill says what the row is FOR;
-            the stepper appears once there is a quantity to step.
-
-            The pill keeps the stepper's 44px height, so committing to a tier
-            does not make the touch target move or shrink under the thumb. */}
+      <div className="shrink-0 pt-0.5">
         {selected ? (
           <Stepper
             label={tier.name}
@@ -281,7 +249,7 @@ function TierCard({
             // reader user, or a test, presses the wrong one.
             aria-label={`Add ${tier.name}`}
             className={cn(
-              'inline-flex h-control min-w-24 items-center justify-center rounded-full border border-border-strong px-5',
+              'inline-flex h-11 min-w-24 items-center justify-center rounded-xl border border-border-strong px-5',
               'text-body-sm font-semibold text-foreground transition-colors duration-fast',
               'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
@@ -291,7 +259,7 @@ function TierCard({
           </button>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -311,12 +279,13 @@ function Stepper({
   // Each press is expressed as a CHANGE to whatever the quantity is at the
   // moment it lands, never as "the number I last rendered, plus one". The
   // rendered value trails the URL by a render, so two quick taps computed from
-  // it would both write the same number and the second would be lost.
+  // it would both write the same number and the second would be lost — which is
+  // a bug this funnel actually shipped once, on the money path.
   return (
-    // `bg-sunken`, not `bg-background`: on a white canvas the page and the card
-    // are the same value, so an inset control has to step DOWN to read as a
-    // well. That is the one value move the light theme has.
-    <div className="flex items-center gap-1 rounded-full border border-border bg-sunken p-1">
+    // The one filled control in the list, and the reason it is filled: a chosen
+    // tier has to be identifiable at a glance in a list of rows that otherwise
+    // look identical. It is the ink of the CTA, not a brand colour on a state.
+    <div className="flex h-11 items-center gap-1 rounded-xl bg-cta px-1 text-cta-foreground">
       <StepButton
         label={`Remove one ${label} ticket`}
         disabled={disabled || value <= 0}
@@ -326,7 +295,7 @@ function Stepper({
       </StepButton>
       <output
         aria-label={`${label} quantity`}
-        className="min-w-10 text-center text-body font-semibold tabular-nums text-foreground"
+        className="min-w-7 text-center text-body font-semibold tabular-nums"
       >
         {value}
       </output>
@@ -358,14 +327,10 @@ function StepButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      // 44px, the brief's minimum touch target — and the reason the stepper is
-      // the tallest thing in the row rather than an afterthought beside a price.
       className={cn(
-        'inline-flex size-11 items-center justify-center rounded-full text-foreground',
-        'transition duration-fast ease-out hover:bg-muted active:scale-95',
-        'disabled:pointer-events-none disabled:opacity-40',
-        'motion-reduce:transition-none motion-reduce:active:scale-100',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'inline-flex size-9 items-center justify-center rounded-lg transition-colors duration-fast',
+        'hover:bg-cta-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cta-foreground/60',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
       )}
     >
       {children}

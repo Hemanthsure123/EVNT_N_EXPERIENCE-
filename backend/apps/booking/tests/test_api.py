@@ -29,9 +29,15 @@ def test_create_booking_returns_201_with_payment_info(authed_client, event, make
     assert resp.status_code == 201
     body = resp.json()
     assert body["booking"]["status"] == "reserved"
-    assert body["booking"]["total_amount"] == 100000
+    # 2 x 50000 tickets + 1% platform fee, which is ADDED to the charge rather
+    # than deducted from the organizer's share. The payment order must be for
+    # the same number — a checkout that charges a different amount from the one
+    # the booking records is what the webhook's amount check exists to catch.
+    assert body["booking"]["total_amount"] == 101000
+    assert body["booking"]["platform_fee"] == 1000
+    assert body["booking"]["donation"] == 0
     assert body["payment"]["order_id"].startswith("fake_order_")
-    assert body["payment"]["amount_minor"] == 100000
+    assert body["payment"]["amount_minor"] == 101000
     assert body["payment"]["currency"] == "INR"
     assert resp.headers["Cache-Control"] == "private, no-store"
 

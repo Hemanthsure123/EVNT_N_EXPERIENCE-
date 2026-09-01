@@ -238,7 +238,7 @@ container is 2. At `0`, DRF keys rate limits on the proxy's own address and
 `THROTTLE_AUTH=10/min` becomes ten attempts per minute for the entire internet.
 
 Review the business values before launch — each has money attached and none
-should be accepted silently: `PLATFORM_FEE_PER_TICKET`,
+should be accepted silently: `PLATFORM_FEE_BPS` (and `DONATION_MAX_MINOR`),
 `SETTLEMENT_REFUND_WINDOW_HOURS`, `BOOKING_HOLD_MINUTES`, `CHECKIN_WINDOW_*`.
 
 [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) is the full table.

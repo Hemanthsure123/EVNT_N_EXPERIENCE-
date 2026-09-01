@@ -518,9 +518,28 @@ class PaymentService:
         if payment.status != PaymentStatus.PAID:
             return False  # only a captured/paid payment can be refunded
 
+        # ── HOW MUCH COMES BACK, AND WHO DECIDES ─────────────────────────
+        #
+        # Not `payment.amount_minor` any more. A booking may carry a donation,
+        # which is given rather than paid for and so does not come back with an
+        # ordinary refund — but DOES when the booking issued no ticket at all,
+        # because money kept for a transaction that delivered nothing is the one
+        # outcome this module exists to prevent.
+        #
+        # `booking` owns that rule and `booking` answers it. Payments does not
+        # know what a donation is, and should not learn: it asks for a number
+        # and refunds exactly that.
+        refund_amount = self._booking_service.refundable_amount_minor(booking_id=payment.booking_id)
+        if refund_amount <= 0:  # pragma: no cover — a zero-value paid booking
+            logger.info(
+                "payment.refund_skipped_zero",
+                extra={"payment_id": str(payment.id), "reason": reason},
+            )
+            return False
+
         rzp_refund_id = self._port.refund(
             payment_id=payment.rzp_payment_id,
-            amount_minor=payment.amount_minor,
+            amount_minor=refund_amount,
             idempotency_key=f"refund:{payment.id}",
         )
 
@@ -532,7 +551,7 @@ class PaymentService:
             self._refunds.create(
                 payment_id=payment_id,
                 rzp_refund_id=rzp_refund_id,
-                amount_minor=locked.amount_minor,
+                amount_minor=refund_amount,
                 reason=reason,
             )
             # A refunded ticket must not enter the gate: void the booking's
@@ -542,7 +561,16 @@ class PaymentService:
             self._booking_service.void_tickets_for_booking(booking_id=locked.booking_id)
             uow.publish(
                 PAYMENT_REFUNDED,
-                {"payment_id": str(payment_id), "reason": reason},
+                # `amount_minor` is new and load-bearing: a refund is no longer
+                # necessarily the whole payment, so a consumer that re-derived
+                # it from `payment.amount_minor` — settlements did — would
+                # subtract a donation from the organizer's net that the customer
+                # never got back.
+                {
+                    "payment_id": str(payment_id),
+                    "reason": reason,
+                    "amount_minor": refund_amount,
+                },
                 aggregate_id=str(payment_id),
             )
             record_audit(
@@ -595,12 +623,16 @@ class RefundRequestService:
     ── WHAT IT DELIBERATELY DOES NOT DO ───────────────────────────────────
 
     **It does not decide amounts.** A request carries no `amount_minor`, and
-    approving one refunds the payment in full — because `execute_refund`
-    refunds `payment.amount_minor` and nothing else. There is no partial-refund
-    path in this system. A request carrying an amount the executor would ignore
-    is a field that silently discards what was typed, which is exactly what the
-    rest of this codebase refuses. Partial refunds need `execute_refund` to
-    accept an amount FIRST; then this grows the field.
+    approving one returns whatever `execute_refund` decides is refundable —
+    today the payment minus any donation, or the whole payment when the booking
+    issued no ticket. That is a RULE, not an operator input: nobody types a
+    number here and nothing here can override it.
+
+    So there is still no CALLER-CHOSEN partial refund, which is the thing this
+    paragraph has always been about. A request carrying an amount the executor
+    would ignore is a field that silently discards what was typed, which is what
+    the rest of this codebase refuses. An operator-specified amount needs
+    `execute_refund` to accept one first; then this grows the field.
 
     **It does not auto-approve anything.** No amount threshold, no "within 24
     hours" rule. Every request is decided by a person, because the policy that

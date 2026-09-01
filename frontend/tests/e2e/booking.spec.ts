@@ -115,37 +115,33 @@ test.describe('the booking funnel', () => {
   test('carries the selection in the URL, and the summary follows it', async ({ page }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
-    // ── THE TICKETS STEP NO LONGER EXISTS ────────────────────────────────
+    // ── THE ORDER IS ON THE PAGE, NOT IN A PERSISTENT CARD ───────────────
     //
-    // This asserted an `h1` of "Choose your tickets" and drove a stepper on
-    // `/booking/{id}`. That step was REMOVED: selection moved to the event
-    // page, beside the poster and the date, rather than asking for the same
-    // four things again on a screen of its own. `/booking/{id}` now redirects
-    // to review, and `app/(site)/booking/[eventId]/page.tsx` says so.
+    // This asserted against a `complementary` "Order summary" landmark mounted
+    // by the funnel LAYOUT, so it survived navigation between steps. With two
+    // screens that both display the order in full it was the same event and the
+    // same total drawn twice on one screen — and on a phone the duplicate came
+    // first, pushing the real content below the fold. It is gone; the order
+    // lives in the review screen's own body.
     //
-    // The stepper's own behaviour — including the double-click that used to
-    // write 1 twice — is covered where it now lives, in discovery.spec.ts's
-    // "quantity is bounded by what is actually left".
+    // What this test is actually for is unchanged: a selection carried in the
+    // URL survives a reload, because the URL is the state and not component
+    // memory.
     //
-    // What is still worth pinning HERE is the funnel's half of the contract:
-    // a selection carried in the URL survives the redirect and the summary
-    // reflects it.
-    // SIGNED IN FIRST, deliberately. `/booking/{id}` redirects to review on the
-    // server, and review then bounces an anonymous visitor on to `/login` — so
-    // asserting `/review` without a session was a race between two redirects
-    // that passed in isolation and failed under a full-suite run. The step this
-    // test is named for is the one it should be standing on.
+    // SIGNED IN FIRST, deliberately: review bounces an anonymous visitor back to
+    // the picker, so asserting on `/review` without a session is a race between
+    // two navigations.
     await signedIn(page);
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:2`);
 
     await expect(page).toHaveURL(/\/review/);
-    const summary = page.getByRole('complementary', { name: 'Order summary' });
-    await expect(summary).toContainText(`${tiers[0]!.name}`);
-    await expect(summary).toContainText('× 2');
+    const main = page.locator('#funnel-main');
+    await expect(main).toContainText(`${tiers[0]!.name}`);
+    await expect(main).toContainText('2 x');
 
     // Shareable and reload-safe: the URL is the state, not component memory.
     await page.reload();
-    await expect(summary).toContainText('× 2');
+    await expect(main).toContainText('2 x');
   });
 
   test('asks a visitor to sign in WITHOUT taking the screen away', async ({ page }) => {
@@ -171,15 +167,18 @@ test.describe('the booking funnel', () => {
     await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+(\?|$)/);
     await expect(page).toHaveURL(/tickets=/);
 
-    // TWO steps, and the same two whether or not there is a session. The rule
-    // that decided every previous version of this assertion is unchanged: the
-    // stepper says what the ROUTER does, and the router no longer navigates to
-    // sign in.
-    const stepper = page.getByRole('navigation', { name: 'Booking progress' });
-    await expect(stepper.getByRole('listitem')).toHaveCount(2);
-    await expect(stepper).not.toContainText('Sign in');
+    // ── AND THE PROGRESS ROW IS GONE ENTIRELY ───────────────────────────
+    //
+    // It counted to four, then to two, and now to nothing: with a two-screen
+    // funnel whose second screen is titled "Review your booking", a row of
+    // discs was chrome restating what the heading already said. The checkout
+    // also left the site layout, so the whole header/search/tab-bar/footer
+    // stack is absent with it.
+    await expect(page.getByRole('navigation', { name: 'Booking progress' })).toHaveCount(0);
+    await expect(page.locator('footer')).toHaveCount(0);
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
 
-    await page.getByRole('button', { name: /Continue/i }).first().click();
+    await page.getByRole('button', { name: 'Checkout' }).click();
 
     // The sheet, over the ticket screen — which is still there underneath.
     const sheet = page.getByRole('dialog').filter({ hasText: 'Sign in to continue' });
@@ -190,7 +189,12 @@ test.describe('the booking funnel', () => {
     // and asking that way would assert the opposite of what it looks like.
     // What is being checked here is that the ticket screen was never navigated
     // away from, and that is a DOM fact.
-    await expect(page.locator('h1').first()).toHaveText('Choose your tickets');
+    //
+    // The `h1` is the EVENT's name now, not "Choose your tickets": the header
+    // names what is being bought, and "Choose tickets" is the `h2` over the
+    // tier list. A checkout with two competing top-level headings has no
+    // outline.
+    await expect(page.locator('h2').first()).toHaveText('Choose tickets');
 
     // Closing it returns to exactly what was behind, selection intact — the
     // whole reason it is a sheet.
@@ -202,7 +206,6 @@ test.describe('the booking funnel', () => {
     await signedIn(page);
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/review/);
-    await expect(stepper.getByRole('listitem')).toHaveCount(2);
     await expect(
       page.getByRole('dialog').filter({ hasText: 'Sign in to continue' }),
     ).toHaveCount(0);
@@ -236,7 +239,11 @@ test.describe('the booking funnel', () => {
     await expect(page).toHaveURL(/booking=[0-9a-f-]{8}/);
 
     // A real countdown, from the booking's own `hold_expires_at`.
-    await expect(page.getByText(/Tickets held for \d+:\d\d/)).toBeVisible();
+    // The countdown moved out of the order-summary card (which is gone) and
+    // became a full-width band under the checkout's header — it is the only
+    // thing on this screen with a deadline, and inside a card it read as one
+    // more fact about the order rather than as the state of the page.
+    await expect(page.getByText(/Complete your booking in \d+:\d\d/)).toBeVisible();
 
     // Inventory actually moved.
     const after = await page.evaluate(
@@ -291,7 +298,15 @@ test.describe('the booking funnel', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
 
     const main = page.locator('#funnel-main');
-    const hasKey = (await main.getByRole('button', { name: /^Pay ₹/ }).count()) > 0;
+    // The pay control carries the AMOUNT now — `₹806.99 | Pay`, not `Pay ₹806.99`
+    // — because the number is the last thing read before the press and belongs
+    // on the thing being pressed. Matching the old name made this test take the
+    // not-configured branch on a deployment that was perfectly configured.
+    // The separator between the amount and the word is `aria-hidden`, so the
+    // ACCESSIBLE name is "₹1,008.99 Pay" — matching the visible "₹… | Pay"
+    // finds nothing, which is how this took the not-configured branch on a
+    // deployment that was perfectly configured.
+    const hasKey = (await main.getByRole('button', { name: /₹[\d,.]+\s+Pay$/ }).count()) > 0;
     if (hasKey) {
       // With a key, the SDK must NOT have been fetched before the press.
       const before = await page.evaluate(() => typeof window.Razorpay);
@@ -327,7 +342,7 @@ test.describe('the booking funnel', () => {
     // is the point: two copies of an auth form is how the two drift, and this
     // one sits in front of a payment.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-    await page.getByRole('button', { name: /Continue/i }).first().click();
+    await page.getByRole('button', { name: 'Checkout' }).click();
     const sheet = page.getByRole('dialog').filter({ hasText: 'Sign in to continue' });
     await expect(sheet).toBeVisible();
 
@@ -363,21 +378,27 @@ test.describe('the booking funnel', () => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
     await signedIn(page);
-    const summary = page.getByRole('complementary', { name: 'Order summary' });
+    // ── THE ORDER AMOUNT SURVIVES THE HOP ───────────────────────────────
+    //
+    // This used to assert a persistent "Order summary" card mounted by the
+    // layout. That card is gone (it drew the event and the total a second time
+    // on a screen that already showed both), so what is worth pinning is the
+    // thing it was really protecting: the number does not change between the
+    // screen where it is chosen and the screen where it is paid.
+    //
+    // The TICKET subtotal, not the grand total — the fee is added on the second
+    // screen, so the two bars deliberately differ by exactly 1%.
+    const bar = page.locator('div.fixed.bottom-0');
 
-    // The funnel is TWO screens now, so "every step" is the picker and review.
-    // The card is mounted by the route group's layout, which is what makes two
-    // routes read as one journey — the total must not change across the hop.
     await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
-    await expect(summary).toBeVisible();
-    const total = (await summary.getByText(/^₹/).last().textContent())?.trim();
+    await expect(page.locator('h2').first()).toHaveText('Choose tickets');
+    await expect(bar).toBeVisible();
+    const subtotal = (await bar.getByText(/^₹/).first().textContent())?.trim();
 
-    await page.getByRole('button', { name: /Continue/i }).first().click();
+    await page.getByRole('button', { name: 'Checkout' }).click();
     await expect(page).toHaveURL(/\/review/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
-    await expect(summary).toBeVisible();
-    await expect(summary).toContainText(total!);
+    await expect(page.locator('#funnel-main')).toContainText(subtotal!);
   });
 
   test.describe('accessibility', () => {
@@ -394,10 +415,10 @@ test.describe('the booking funnel', () => {
       // goes wrong: an unlabelled dialog, or a background that is still
       // reachable by tab.
       await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+      await expect(page.locator('h2').first()).toHaveText('Choose tickets');
       await axeClean(page, 'booking step 1 (tickets)');
 
-      await page.getByRole('button', { name: /Continue/i }).first().click();
+      await page.getByRole('button', { name: 'Checkout' }).click();
       await expect(page.getByRole('dialog').filter({ hasText: 'Sign in to continue' })).toBeVisible();
       await axeClean(page, 'the sign-in sheet');
 
@@ -438,7 +459,9 @@ test.describe('the booking funnel', () => {
     // what has to survive into the next step.
     await book.click();
     await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+$/);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+    // The `h1` names the EVENT — the checkout's header is what is being bought,
+    // and "Choose tickets" is the `h2` over the tier list.
+    await expect(page.locator('h2').first()).toHaveText('Choose tickets');
 
     // `Add {tier}`, the pill on an unchosen tier — not `Add one {tier} ticket`,
     // which is the stepper's plus and only exists once a quantity is set.
@@ -446,7 +469,7 @@ test.describe('the booking funnel', () => {
     await add.scrollIntoViewIfNeeded();
     await add.click();
 
-    const proceed = page.getByRole('button', { name: /Continue/i }).first();
+    const proceed = page.getByRole('button', { name: 'Checkout' });
     await proceed.scrollIntoViewIfNeeded();
     await proceed.click();
 

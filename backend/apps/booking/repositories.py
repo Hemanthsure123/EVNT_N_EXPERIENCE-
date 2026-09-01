@@ -34,6 +34,7 @@ class BookingRepository(BaseRepository[Booking]):
         total_amount_minor: int,
         platform_fee_minor: int,
         idempotency_key: str | None,
+        donation_amount_minor: int = 0,
     ) -> Booking:
         return Booking.objects.create(
             id=id,
@@ -42,6 +43,7 @@ class BookingRepository(BaseRepository[Booking]):
             hold_expires_at=hold_expires_at,
             total_amount_minor=total_amount_minor,
             platform_fee_minor=platform_fee_minor,
+            donation_amount_minor=donation_amount_minor,
             idempotency_key=idempotency_key,
         )
 
@@ -64,6 +66,22 @@ class BookingRepository(BaseRepository[Booking]):
         self, user_id: uuid.UUID | str, idempotency_key: str
     ) -> Booking | None:
         return Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key).first()
+
+    def get_amounts_for_refund(self, booking_id: uuid.UUID | str) -> Booking | None:
+        """Just enough of a booking to decide what may be refunded.
+
+        NOT an override of `BaseRepository.get_by_id`, deliberately. This one is
+        `.only(...)`-restricted, and a narrowed row hiding behind the name of the
+        general accessor is how an unrelated caller ends up triggering a
+        deferred re-fetch per attribute — the same trap the settlements
+        serializer hit with `provider_ref`. A restricted read gets a name that
+        says what it is for.
+        """
+        return (
+            Booking.objects.only("id", "status", "total_amount_minor", "donation_amount_minor")
+            .filter(pk=booking_id)
+            .first()
+        )
 
     def get_by_payment_order_id(self, rzp_order_id: str) -> Booking | None:
         """Resolve the booking behind a payment order id — how `payments` maps

@@ -44,8 +44,14 @@ class Settlement(models.Model):
     )
     gross = models.PositiveIntegerField(default=0)
     platform_fee = models.PositiveIntegerField(default=0)
+    # Charity money captured with these bookings. Its own column, not folded
+    # into `platform_fee`: a financial record that describes a donation as a
+    # platform fee is wrong about where money went, even though the net comes
+    # out the same.
+    donations = models.PositiveIntegerField(default=0)
     refunds = models.PositiveIntegerField(default=0)
-    net = models.IntegerField(default=0)  # gross - platform_fee - refunds (may be < 0 pre-guard)
+    # gross - platform_fee - donations - refunds (may be < 0 pre-guard)
+    net = models.IntegerField(default=0)
     status = models.CharField(
         max_length=16, choices=SettlementStatus.choices, default=SettlementStatus.PENDING
     )

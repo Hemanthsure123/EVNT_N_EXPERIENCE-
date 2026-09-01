@@ -713,8 +713,17 @@ const idempotency = new Map(); // `${email}:${key}` -> booking id
  */
 const reservedByTier = new Map(); // tier id -> quantity held
 
-/** Matches backend PLATFORM_FEE_PER_TICKET (paise), taken OUT of the total. */
-const PLATFORM_FEE_PER_TICKET = 10;
+/**
+ * Matches backend `PLATFORM_FEE_BPS`. 100 bps = 1% of the ticket subtotal,
+ * ADDED to what the customer pays rather than deducted from the organizer's
+ * share. Integer arithmetic rounded half up, exactly as Python does it — a
+ * fixture that rounds differently from the backend produces a total the funnel
+ * displays and the webhook would then reject.
+ */
+const PLATFORM_FEE_BPS = 100;
+const platformFeeFor = (subtotal) => Math.floor((subtotal * PLATFORM_FEE_BPS + 5_000) / 10_000);
+/** Matches backend DONATION_MAX_MINOR. */
+const DONATION_MAX_MINOR = 100_000;
 /** Matches backend BOOKING_HOLD_MINUTES. */
 const HOLD_MINUTES = 10;
 
@@ -1386,14 +1395,23 @@ const server = createServer((req, res) => {
         return authError(res, req, 400, 'invalid_input', 'Choose at least one ticket.');
       }
 
+      const donation = Number(body.donation_minor ?? 0);
+      if (!Number.isInteger(donation) || donation < 0 || donation > DONATION_MAX_MINOR) {
+        return authError(res, req, 400, 'invalid_input', 'That donation amount is not allowed.');
+      }
+      // Subtotal + fee + donation, the same three terms the backend charges.
+      const platformFee = platformFeeFor(total);
+      const grandTotal = total + platformFee + donation;
+
       const booking = {
         id: fixtureId(70_000 + bookings.size),
         user_email: user.email,
         event_id: event.id,
         event_title: event.title,
         status: 'reserved',
-        total_amount: total,
-        platform_fee: PLATFORM_FEE_PER_TICKET * quantity,
+        total_amount: grandTotal,
+        platform_fee: platformFee,
+        donation,
         hold_expires_at: new Date(Date.now() + HOLD_MINUTES * 60_000).toISOString(),
         payment_order_id: `order_fixture_${bookings.size + 1}`,
         items,
@@ -1409,6 +1427,49 @@ const server = createServer((req, res) => {
       }
       if (idKey) idempotency.set(idKey, booking.id);
       sendJson(req, res, 201, bookingResponse(booking));
+    });
+    return;
+  }
+
+  // ── Set the donation on a live hold ─────────────────────────────────
+  //
+  // Mirrors `apps/booking.set_donation`, including the part that matters most:
+  // it does NOT touch `reservedByTier`. A donation is not inventory, and a
+  // fixture that released and re-reserved here would let a real release/reserve
+  // bug through every test that used it.
+  const donationMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/donation\/?$/);
+  if (donationMatch && req.method === 'POST') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(donationMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    void readBody(req).then((body) => {
+      if (booking.status !== 'reserved') {
+        return authError(
+          res,
+          req,
+          409,
+          'booking_not_cancellable',
+          'This booking can no longer be changed.',
+        );
+      }
+      const next = Number(body.donation_minor ?? 0);
+      if (!Number.isInteger(next) || next < 0 || next > DONATION_MAX_MINOR) {
+        return authError(res, req, 400, 'invalid_input', 'That donation amount is not allowed.');
+      }
+      if (next !== booking.donation) {
+        const withoutDonation = booking.total_amount - booking.donation;
+        booking.donation = next;
+        booking.total_amount = withoutDonation + next;
+        // A new order for the new amount, exactly as the real service does —
+        // a stale order would be paid at the old total and then refused by the
+        // webhook's amount check.
+        booking.payment_order_id = `order_fixture_${booking.id}_${next}`;
+      }
+      const { user_email: _ignored, ...payload } = booking;
+      sendJson(req, res, 200, payload, 'private, no-store');
     });
     return;
   }

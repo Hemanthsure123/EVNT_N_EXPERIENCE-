@@ -41,11 +41,19 @@ def test_running_totals_reconcile_gross_fee_refunds_net(
     refund(settlement_service, event=finished_event, payment=p1)
 
     s = _settlement(finished_event)
-    # 3 x (gross 50000, fee 10); one fully refunded (refunds 50000).
-    assert s.gross == 150000
-    assert s.platform_fee == 30
-    assert s.refunds == 50000
-    assert s.net == s.gross - s.platform_fee - s.refunds == 99970
+    # ── THE FEE IS NOW CHARGED ON TOP, SO GROSS IS BIGGER THAN THE TICKETS ─
+    #
+    # Each booking is one 50000 ticket plus 1% = 50500 captured. Three of those
+    # is 151500 gross carrying 1500 of platform fee; refunding one returns the
+    # whole 50500 (there is no donation here to hold back).
+    #
+    # What the organizer is owed is unchanged in meaning and is the number that
+    # matters: two tickets' worth of money, 100000.
+    assert s.gross == 151500
+    assert s.platform_fee == 1500
+    assert s.donations == 0
+    assert s.refunds == 50500
+    assert s.net == s.gross - s.platform_fee - s.donations - s.refunds == 99500
 
 
 @pytest.mark.django_db
@@ -61,7 +69,9 @@ def test_release_pays_the_authoritative_net_after_the_event(
 
     s.refresh_from_db()
     assert s.status == SettlementStatus.PAID
-    assert s.net == 100000 - 20  # 2 x 50000 gross, 2 x 10 fee
+    # 2 x 50500 captured, of which 1000 is the platform's 1% — leaving the
+    # organizer exactly what the two tickets cost.
+    assert s.net == 100000
     assert s.payout_at is not None
     assert s.provider_ref.startswith("fake_payout_")
     # Exactly the authoritative net was paid to the organizer's linked account.
@@ -120,9 +130,10 @@ def test_refund_before_payout_reduces_net_and_the_payout(
     settlement_service.release_payout(s.id)
 
     s.refresh_from_db()
-    # gross 150000, fee 30, refunds 50000 -> net 99970, and that's what's paid.
-    assert s.net == 99970
-    assert list(payout_adapter.payouts_by_key.values())[0]["amount_minor"] == 99970
+    # gross 151500, fee 1500, refunds 50500 -> net 99500, and that's what's paid:
+    # two tickets' worth, the third having been refunded in full.
+    assert s.net == 99500
+    assert list(payout_adapter.payouts_by_key.values())[0]["amount_minor"] == 99500
 
 
 @pytest.mark.django_db

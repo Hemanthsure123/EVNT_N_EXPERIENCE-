@@ -599,7 +599,8 @@ def build_booking_service() -> BookingService:
         cache=cache_port(),
         qr_secret=settings.TICKET_QR_SIGNING_KEY,
         hold_minutes=settings.BOOKING_HOLD_MINUTES,
-        platform_fee_per_ticket=settings.PLATFORM_FEE_PER_TICKET,
+        platform_fee_bps=settings.PLATFORM_FEE_BPS,
+        donation_max_minor=settings.DONATION_MAX_MINOR,
     )
 
 

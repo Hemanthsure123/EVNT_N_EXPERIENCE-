@@ -12,6 +12,11 @@ urlpatterns = [
         name="booking-cancel",
     ),
     path(
+        "bookings/<uuid:booking_id>/donation",
+        api.BookingDonationView.as_view(),
+        name="booking-donation",
+    ),
+    path(
         "bookings/<uuid:booking_id>/attendees",
         api.BookingAttendeesView.as_view(),
         name="booking-attendees",

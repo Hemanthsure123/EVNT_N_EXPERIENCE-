@@ -1005,9 +1005,10 @@ wouldn't apply.
   rendered as floors ("24+ events") rather than as totals nobody computed.
   BACKLOG.md item 12 lists each omission against the field it would need. The
   funnel holds the same line: no guest checkout (a ticket needs a user), no promo
-  field (no coupon endpoint), no tax line (no tax field), and the platform fee is
-  shown but never ADDED — the backend takes it OUT of the total rather than
-  charging it on top.
+  field (no coupon endpoint) and no tax line (no tax field). The platform fee IS
+  added now (1% of the ticket subtotal, on its own line before the total) — see
+  "The checkout is its own product surface" below; this used to read "shown but
+  never added", which was true of the flat per-ticket fee it replaced.
 - **One sign-in surface, and it admits what isn't wired.** `components/auth/
 auth-panel.tsx` is rendered by BOTH the standalone `/sign-in` route and the
   funnel's sign-in SHEET — two copies of an auth form is how the two drift. The header
@@ -1576,6 +1577,111 @@ or a quantity control; the moment it does, the funnel asks twice again.
 
 The event page's CTA carries **no `?tickets=`**. Nothing has been chosen yet,
 and a preselected basket is the checkout deciding on the visitor's behalf.
+
+## The checkout is its own product surface, and the fee is now charged
+
+The two booking screens were rebuilt to a supplied reference (District by
+Zomato). What was copied is the SHAPE — a stripped header, one card of ticket
+rows, a countdown band, a payment summary with its own rules. What was not
+copied is District's palette, type, artwork or any claim we cannot back.
+
+**1. The checkout left `(site)`.** `app/(checkout)/` is a route group, so no URL
+moved. What moved is everything the site layout imposed on a payment screen: an
+announcement bar, the logo row, a city switcher, a search field, a theme toggle,
+an account avatar, the bottom tab bar, a "Find something on this week" marketing
+panel and a four-column footer. Measured on a phone that put roughly a screen of
+chrome above the first ticket tier — you could not see one thing you had come to
+buy without scrolling — and it ended the review screen, where a hold is counting
+down, with an invitation to browse something else. **Every one of those controls
+is a way out of a flow whose only job is to finish.** The group has no
+`loading.tsx` on purpose: a Suspense boundary makes a page-level `redirect()`
+resolve client-side, and the retired `/pay` and `/login` shims must answer with a
+real 3xx.
+
+**2. The order summary card and the stepper are gone.** Both were mounted by the
+layout so they survived navigation. With two screens that each show the order in
+full, the card drew the same event and the same total a second time — and on a
+phone the duplicate came FIRST. The countdown it carried became a full-width band
+under the header, because it is the only thing on that screen with a deadline.
+The progress row counted to four, then to two, and now to nothing: a row of discs
+restating a heading that already says "Review your booking".
+
+**3. THE PLATFORM FEE IS NOW A PERCENTAGE, ADDED ON TOP.**
+`PLATFORM_FEE_BPS` (100 bps = 1% of the ticket subtotal) replaces
+`PLATFORM_FEE_PER_TICKET`, and `booking.total_amount_minor` now means **subtotal
++ fee + donation** — the number the payment order is created for and the number
+the webhook amount-checks against, so that guard keeps working untouched on a
+bigger number. Consequences, all load-bearing:
+
+- **The organizer is better off**: they receive the full ticket subtotal, where
+  the flat fee used to come out of their share. `_build_transfers` subtracts fee
+  AND donation, so the Route transfer is exactly what the tickets cost.
+- **Basis points, not a float.** Money is integer paise everywhere; a rate stored
+  as `0.01` is the one place a rounding error could reach a charged amount. The
+  frontend estimate uses the same integer form, rounded half up, so it agrees
+  with Python to the paise.
+- **The fee is computed INSIDE the reserve transaction**, from the same locked
+  prices as the subtotal — computing it from the earlier unlocked read would bill
+  a percentage of a price nobody was charged.
+- **It is its own line on the checkout.** A charge the customer pays that is not
+  on its own line is the definition of a hidden fee. The old caption said the
+  opposite ("includes a ₹0.10 platform fee, no booking surcharge"), which was
+  true of a deducted fee and is now the number that would be a lie.
+- **Everything describing the fee moved with it**: `/pricing`, `/organizer`, the
+  receipt PDF and the notification templates.
+
+**4. Donations ride on the booking and never touch inventory.**
+`Booking.donation_amount_minor` is added to the total, charged with the ticket,
+retained by the platform and excluded from the organizer's transfer — leave it in
+and the event organizer is paid the charity's share, which is invisible to every
+test that only checks the arithmetic balances. `Settlement.donations` is its own
+column for the same reason: a financial record that describes charity money as a
+platform fee is wrong about where money went, however well the net adds up.
+
+**`POST /bookings/{id}/donation` is a separate endpoint, and this is the whole
+point of it.** The reservation happens when the review screen opens (the
+countdown has to be counting something) and the donation is chosen while reading
+that screen — so the amount changes after the booking exists. The tempting fix,
+cancel-and-re-reserve, would put a live hold through a release/reserve cycle over
+a decision with nothing to do with stock: **the tier could be gone by the time
+the second reserve ran, so choosing to give ₹15 could cost somebody their seats.**
+`set_donation` moves only the donation and the total, under the booking's row
+lock, then re-issues the payment order OUTSIDE the lock — a stale order would be
+paid at the old amount and then refused by the amount check.
+
+**A donation is not refunded, EXCEPT when nothing was delivered.**
+`refundable_amount_minor` returns total − donation for a PAID booking (the gift
+was given deliberately) and the full total otherwise. The two auto-refund paths —
+a lapsed hold, a captured amount that did not match — issued no ticket at all,
+and money retained for a transaction that delivered nothing is the single outcome
+`payments` exists to prevent. The test is the booking's STATE, not the refund's
+`reason` string, so a future caller cannot get it wrong by passing a label nobody
+anticipated. `PAYMENT_REFUNDED` now carries `amount_minor`, because a consumer
+re-deriving it from `payment.amount_minor` (settlements did) would subtract a
+donation from the organizer's net that the customer never got back.
+
+**5. What the reference has and we do not, with the reason.** No offers block (no
+coupon endpoint). No "Feeding India" branding or meals-served counter — the money
+goes to the platform's own Razorpay account and the copy says exactly that, with
+no registered charity and no tax claim. No payment-method chooser: Razorpay
+Checkout is a hosted modal and the instrument is picked inside it, so the bar
+NAMES the provider (`PayUsing`) rather than drawing a chevron that promises a
+choice we cannot honour. No `State` line in ticket details — there is no column.
+Per-line `Remove` is a `Change` link to the picker: dropping one line of a live
+hold means cancel-and-re-reserve, and the picker already does exactly that with
+the selection loaded, so a second write path for one operation would be a second
+place for it to go wrong on the money path.
+
+**6. The pay control carries the amount** (`₹1,331.18 | Pay`). It is the last
+thing read before the press, and putting it anywhere else makes the number and
+the action that commits to it two separate glances. The separator is
+`aria-hidden`, so the accessible name is "₹1,331.18 Pay".
+
+**7. `PaymentSection` splits into `notice` + `compact`.** The action belongs where
+a thumb is; the explanation belongs where the eye is. Rendering only `compact`
+left a deployment with no provider showing a button labelled "Simulate" and
+nothing whatsoever saying why — the exact failure that component exists to
+prevent.
 
 **The funnel is TWO screens — Tickets, then Review & pay — for everyone.**
 

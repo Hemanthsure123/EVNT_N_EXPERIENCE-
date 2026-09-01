@@ -53,8 +53,11 @@ def test_create_booking_reserves_and_holds(booking_service, event, buyer, make_t
 
     booking = result.booking
     assert booking.status == BookingStatus.RESERVED
-    assert booking.total_amount_minor == 100000  # 2 x 50000
-    assert booking.platform_fee_minor == 20  # 10 per ticket x 2
+    # subtotal 2 x 50000, plus the 1% fee the customer now pays on top. It used
+    # to be `100000` with a 20-paise fee taken OUT of the organizer's share.
+    assert booking.total_amount_minor == 101000
+    assert booking.platform_fee_minor == 1000  # 1% of 100000
+    assert booking.donation_amount_minor == 0
     assert result.payment_order_id.startswith("fake_order_")
     assert _reserved(tier.id) == 2
     assert OutboxEvent.objects.filter(event_type="booking.booking_created").exists()
@@ -80,11 +83,16 @@ def test_line_items_are_billed_at_the_locked_phase_price(booking_service, event,
     )
 
     booking = result.booking
-    assert booking.total_amount_minor == 60000  # 2 x the phase price, not the face price
+    # 2 x the phase price, not the face price — plus 1%.
+    assert booking.total_amount_minor == 60600
     (item,) = _items(booking.id)
     assert item.unit_price_minor == 30000
     assert item.phase_name == "Early bird"
-    assert item.quantity * item.unit_price_minor == booking.total_amount_minor
+    # The point of this test is that the LINE reflects the locked phase price.
+    # The fee sits between the line total and the charge, so the identity is
+    # lines + fee == total rather than lines == total.
+    assert item.quantity * item.unit_price_minor == 60000
+    assert booking.platform_fee_minor == 600
 
 
 @pytest.mark.django_db
@@ -130,8 +138,17 @@ def test_line_items_sum_to_the_billed_total_across_mixed_tiers(
         (20000, None),
         (60000, "Phase 1"),
     ]
-    assert sum(i.quantity * i.unit_price_minor for i in items) == booking.total_amount_minor
-    assert booking.total_amount_minor == 180000  # 2 x 60000 + 3 x 20000
+    # ── THE INVOICE STILL HAS TO ADD UP TO THE CHARGE ────────────────────
+    #
+    # It used to read `sum(lines) == total`. A fee is charged on top now, so the
+    # identity gained a term — and stating it as `lines + fee == total` is
+    # exactly as strong: an invoice whose parts do not reconcile to the amount
+    # charged is not a display bug on the money path.
+    subtotal = sum(i.quantity * i.unit_price_minor for i in items)
+    assert subtotal == 180000  # 2 x 60000 + 3 x 20000
+    assert booking.platform_fee_minor == 1800  # 1% of 180000
+    assert subtotal + booking.platform_fee_minor == booking.total_amount_minor
+    assert booking.total_amount_minor == 181800
 
 
 @pytest.mark.django_db
@@ -157,8 +174,11 @@ def test_an_order_straddling_a_phase_threshold_records_what_it_paid(
     (item,) = _items(booking.id)
     assert item.unit_price_minor == 50000
     assert item.phase_name is None
-    assert booking.total_amount_minor == 100000
-    assert item.quantity * item.unit_price_minor == booking.total_amount_minor
+    assert booking.total_amount_minor == 101000
+    assert (
+        item.quantity * item.unit_price_minor + booking.platform_fee_minor
+        == booking.total_amount_minor
+    )
 
 
 @pytest.mark.django_db

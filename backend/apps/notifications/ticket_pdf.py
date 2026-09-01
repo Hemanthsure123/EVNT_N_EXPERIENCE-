@@ -27,9 +27,10 @@ The thing people actually do with a ticket PDF nine times out of ten: file
 it, forward it to whoever is paying, and pull the reference out of it when
 something goes wrong. That is a RECEIPT. So it is laid out as one — the event
 as the hero, then when/where/tier, then the booking block, then the payment
-block with the platform fee shown as INCLUDED rather than added on top (the
-backend takes the fee out of the total; showing it as a surcharge would be a
-number the buyer was never charged).
+block with the platform fee shown as INCLUDED in the amount paid rather than
+listed beside it (the fee is charged on top of the tickets, but the "Amount
+paid" line already contains it — printing it as a separate charge would invite
+adding the two together and reading a total nobody was billed).
 
 ── ONE PAGE PER TICKET, STILL ────────────────────────────────────────────
 
@@ -611,10 +612,10 @@ def build_ticket_pdf(
             if payment.amount_display:
                 payment_rows.append(("Amount paid", _pdf_text(payment.amount_display), True))
             if payment.platform_fee_display:
-                # INCLUDED, never added. The backend takes the platform fee out
-                # of the total rather than charging it on top, and the frontend
-                # says so too — a receipt that presented it as a surcharge
-                # would show a figure nobody was ever charged.
+                # INCLUDED in "Amount paid" above, not a line to add to it.
+                # The fee IS charged on top of the tickets, but by the time it
+                # reaches a receipt it is already inside the total — and the
+                # frontend's checkout says the same thing the same way.
                 payment_rows.append(
                     (
                         "Includes platform fee",

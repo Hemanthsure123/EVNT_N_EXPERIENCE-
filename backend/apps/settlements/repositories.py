@@ -56,14 +56,21 @@ class SettlementRepository(BaseRepository[Settlement]):
         )
         return settlement
 
-    def add_confirmed(self, event_id: uuid.UUID | str, *, amount: int, fee: int) -> None:
-        """gross += amount, platform_fee += fee, net recomputed — atomically.
-        All F() refer to the pre-update values, so net = new_gross − new_fee −
-        refunds in one statement."""
+    def add_confirmed(
+        self, event_id: uuid.UUID | str, *, amount: int, fee: int, donation: int = 0
+    ) -> None:
+        """gross += amount, platform_fee += fee, donations += donation, net
+        recomputed — atomically. All F() refer to the pre-update values, so net =
+        new_gross − new_fee − new_donations − refunds in one statement."""
         Settlement.objects.filter(event_id=event_id).update(
             gross=F("gross") + amount,
             platform_fee=F("platform_fee") + fee,
-            net=F("gross") + amount - (F("platform_fee") + fee) - F("refunds"),
+            donations=F("donations") + donation,
+            net=F("gross")
+            + amount
+            - (F("platform_fee") + fee)
+            - (F("donations") + donation)
+            - F("refunds"),
             updated_at=timezone.now(),
         )
 
@@ -71,7 +78,7 @@ class SettlementRepository(BaseRepository[Settlement]):
         """refunds += amount, net -= amount — atomically."""
         Settlement.objects.filter(event_id=event_id).update(
             refunds=F("refunds") + amount,
-            net=F("gross") - F("platform_fee") - (F("refunds") + amount),
+            net=F("gross") - F("platform_fee") - F("donations") - (F("refunds") + amount),
             updated_at=timezone.now(),
         )
 

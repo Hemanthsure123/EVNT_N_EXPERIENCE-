@@ -32,19 +32,35 @@ class PaymentRepository(BaseRepository[Payment]):
         at release time — never from a running total that could drift):
         - gross        = sum of every captured payment (paid + refunded);
         - platform_fee = sum of those bookings' platform fees;
+        - donations    = sum of those bookings' donations;
         - refunds      = sum of the recorded refund amounts.
-        net = gross - platform_fee - refunds is computed by the caller.
+        net = gross - platform_fee - donations - refunds is computed by the caller.
+
+        ── WHY DONATIONS ARE THEIR OWN LINE ──────────────────────────────────
+
+        `gross` is what was captured, and a captured amount now includes both
+        the platform's fee and any donation the buyer added. Both have to come
+        back out before the organizer is paid, and they are subtracted
+        SEPARATELY rather than summed into `platform_fee`, because a settlement
+        report that describes charity money as a platform fee is a lie about
+        where money went — which is the one thing a financial record may never
+        be, however correct the arithmetic underneath it happens to be.
         """
         captured = Payment.objects.filter(
             booking__event_id=event_id,
             status__in=(PaymentStatus.PAID, PaymentStatus.REFUNDED),
-        ).aggregate(gross=Sum("amount_minor"), platform_fee=Sum("booking__platform_fee_minor"))
+        ).aggregate(
+            gross=Sum("amount_minor"),
+            platform_fee=Sum("booking__platform_fee_minor"),
+            donations=Sum("booking__donation_amount_minor"),
+        )
         refunds = Refund.objects.filter(payment__booking__event_id=event_id).aggregate(
             total=Sum("amount_minor")
         )
         return {
             "gross": captured["gross"] or 0,
             "platform_fee": captured["platform_fee"] or 0,
+            "donations": captured["donations"] or 0,
             "refunds": refunds["total"] or 0,
         }
 

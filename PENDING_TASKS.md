@@ -38,7 +38,7 @@ covered by a test that fails if a footer link ever outruns a route again.
   the actual schema and code paths — the refund policy describes the three
   refunds the system really performs, the cookie notice is an enumerated
   inventory of the real storage keys, and `/pricing` imports
-  `PLATFORM_FEE_PER_TICKET` rather than restating it.
+  `PLATFORM_FEE_BPS` rather than restating it.
 - **Share and install assets:** dynamic OG cards (site-wide + per event),
   generated app icon and apple-icon from the real `BrandMark` vector, and a PWA
   manifest — the app had been shipping a service worker with no manifest, so it
@@ -300,7 +300,7 @@ Nothing here is code you are missing; it is state only you can set.
 | 4.1.6 | `/cookies`                               | ✅ An enumerated table of the eleven real storage keys, grepped from source. States there are no tracking cookies at all. |
 | 4.1.7 | `/help`                                  | ✅ Six topics, ~25 answers, all facts about the backend. `FAQPage` JSON-LD. Native `<details>`, so find-in-page opens a closed answer. |
 | 4.1.8 | `/organizer`                             | ✅ The supply front door. Argues from real engineering properties (money held by the provider, oversell impossible at the DB, auto-refund) and **names the gaps** (no seating, no promo codes, no team accounts). |
-| 4.1.9 | `/pricing`                               | ✅ Imports `PLATFORM_FEE_PER_TICKET` rather than restating it, with computed worked example and the payout timeline. Names Razorpay's separate charges. |
+| 4.1.9 | `/pricing`                               | ✅ Imports `PLATFORM_FEE_BPS` rather than restating it, with computed worked example and the payout timeline. Names Razorpay's separate charges. |
 | 4.1.10| `/careers`                               | ✅ Honest empty state using the set's own `SceneNothingYet`, plus what working here is actually like. No invented roles, no form to nowhere. |
 
 ### 4.2 Booking & ticket experience

@@ -62,9 +62,19 @@ export function PaymentSection({
 }: {
   event: EventDetail;
   active: Booking;
-  /** `full` is the desktop block under the summary; `compact` is the sticky
-   *  mobile bar's button, which is the same action with no explanatory copy. */
-  layout: 'full' | 'compact';
+  /**
+   * `compact` — just the control, for the sticky bar.
+   * `notice`  — just the explanation, for the page body above it.
+   * `full`    — both, as one block.
+   *
+   * The checkout renders `notice` + `compact` rather than `full`, because the
+   * action belongs where a thumb is and the explanation belongs where the eye
+   * is. Splitting them is not cosmetic: with only `compact` on screen, a
+   * deployment with no provider showed a button labelled "Simulate" and
+   * absolutely nothing saying why — which is the exact failure mode this
+   * component exists to prevent.
+   */
+  layout: 'full' | 'compact' | 'notice';
 }) {
   const { paymentKeyId, paymentProvider } = useBooking();
   const { user } = useAuth();
@@ -155,6 +165,76 @@ export function PaymentSection({
   // ~72px of a phone; an explanation of demo mode does not fit in it and does
   // not belong there — the full block above it already says all of that, and
   // the bar is scrolled past it, not instead of it.
+  if (layout === 'notice') {
+    if (isDemo) {
+      return (
+        <div className="flex flex-col gap-3">
+          {errorBlock}
+          {/* DEMO MODE, SAID OUT LOUD. What IS real is everything after the
+              press: the backend confirms through the same path a Razorpay
+              payment takes, and a genuine ticket with a genuine signed QR comes
+              out. The control itself is in the action bar. */}
+          <div className="flex flex-col gap-2 rounded-2xl border border-dashed border-border-strong bg-sunken p-card">
+            <p className="inline-flex items-center gap-2 text-body-sm font-medium text-foreground">
+              <FlaskConical className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              Demo mode — this payment is simulated
+            </p>
+            <p className="text-body-sm text-muted-foreground">
+              This deployment has no payment provider connected, so no card is charged and no money
+              moves. Continuing records a simulated payment against order{' '}
+              <span className="font-mono text-caption text-foreground">
+                {active.payment_order_id}
+              </span>{' '}
+              and issues real tickets with real QR codes, through exactly the same confirmation the
+              live provider would trigger.
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (!keyId) {
+      return (
+        <div className="flex flex-col gap-3">
+          {errorBlock}
+          {/* Razorpay is the configured provider but no public key reached the
+              browser. Everything up to the handoff is real — the booking exists,
+              inventory is held, the order id below is the one the backend
+              created. What cannot happen is opening a checkout, and that is
+              said rather than worked around. The action bar renders no button
+              at all in this state, so this text is the only thing on screen
+              explaining why. */}
+          <div className="flex flex-col gap-2 rounded-2xl border border-dashed border-border bg-sunken p-card">
+            <p className="inline-flex items-center gap-2 text-body-sm font-medium text-foreground">
+              <Info className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              Payment provider not configured
+            </p>
+            <p className="text-body-sm text-muted-foreground">
+              Your tickets are held and the order was created — reference{' '}
+              <span className="font-mono text-caption text-foreground">
+                {active.payment_order_id}
+              </span>
+              . Payments are temporarily unavailable, so this booking cannot be completed right now.
+            </p>
+            <p className="text-caption text-muted-foreground">
+              Nothing has been charged. Your hold stays until it expires — try again shortly, or
+              contact support with the reference above.
+            </p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col gap-3">
+        {errorBlock}
+        <p className="flex items-start gap-2.5 text-caption text-muted-foreground">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
+          Card details are entered on Razorpay&rsquo;s encrypted checkout — they never touch
+          Curatix. You will be returned here the moment it completes.
+        </p>
+      </div>
+    );
+  }
+
   if (layout === 'compact') {
     if (isDemo) {
       return (
@@ -163,21 +243,32 @@ export function PaymentSection({
           size="lg"
           onClick={() => void simulate()}
           loading={busy}
-          className={cn(PILL, 'h-control-lg shrink-0')}
+          className={cn(PILL, 'h-control-lg shrink-0 gap-2')}
         >
+          <span className="tabular-nums">{formatFromPrice(total)}</span>
+          <span aria-hidden className="opacity-40">
+            |
+          </span>
           Simulate
         </Button>
       );
     }
     if (!keyId) return null;
     return (
+      /* The amount rides ON the button: it is the last thing read before the
+         press, and putting it anywhere else makes the number and the action
+         that commits to it two separate glances. */
       <Button
         size="lg"
         onClick={() => void pay()}
         loading={busy}
-        className={cn(CTA_PILL_LG, 'shrink-0')}
+        className={cn(CTA_PILL_LG, 'shrink-0 gap-2')}
       >
         <Lock className="size-4" aria-hidden />
+        <span className="tabular-nums">{formatFromPrice(total)}</span>
+        <span aria-hidden className="opacity-50">
+          |
+        </span>
         Pay
       </Button>
     );
@@ -295,5 +386,33 @@ export function PaymentSection({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * "Pay using — Razorpay". Named, not chosen.
+ *
+ * The reference design puts a payment-method picker here (`Pay Using ⌄ / Jupiter
+ * UPI`). We do not have one and will not draw one: Razorpay Checkout is a hosted
+ * modal, the instrument is selected INSIDE it, and a chevron on this origin
+ * promising a choice we cannot honour is a control that lies about what pressing
+ * it does — on the last screen before money moves, of all places.
+ *
+ * What is true and worth saying is who handles the payment, so that is what it
+ * says. In demo mode it says that instead, because claiming a provider that is
+ * not connected would be the same lie in the other direction.
+ */
+export function PayUsing() {
+  const { paymentProvider } = useBooking();
+  const provider = resolveProvider(paymentProvider);
+  return (
+    <div className="flex min-w-0 flex-col">
+      <span className="text-caption text-muted-foreground">
+        {provider === 'fake' ? 'No provider connected' : 'Pay using'}
+      </span>
+      <span className="truncate text-body-sm font-semibold text-foreground">
+        {provider === 'fake' ? 'Demo mode' : 'Razorpay'}
+      </span>
+    </div>
   );
 }
