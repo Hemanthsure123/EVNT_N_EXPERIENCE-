@@ -77,9 +77,34 @@ export function FunnelScreen({
   className?: string;
 }) {
   return (
-    <div className="flex min-h-dvh flex-col bg-canvas">
-      <FunnelHeader title={title} subtitle={subtitle} />
-      {banner}
+    <div className="flex min-h-dvh flex-col bg-background">
+      {/* ── THE HEADER AND THE COUNTDOWN PIN TOGETHER ─────────────────────
+          The banner used to sit OUTSIDE this wrapper, under a sticky header
+          without being sticky itself — so the hold countdown left the viewport
+          within one flick, and everything it is counting down over (the order,
+          the total, the donation, the pay button) is below that point. A
+          deadline you can scroll past is a fact you were shown once.
+
+          One sticky wrapper rather than two stacked sticky elements with
+          hand-computed offsets: the second would need to know the first's
+          height, which changes with a wrapped title. */}
+      {/* OPAQUE, and that is load-bearing. The header is `bg-background/95` and
+          the countdown band is a 10% `--primary` tint — both translucent, and
+          with nothing solid behind them the page scrolled visibly THROUGH the
+          pinned block: "PAYMENT SUMMARY" read straight across the countdown's
+          digits. A solid base here gives both something to composite onto, so
+          the tint still reads as a tint and the text stays legible.
+
+          It said `bg-canvas` first, which is NOT A UTILITY THIS CONFIG DEFINES
+          — Tailwind drops an unknown class silently, so the header had been
+          fully transparent since it was written and nothing said so. It only
+          ever looked right because most of what scrolls under it is white. The
+          token is `background`; `--canvas` exists in the CSS but is not mapped
+          into the colour scale. */}
+      <div className="sticky top-0 z-sticky bg-background">
+        <FunnelHeader title={title} subtitle={subtitle} />
+        {banner}
+      </div>
       {/* A SECTION, not a `<main>`: the root layout owns the document's main
           landmark. The id is the skip-link target and what the step
           transitions reference. */}
@@ -104,7 +129,9 @@ export function FunnelScreen({
 function FunnelHeader({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) {
   const router = useRouter();
   return (
-    <header className="sticky top-0 z-sticky border-b border-border bg-canvas/95 backdrop-blur">
+    // Not sticky itself — the wrapper above pins the header and the countdown
+    // as one block, so they can never separate mid-scroll.
+    <header className="border-b border-border bg-background/95 backdrop-blur">
       <div className="mx-auto flex w-full max-w-2xl items-start gap-3 px-4 py-3.5 sm:px-6">
         {/* `router.back()`, not a link to the event. The two screens are one
             flow and the browser's own history is the truthful answer to "where

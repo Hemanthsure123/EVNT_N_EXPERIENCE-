@@ -12,30 +12,53 @@ import { cn } from '@/lib/utils/cn';
  * comes from the booking row, and when it passes a sweeper releases the
  * inventory and marks the booking expired. Nothing here is a persuasion device.
  *
- * It is deliberately calm below five minutes and only warns near the end —
- * a timer that is red from the first second trains people to ignore it.
- *
  * Hydration-safe by the same rule as the event countdown: the server can't know
  * the client's clock, so the first client render matches the server's (a dash)
  * and the digits arrive on the first tick.
  *
- * ── THE ONE PLACE THE FUNNEL SPENDS ITS ACCENT ────────────────────────────
+ * ── THE BAR WAS PRESENT AND UNREADABLE, WHICH IS THE SAME AS ABSENT ───────
  *
- * The light-first language reserves the wayfinding violet for a handful of
- * jobs, and "a timer banner's tint" is explicitly one of them — so the calm
- * state is a 10% `--primary` wash with a violet clock glyph and INK text
- * (5.0:1 and up on the tint in light, 5.3:1 in dark; the ink is 15:1, and it
- * is the ink that carries the words). It used to be `bg-muted`, which put the
- * only genuinely time-sensitive thing on the screen in the same grey as a
- * disabled control.
+ * Two faults, and each alone was nearly enough to make people report that the
+ * review screen had no countdown at all:
  *
- * The escalation is unchanged and still semantic, not decorative: neutral
- * accent → `--warning-subtle` under two minutes → `--destructive-subtle` once
- * it has lapsed. A timer that is red from the first second trains people to
- * ignore it.
+ * 1. **It scrolled away.** It sat under a sticky header without being sticky
+ *    itself, so it left the viewport within one flick — and everything below it
+ *    (the order, the total, the donation, the pay button) is exactly where
+ *    somebody spends the ten minutes it is counting. A deadline you can scroll
+ *    away from is not a deadline; it is a fact you were shown once. It now
+ *    travels with the header.
+ *
+ * 2. **It was white on white.** `bg-sunken` over the page background is a real
+ *    step in dark theme and a NO-OP in light, where the background, the surface
+ *    and the sunken well are all effectively white — the same trap
+ *    `tier-picker`'s rank ladder hit. The calm state is a `--primary` wash now,
+ *    which is a value the light theme genuinely has.
+ *
+ * ── AND IT SHOWS TIME THE WAY TIME IS READ ────────────────────────────────
+ *
+ * A depleting rule under the text, so the state is answerable at a glance
+ * without parsing digits — the thing a progress bar is actually good at. It is
+ * driven off the same `left` the label is, so the two can never disagree, and
+ * it is `aria-hidden` because the sentence above it already says the number.
+ *
+ * `tabular-nums` on the digits is not cosmetic: without it "9:59" and "9:11"
+ * are different widths and the whole line jitters once a second, directly under
+ * the reader's eye.
+ *
+ * ── THE ESCALATION IS SEMANTIC, NOT DECORATIVE ────────────────────────────
+ *
+ * Calm accent → `--warning-subtle` under two minutes → `--destructive-subtle`
+ * once it has lapsed. A timer that is red from the first second trains people
+ * to ignore it, which costs exactly the moment it was built for.
+ *
+ * `aria-live` stays POLITE and the text stays coarse. Announcing every second
+ * would make the screen unusable with a screen reader; the sentence carries the
+ * state, the digits are detail.
  */
 
 const WARN_AT_SECONDS = 120;
+/** The window a full hold covers, for the depleting rule. Mirrors BOOKING_HOLD_MINUTES. */
+const HOLD_SECONDS = 600;
 
 export function HoldTimer({
   expiresAt,
@@ -45,7 +68,7 @@ export function HoldTimer({
   expiresAt: string;
   /**
    * `card` — a bordered pill inside a column of content.
-   * `bar`  — full width, flush under the checkout header, no rounding.
+   * `bar`  — full width, pinned under the checkout header.
    *
    * The bar exists because the deadline is the only thing on the review screen
    * that runs out. Inside a card it read as one more fact about the order; as a
@@ -74,27 +97,30 @@ export function HoldTimer({
   const expired = left !== null && left <= 0;
   const warning = left !== null && left > 0 && left <= WARN_AT_SECONDS;
   const label =
-    left === null ? '—' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    left === null ? '—:——' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  // Clamped both ways: a hold longer than the nominal window (a config change,
+  // a clock skew) must not draw a rule wider than its track.
+  const remaining = left === null ? 1 : Math.min(Math.max(left / HOLD_SECONDS, 0), 1);
 
-  return (
-    <div
-      className={cn(
-        'flex items-center gap-2.5 px-3 py-2.5 text-body-sm',
-        variant === 'card' ? 'rounded-lg border' : 'justify-center border-b',
-        expired
-          ? 'border-destructive-subtle bg-destructive-subtle text-destructive-subtle-foreground'
-          : warning
-            ? 'border-warning-subtle bg-warning-subtle text-warning-subtle-foreground'
-            : 'border-border bg-sunken text-foreground',
-        className,
-      )}
-      // Polite and coarse: announcing every second would make the page unusable
-      // with a screen reader, so the text below carries the state, not the count.
-      role="status"
-      aria-live="polite"
-    >
+  const tone = expired
+    ? 'border-destructive-subtle bg-destructive-subtle text-destructive-subtle-foreground'
+    : warning
+      ? 'border-warning-subtle bg-warning-subtle text-warning-subtle-foreground'
+      : // A `--primary` wash, not `bg-sunken`: see the note above. The INK is
+        // what carries the words (15:1); the tint only says which state this is.
+        'border-primary/25 bg-primary/10 text-foreground';
+
+  const body = (
+    <>
       <Timer
-        className={cn('size-4 shrink-0', !expired && !warning && 'text-primary')}
+        className={cn(
+          'size-4 shrink-0',
+          !expired && !warning && 'text-primary',
+          // The only motion here, and only when it is nearly out — a pulsing
+          // icon for ten minutes is decoration; for the last two it is the
+          // point. Off entirely under reduced motion.
+          warning && 'motion-safe:animate-pulse',
+        )}
         aria-hidden
       />
       {expired ? (
@@ -102,17 +128,45 @@ export function HoldTimer({
       ) : (
         <span>
           Complete your booking in{' '}
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              !warning && 'text-success-subtle-foreground',
-            )}
-          >
-            {label}
-          </span>{' '}
-          mins
+          <span className="font-semibold tabular-nums">{label}</span> mins
         </span>
       )}
+    </>
+  );
+
+  if (variant === 'card') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className={cn('flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-body-sm', tone, className)}
+      >
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn('relative border-b text-body-sm', tone, className)}
+    >
+      <div className="mx-auto flex w-full max-w-2xl items-center justify-center gap-2.5 px-4 py-2.5 sm:px-6">
+        {body}
+      </div>
+      {/* The rule sits ON the band's bottom edge rather than under it, so the
+          band's height never changes as the fill shrinks — a bar that resized
+          itself would nudge the whole page up once a second. */}
+      <div aria-hidden className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden">
+        <div
+          className={cn(
+            'h-full origin-left transition-[width] duration-1000 ease-linear',
+            expired ? 'bg-destructive' : warning ? 'bg-warning' : 'bg-primary',
+          )}
+          style={{ width: `${remaining * 100}%` }}
+        />
+      </div>
     </div>
   );
 }
