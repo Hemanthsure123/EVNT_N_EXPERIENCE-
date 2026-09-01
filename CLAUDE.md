@@ -1019,7 +1019,16 @@ auth-panel.tsx` is rendered by BOTH the standalone `/sign-in` route and the
   appears to work is the worst thing to fake, because a ticket and a payment are
   attributed to whoever it claims you are. Switching either on is one env var
   (`NEXT_PUBLIC_OAUTH_BASE_URL`, `NEXT_PUBLIC_PHONE_AUTH_ENABLED`), no component
-  change; `frontend/BACKLOG.md` item 19 specifies the three endpoints. `?next=`
+  change; `frontend/BACKLOG.md` item 19 specifies the three endpoints. **The
+  phone field takes its country code from a picker** (`lib/auth/dial-codes.ts`),
+  not from a hint asking somebody to type `+91` on a numeric keypad where `+`
+  lives behind a symbols key; `toE164` composes the two and absorbs a pasted
+  international number (their `+` wins over the select), a trunk zero, a
+  doubled country code and any punctuation. The `<select>` is transparent over
+  a face showing only the code, because a native select sizes itself to its
+  widest OPTION — styled directly it drew a 221px picker beside a 113px number
+  box, the control for choosing one of eighteen things twice the width of the
+  one for typing ten digits. `?next=`
   is validated as a same-origin path (`components/auth/safe-next.ts`) — an open
   redirect is exactly what a "send you back where you came from" affordance
   invites.
