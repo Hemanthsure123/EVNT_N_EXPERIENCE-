@@ -1010,7 +1010,7 @@ wouldn't apply.
   charging it on top.
 - **One sign-in surface, and it admits what isn't wired.** `components/auth/
 auth-panel.tsx` is rendered by BOTH the standalone `/sign-in` route and the
-  funnel's step 2 — two copies of an auth form is how the two drift. The header
+  funnel's sign-in SHEET — two copies of an auth form is how the two drift. The header
   carries the control (a `?next=`-preserving Sign in when anonymous, an account
   menu when not; the menu's Console entry is the only link to `/admin`, shown
   only for `is_staff`). Google, Apple and phone/OTP are BUILT but have no
@@ -1568,9 +1568,38 @@ or a quantity control; the moment it does, the funnel asks twice again.
 The event page's CTA carries **no `?tickets=`**. Nothing has been chosen yet,
 and a preselected basket is the checkout deciding on the visitor's behalf.
 
-The funnel is Tickets → [Sign in] → Review → Payment: four steps signed out,
-three signed in. The stepper must agree with the ROUTER — it once drew "Review"
-as step 1 for somebody the router was about to bounce to `/login`.
+**The funnel is TWO screens — Tickets, then Review & pay — for everyone.**
+
+`payment` was a screen whose entire job was to restate the order the previous
+screen had just shown (the same lines, the same total, the same platform-fee
+note) and then offer a button: a whole navigation and a second chance to
+abandon, in exchange for a summary somebody had already read. The button moved
+onto the summary (`payment-section.tsx`, which had been written for exactly
+this and left unmounted). Nothing about the payment changed — no card UI on
+this origin, the browser's success callback is still not proof, and
+confirmation still polls the BACKEND until it says `paid`.
+
+`login` was a screen for a thing that is not part of buying a ticket, counted
+by the progress row as a quarter of the journey, and reached by leaving the
+selection behind. **Signing in is a SHEET now** (`components/auth/
+auth-sheet.tsx`) over whichever screen asked for it — the tickets stay chosen
+and stay visible behind the scrim, and the session's arrival continues the
+flow from where it paused. It renders `AuthPanel` verbatim, the same component
+`/sign-in` uses: two copies of an auth form is how the two drift, and this one
+sits in front of a payment.
+
+Both URLs are kept as `redirect()` shims carrying their query — they are in
+histories and in links people sent themselves, and a 404 mid-checkout is the
+worst place to learn a route retired. `currentStep` still maps both, because
+for the frame before a redirect resolves the shell has a pathname to place, and
+mapping it to a step that no longer exists is how the stepper highlights the
+wrong disc.
+
+**The stepper must agree with the ROUTER** — it once drew "Review" as step 1
+for somebody the router was about to bounce to `/login`. And **an outcome is
+not a step**: `confirmation` has its own id and marks every disc done, because
+`findIndex` returns -1 for it and the old `Math.max(..., 0)` told somebody
+holding a paid ticket they were back at step one with two things left to do.
 
 ## Preview, then "See all" — disclosure has to earn itself
 
