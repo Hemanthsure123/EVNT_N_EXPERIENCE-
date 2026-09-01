@@ -1,11 +1,11 @@
 import * as React from 'react';
 import Link from 'next/link';
-import { ArrowRight, SlidersHorizontal } from 'lucide-react';
+import { AllEventsChips } from './all-events-chips';
+import { ArrowRight } from 'lucide-react';
 import { Container } from '@/components/shell/container';
 import { fetchEventsSafe } from '@/lib/api/events';
 import { addDays, istToday } from '@/lib/discovery/calendar';
 import { browseHref } from '@/lib/discovery/filters';
-import { cn } from '@/lib/utils/cn';
 import { AutoRail } from '@/components/discovery/auto-rail';
 import { PosterCard } from './poster-card';
 
@@ -70,8 +70,6 @@ function quickFilters(): ReadonlyArray<{ label: string; href: string }> {
   ];
 }
 
-const CHIP_CLASS =
-  'inline-flex h-control shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-surface px-4 text-label text-foreground transition-colors duration-fast hover:border-muted-foreground/40 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 
 export async function AllEvents() {
   // Never throws: the front page's main content must not depend on an upstream
@@ -92,18 +90,18 @@ export async function AllEvents() {
             One row, scrolled rather than wrapped. Wrapping puts the grid a
             whole row further down on a phone for no gain; a scroller keeps the
             first cards on the first screen. It stays a SCROLLER at every width
-            now rather than wrapping from `sm` — a bar that is one line on a
-            phone and two on a tablet changes height as it sticks, which shifts
-            the grid under it.
+            rather than wrapping from `sm` — a bar that is one line on a phone
+            and two on a tablet changes height as it sticks, which shifts the
+            grid under it.
 
             `position: sticky` and nothing else: a sticky element is bounded by
             its CONTAINING BLOCK, and this row's parent is the same Container
             that holds the grid. So it follows the reader down the event list
-            and stops of its own accord at the end of the section — which is
-            exactly the requirement, with no scroll listener, no measured
-            offsets and no `IntersectionObserver` to get wrong. A JS version
-            would also have to re-measure on resize, on font load and on every
-            filter change.
+            and stops of its own accord at the end of the section — with no
+            scroll listener, no measured offsets and no `IntersectionObserver`
+            to get wrong. That is still true; the client component below adds a
+            listener for the horizontal COLLAPSE only, and touches none of the
+            pinning.
 
             Two details it does not work without:
               - a BACKGROUND. The row is transparent by default and the poster
@@ -111,18 +109,13 @@ export async function AllEvents() {
               - `z-[999]`, one below the header's `z-sticky` (1000). The header
                 sticks at `top-0` and this sticks beneath it; on the same z the
                 later element in the DOM wins, so the chips would slide over
-                the header's bottom edge and its shadow. */}
-        <div className="sticky top-sticky-top z-[999] -mx-4 flex gap-2.5 overflow-x-auto bg-background px-4 py-2 [-ms-overflow-style:none] [scrollbar-width:none] lg:top-sticky-top-lg lg:-mx-6 lg:px-6 [&::-webkit-scrollbar]:hidden">
-          <Link href="/events" className={cn(CHIP_CLASS, 'font-semibold')}>
-            <SlidersHorizontal className="size-4" aria-hidden />
-            Filters
-          </Link>
-          {quickFilters().map((chip) => (
-            <Link key={chip.label} href={chip.href} className={CHIP_CLASS}>
-              {chip.label}
-            </Link>
-          ))}
-        </div>
+                the header's bottom edge and its shadow.
+
+            The hrefs are computed HERE, on the server: `quickFilters()` reads
+            the date windows per render, and freezing "Tomorrow" into a client
+            bundle would mean the day after whichever day the bundle was
+            built. */}
+        <AllEventsChips chips={quickFilters()} />
 
         {events.length ? (
           <>

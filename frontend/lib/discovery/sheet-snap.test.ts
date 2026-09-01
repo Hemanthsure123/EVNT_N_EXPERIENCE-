@@ -44,14 +44,24 @@ describe('resolveSnap', () => {
     // THE regression this projection exists for. Snapping to whatever is
     // nearest the release POSITION sends this straight back where it started —
     // the sheet springs back under the thumb that just threw it upward.
+    //
+    // What it must do is ADVANCE. It used to assert `FULL_SNAP_INDEX`
+    // specifically, which was true only because the snaps were 136px apart
+    // (`[0, 0.06, 0.17]`) and one flick's projection cleared all of them. They
+    // are `[0, 0.22, 0.45]` now — the poster is anchored behind the sheet, so
+    // where it rests is how much artwork you can see — and at that spacing a
+    // flick advances one stop, which is what a three-position sheet should do.
+    // Asserting the specific end stop was pinning an artifact of the old
+    // spacing; asserting movement is the rule the projection exists for.
     const result = resolveSnap({
       y: SNAPS[INITIAL_SNAP_INDEX] - 6,
       velocity: -1800,
       snaps: SNAPS,
       viewportHeight: VIEWPORT,
     });
-    expect(result.index).toBe(FULL_SNAP_INDEX);
-    expect(result.y).toBe(0);
+    expect(result.index).toBeLessThan(INITIAL_SNAP_INDEX);
+    expect(result.y).toBeLessThan(SNAPS[INITIAL_SNAP_INDEX]);
+    expect(result.shouldClose).toBe(false);
   });
 
   it('does not treat a slow, long upward drag as a flick — position still governs', () => {

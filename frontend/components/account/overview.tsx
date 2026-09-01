@@ -86,13 +86,22 @@ export function AccountOverview() {
         </div>
       </header>
 
-      <ul className="grid grid-cols-2 gap-stack sm:grid-cols-3 sm:gap-stack-lg">
+      {/* ── THE TALL TICKETS TILE WAS THE CLUMSY PART ────────────────────
+          `row-span-2` on the first card made a 2-column phone grid where one
+          tile was double height and the two beside it stacked — a ragged,
+          unbalanced block above everything else on the screen. Three equal
+          tiles in a row do the same job: the numbers are short, and at 360px a
+          third of the width is still ample for "20+".
+
+          Still a `<ul>` of `<li>`, because it is a list of facts, and the two
+          that lead somewhere are still links. */}
+      <ul className="grid grid-cols-3 gap-2 sm:gap-stack-lg">
         <Stat
           label="Tickets"
           value={tickets.isPending ? null : `${rows.length}${more ? '+' : ''}`}
           hint={ready > 0 ? `${ready} ready to use` : 'None ready to use'}
           href="/account/tickets"
-          className="row-span-2 flex flex-col justify-between sm:row-span-1"
+          className="flex flex-col justify-between"
         />
         <Stat
           label="Saved events"

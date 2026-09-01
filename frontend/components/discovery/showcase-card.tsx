@@ -1,3 +1,5 @@
+'use client';
+
 import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -9,6 +11,7 @@ import { categoryBySlug, inferCategory } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatFromPrice, machineDate } from '@/lib/discovery/format';
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { AvailabilityBadge } from './availability-badge';
 
 /**
@@ -48,10 +51,34 @@ export function ShowcaseCard({
   const category = categoryBySlug(event.category) ?? inferCategory(event);
   const badge = availabilityBadge(event);
   const price = formatFromPrice(event.from_price);
+  const { openDeck } = useEventDeck();
 
   return (
-    <Link
-      href={eventPath(event)}
+    <>
+      {/* Below `sm` the card opens the widget; above it, and for a crawler,
+          the anchor below is the real canonical link. */}
+      <button
+        type="button"
+        onClick={() => openDeck([event], 0)}
+        aria-label={event.title}
+        className="relative flex aspect-[3/4] w-[15rem] shrink-0 overflow-hidden rounded-2xl border border-border bg-sunken shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+      >
+        {event.poster_url ? (
+          <Image
+            src={event.poster_url}
+            alt=""
+            fill
+            sizes="15rem"
+            className="object-cover"
+          />
+        ) : null}
+        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-3 text-left">
+          <span className="line-clamp-2 text-body-sm font-bold text-white">{event.title}</span>
+        </span>
+      </button>
+
+      <Link
+        href={eventPath(event)}
       className={cn(
         'group relative flex aspect-[3/4] w-[15rem] shrink-0 overflow-hidden rounded-2xl border border-border bg-sunken shadow-lg sm:w-[17rem]',
         'transition duration-base ease-out hover:-translate-y-1 hover:shadow-xl',
@@ -104,6 +131,7 @@ export function ShowcaseCard({
         ) : null}
       </div>
     </Link>
+    </>
   );
 }
 

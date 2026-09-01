@@ -1,3 +1,5 @@
+'use client';
+
 import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -14,6 +16,7 @@ import {
 import { ClayIcon } from '@/components/illustrations/clay';
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
 import { FavouriteButton } from './favourite-button';
@@ -68,9 +71,22 @@ export function FeatureCard({
   const CategoryIcon = category?.icon;
   const tint = categoryTint(category?.slug);
   const soldOut = event.tickets_available === 0;
+  const { openDeck } = useEventDeck();
 
   return (
     <div className="group/card relative h-full">
+      {/* ── A PHONE OPENS THE WIDGET ────────────────────────────────────────
+          This card was link-only at every width — the last surface on the home
+          page where a tap left the app-shaped experience for the standalone
+          page. The overlay button covers the whole card below `sm`, exactly as
+          the link's stretched `after:` does above it, so the hit area is
+          identical and only the destination differs. */}
+      <button
+        type="button"
+        onClick={() => openDeck([event], 0)}
+        aria-label={event.title}
+        className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+      />
       <Link
         href={eventPath(event)}
         className={cn(

@@ -32,6 +32,17 @@ export const BOTTOM_NAV_CLEARANCE =
   'pb-[calc(var(--bottom-nav-height)_+_env(safe-area-inset-bottom))] md:pb-0';
 
 /**
+ * How far the floating pill sits off the bottom edge.
+ *
+ * A number rather than a token because it is the pill's own inset and nothing
+ * else consumes it — but `--bottom-nav-height` STILL has to cover the pill's
+ * full footprint (its height plus this gap), because `BOTTOM_NAV_CLEARANCE` is
+ * what stops the last row of every page from ending up underneath it, and the
+ * event page's booking bar stacks on the same variable.
+ */
+const FLOAT_GAP = '0.75rem';
+
+/**
  * Mobile bottom navigation (hidden on md+). Marks the active route.
  *
  * ── THE ACTIVE ITEM WEARS THE SAME BUTTER PILL AS THE HEADER NAV ──────────
@@ -80,16 +91,29 @@ export const BOTTOM_NAV_CLEARANCE =
  */
 export function BottomNav({ items, className }: { items: BottomNavItem[]; className?: string }) {
   const pathname = usePathname();
-  const [hidden, setHidden] = React.useState(false);
+  /**
+   * ── IT MINIMISES NOW; IT USED TO DISAPPEAR ──────────────────────────────
+   *
+   * The bar translated fully off the bottom of the screen on a downward
+   * scroll, which meant the primary navigation of the entire mobile site was
+   * absent for as long as somebody kept reading — and getting it back required
+   * scrolling the wrong way first. Condensing keeps every destination one tap
+   * away at all times and still returns the vertical space that hiding it was
+   * really after: the labels come off, and the pill shrinks to its icons.
+   *
+   * The thresholds are unchanged (+10px past 60px to condense, -10px to
+   * expand) so the feel of the gesture is the same one people already have.
+   */
+  const [condensed, setCondensed] = React.useState(false);
   const lastScrollY = React.useRef(0);
 
   React.useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
       if (currentScrollY > lastScrollY.current + 10 && currentScrollY > 60) {
-        setHidden(true);
+        setCondensed(true);
       } else if (currentScrollY < lastScrollY.current - 10) {
-        setHidden(false);
+        setCondensed(false);
       }
       lastScrollY.current = currentScrollY;
     };
@@ -99,58 +123,84 @@ export function BottomNav({ items, className }: { items: BottomNavItem[]; classN
   }, []);
 
   return (
-    <nav
-      aria-label="Primary"
-      aria-hidden={hidden || undefined}
+    /* ── A FLOATING PILL, NOT AN EDGE-TO-EDGE BAR ─────────────────────────
+       The outer element is a positioning frame with no paint of its own, so
+       the pill inside can be centred and can shrink without the surface it
+       sits on resizing with it. `pointer-events-none` on the frame and
+       `pointer-events-auto` on the pill means the page stays scrollable
+       through the gap on either side — a full-width invisible strip across
+       the bottom of every page would swallow taps on whatever is behind it.
+
+       It is NOT `aria-hidden` any more. Hiding was a visual state that took
+       the whole nav out of the accessibility tree and made it untabbable;
+       condensing is a visual state that changes nothing about reachability,
+       so both `aria-hidden` and `pointer-events-none` came off with it. */
+    <div
       className={cn(
-        'fixed inset-x-0 bottom-0 z-sticky border-t border-border bg-surface/90 backdrop-blur-glass md:hidden',
-        // Somebody who asked for less motion should not get a bar sliding in
-        // and out of the bottom of every scroll.
-        'motion-reduce:transition-none',
-        'pb-[env(safe-area-inset-bottom)]',
-        'transition-transform duration-300 ease-out',
-        hidden ? 'translate-y-full' : 'translate-y-0',
-        // A bar translated off the bottom of the screen is still IN the page:
-        // its four links keep their tab stops and stay in the accessibility
-        // tree, so tabbing from the last visible control jumped to a nav
-        // nobody could see. `pointer-events-none` matters too — the transform
-        // leaves its hit area reachable in some engines during the slide.
-        hidden && 'pointer-events-none',
+        'pointer-events-none fixed inset-x-0 z-sticky flex justify-center px-4 md:hidden',
         className,
       )}
+      style={{ bottom: `calc(${FLOAT_GAP} + env(safe-area-inset-bottom))` }}
     >
-      <ul className="flex items-stretch justify-around">
-        {items.map((item) => {
-          const active = isActive(pathname, item.href);
-          return (
-            <li key={item.href} className="flex-1">
-              <Link
-                href={item.href}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex h-bottom-nav flex-col items-center justify-center gap-1 text-caption transition-colors duration-fast ease-out',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                  active ? 'text-foreground' : 'text-muted-foreground',
-                )}
-              >
-                <span
-                  aria-hidden
+      <nav
+        aria-label="Primary"
+        className={cn(
+          'glass pointer-events-auto flex max-w-full items-center gap-1 overflow-hidden rounded-full border p-1.5 shadow-lg',
+          'transition-[padding,gap] duration-300 ease-out motion-reduce:transition-none',
+          condensed && 'gap-0.5 p-1',
+        )}
+      >
+        <ul className="flex items-center gap-0.5">
+          {items.map((item) => {
+            const active = isActive(pathname, item.href);
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'inline-flex h-7 items-center justify-center rounded-full px-4 transition-colors duration-fast ease-out',
+                    'flex h-11 items-center gap-2 rounded-full px-3 text-caption transition-[background-color,color,padding] duration-300 ease-out',
+                    'motion-reduce:transition-none',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    // The active item wears the butter pill the header rail
+                    // uses, so both navigations mark the current page the same
+                    // way and the mark survives in greyscale.
                     active
-                      ? 'bg-[#fde047] text-neutral-900 font-semibold dark:bg-amber-400/40 dark:text-amber-100'
-                      : 'bg-transparent',
+                      ? 'bg-nav-active font-semibold text-nav-active-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    condensed && 'px-2.5',
                   )}
                 >
-                  {item.icon}
-                </span>
-                {item.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+                  <span aria-hidden className="inline-flex shrink-0 items-center justify-center">
+                    {item.icon}
+                  </span>
+                  {/* ── THE LABEL COLLAPSES; IT IS NEVER REMOVED ──────────
+                      `max-w` + `opacity`, not `hidden`: an animated width lets
+                      the pill contract smoothly around its icons, where
+                      `display:none` would snap. And the text stays in the DOM
+                      throughout, so the link keeps its accessible name — a nav
+                      whose items lose their names on scroll is unusable with a
+                      screen reader for the rest of the page.
+
+                      Only the INACTIVE labels collapse. Keeping the current
+                      page's label is what stops the condensed pill from being
+                      four anonymous glyphs: it still says where you are. */}
+                  <span
+                    className={cn(
+                      'overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-300 ease-out',
+                      'motion-reduce:transition-none',
+                      condensed && !active ? 'max-w-0 opacity-0' : 'max-w-24 opacity-100',
+                    )}
+                  >
+                    {item.label}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+    </div>
   );
 }
 

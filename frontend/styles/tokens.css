@@ -473,7 +473,12 @@
      coded `bottom-16` against a bottom nav with no height token at all -- so
      any change to the chrome silently desynchronised them. These are that
      arithmetic, expressed once. */
-  --bottom-nav-height: 4rem; /* 64px -- matches BottomNav's h-16 */
+  /* 68px -- the FLOATING pill's full footprint: an h-11 (44px) row inside
+     p-1.5 (12px), plus the 12px it sits off the bottom edge. It was 64px when
+     the nav was an edge-to-edge bar with an h-16 row. Anything that clears the
+     nav reads this, so it has to cover the gap too or the last row of a page
+     ends up under a pill that is no longer touching the screen edge. */
+  --bottom-nav-height: 4.25rem;
 
   /* ── THE HEADER'S REAL HEIGHT, MEASURED ────────────────────────────────
      `--sticky-top` used to be `--header-height + 1rem`, i.e. the identity ROW

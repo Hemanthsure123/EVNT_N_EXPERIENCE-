@@ -105,7 +105,20 @@ export function resolveSnap({
  * a sheet pinned to a stale pixel value ends up floating or clipped. They are
  * resolved against the live `window.innerHeight` on every resize.
  */
-export const SHEET_SNAP_FRACTIONS = [0, 0.06, 0.17] as const;
+/**
+ * ── THEY MOVED WHEN THE POSTER STOPPED SCROLLING ──────────────────────────
+ *
+ * These were `[0, 0.06, 0.17]` — near-full-screen at every rest position —
+ * because the artwork lived INSIDE the sheet and scrolled with the content, so
+ * a sheet that stopped short just showed a strip of dimmed page above it.
+ *
+ * The poster is anchored behind the sheet now, so where the sheet rests is
+ * exactly how much artwork you can see. 45% leaves the poster as the top half
+ * of the screen with the title, date and venue below it — which is the whole
+ * shape the reference is built around — and 22% is the reading position on the
+ * way to full.
+ */
+export const SHEET_SNAP_FRACTIONS = [0, 0.22, 0.45] as const;
 
 export function snapPixels(viewportHeight: number): number[] {
   return SHEET_SNAP_FRACTIONS.map((fraction) => Math.round(fraction * viewportHeight));

@@ -109,12 +109,20 @@ import { EventWidgetContent } from './event-widget-content';
  * position on close. `overscroll-contain` on the content stops a fling at
  * either end chaining into whatever is underneath.
  *
- * ── AND IT IS ALWAYS DARK ─────────────────────────────────────────────────
+ * ── IT FOLLOWS THE THEME; IT USED TO BE ALWAYS DARK ───────────────────────
  *
- * The `dark` class re-points the design tokens for the whole subtree, which is
- * what lets it reuse the page's own sections — the fact grid, the countdown,
- * the lightbox, the FAQ accordion, the policy lists — instead of forking a
- * dark copy of each.
+ * A literal `dark` class sat on every card in the track, re-pointing the design
+ * tokens for the whole subtree. It was there for a good reason — it is what
+ * lets the widget reuse the page's own sections (the fact grid, the countdown,
+ * the lightbox, the FAQ accordion, the policy lists) instead of forking a dark
+ * copy of each — but the effect was that a visitor who had chosen the light
+ * theme got a black event page and nothing else on the site behaved that way.
+ *
+ * The reuse argument survives without the override: those sections are built
+ * from the same tokens, so they render correctly in whichever theme is active.
+ * What the override was really protecting was the SCRIM — a dark sheet over a
+ * dark backdrop needs no separation. In light theme the card is white on a
+ * dimmed page instead, which is what every other sheet in the product does.
  */
 
 const SPRING = { type: 'spring', stiffness: 340, damping: 36, mass: 0.9 } as const;
@@ -144,7 +152,6 @@ export function EventWidgetDeck() {
   const [snapIndex, setSnapIndex] = React.useState(INITIAL_SNAP_INDEX);
   const [viewport, setViewport] = React.useState({ width: 0, height: 0 });
   const [ctaHeight, setCtaHeight] = React.useState(0);
-  const [pastHero, setPastHero] = React.useState(false);
 
   const y = useMotionValue(0);
   const gestureRef = React.useRef({ x: 0, y: 0, committed: false });
@@ -154,6 +161,8 @@ export function EventWidgetDeck() {
    *  click a drag emits on release does not ALSO step a snap. */
   const draggedRef = React.useRef(false);
   const trackRef = React.useRef<HTMLDivElement>(null);
+  /** The anchored poster layer behind the sheet — see `applyTrack`. */
+  const posterTrackRef = React.useRef<HTMLDivElement>(null);
   const sheetRef = React.useRef<HTMLDivElement>(null);
   /** True for the first positioning pass of an open, so the deck does not
    *  slide sideways into place while it is sliding up. */
@@ -215,14 +224,31 @@ export function EventWidgetDeck() {
     [y],
   );
 
-  /** Writes the track's position. `settle` turns the CSS transition on. */
+  /**
+   * Writes BOTH tracks' positions. `settle` turns the CSS transition on.
+   *
+   * ── WHY TWO TRACKS ────────────────────────────────────────────────────
+   *
+   * The poster is anchored and the content sheet slides over it, which means
+   * they cannot live in the same element: the sheet translates on Y and the
+   * poster must not. So there are two horizontal tracks — one behind holding
+   * the posters, one inside the Y-translating sheet holding the content — and
+   * they are given the SAME x here, in the same frame, from the same call.
+   *
+   * One writer rather than two effects, because a single frame in which the
+   * poster and its own content are at different x is a visible tear, and two
+   * independent writers is exactly how that happens.
+   */
   const applyTrack = React.useCallback(
     (offset: number, settle: boolean) => {
-      const node = trackRef.current;
-      if (!node) return;
-      node.style.transition =
+      const transition =
         settle && !reduceMotion ? 'transform 340ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
-      node.style.transform = `translate3d(${offset}px, 0, 0)`;
+      const transform = `translate3d(${offset}px, 0, 0)`;
+      for (const node of [trackRef.current, posterTrackRef.current]) {
+        if (!node) continue;
+        node.style.transition = transition;
+        node.style.transform = transform;
+      }
     },
     [reduceMotion],
   );
@@ -245,7 +271,6 @@ export function EventWidgetDeck() {
     if (!isOpen || viewport.height === 0) return;
     const resting = snapPixels(viewport.height)[INITIAL_SNAP_INDEX];
     setSnapIndex(INITIAL_SNAP_INDEX);
-    setPastHero(false);
     justOpenedRef.current = true;
     if (reduceMotion) {
       y.set(resting);
@@ -281,22 +306,16 @@ export function EventWidgetDeck() {
   // not the event's.
   React.useEffect(() => {
     scrollerRef.current?.scrollTo({ top: 0 });
-    setPastHero(false);
   }, [currentEvent?.id]);
 
-  // One boolean, flipped on a threshold crossing. A passive listener that only
-  // calls `setState` when the answer actually changes costs a comparison per
-  // frame and nothing else — no layout read, no re-render while scrolling.
-  React.useEffect(() => {
-    const node = scrollerRef.current;
-    if (!node || !isOpen) return;
-    const onScroll = () => {
-      const past = node.scrollTop > node.clientWidth * 0.55;
-      setPastHero((current) => (current === past ? current : past));
-    };
-    node.addEventListener('scroll', onScroll, { passive: true });
-    return () => node.removeEventListener('scroll', onScroll);
-  }, [isOpen, currentEvent?.id]);
+  // ── THE `pastHero` SCROLL LISTENER IS GONE ──────────────────────────────
+  //
+  // It watched the content scroller for the poster leaving the top of the
+  // screen, and switched the floating controls from white-on-artwork to
+  // ink-on-surface at that point. The poster does not scroll any more: it is
+  // anchored behind the sheet, and whether it is visible is a function of
+  // where the SHEET is, which `isFull` already answers. A listener computing
+  // an answer another value already holds is one more thing to keep in sync.
 
   /**
    * ── CLAIM THE GESTURE BEFORE THE BROWSER DOES ──────────────────────────
@@ -590,6 +609,95 @@ export function EventWidgetDeck() {
         aria-hidden
       />
 
+      {/* ── THE POSTER LAYER: ANCHORED, BEHIND THE SHEET ───────────────────
+          The artwork used to live INSIDE the scroller, so a drag or a scroll
+          carried it away and the top of the screen went blank. Here it is a
+          sibling of the sheet rather than a descendant, which is the whole
+          trick: the sheet translates on Y and this does not, so dragging the
+          sheet down reveals more of the SAME picture in the SAME place, and
+          dragging it up covers it. That is what the poster staying put means.
+
+          It still moves on X with the content — one writer, `applyTrack`,
+          gives both tracks the same transform in the same frame — so a
+          horizontal swipe changes poster and content together.
+
+          `pointer-events-none`: every gesture belongs to the sheet above,
+          including the ones that begin over the artwork. A poster that
+          swallowed touches would be a dead zone across the top third of the
+          screen. */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div
+          ref={posterTrackRef}
+          style={{ paddingLeft: railPadding, paddingRight: railPadding, willChange: 'transform' }}
+          className="flex h-full items-stretch"
+        >
+          {events.map((event, index) => (
+            <div
+              key={event.id}
+              style={{ width: cardWidth, marginRight: index === events.length - 1 ? 0 : gap }}
+              className="relative shrink-0 overflow-hidden"
+              aria-hidden
+            >
+              {/* Tall enough that the sheet can be dragged well down without
+                  running off the bottom of the artwork. */}
+              <div className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden bg-muted">
+                <Poster event={event} priority={index === currentIndex} />
+                {/* A scrim under the floating controls, so a white poster
+                    cannot swallow them. */}
+                <div
+                  className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent"
+                  aria-hidden
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── THE CONTROLS BELONG TO THE SCREEN, NOT TO THE SHEET ────────────
+          They used to float over the card, which was right when the card WAS
+          the whole screen and the poster scrolled inside it. With the poster
+          anchored behind and the sheet resting at 45%, a control pinned to the
+          sheet's top edge sits on the white panel halfway down the screen —
+          nowhere near where a thumb reaches for Back.
+
+          Here they are pinned to the deck root, over the artwork, and they
+          stay there whatever the sheet does. Once the sheet is FULL the poster
+          is covered, so they take a surface of their own rather than sitting
+          on an event's title. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-3 pt-3">
+        <button
+          type="button"
+          onClick={dismiss}
+          aria-label="Back to events"
+          className={cn(
+            'pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90',
+            isFull ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
+          )}
+        >
+          <ArrowLeft className="size-5" aria-hidden />
+        </button>
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-body-sm font-semibold transition-opacity duration-200',
+            isFull ? 'text-foreground opacity-100' : 'opacity-0',
+          )}
+          aria-hidden
+        >
+          {currentEvent?.title}
+        </span>
+        {currentEvent ? (
+          <FavouriteButton
+            eventId={currentEvent.id}
+            title={currentEvent.title}
+            className={cn(
+              'pointer-events-auto size-10 shrink-0 rounded-full transition-transform active:scale-90',
+              isFull ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
+            )}
+          />
+        ) : null}
+      </div>
+
       {/* The SHEET. Drags on Y only; it is transparent, because the visible
           panels are the cards inside the track. */}
       <motion.div
@@ -622,7 +730,7 @@ export function EventWidgetDeck() {
               >
                 <div
                   className={cn(
-                    'dark relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl transition-[border-radius] duration-200',
+                    'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl transition-[border-radius] duration-200',
                     isFull ? 'rounded-none' : 'rounded-t-3xl border-t border-border',
                     // The neighbours are context, not content: dimmed so the
                     // centre reads as the one in focus.
@@ -637,7 +745,6 @@ export function EventWidgetDeck() {
                       tiers={tiers}
                       events={events}
                       isFull={isFull}
-                      pastHero={pastHero}
                       ctaHeight={ctaHeight}
                       price={price}
                       scrollerRef={scrollerRef}
@@ -650,7 +757,6 @@ export function EventWidgetDeck() {
                         const next = events.findIndex((candidate) => candidate.id === id);
                         if (next >= 0) goTo(next);
                       }}
-                      onDismiss={dismiss}
                       onLeave={closeDeck}
                       onHandleTap={handleTap}
                     />
@@ -705,14 +811,22 @@ function Poster({ event, priority }: { event: EventCardData; priority?: boolean 
   );
 }
 
+/**
+ * A NEIGHBOUR's content sheet — a blank panel and its title, nothing more.
+ *
+ * It used to render the poster itself. It must not any more: the anchored
+ * layer behind now draws a poster for EVERY event in the track, so a neighbour
+ * drawing its own would be the same artwork twice, the lower copy sliding over
+ * the upper one on every drag.
+ *
+ * About six percent of this is ever on screen, which is why it is a title on a
+ * surface rather than an event page: twenty of those mounted at once would
+ * cost a fetch and a subtree each for a sliver.
+ */
 function NeighbourCard({ event }: { event: EventCardData }) {
   return (
-    <div className="relative h-full w-full overflow-hidden bg-muted">
-      <Poster event={event} />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" aria-hidden />
-      <p className="absolute inset-x-3 bottom-6 line-clamp-2 text-body-sm font-bold text-white">
-        {event.title}
-      </p>
+    <div className="relative flex h-full w-full items-start overflow-hidden px-3 pt-11">
+      <p className="line-clamp-3 text-body-sm font-bold text-foreground">{event.title}</p>
     </div>
   );
 }
@@ -724,7 +838,6 @@ function ActiveCard({
   tiers,
   events,
   isFull,
-  pastHero,
   ctaHeight,
   price,
   scrollerRef,
@@ -734,7 +847,6 @@ function ActiveCard({
   onContentPointerMove,
   onOpenSheet,
   onSelectEvent,
-  onDismiss,
   onLeave,
   onHandleTap,
 }: {
@@ -744,7 +856,6 @@ function ActiveCard({
   tiers: React.ComponentProps<typeof EventWidgetContent>['tiers'];
   events: readonly EventCardData[];
   isFull: boolean;
-  pastHero: boolean;
   ctaHeight: number;
   price: string | null;
   scrollerRef: React.RefObject<HTMLDivElement>;
@@ -754,7 +865,6 @@ function ActiveCard({
   onContentPointerMove: (event: React.PointerEvent) => void;
   onOpenSheet: (sheet: NonNullable<SubSheetType>) => void;
   onSelectEvent: (id: string) => void;
-  onDismiss: () => void;
   /** Closes WITHOUT the exit animation — for navigating away. */
   onLeave: () => void;
   onHandleTap: () => void;
@@ -792,52 +902,14 @@ function ActiveCard({
         <span className="h-1.5 w-12 rounded-full bg-border-strong" aria-hidden />
       </button>
 
-      {/* The controls float OVER the card rather than sitting on the hero,
-          because the hero scrolls away — pinned to the poster, Back and Save
-          would scroll off with it and leave no way out but a gesture. Floating
-          over the CONTENT, though, they sit on top of whatever is underneath,
-          so once the poster is gone the bar takes a background and the event's
-          name, which is also what you want on screen deep in a long page. */}
-      <div
-        className={cn(
-          'pointer-events-none absolute inset-x-0 top-5 z-20 flex items-center gap-3 px-3 pb-2 pt-1 transition-colors duration-200',
-          pastHero && 'border-b border-border bg-background/95 backdrop-blur-md',
-        )}
-      >
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label="Back to events"
-          className={cn(
-            'pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90',
-            pastHero ? 'text-foreground' : 'bg-black/50 text-white backdrop-blur-md',
-          )}
-        >
-          <ArrowLeft className="size-5" aria-hidden />
-        </button>
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-body-sm font-semibold text-foreground transition-opacity duration-200',
-            pastHero ? 'opacity-100' : 'opacity-0',
-          )}
-          aria-hidden
-        >
-          {event.title}
-        </span>
-        <FavouriteButton
-          eventId={event.id}
-          title={event.title}
-          className={cn(
-            'pointer-events-auto size-10 shrink-0 rounded-full transition-transform active:scale-90',
-            pastHero ? 'text-foreground' : 'bg-black/50 text-white backdrop-blur-md',
-          )}
-        />
-      </div>
-
-      {/* Content, INCLUDING the hero. The hero used to be pinned outside this
-          scroller, which meant a 4:3 photograph held ~60% of the screen
-          permanently and the whole event was read through what was left.
-          Inside the scroller it behaves like the top of a page. */}
+      {/* Content ONLY. The hero has moved out to the anchored layer behind
+          this sheet — see the note there. It has been both ways: pinned
+          outside the scroller it held ~60% of the screen permanently and the
+          whole event was read through what was left; inside the scroller it
+          scrolled away and the top of the screen went blank. Anchored BEHIND a
+          sheet that slides over it is the third arrangement and the one the
+          reference uses: the artwork is always in the same place, and how much
+          of it you can see is the reader's choice, made by dragging. */}
       <div
         ref={scrollerRef}
         onPointerDown={onContentPointerDown}
@@ -845,27 +917,6 @@ function ActiveCard({
         className="flex-1 overflow-y-auto overscroll-contain"
         style={{ paddingBottom: ctaHeight ? `${ctaHeight + 16}px` : '7rem' }}
       >
-        {/* The hero deliberately has NO drag handler of its own. It lives
-            inside the scroller, so it inherits the commit logic there — which
-            means a swipe across the poster changes event, and a drag up or
-            down from it moves the sheet. Starting the SHEET drag here
-            unconditionally (as it did) made a horizontal swipe across the
-            biggest, most obvious grab area do nothing at all. */}
-        <div
-          className={cn(
-            'relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-muted',
-            !isFull && 'rounded-t-3xl',
-          )}
-        >
-          <Poster event={event} priority />
-          {/* A scrim under the floating controls, so a white poster cannot
-              swallow them. */}
-          <div
-            className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent"
-            aria-hidden
-          />
-        </div>
-
         <EventWidgetContent
           key={event.id}
           event={event}

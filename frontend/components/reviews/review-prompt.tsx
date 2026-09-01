@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+import { OpenEventLink } from '@/components/event/open-event-link';
 import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { useAuth } from '@/lib/auth/auth-provider';
@@ -183,16 +183,21 @@ export function PendingReviewCard({ className }: { className?: string }) {
       <ul className="flex flex-col gap-3">
         {pending.map((row) => (
           <li key={row.event_id}>
-            <article className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
+            <article className="flex flex-col gap-stack rounded-2xl border border-border bg-surface p-card">
               <div className="flex items-start gap-3">
                 <EventThumb event={row} />
                 <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/events/${row.event_id}`}
+                  {/* Opens the WIDGET on a phone. This was a hard link to
+                      `/events/{uuid}`, so tapping an event you had just been
+                      to dropped you out of the app-shaped experience and onto
+                      the standalone page — the one surface the mobile flow is
+                      not supposed to reach. */}
+                  <OpenEventLink
+                    event={{ id: row.event_id, title: row.title, poster_url: row.poster_url ?? '' }}
                     className="block truncate text-body font-semibold underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {row.title}
-                  </Link>
+                  </OpenEventLink>
                   <p className="truncate text-caption text-muted-foreground">
                     {formatAttended(row.ended_at)} · {row.venue}, {row.city}
                   </p>

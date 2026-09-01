@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { OpenEventLink } from '@/components/event/open-event-link';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -264,7 +265,21 @@ export function MyTickets() {
           the common case. */}
       <PendingReviewCard />
 
-      <div role="tablist" aria-label="Filter tickets" className="flex flex-wrap gap-2">
+      {/* ── ONE LINE THAT SCROLLS, NOT TWO THAT WRAP ──────────────────────
+          `flex-wrap` put "All 20 / Ready to use 20" on one row and "Used /
+          Refunded" on a second, so the filter cost two rows of a phone screen
+          before a single ticket appeared. A scroller keeps it to one and keeps
+          the first card on the first screen — the same trade the home page's
+          chip row makes, and for the same reason.
+
+          `-mx-4 px-4` bleeds it to the viewport rim so the last chip can
+          actually be reached; `scrollbar-none` because the project's global
+          scrollbar styling would otherwise draw a 6px grey bar under it. */}
+      <div
+        role="tablist"
+        aria-label="Filter tickets"
+        className="scrollbar-none -mx-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0"
+      >
         {FILTERS.map((entry) => {
           const count =
             entry.value === 'all'
@@ -278,7 +293,7 @@ export function MyTickets() {
               aria-selected={filter === entry.value}
               onClick={() => setFilter(entry.value)}
               className={cn(
-                'inline-flex h-control items-center gap-2 rounded-full border px-4 text-label transition-colors duration-fast',
+                'inline-flex h-control shrink-0 items-center gap-2 rounded-full border px-4 text-label transition-colors duration-fast',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                 filter === entry.value
                   ? 'border-transparent bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
@@ -296,18 +311,18 @@ export function MyTickets() {
         <ErrorState
           message="Could not load your tickets."
           onRetry={() => void query.refetch()}
-          className="rounded-xl border border-border bg-surface shadow-sm"
+          className="rounded-2xl border border-border bg-surface"
         />
       ) : query.isPending ? (
         <ul className="grid gap-stack-lg sm:grid-cols-2">
           {Array.from({ length: 4 }, (_, index) => (
             <li key={index}>
-              <Skeleton className="h-44 w-full rounded-xl" />
+              <Skeleton className="h-44 w-full rounded-2xl" />
             </li>
           ))}
         </ul>
       ) : rows.length === 0 ? (
-        <div className="rounded-xl border border-border bg-surface shadow-sm">
+        <div className="rounded-2xl border border-border bg-surface">
           <EmptyState
             icon={TicketIcon}
             title={all.length ? 'Nothing in this view' : 'No tickets yet'}
@@ -444,20 +459,25 @@ function BookingCard({
   const pillStatus = group.tickets[0].status;
 
   return (
+    // 2xl radii and a hairline instead of a shadow — the language the rebuilt
+    // checkout uses. A phone screen of `rounded-xl … shadow-sm` cards reads as
+    // a list of separate widgets; the flatter treatment reads as one document.
     <article
       className={cn(
-        'flex h-full flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm',
-        'transition-shadow duration-fast hover:shadow-md motion-reduce:transition-none',
+        'flex h-full flex-col gap-stack rounded-2xl border border-border bg-surface p-card',
+        'transition-colors duration-fast hover:border-border-strong motion-reduce:transition-none',
       )}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link
-            href={`/events/${group.eventId}`}
+          {/* Same rule as everywhere else: a phone gets the widget, a desktop
+              and a crawler get the canonical page. */}
+          <OpenEventLink
+            event={{ id: group.eventId, title: group.eventTitle }}
             className="block truncate text-body-lg font-semibold underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {group.eventTitle}
-          </Link>
+          </OpenEventLink>
           <p className="truncate text-body-sm text-muted-foreground">
             {group.tierName ?? `${total} tickets across tiers`}
           </p>
@@ -490,7 +510,7 @@ function BookingCard({
       </div>
 
       {refundRequest ? (
-        <div className="rounded-lg border border-border bg-sunken p-3">
+        <div className="rounded-xl border border-border bg-sunken p-3">
           <div className="flex items-center gap-2">
             <StatusPill tone={REFUND_TONES[refundRequest.status]}>
               {REFUND_REQUEST_LABELS[refundRequest.status].label}

@@ -155,8 +155,24 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
         {/* Horizontal below lg, vertical above — the same responsive rail the
             wizard uses, so the pattern is learned once. `-mx-1 px-1` lets the
             focus ring of the first and last chip breathe inside the scroller
-            instead of being clipped by `overflow-x-auto`. */}
-        <ul className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-2 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
+            instead of being clipped by `overflow-x-auto`.
+
+            ── AND IT DOES NOT DRAW ITS OWN SCROLLBAR ──────────────────────
+            `overflow-x-auto` with no `scrollbar-none` meant this row rendered
+            the project's GLOBAL scrollbar styling — `styles/globals.css` sets
+            `::-webkit-scrollbar` to `--scrollbar-thickness` (6px) filled with
+            `--input`, a mid grey. On a phone that is a thick grey bar directly
+            under the tabs, which reads as a broken underline indicator rather
+            than as a scroll affordance: the tabs already say which one is
+            active with a filled pill, so the bar is saying nothing and looking
+            like a mistake.
+
+            `.scrollbar-none` is the project's own utility (tokens.css) and is
+            what category-tiles, filter-toolbar, hero-carousel, home-sections
+            and marquee all use for exactly this. The row still scrolls; it
+            just stops advertising it with a bar nobody can grab on a
+            touchscreen anyway. */}
+        <ul className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-2 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
           {SECTIONS.map((section) => {
             const active = isActive(pathname, section.href);
             return (

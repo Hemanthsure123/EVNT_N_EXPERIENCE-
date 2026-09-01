@@ -2,14 +2,13 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { EventContent } from '@/lib/api/event-content';
 import type { EventCard as EventCardData, EventDetail } from '@/lib/api/types';
 import { formatEventDateTime, formatFromPrice } from '@/lib/discovery/format';
 import { selectSimilarEvents } from '@/lib/discovery/similar-events';
-import { eventPath } from '@/lib/events/ref';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import {
   AccessibilityNotes,
   EventFaqs,
@@ -124,7 +123,10 @@ export function EventSubSheets({
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: 'spring', stiffness: 360, damping: 34 }}
-            className="dark relative z-10 flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-3xl border-t border-border bg-surface text-foreground shadow-2xl"
+            // No `dark` here any more. It matched the deck card it opens over, and
+            // that card follows the theme now — a sub-sheet that stayed dark
+            // would be a black panel sliding over a white one.
+            className="relative z-10 flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-3xl border-t border-border bg-surface text-foreground shadow-2xl"
           >
             {/* Pinned header, scrolling body — a long policy set must never be
                 able to push its own close control off the screen. */}
@@ -337,6 +339,7 @@ function OrganiserSheet({
   const initial = (event.organization_name || '?').trim().charAt(0).toUpperCase();
   // Their OTHER events — the previous version listed the event you were already
   // looking at, under the heading "Ongoing events".
+  const { openEvent } = useEventDeck();
   const others = React.useMemo(
     () => selectSimilarEvents(event, pool, { limit: 6 }).filter(
       (candidate) => candidate.organization_id === event.organization_id,
@@ -372,9 +375,14 @@ function OrganiserSheet({
           <ul className="flex flex-col gap-3">
             {others.map((other) => (
               <li key={other.id}>
-                <Link
-                  href={eventPath(other)}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 transition-colors active:bg-muted"
+                {/* Inside the widget already, so this must not navigate OUT
+                    of it — a tap here used to close the app-shaped experience
+                    and land on the standalone page, from the one surface that
+                    is by definition already on a phone. */}
+                <button
+                  type="button"
+                  onClick={() => openEvent(other)}
+                  className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface p-3 text-left transition-colors active:bg-muted"
                 >
                   <span className="relative size-14 shrink-0 overflow-hidden rounded-lg bg-muted">
                     {other.poster_url ? (
@@ -395,7 +403,7 @@ function OrganiserSheet({
                   <span className="shrink-0 text-caption font-semibold tabular-nums text-foreground">
                     {formatFromPrice(other.from_price)}
                   </span>
-                </Link>
+                </button>
               </li>
             ))}
           </ul>

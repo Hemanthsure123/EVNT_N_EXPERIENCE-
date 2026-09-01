@@ -1,3 +1,5 @@
+'use client';
+
 import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -12,6 +14,7 @@ import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { AvailabilityBadge } from './availability-badge';
 import { categoryTint } from './category-tint';
+import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { FavouriteButton } from './favourite-button';
 
 /**
@@ -63,6 +66,7 @@ export function EventRow({
   priority?: boolean;
   className?: string;
 }) {
+  const { openDeck } = useEventDeck();
   const badge = availabilityBadge(event);
   const category = inferCategory(event);
   const price = formatFromPrice(event.from_price);
@@ -130,12 +134,23 @@ export function EventRow({
             </div>
 
             <h3 className="line-clamp-2 text-body font-semibold leading-tight text-foreground sm:text-body-lg">
+              {/* Two halves, as on every other card: a phone opens the
+                  widget, a desktop and a crawler follow the canonical link.
+                  Both carry the same stretched overlay, so the whole row stays
+                  the hit area either way. */}
               <Link
                 href={eventPath(event)}
-                className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background"
+                className="hidden after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background sm:inline"
               >
                 {event.title}
               </Link>
+              <button
+                type="button"
+                onClick={() => openDeck([event], 0)}
+                className="text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none sm:hidden"
+              >
+                {event.title}
+              </button>
             </h3>
 
             <p className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
