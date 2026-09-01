@@ -101,7 +101,19 @@ export function EventGrid({
         // 190 and 240px at every width and on every result count, and the grid
         // simply fits as many as the row holds. Two results are two compact
         // cards, not two posters.
-        'grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 sm:gap-5 lg:gap-6',
+        // The class had drifted back to a fixed ladder while the reasoning
+        // above still described `auto-fill`, so a 1280px screen rendered 290px
+        // cards — wider than the 240px ceiling this comment argues for, and the
+        // exact "the cards are too large" complaint it was written to fix. The
+        // skeleton below never drifted, so the loading state and the loaded
+        // state were laying out differently.
+        //
+        // The ceiling is enforced by the grid now rather than asserted by a
+        // comment: a card is between 190 and 240px at every width and on every
+        // result count, and `justify-between` spreads the leftover instead of
+        // stretching the cards into it.
+        'grid grid-cols-1 gap-3 sm:gap-5 lg:gap-6',
+        'sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:justify-between',
         className,
       )}
     >

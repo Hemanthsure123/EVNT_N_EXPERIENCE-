@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type { Metadata } from 'next';
+import { Container } from '@/components/shell/container';
+import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { ResultsView } from '@/components/discovery/results-view';
 import { fetchEventsSafe } from '@/lib/api/events';
 import { categoryBySlug } from '@/lib/discovery/categories';
@@ -74,6 +76,21 @@ function describe(filters: DiscoveryFilters): {
     // don't index the page.
     indexable: !filters.q,
   };
+}
+
+function breadcrumbs(filters: DiscoveryFilters, title: string): BreadcrumbItem[] {
+  const trail: BreadcrumbItem[] = [{ label: 'Home', href: '/' }];
+  if (filters.city) {
+    trail.push({ label: filters.city, href: browseHref({ city: filters.city }) });
+  }
+  if (filters.category) {
+    const category = categoryBySlug(filters.category);
+    if (category) trail.push({ label: category.label, href: `/categories/${category.slug}` });
+  }
+  // The last crumb is always the page you are on, and is never a link — so a
+  // trail that would otherwise end on a link gets the current view appended.
+  if (trail.length === 1 || filters.q || filters.when) trail.push({ label: title });
+  return trail;
 }
 
 /**
@@ -152,6 +169,43 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
       {indexable && events.length ? (
         <JsonLd data={eventItemListJsonLd(title, events.map(eventToJsonLd))} />
       ) : null}
+
+      {/* ── THE PAGE'S OWN HEADING, PUT BACK ────────────────────────────────
+          `654fd8d` deleted the breadcrumb, this `h1` and the banner together,
+          under the heading "eliminate gap above /events filter bar". The gap
+          was real; deleting the page's only `h1` to close it was not the fix.
+          What it cost:
+
+            - The site's stated rule is exactly one `<h1>` per public page, and
+              this one had none at all — so the busiest indexable route on the
+              platform had no heading for a crawler to read, and axe's
+              `page-has-heading-one` had nothing to find.
+            - `/events?category=comedy&city=Mumbai` is a real landing surface
+              people share. Arriving on it, nothing on screen said what you
+              were looking at.
+
+          It comes back WITHOUT the gap, because the gap was never the
+          heading's fault:
+
+            - Below `sm` the heading is `sr-only`. A phone gets zero extra
+              height — the search field still sits directly above the filter
+              strip, which is what the complaint was — and the document still
+              has its `h1`, which is what a crawler and a screen reader read.
+            - The breadcrumb is desktop-only. A trail is a wayfinding aid for a
+              wide viewport; on a phone it is a second row of small links above
+              the thing you came for.
+
+          The BANNER is deliberately NOT restored. That was 256px of blurred
+          poster restating the heading beside it, and removing it was the
+          correct half of that commit. */}
+      {/* No vertical padding at all below `sm` — the block is a 1px `sr-only`
+          heading there, and padding around it would put back a slice of the
+          exact gap this is careful not to reintroduce. Measured: 1px tall on a
+          390px viewport, with the filter bar still directly under the header. */}
+      <Container className="flex flex-col gap-0 sm:gap-2 sm:pb-2 sm:pt-4">
+        <Breadcrumb items={breadcrumbs(filters, title)} className="hidden sm:block" />
+        <h1 className="sr-only text-h2 sm:not-sr-only md:text-h1">{title}</h1>
+      </Container>
 
       <ResultsView
         initialFilters={filters}

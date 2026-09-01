@@ -100,9 +100,11 @@ test.describe('signing in from the header', () => {
     // a strict-mode violation rather than as the assertion it was pretending
     // to make.
     //
-    // "My tickets" is in the menu, and it is what a signed-in non-operator
-    // should find there.
-    await expect(page.getByRole('link', { name: 'My tickets' })).toBeVisible();
+    // The menu's bookings link, by the label it ACTUALLY carries. It was
+    // "My tickets"; the menu was redesigned and the row became "View all
+    // bookings", and this assertion was never moved with it — so the test has
+    // been failing on stale copy rather than on behaviour.
+    await expect(page.getByRole('link', { name: 'View all bookings' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Operator console' })).toHaveCount(0);
     await expect(page.getByText('Platform operator')).toHaveCount(0);
 

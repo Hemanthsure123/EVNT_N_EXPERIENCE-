@@ -265,12 +265,19 @@ test.describe('home', () => {
     );
 
     await expect(page.getByRole('heading', { name: 'Browse by mood', exact: true })).toBeVisible();
-    // "Trending near you" is deliberately GONE from this page. Its cards
-    // carried urgency badges computed from remaining stock, and the poster
-    // cards in "All Events" carry the same badge from the same helper — so the
-    // rail was showing the same events again under a heading implying they
-    // were different ones.
-    await expect(page.getByRole('heading', { name: 'Trending near you' })).toHaveCount(0);
+    // "Trending near you" is BACK, and this assertion had to be corrected
+    // rather than the section removed. `1d1166a` took it out and this spec
+    // recorded that as "deliberately GONE"; `e2d838b` put it back when the home
+    // page was re-sequenced to the reference layout, and the spec was not moved
+    // with it. It kept passing only because the rail is a CLIENT component that
+    // swaps in after a fetch — so `toHaveCount(0)` was true for the first
+    // moment and false a heartbeat later. A count-zero assertion against
+    // something that arrives late passes for the wrong reason, every time.
+    //
+    // Asserting it EXISTS also fixes what came after: waiting for a section
+    // that streams in late is what lets the checks below it run against a
+    // finished page instead of racing the RSC stream.
+    await expect(page.getByRole('heading', { name: 'Trending near you' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Why Curatix', exact: true })).toBeVisible();
     await expect(page.getByText('Instant tickets')).toBeVisible();
     await expect(page.getByRole('contentinfo')).toBeVisible();
@@ -570,16 +577,18 @@ test.describe('the browse page', () => {
 
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Concerts in Mumbai');
 
-    // The banner carries the scope as an eyebrow and spends its headline on
-    // something the h1 doesn't already say.
-    const banner = page.getByRole('region', { name: 'Concerts \u00b7 Mumbai' });
-    await expect(banner).toBeVisible();
-    await expect(banner.getByRole('heading')).not.toHaveText('Concerts in Mumbai');
+    // THE BANNER IS GONE, ON PURPOSE. It was 256px of blurred poster whose
+    // headline restated the h1 two inches above it, and 654fd8d removed it to
+    // get the first card up the page. That half of the commit was right — what
+    // it also removed, and should not have, were the breadcrumb and the h1
+    // asserted above.
+    await expect(page.getByRole('region', { name: /Concerts . Mumbai/ })).toHaveCount(0);
 
-    // Compact by contract: the banner must not push the grid off-screen.
-    const box = (await banner.boundingBox())!;
-    expect(box.height).toBeGreaterThanOrEqual(220);
-    expect(box.height).toBeLessThanOrEqual(260);
+    // What replaces "the banner is compact" as the guard against a tall
+    // preamble: the first result must still be near the top of the page.
+    const firstCard = page.locator('main ul li').first();
+    const cardTop = (await firstCard.boundingBox())!.y;
+    expect(cardTop).toBeLessThan(700);
   });
 
   test('counts are floors, never invented totals', async ({ page }) => {
@@ -1409,6 +1418,12 @@ test.describe('the event page', () => {
 
 test.describe('saving an event', () => {
   test('toggles without navigating, and survives a reload', async ({ page }) => {
+    // Reduced motion, because the All Events rail advances itself every four
+    // seconds and Playwright will not click an element whose bounding box is
+    // still moving. The click was timing out on the RAIL, not on the button.
+    // The rail honours the preference by not starting at all, which makes this
+    // deterministic without changing anything about what is being tested.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
     const save = page.getByRole('button', { name: /^Save .* for later$/ }).first();
     await expect(save).toHaveAttribute('aria-pressed', 'false');
@@ -1426,10 +1441,17 @@ test.describe('saving an event', () => {
     ).toBeVisible();
 
     await page.reload();
+    // `.first()`: one event legitimately appears in more than one section of
+    // the home page — "Selling fast" and "All Events" draw from the same index
+    // — so after a reload there are two buttons for it, and an unscoped query
+    // is a strict-mode violation rather than a failure of the thing under test.
+    // What matters is that the saved state SURVIVED, which either one proves.
     await expect(
-      page.getByRole('button', {
-        name: label!.replace('Save ', 'Remove ').replace(' for later', ' from saved'),
-      }),
+      page
+        .getByRole('button', {
+          name: label!.replace('Save ', 'Remove ').replace(' for later', ' from saved'),
+        })
+        .first(),
     ).toBeVisible();
   });
 });
@@ -1442,7 +1464,15 @@ test.describe('urgency is real', () => {
     });
     if ((await section.count()) === 0) test.skip(true, 'nothing genuinely scarce right now');
 
-    const cards = section.locator('a[href^="/events/"]');
+    // The CARD, not its anchor. Every card here is now a real link, but the
+    // link is the stretched title — the remaining count sits beside it on the
+    // card, exactly as the sibling assertion on the browse page already notes.
+    // Asserting on the `<a>` would be asserting that a title contains a stock
+    // count.
+    const anchors = section.locator('a[href^="/events/"]');
+    expect(await anchors.count()).toBeGreaterThan(0);
+
+    const cards = section.locator('li');
     const count = await cards.count();
     expect(count).toBeGreaterThan(0);
 

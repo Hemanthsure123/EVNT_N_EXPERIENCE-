@@ -8,6 +8,8 @@ import { inferCategory } from '@/lib/discovery/categories';
 import { demandSignal } from '@/lib/discovery/demand';
 import { formatEventDate, formatFromPrice, machineDate } from '@/lib/discovery/format';
 import { ClayIcon } from '@/components/illustrations/clay';
+import Link from 'next/link';
+import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { categoryTint } from './category-tint';
 import { Countdown } from './countdown';
@@ -40,9 +42,9 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
 
   return (
     <div
-      onClick={() => openDeck([event], 0)}
       className={cn(
-        'group/urgent flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-md cursor-pointer sm:cursor-auto',
+        // `relative`, so the title's stretched link covers the card.
+        'group/urgent relative flex h-full flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-md',
         'transition duration-base ease-spring hover:-translate-y-1 hover:shadow-lg',
         'motion-reduce:hover:translate-y-0',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -82,8 +84,30 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
       </div>
 
       <div className="flex flex-1 flex-col gap-2 p-card lg:p-card-lg">
+        {/* ── A REAL LINK, NOT A DIV WITH AN onClick ──────────────────────
+            The card root was `<div onClick>`: unfocusable, announced as
+            nothing by a screen reader, impossible to open in a new tab or
+            long-press, invisible to a crawler, and unreachable by keyboard —
+            on the shelf that exists to move the events closest to selling out.
+            It also carried `focus-visible:ring` classes that could never fire,
+            because a div is never focused.
+
+            Same split as every other card here: a stretched LINK from `sm` up,
+            and the mobile widget below it. */}
         <h3 className="line-clamp-2 text-body-lg font-semibold leading-tight text-foreground">
-          {event.title}
+          <Link
+            href={eventPath(event)}
+            className="hidden after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-background sm:inline"
+          >
+            {event.title}
+          </Link>
+          <button
+            type="button"
+            onClick={() => openDeck([event], 0)}
+            className="text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none sm:hidden"
+          >
+            {event.title}
+          </button>
         </h3>
 
         <p className="inline-flex items-center gap-2 text-body-sm text-muted-foreground">

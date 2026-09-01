@@ -198,7 +198,10 @@ export function AccountMenu() {
               className={rowClass}
             >
               <LogOut className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-              <span className="min-w-0 flex-1 truncate font-medium text-foreground">Logout</span>
+              {/* "Sign out", not "Logout" — it is the exact counterpart of the
+                  header's "Sign in", and a product that signs you IN should not
+                  log you OUT. The pair was drifting apart. */}
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground">Sign out</span>
             </button>
           </div>
         </div>
@@ -261,11 +264,21 @@ function ScopeRow({
 
   if (href) {
     return (
+      // NO `role="menuitemradio"` on the link variant.
+      //
+      // Two things were wrong with it. `menuitemradio` is only valid inside a
+      // `menu`/`menubar`, and there is none here — this is a dialog — so the
+      // role was invalid ARIA that a screen reader may ignore or mis-announce.
+      // And it OVERRODE the native link role on a control whose entire job is
+      // to navigate to /admin: the one door to the operator console was not
+      // announced as a door.
+      //
+      // `aria-current` is the honest way to say "this is the scope you are in"
+      // for something that is a link.
       <Link
         href={href}
         onClick={onSelect}
-        role="menuitemradio"
-        aria-checked={active}
+        aria-current={active ? 'page' : undefined}
         className={cn(
           rowClass,
           active
