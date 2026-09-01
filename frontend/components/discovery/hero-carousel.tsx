@@ -324,10 +324,21 @@ function MobileFeaturedCarousel({
                   : 'scale-95 translate-y-1 opacity-75 z-0',
               )}
             >
+              {/* ── NO RING ON THE ACTIVE CARD ───────────────────────────
+                  It carried `ring-2 ring-primary/40`, which drew a violet
+                  outline around the whole card — so the centre event read as a
+                  UI component in a selected state rather than as a poster. A
+                  discovery card is a thing you look AT; an outline is the
+                  language of a control you have focused.
+
+                  Position, scale and elevation already say which one is
+                  active, and they say it the way a deck of cards does. The
+                  focus ring is still there for the keyboard, on the button
+                  itself, where a focus ring belongs. */}
               <div
                 className={cn(
-                  'rounded-2xl transition-all duration-300 motion-reduce:transition-none',
-                  isActive ? 'shadow-xl ring-2 ring-primary/40' : 'shadow-sm',
+                  'rounded-2xl transition-shadow duration-300 motion-reduce:transition-none',
+                  isActive ? 'shadow-xl' : 'shadow-sm',
                 )}
               >
                 <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
@@ -361,7 +372,11 @@ function HeroPosterTile({
     <button
       type="button"
       onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
-      className="group/tile flex h-full w-full flex-col gap-2.5 rounded-2xl text-left transition-transform duration-fast active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none motion-reduce:active:scale-100"
+      // A CARD, not a bare poster with two lines under it. The artwork sits
+      // on a surface with its own padding, which is what gives the title and
+      // the price somewhere to live instead of floating on the page — and what
+      // makes the rail read as a row of cards rather than a row of pictures.
+      className="group/tile flex h-full w-full flex-col overflow-hidden rounded-2xl bg-surface p-2 text-left transition-transform duration-fast active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none motion-reduce:active:scale-100"
     >
       {/* `aspect-poster` (4/5), not `aspect-portrait` (3/4). The token was added
           for exactly this carousel and was orphaned — nothing referenced it —
@@ -369,15 +384,21 @@ function HeroPosterTile({
           under the bottom navigation bar on a 664px-tall phone. 4/5 is ~24px
           shorter at this width, which is the difference between reading the
           price and not. */}
-      <div className="relative aspect-poster w-full overflow-hidden rounded-2xl bg-muted">
+      {/* `rounded-xl` inside a `rounded-2xl` card: the artwork's corners sit
+          just inside the card's, which is what stops the padding reading as a
+          mistake. */}
+      <div className="relative aspect-poster w-full overflow-hidden rounded-xl bg-muted">
         {/* `68vw` because that is exactly what the card is (see the track's
             padding). It said `76vw`, which asked the browser for a source a
             size larger than anything ever painted. */}
         <Poster event={event} priority={priority} sizes="68vw" />
         <DateBadge startsAt={event.starts_at} className="left-2 top-2" />
       </div>
-      <div className="flex flex-col gap-0.5 px-0.5 pb-1">
-        <p className="line-clamp-2 text-body-sm font-bold leading-snug text-foreground">
+      {/* Compact: the title clamped to one line and the price under it. Two
+          lines of title on a 4:5 poster is most of the card's height spent
+          below the artwork, which is the "excessively tall" complaint. */}
+      <div className="flex flex-col gap-0.5 px-1 pb-1 pt-2">
+        <p className="line-clamp-1 text-body-sm font-bold leading-snug text-foreground">
           {event.title}
         </p>
         {price ? (

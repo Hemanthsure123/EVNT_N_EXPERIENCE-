@@ -59,8 +59,15 @@ export async function Showcase({
     : (await fetchEventsSafe({ page_size: FALLBACK_SIZE })).events;
 
   const events = curated.length ? curated : fallback;
-  const isCurated = curated.length > 0;
-  const label = isCurated ? 'Featured events' : 'Events on sale now';
+  // ── ONE NAME, WHATEVER FILLED IT ──────────────────────────────────────
+  //
+  // The heading used to change with the SOURCE: "Featured events" when an
+  // operator had curated a collection, "Events on sale now" when it fell back
+  // to the index. That is a distinction only the person who wrote the query
+  // can see — to a visitor the rail looks identical either way, and a section
+  // whose title changes for reasons invisible on screen is a section nobody
+  // can learn. It is the featured rail; it says so.
+  const label = 'Featured events';
 
   if (!events.length) return <EmptyShowcase />;
 
