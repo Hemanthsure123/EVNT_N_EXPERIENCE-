@@ -7,12 +7,10 @@ import { ArrowLeft, Ticket } from 'lucide-react';
 import {
   animate,
   motion,
-  useDragControls,
   useMotionValue,
   useMotionValueEvent,
   useReducedMotion,
 } from 'framer-motion';
-import type { PanInfo } from 'framer-motion';
 import { FavouriteButton } from '@/components/discovery/favourite-button';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
@@ -58,9 +56,8 @@ import { EventWidgetContent } from './event-widget-content';
  *
  * ── TWO DRAGGABLES, ONE GESTURE ───────────────────────────────────────────
  *
- * The sheet drags on Y through framer; the track is moved by HAND. A single
- * commit function watches the first few pixels of movement and hands the
- * gesture to exactly one of them:
+ * BOTH AXES ARE DRIVEN BY HAND. A single commit function watches the first
+ * few pixels of movement and hands the gesture to exactly one of them:
  *
  *   mostly horizontal          -> the track   (previous / next event)
  *   downward, content at top   -> the sheet   (collapse, then dismiss)
@@ -80,6 +77,18 @@ import { EventWidgetContent } from './event-widget-content';
  * quite centred and the peek was lopsided. And a hand-written transform costs
  * no React render per frame: the move handler writes one string, and the
  * settle is a CSS transition rather than a spring driven from JavaScript.
+ *
+ * The VERTICAL axis is hand-driven for a different reason. It used framer's
+ * `dragControls`, which has to be handed a live pointer event to start — fine
+ * from the handle, where the gesture begins on `pointerdown`, and unreliable
+ * from the content, where it can only be started once a few pixels of movement
+ * have proved the gesture is a drag rather than a scroll. Under real touch
+ * that second case simply did not start: dragging DOWN from the content to
+ * collapse the sheet did nothing at all, while the same gesture on the handle
+ * worked, which is the most confusing possible half-working state.
+ *
+ * One implementation, window listeners for both, and the two axes now behave
+ * identically wherever the finger lands.
  *
  * ── THE DRAG IS A REAL DRAG ───────────────────────────────────────────────
  *
@@ -138,10 +147,12 @@ export function EventWidgetDeck() {
   const [pastHero, setPastHero] = React.useState(false);
 
   const y = useMotionValue(0);
-  const sheetDrag = useDragControls();
   const gestureRef = React.useRef({ x: 0, y: 0, committed: false });
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const ctaRef = React.useRef<HTMLDivElement>(null);
+  /** True when the gesture that just ended actually moved the sheet, so the
+   *  click a drag emits on release does not ALSO step a snap. */
+  const draggedRef = React.useRef(false);
   const trackRef = React.useRef<HTMLDivElement>(null);
   const sheetRef = React.useRef<HTMLDivElement>(null);
   /** True for the first positioning pass of an open, so the deck does not
@@ -195,6 +206,14 @@ export function EventWidgetDeck() {
   useMotionValueEvent(y, 'change', (value) => {
     sheetRef.current?.style.setProperty('--deck-y', `${Math.max(value, 0)}px`);
   });
+
+  /** Writes the sheet's translate while a finger is on it. */
+  const applySheet = React.useCallback(
+    (offset: number) => {
+      y.set(offset);
+    },
+    [y],
+  );
 
   /** Writes the track's position. `settle` turns the CSS transition on. */
   const applyTrack = React.useCallback(
@@ -279,6 +298,67 @@ export function EventWidgetDeck() {
     return () => node.removeEventListener('scroll', onScroll);
   }, [isOpen, currentEvent?.id]);
 
+  /**
+   * ── CLAIM THE GESTURE BEFORE THE BROWSER DOES ──────────────────────────
+   *
+   * `touch-action` is NOT inherited, so the `touch-none` on the sheet does
+   * nothing for the scrolling content inside it: that element computes to
+   * `auto`, and the browser decides on the FIRST touchmove that a vertical
+   * gesture belongs to its own panning. It then fires `pointercancel` and
+   * stops delivering pointer events entirely.
+   *
+   * The symptom was precise and baffling: dragging the handle collapsed the
+   * sheet, and the identical drag started two centimetres lower did nothing at
+   * all — no movement, no snap, no error. Exactly one `pointermove` arrived
+   * and the rest of the gesture went to a scroll that had nowhere to go,
+   * because the content was already at the top.
+   *
+   * A non-passive `touchmove` that calls `preventDefault()` in the cases the
+   * commit rule is about to claim keeps the browser out of it and the pointer
+   * stream alive. It is deliberately narrow — horizontal, or vertical from a
+   * content top that has nothing above it — so ordinary scrolling is still the
+   * browser's, natively, with nothing intercepting it.
+   */
+  React.useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node || !isOpen) return;
+
+    let startX = 0;
+    let startY = 0;
+
+    const onStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      startX = touch.clientX;
+      startY = touch.clientY;
+    };
+
+    const onMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
+
+      const horizontal = Math.abs(dx) > Math.abs(dy);
+      const atTop = node.scrollTop <= 0;
+      const claimsIt =
+        horizontal || (atTop && (dy > 0 || (dy < 0 && snapIndex !== FULL_SNAP_INDEX)));
+
+      // `cancelable` guards the case where the browser has already committed to
+      // scrolling — calling `preventDefault` there is a no-op that logs a
+      // console warning on every frame.
+      if (claimsIt && event.cancelable) event.preventDefault();
+    };
+
+    node.addEventListener('touchstart', onStart, { passive: true });
+    node.addEventListener('touchmove', onMove, { passive: false });
+    return () => {
+      node.removeEventListener('touchstart', onStart);
+      node.removeEventListener('touchmove', onMove);
+    };
+  }, [isOpen, snapIndex, currentEvent?.id]);
+
   const goTo = React.useCallback(
     (index: number) => {
       if (index < 0 || index >= events.length) return;
@@ -306,19 +386,59 @@ export function EventWidgetDeck() {
     animate(y, viewport.height, { ...SPRING, onComplete: closeDeck });
   }, [closeDeck, viewport.height, y, reduceMotion]);
 
-  const handleSheetDragEnd = React.useCallback(
-    (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
-      gestureRef.current.committed = false;
-      const resolution = resolveSnap({
-        y: y.get(),
-        velocity: info.velocity.y,
-        snaps,
-        viewportHeight: viewport.height,
-      });
-      if (resolution.shouldClose) dismiss();
-      else snapTo(resolution.index);
+  /**
+   * The vertical gesture, start to finish.
+   *
+   * Window listeners, like the horizontal one — a drag that begins on the
+   * handle and travels up the screen leaves that element almost immediately,
+   * and a React handler bound to it stops hearing about the gesture the moment
+   * it does.
+   */
+  const beginVerticalDrag = React.useCallback(
+    (event: React.PointerEvent) => {
+      const base = y.get();
+      const startY = event.clientY;
+      let lastY = event.clientY;
+      let lastAt = event.timeStamp;
+      let velocity = 0;
+      draggedRef.current = false;
+
+      const move = (moveEvent: PointerEvent) => {
+        const elapsed = moveEvent.timeStamp - lastAt;
+        if (elapsed > 0) {
+          velocity = ((moveEvent.clientY - lastY) / elapsed) * 1000;
+          lastY = moveEvent.clientY;
+          lastAt = moveEvent.timeStamp;
+        }
+        const travelled = moveEvent.clientY - startY;
+        if (Math.abs(travelled) > 4) draggedRef.current = true;
+        // Above the top snap there is nothing to reveal, so resistance is
+        // heavy; below the resting one there is (a dismissal), so it is light.
+        let next = base + travelled;
+        if (next < 0) next *= 0.12;
+        applySheet(next);
+      };
+
+      const end = (endEvent: PointerEvent) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+        gestureRef.current.committed = false;
+        const resolution = resolveSnap({
+          y: y.get() + (endEvent.clientY - startY) * 0,
+          velocity,
+          snaps,
+          viewportHeight: viewport.height,
+        });
+        if (resolution.shouldClose) dismiss();
+        else snapTo(resolution.index);
+      };
+
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', end);
+      window.addEventListener('pointercancel', end);
     },
-    [dismiss, snapTo, snaps, viewport.height, y],
+    [applySheet, dismiss, snapTo, snaps, viewport.height, y],
   );
 
   /**
@@ -384,14 +504,30 @@ export function EventWidgetDeck() {
     [applyTrack, currentIndex, events.length, goTo, restingX, stride],
   );
 
-  /** The handle and the poster always drag the SHEET — nothing scrolls there. */
+  /** The handle always drags the SHEET — nothing scrolls there. */
   const startSheetDrag = React.useCallback(
     (event: React.PointerEvent) => {
       gestureRef.current.committed = true;
-      sheetDrag.start(event);
+      beginVerticalDrag(event);
     },
-    [sheetDrag],
+    [beginVerticalDrag],
   );
+
+  /**
+   * Tap the handle to step one snap taller — or, at full screen, back down.
+   *
+   * Guarded on `draggedRef`, which `handleSheetDragEnd` sets: a drag ends with
+   * a click event too, and without the guard every drag would also step the
+   * sheet one further than the finger asked for.
+   */
+  const handleTap = React.useCallback(() => {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    if (snapIndex === FULL_SNAP_INDEX) snapTo(INITIAL_SNAP_INDEX);
+    else snapTo(snapIndex - 1);
+  }, [snapIndex, snapTo]);
 
   const onContentPointerDown = React.useCallback((event: React.PointerEvent) => {
     gestureRef.current = { x: event.clientX, y: event.clientY, committed: false };
@@ -420,7 +556,7 @@ export function EventWidgetDeck() {
       // to scroll to, so the only thing that gesture can mean is "put it away".
       if (dy > 0 && atTop) {
         gesture.committed = true;
-        sheetDrag.start(event);
+        beginVerticalDrag(event);
         return;
       }
       // Upward from the top, while there is still room to grow: expand. This is
@@ -429,13 +565,13 @@ export function EventWidgetDeck() {
       // drag is a request to read further and belongs to the scroller.
       if (dy < 0 && atTop && !isFull) {
         gesture.committed = true;
-        sheetDrag.start(event);
+        beginVerticalDrag(event);
         return;
       }
       // Neither: the browser scrolls the content, natively, uninterrupted.
       gesture.committed = true;
     },
-    [beginSwipe, isFull, sheetDrag],
+    [beginSwipe, beginVerticalDrag, isFull],
   );
 
   if (!isOpen || !currentEvent) return null;
@@ -457,22 +593,13 @@ export function EventWidgetDeck() {
       {/* The SHEET. Drags on Y only; it is transparent, because the visible
           panels are the cards inside the track. */}
       <motion.div
-        drag="y"
-        dragListener={false}
-        dragControls={sheetDrag}
-        dragConstraints={{ top: 0, bottom: snaps[snaps.length - 1] ?? 0 }}
-        // Downward rubber-bands generously (it is a gesture with somewhere to
-        // go); upward barely moves, because 0 is full screen and there is
-        // nothing above it.
-        dragElastic={{ top: 0.02, bottom: 0.55 }}
-        onDragEnd={handleSheetDragEnd}
         ref={sheetRef}
         // The variable is seeded here rather than in a class, because the
         // project's lint rule (correctly) refuses raw px in Tailwind arbitrary
         // values — and this one is not a design token, it is a live readout of
         // the sheet's own translate.
         style={{ y, ...({ '--deck-y': '0px' } as React.CSSProperties) }}
-        className="absolute inset-x-0 top-0 h-[100dvh] overflow-hidden"
+        className="absolute inset-x-0 top-0 h-[100dvh] touch-none overflow-hidden"
       >
         {/* The TRACK. Positioned by hand — see the note at the top. */}
         <div
@@ -525,6 +652,7 @@ export function EventWidgetDeck() {
                       }}
                       onDismiss={dismiss}
                       onLeave={closeDeck}
+                      onHandleTap={handleTap}
                     />
                   ) : (
                     // A NEIGHBOUR. Only about six percent of it is ever on
@@ -608,6 +736,7 @@ function ActiveCard({
   onSelectEvent,
   onDismiss,
   onLeave,
+  onHandleTap,
 }: {
   event: EventCardData;
   detail: React.ComponentProps<typeof EventWidgetContent>['detail'];
@@ -628,16 +757,40 @@ function ActiveCard({
   onDismiss: () => void;
   /** Closes WITHOUT the exit animation — for navigating away. */
   onLeave: () => void;
+  onHandleTap: () => void;
 }) {
   return (
     <>
-      {/* Grab handle. A real affordance, and an always-draggable area. */}
-      <div
+      {/* ── THE HANDLE IS A CONTROL, NOT A DECORATION ────────────────────
+          The pill is 6px tall. Its grab area was the 20px strip around it,
+          which on a real thumb is a target you miss more often than you hit —
+          and missing it did nothing at all, so the handle read as painted on.
+
+          It is a BUTTON now, 44px tall (the brief's minimum target), spanning
+          the card's full width. The pill inside is unchanged; what grew is the
+          part your thumb has to find.
+
+          It answers to BOTH gestures, which is the other half of the fix:
+
+            DRAG  — `onPointerDown` hands the gesture straight to the sheet, so
+                    the surface follows the finger from the first pixel.
+            TAP   — `onClick` steps one snap taller. A control that only
+                    responds to a drag is a control most people conclude is
+                    broken, because the first thing anyone does to a small
+                    horizontal bar is press it.
+
+          The two do not fight: a press that turns into a drag is claimed by
+          the drag, and `dragged` records that so the click that follows a drag
+          release does not also step the sheet. */}
+      <button
+        type="button"
         onPointerDown={onStartSheetDrag}
-        className="flex w-full shrink-0 cursor-grab justify-center pb-1 pt-2.5 active:cursor-grabbing"
+        onClick={onHandleTap}
+        aria-label={isFull ? 'Collapse event' : 'Expand event'}
+        className="flex h-11 w-full shrink-0 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
       >
         <span className="h-1.5 w-12 rounded-full bg-border-strong" aria-hidden />
-      </div>
+      </button>
 
       {/* The controls float OVER the card rather than sitting on the hero,
           because the hero scrolls away — pinned to the poster, Back and Save
