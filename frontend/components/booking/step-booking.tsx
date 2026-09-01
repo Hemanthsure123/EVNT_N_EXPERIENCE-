@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, User as UserIcon } from 'lucide-react';
+import { AuthSheet } from '@/components/auth/auth-sheet';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { SELECTION_PARAM, serialiseSelection } from '@/lib/booking/selection';
@@ -42,9 +43,26 @@ export function BookingStep() {
   const router = useRouter();
 
   const chosen = totals.ticketCount > 0;
-  const next = status === 'authenticated' ? 'review' : 'login';
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
-  const advance = () => router.push(`/booking/${event.id}/${next}${query}`);
+  const reviewHref = `/booking/${event.id}/review${query}`;
+
+  /**
+   * ── SIGNING IN IS AN INTERRUPTION, NOT A STEP ──────────────────────────
+   *
+   * This used to push `/booking/{id}/login` — a whole screen for a thing that
+   * is not part of buying a ticket, counted by the progress bar as a quarter
+   * of the journey, and reached by leaving the selection behind and hoping it
+   * survived the round trip.
+   *
+   * Now an anonymous press opens a sheet OVER this screen. The tickets stay
+   * chosen and stay visible behind the scrim, and the moment a session exists
+   * the flow continues to review from exactly where it paused.
+   */
+  const [authOpen, setAuthOpen] = React.useState(false);
+  const advance = () => {
+    if (status === 'authenticated') router.push(reviewHref);
+    else setAuthOpen(true);
+  };
 
   return (
     <StepTransition stepKey="booking" className="flex flex-col gap-section">
@@ -145,6 +163,20 @@ export function BookingStep() {
           <ArrowRight className="size-4" aria-hidden />
         </Button>
       </StickyActionBar>
+      <AuthSheet
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        // Straight on to review — the press that opened this sheet was a press
+        // of Continue, and answering an interruption should not cost the
+        // action that raised it.
+        onAuthenticated={() => {
+          setAuthOpen(false);
+          router.push(reviewHref);
+        }}
+        // Where an OAuth round trip returns to: the same place, with the same
+        // selection, so a trip out to Google does not empty the basket.
+        next={reviewHref}
+      />
     </StepTransition>
   );
 }

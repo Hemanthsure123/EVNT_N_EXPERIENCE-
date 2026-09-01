@@ -4,7 +4,7 @@ import * as React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { useAuth } from '@/lib/auth/auth-provider';
-import { type StepId, stepsFor } from '@/lib/booking/steps';
+import { stepsFor } from '@/lib/booking/steps';
 import { cn } from '@/lib/utils/cn';
 import { EASE_OUT } from './motion';
 import { useBooking } from './booking-context';
@@ -12,10 +12,10 @@ import { useBooking } from './booking-context';
 /**
  * Where you are, and how much is left.
  *
- * THE STEP LIST DEPENDS ON AUTH. A signed-in person is shown three steps, not
- * four with one greyed out: a step you will never see is noise, and worse, it
- * makes the journey look longer than it is on the screen where people decide
- * whether to continue.
+ * TWO STEPS, AND THE ROW IS THE SAME FOR EVERYONE. Signing in used to be a
+ * conditional third disc; it is a sheet now, so it is not on the row at all —
+ * a step you will never see is noise, and worse, it makes the journey look
+ * longer than it is on the screen where people decide whether to continue.
  *
  * It's a `<nav>` with an ordered list and `aria-current="step"`, so the position
  * is available to a screen reader without relying on colour or a check mark.
@@ -39,22 +39,28 @@ import { useBooking } from './booking-context';
  * as one continuous mark rather than as circles joined by a different colour.
  *
  * THE CURRENT STEP'S LABEL IS VISIBLE AT EVERY WIDTH. The others stay hidden
- * below `sm` (four labels do not fit on a 390px screen), but hiding all four
- * left a phone showing bare numbered discs — "3" is not an answer to "where am
- * I in this purchase". One label costs ~60px and the row still fits at 360px.
+ * below `sm`, but hiding all of them left a phone showing bare numbered discs —
+ * "2" is not an answer to "where am I in this purchase". One label costs ~60px
+ * and the row still fits at 360px.
  */
 export function Stepper({ className }: { className?: string }) {
   const { step } = useBooking();
   const { status } = useAuth();
   const reduced = useReducedMotion();
 
-  // While auth is unknown, assume the longer list. Rendering three steps and
-  // then inserting a fourth would shift the whole header under the reader.
   const steps = stepsFor(status === 'authenticated');
-  const currentIndex = Math.max(
-    steps.findIndex((entry) => entry.id === step),
-    0,
-  );
+
+  /**
+   * The confirmation screen is past the last step, not on it.
+   *
+   * `findIndex` returns -1 for anything not in the list, and the old
+   * `Math.max(..., 0)` turned that into "step one" — so somebody looking at a
+   * paid ticket was told they were back at Tickets with two things left to do.
+   * Sending the index past the end instead marks every step done, which is
+   * what has actually happened.
+   */
+  const found = steps.findIndex((entry) => entry.id === step);
+  const currentIndex = step === 'confirmation' ? steps.length : Math.max(found, 0);
 
   return (
     <nav aria-label="Booking progress" className={cn('w-full', className)}>
@@ -113,9 +119,3 @@ export function Stepper({ className }: { className?: string }) {
     </nav>
   );
 }
-
-/** The step a route declares it is on, for pages that render outside the nav. */
-export const isBeyond = (step: StepId, than: StepId, authenticated: boolean) => {
-  const order = stepsFor(authenticated).map((entry) => entry.id);
-  return order.indexOf(step) > order.indexOf(than);
-};

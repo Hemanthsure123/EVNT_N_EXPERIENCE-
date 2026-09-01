@@ -9,7 +9,17 @@ import { type Page, expect, test } from '@playwright/test';
  * `AuthPanel`, so a change that breaks one breaks both here.
  */
 
-const API = 'http://localhost:8000/api/v1';
+/**
+ * The fixture's origin, overridable.
+ *
+ * Hard-coded, this file could only ever run against port 8000 — and on a
+ * developer machine 8000 is as contended as 3000: the real Django backend uses
+ * it, and so does anything else somebody happens to have open. When it is
+ * taken, every test here fails in `bookableEvent` with a 404 that says nothing
+ * about ports. `E2E_API` is the same escape hatch `E2E_PORT` already gives the
+ * app server; CI sets neither and gets exactly what it had.
+ */
+const API = process.env.E2E_API ?? 'http://localhost:8000/api/v1';
 
 const seriousOrWorse = (v: { impact?: string | null }) =>
   v.impact === 'critical' || v.impact === 'serious';

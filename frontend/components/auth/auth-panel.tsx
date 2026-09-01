@@ -1,8 +1,9 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowLeft, Eye, EyeOff, Info, Mail, Phone, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Eye, EyeOff, Info, Mail, Phone, TriangleAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { DEFAULT_DIAL_CODE, DIAL_CODES, toE164 } from '@/lib/auth/dial-codes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -125,9 +126,17 @@ export function AuthPanel({
   const [fullName, setFullName] = React.useState('');
   const [reveal, setReveal] = React.useState(false);
 
+  // The dialling code and the subscriber number are separate pieces of state
+  // and are joined only on submit (`toE164`). Storing the joined string would
+  // mean re-parsing it on every keystroke to know which option the select
+  // should show, and getting that wrong in front of a keypad is how a field
+  // starts rewriting what somebody typed.
+  const [dialCode, setDialCode] = React.useState(DEFAULT_DIAL_CODE);
   const [phone, setPhone] = React.useState('');
   const [code, setCode] = React.useState('');
   const [codeSent, setCodeSent] = React.useState(false);
+  /** The E.164 number the OTP endpoints actually receive. */
+  const e164 = toE164(dialCode, phone);
 
   const reset = () => {
     setError(null);
@@ -213,7 +222,7 @@ export function AuthPanel({
     reset();
     setBusy(true);
     try {
-      await requestPhoneOtp(phone);
+      await requestPhoneOtp(e164);
       setCodeSent(true);
     } catch (thrown) {
       handle(thrown);
@@ -227,7 +236,7 @@ export function AuthPanel({
     reset();
     setBusy(true);
     try {
-      const { user } = await verifyPhoneOtp(phone, code);
+      const { user } = await verifyPhoneOtp(e164, code);
       onAuthenticated(user);
     } catch (thrown) {
       handle(thrown);
@@ -465,7 +474,7 @@ export function AuthPanel({
           </form>
         ) : codeSent ? (
           <form onSubmit={submitCode} className="flex flex-col gap-stack" noValidate>
-            <Field label="Verification code" htmlFor="auth-code" hint={`Sent to ${phone}.`}>
+            <Field label="Verification code" htmlFor="auth-code" hint={`Sent to ${e164}.`}>
               <Input
                 id="auth-code"
                 inputMode="numeric"
@@ -487,6 +496,10 @@ export function AuthPanel({
               type="button"
               onClick={() => {
                 setCodeSent(false);
+                // Clear the code as well as the step: coming back to a box
+                // still holding the digits from the message that did not
+                // arrive is how somebody resends the same wrong code.
+                setCode('');
                 reset();
               }}
               className="inline-flex min-h-control items-center gap-1.5 self-start rounded-full pr-3 text-body-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -497,26 +510,93 @@ export function AuthPanel({
           </form>
         ) : (
           <form onSubmit={sendCode} className="flex flex-col gap-stack" noValidate>
+            {/* ── ONE CONTROL, TWO INPUTS ──────────────────────────────
+                The code and the number are one field to look at and two to
+                operate, so the number box gets `inputMode="numeric"` and never
+                has to produce a `+` — which on a phone keypad lives behind a
+                symbols key, and is the single most common reason a typed
+                number is not one the OTP endpoint can send to.
+
+                The select carries a visible `+91`, not a flag: a flag is a
+                picture of a country standing in for a number, unreadable to a
+                screen reader and ambiguous where several countries share a
+                code (+1 is the US AND Canada). */}
             <Field
               label="Phone number"
               htmlFor="auth-phone"
-              hint="Include the country code, e.g. +91 98765 43210."
+              hint="We'll text a one-time code to this number."
             >
-              <Input
-                id="auth-phone"
-                type="tel"
-                required
-                autoComplete="tel"
-                aria-describedby="auth-phone-hint"
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="+91 98765 43210"
-              />
+              <div className="flex items-stretch gap-2">
+                {/* ── A NATIVE SELECT, WEARING ITS OWN CODE ────────────
+                    An option has to read "+91 India", because a column of bare
+                    numbers is a puzzle. But a native select sizes itself to its
+                    WIDEST option, so styling it directly gave a 221px picker
+                    beside a 113px box — the control for choosing one of
+                    eighteen things was twice the width of the one for typing
+                    ten digits.
+
+                    So the select is transparent and stretched over a face that
+                    renders only the code. It is still a real, focusable,
+                    labelled `<select>` — the native wheel picker, the keyboard
+                    behaviour and the screen-reader semantics are all the
+                    platform's — and the box under it is only paint. */}
+                <div className="relative shrink-0">
+                  <div
+                    aria-hidden
+                    className="pointer-events-none flex h-full min-h-control items-center gap-1 rounded-lg border border-input bg-surface pl-3 pr-2 text-body-sm font-medium text-foreground"
+                  >
+                    {dialCode}
+                    <ChevronDown className="size-4 text-muted-foreground" />
+                  </div>
+                  <select
+                    id="auth-dial-code"
+                    // Its own name: read on its own, "Country calling code"
+                    // says what a list of numbers with plus signs is for.
+                    aria-label="Country calling code"
+                    autoComplete="tel-country-code"
+                    value={dialCode}
+                    onChange={(event) => setDialCode(event.target.value)}
+                    className="peer absolute inset-0 h-full w-full cursor-pointer opacity-0 focus-visible:outline-none"
+                  >
+                    {DIAL_CODES.map((entry) => (
+                      <option key={entry.iso} value={entry.code}>
+                        {entry.code} {entry.name}
+                      </option>
+                    ))}
+                  </select>
+                  {/* The focus ring has to be drawn by the wrapper, because the
+                      element that actually takes focus is invisible — without
+                      this, tabbing to the country code looks like focus
+                      vanishing off the form. */}
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 rounded-lg ring-ring transition-shadow peer-focus-visible:ring-2"
+                  />
+                </div>
+                <Input
+                  id="auth-phone"
+                  type="tel"
+                  required
+                  inputMode="numeric"
+                  autoComplete="tel-national"
+                  aria-describedby="auth-phone-hint"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="98765 43210"
+                  className="flex-1"
+                />
+              </div>
             </Field>
 
             <Messages error={error} notice={notice} />
 
-            <Button type="submit" size="lg" loading={busy} className="mt-1 w-full">
+            <Button
+              type="submit"
+              size="lg"
+              loading={busy}
+              disabled={!e164}
+              className="mt-1 w-full"
+            >
               Send code
             </Button>
           </form>

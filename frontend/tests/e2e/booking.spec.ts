@@ -9,7 +9,17 @@ import { type Page, expect, test } from '@playwright/test';
  * the hold timer is a real deadline, and nothing simulates a payment.
  */
 
-const API = 'http://localhost:8000/api/v1';
+/**
+ * The fixture's origin, overridable.
+ *
+ * Hard-coded, this file could only ever run against port 8000 — and on a
+ * developer machine 8000 is as contended as 3000: the real Django backend uses
+ * it, and so does anything else somebody happens to have open. When it is
+ * taken, every test here fails in `bookableEvent` with a 404 that says nothing
+ * about ports. `E2E_API` is the same escape hatch `E2E_PORT` already gives the
+ * app server; CI sets neither and gets exactly what it had.
+ */
+const API = process.env.E2E_API ?? 'http://localhost:8000/api/v1';
 
 const seriousOrWorse = (v: { impact?: string | null }) =>
   v.impact === 'critical' || v.impact === 'serious';
@@ -138,42 +148,64 @@ test.describe('the booking funnel', () => {
     await expect(summary).toContainText('× 2');
   });
 
-  test('shows the sign-in step to a visitor, and skips it entirely once signed in', async ({
-    page,
-  }) => {
+  test('asks a visitor to sign in WITHOUT taking the screen away', async ({ page }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
 
-    // ── A VISITOR IS SENT TO SIGN IN, NOT SHOWN A CONTINUE ───────────────
+    // ── SIGNING IN IS AN INTERRUPTION, NOT A STEP ────────────────────────
     //
-    // This clicked "Continue" on review to reach login. There is nothing to
-    // click: `/review` REDIRECTS an anonymous visitor straight to `/login`,
-    // and always has. The click waited 30s for a button on a page the test
-    // had already been bounced off.
+    // This has been asserted three ways, and the history is the point. It
+    // once clicked a Continue on review to reach `/login`; then it asserted
+    // the REDIRECT to `/login`, because review always bounced an anonymous
+    // visitor there; now there is no sign-in screen at all.
     //
-    // Sign in, review, pay — so the redirect IS the first step, and that is
-    // what this now asserts.
+    // A whole navigation for a thing that is not part of buying a ticket,
+    // counted by the progress row as a quarter of the journey, and reached by
+    // leaving the selection behind. It is a sheet over whichever screen asked
+    // for it, so the tickets stay chosen and stay on screen behind it.
+    //
+    // The redirect that remains sends an anonymous visitor back to the PICKER,
+    // which is where the sheet lives — carrying the selection, so one press of
+    // Continue raises it.
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+(\?|$)/);
+    await expect(page).toHaveURL(/tickets=/);
 
-    // FOUR steps signed out, not three: Tickets is a step again (§5), so the
-    // funnel is Tickets -> Sign in -> Review -> Payment. What matters here is
-    // unchanged — the stepper agrees with the router about where you are, and
-    // Sign in is drawn because the router just sent you to it.
+    // TWO steps, and the same two whether or not there is a session. The rule
+    // that decided every previous version of this assertion is unchanged: the
+    // stepper says what the ROUTER does, and the router no longer navigates to
+    // sign in.
     const stepper = page.getByRole('navigation', { name: 'Booking progress' });
-    await expect(stepper.getByRole('listitem')).toHaveCount(4);
-    await expect(stepper).toContainText('Sign in');
+    await expect(stepper.getByRole('listitem')).toHaveCount(2);
+    await expect(stepper).not.toContainText('Sign in');
 
-    // The heading continues the purchase rather than starting something new —
-    // the standalone /sign-in page is the one that says "Welcome back".
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Almost there');
+    await page.getByRole('button', { name: /Continue/i }).first().click();
 
-    // Signed in: straight to review, three steps, no sign-in anywhere.
+    // The sheet, over the ticket screen — which is still there underneath.
+    const sheet = page.getByRole('dialog').filter({ hasText: 'Sign in to continue' });
+    await expect(sheet).toBeVisible();
+    // A CSS locator, deliberately, not `getByRole('heading')`: Radix takes the
+    // background OUT of the accessibility tree while the dialog is open, which
+    // is the dialog doing its job — so the role query correctly finds nothing,
+    // and asking that way would assert the opposite of what it looks like.
+    // What is being checked here is that the ticket screen was never navigated
+    // away from, and that is a DOM fact.
+    await expect(page.locator('h1').first()).toHaveText('Choose your tickets');
+
+    // Closing it returns to exactly what was behind, selection intact — the
+    // whole reason it is a sheet.
+    await sheet.getByRole('button', { name: 'Close' }).click();
+    await expect(sheet).toBeHidden();
+    await expect(page.locator('output').first()).toHaveText('1');
+
+    // Signed in: no sheet, straight through to review.
     await signedIn(page);
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
     await expect(page).toHaveURL(/\/review/);
-    await expect(stepper.getByRole('listitem')).toHaveCount(3);
-    await expect(stepper).not.toContainText('Sign in');
+    await expect(stepper.getByRole('listitem')).toHaveCount(2);
+    await expect(
+      page.getByRole('dialog').filter({ hasText: 'Sign in to continue' }),
+    ).toHaveCount(0);
   });
 
   test('reserves real inventory at review, with a real hold deadline', async ({ page }) => {
@@ -244,21 +276,19 @@ test.describe('the booking funnel', () => {
 
     await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
 
-    // ── WAIT FOR THE RESERVATION, THEN PRESS ────────────────────────────
+    // ── WAIT FOR THE RESERVATION ─────────────────────────────────────────
     //
-    // Review reserves inventory on mount, and "Proceed to payment" only
-    // carries `?booking=` once that POST has answered. Pressed before it
-    // lands, the link goes to `/pay` WITHOUT a booking, the pay step has
-    // nothing to pay for, and it bounces straight back to review — which
-    // surfaced here as an `h1` that stubbornly read "Review your booking".
+    // Review reserves inventory on mount, and the payment control only has
+    // something to pay for once that POST has answered. Waiting on the URL
+    // rather than a spinner, because the booking id in the query IS the
+    // evidence that the reservation exists. Under a full-suite load that POST
+    // is simply slower, which is why this once passed alone and failed in a
+    // run.
     //
-    // Waiting on the URL rather than a spinner, because the booking id in the
-    // query IS the evidence that the reservation exists. Under a full-suite
-    // load that POST is simply slower, which is why this passed alone and
-    // failed in a run.
+    // There is no press to make any more: `/pay` was a screen that restated
+    // the order and offered a button, and the button is on the summary now.
     await page.waitForURL(/[?&]booking=/, { timeout: 20_000 });
-    await page.getByRole('link', { name: /Proceed to payment/ }).click();
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
 
     const main = page.locator('#funnel-main');
     const hasKey = (await main.getByRole('button', { name: /^Pay ₹/ }).count()) > 0;
@@ -289,41 +319,44 @@ test.describe('the booking funnel', () => {
   }) => {
     await page.goto('/events');
     const { eventId, tiers } = await bookableEvent(page);
-    // ── "Continue" ALSO MATCHES "Continue with Google" ───────────────────
+    // ── THE PANEL IS THE SAME ONE, IN A SHEET ────────────────────────────
     //
-    // `getByRole(..., { name })` is a SUBSTRING match, so this clicked the
-    // Google button and left for the provider — the failure was a real OAuth
-    // start URL where `/login` was expected. Google is wired now, so a locator
-    // that used to be merely loose became one that navigates off-site.
-    //
-    // There is nothing to click anyway: an anonymous visitor is redirected to
-    // `/login`, which is the first step.
-    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
-    await expect(page).toHaveURL(/\/login/);
+    // It used to be reached by a redirect to `/login`. Signing in is a sheet
+    // now, so the panel is opened by pressing Continue without a session — but
+    // it is the SAME `AuthPanel` the standalone /sign-in route renders, which
+    // is the point: two copies of an auth form is how the two drift, and this
+    // one sits in front of a payment.
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await page.getByRole('button', { name: /Continue/i }).first().click();
+    const sheet = page.getByRole('dialog').filter({ hasText: 'Sign in to continue' });
+    await expect(sheet).toBeVisible();
 
-    // The control EXISTS — the funnel and /sign-in render the same panel.
-    // Never clicked: Google is real now, and a real click leaves the SPA.
-    await expect(page.getByRole('button', { name: /Continue with Google/i })).toHaveCount(1);
+    // The control EXISTS. Never clicked: Google is real now, and a real click
+    // leaves the SPA. (`getByRole(..., {name})` is a SUBSTRING match, so a
+    // loose /Continue/ inside this sheet would find the Google button too —
+    // which is exactly how an earlier version of this test navigated off-site.)
+    await expect(sheet.getByRole('button', { name: /Continue with Google/i })).toHaveCount(1);
     // Apple was removed outright — no backend, no planned one.
-    await expect(page.getByRole('button', { name: /Continue with Apple/i })).toHaveCount(0);
+    await expect(sheet.getByRole('button', { name: /Continue with Apple/i })).toHaveCount(0);
 
-    // Phone is the seam still stating the truth: the tab is real, the send
-    // fails loudly rather than pretending a code went out. A social button
-    // that silently does nothing, or appears to succeed, is the worst
-    // possible control to fake on a checkout.
+    // Phone is the seam still stating the truth: the tab is real, the field
+    // takes a country code and a number, and the send fails loudly rather than
+    // pretending a code went out. A control that silently does nothing, or
+    // appears to succeed, is the worst possible thing to fake on a checkout.
     const urlBefore = page.url();
-    await page.getByRole('tab', { name: 'Phone' }).click();
-    await page.getByLabel('Phone number').fill('+919876543210');
-    await page.getByRole('button', { name: 'Send code' }).click();
-    // Scoped to main — the header carries its own sr-only status region.
-    await expect(page.getByRole('main').getByRole('status')).toContainText(
+    await sheet.getByRole('tab', { name: 'Phone' }).click();
+    await expect(sheet.getByLabel('Country calling code')).toHaveValue('+91');
+    await sheet.getByLabel('Phone number').fill('9876543210');
+    await sheet.getByRole('button', { name: 'Send code' }).click();
+    await expect(sheet.getByRole('status')).toContainText(
       /Phone sign-in isn't connected yet/i,
     );
+    // A sheet, not a navigation: the ticket screen is still underneath.
     expect(page.url()).toBe(urlBefore);
 
     // Email + password is the one method with a backend behind it, and it works.
-    await page.getByRole('tab', { name: 'Email' }).click();
-    await expect(page.getByLabel('Email')).toBeVisible();
+    await sheet.getByRole('tab', { name: 'Email' }).click();
+    await expect(sheet.getByLabel('Email')).toBeVisible();
   });
 
   test('the summary card is present and consistent on every step', async ({ page }) => {
@@ -332,17 +365,17 @@ test.describe('the booking funnel', () => {
     await signedIn(page);
     const summary = page.getByRole('complementary', { name: 'Order summary' });
 
-    // Signed in, so `/booking/{id}` lands on review directly — there is no
-    // ticket step to Continue out of, and the click here waited 30s for a
-    // button on the page it was already on.
-    await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
-    await expect(page).toHaveURL(/\/review/);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
+    // The funnel is TWO screens now, so "every step" is the picker and review.
+    // The card is mounted by the route group's layout, which is what makes two
+    // routes read as one journey — the total must not change across the hop.
+    await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
     await expect(summary).toBeVisible();
     const total = (await summary.getByText(/^₹/).last().textContent())?.trim();
 
-    await page.getByRole('link', { name: /Proceed to payment/ }).click();
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
+    await page.getByRole('button', { name: /Continue/i }).first().click();
+    await expect(page).toHaveURL(/\/review/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
     await expect(summary).toBeVisible();
     await expect(summary).toContainText(total!);
   });
@@ -356,22 +389,22 @@ test.describe('the booking funnel', () => {
       await page.goto('/events');
       const { eventId, tiers } = await bookableEvent(page);
 
-      await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-      await axeClean(page, 'booking step 1');
+      // Two screens and one sheet — the sheet included BECAUSE it is a focus
+      // trap over a live page, which is where dialog accessibility actually
+      // goes wrong: an unlabelled dialog, or a background that is still
+      // reachable by tab.
+      await page.goto(`/booking/${eventId}?tickets=${tiers[0]!.id}:1`);
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Choose your tickets');
+      await axeClean(page, 'booking step 1 (tickets)');
 
-      await page.goto(`/booking/${eventId}/login?tickets=${tiers[0]!.id}:1`);
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-      await axeClean(page, 'booking step 2');
+      await page.getByRole('button', { name: /Continue/i }).first().click();
+      await expect(page.getByRole('dialog').filter({ hasText: 'Sign in to continue' })).toBeVisible();
+      await axeClean(page, 'the sign-in sheet');
 
       await signedIn(page);
       await page.goto(`/booking/${eventId}/review?tickets=${tiers[0]!.id}:1`);
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review your booking');
-      await axeClean(page, 'booking step 3');
-
-      await page.getByRole('link', { name: /Proceed to payment/ }).click();
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pay securely');
-      await axeClean(page, 'booking step 4');
+      await axeClean(page, 'booking step 2 (review and pay)');
     });
   });
 
@@ -417,9 +450,11 @@ test.describe('the booking funnel', () => {
     await proceed.scrollIntoViewIfNeeded();
     await proceed.click();
 
-    // The funnel's real first step for a visitor without a session, with the
-    // selection carried across.
-    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+\/(login|review)/);
+    // Without a session, Continue raises the sheet rather than navigating —
+    // so the URL must NOT have moved, and the selection must still be in it.
+    const sheet = page.getByRole('dialog').filter({ hasText: 'Sign in to continue' });
+    await expect(sheet).toBeVisible();
+    await expect(page).toHaveURL(/\/booking\/[0-9a-f-]+(\?|$)/);
     await expect(page).toHaveURL(/tickets=/);
   });
 });

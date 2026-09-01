@@ -10,6 +10,18 @@ import { type Page, expect, test } from '@playwright/test';
  */
 
 /**
+ * The fixture's origin, overridable — same escape hatch as `E2E_PORT`.
+ *
+ * The two tests below reach past the UI to the API (to register a real user,
+ * and to find an event with a sellable tier), and both had the origin written
+ * into them. On a machine where 8000 is taken — the real Django backend uses
+ * it, and so does anything else somebody has open — they fail with
+ * `list.data is not iterable`, which says nothing whatsoever about a port. CI
+ * sets nothing and gets exactly what it had.
+ */
+const API = process.env.E2E_API ?? 'http://localhost:8000/api/v1';
+
+/**
  * A canonical event URL: `/events/{slug}-{uuid}`, of which a bare `/events/{uuid}`
  * is the degenerate case (an event whose title yields no ASCII slug).
  *
@@ -1082,8 +1094,8 @@ test.describe('the subscribe card', () => {
     // now verifies a stored token against `/auth/me` before believing it — a
     // stale or revoked token must not present a signed-in UI that then fails at
     // the first real request. So the test has to sign in for real too.
-    await page.evaluate(async () => {
-      const response = await fetch('http://localhost:8000/api/v1/auth/register', {
+    await page.evaluate(async (api) => {
+      const response = await fetch(`${api}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1095,7 +1107,7 @@ test.describe('the subscribe card', () => {
       const body = (await response.json()) as { tokens: { access: string; refresh: string } };
       localStorage.setItem('ee-access', body.tokens.access);
       localStorage.setItem('ee-refresh', body.tokens.refresh);
-    });
+    }, API);
     await page.reload();
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
@@ -1285,7 +1297,7 @@ test.describe('the event page', () => {
         if (sellable) return event.id;
       }
       return null;
-    }, 'http://localhost:8000/api/v1');
+    }, API);
     expect(target, 'the fixture is serving no event with a sellable tier').not.toBeNull();
 
     await page.goto(`/booking/${target}`);
@@ -1301,7 +1313,18 @@ test.describe('the event page', () => {
     // So a spec that wants to increment presses Add first. The two names are
     // deliberately distinct: two controls answering to one name is how a
     // screen reader user, or a test, presses the wrong one.
-    const addPill = page.getByRole('button', { name: /^Add (?!one ).+/ }).first();
+    // ── AND IT MUST BE THE SELLABLE TIER, NOT THE FIRST ONE ─────────────
+    //
+    // The query above finds an event with A sellable tier; `.first()` then
+    // pressed whichever tier the page listed first, which is routinely a
+    // sold-out or not-yet-open one. Its Add pill renders DISABLED, so the
+    // click spent the whole 90s budget retrying a button that was never going
+    // to enable — reported as a timeout on the press, which reads like a
+    // broken control and is really a test aiming at the wrong tier.
+    const addPill = page
+      .getByRole('button', { name: /^Add (?!one ).+/ })
+      .and(page.locator(':not([disabled])'))
+      .first();
     const plus = page.getByRole('button', { name: /Add one .+ ticket/ }).first();
     await addPill.click();
     await plus.waitFor({ state: 'attached' });

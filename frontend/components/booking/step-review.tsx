@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
-  ArrowRight,
   CalendarDays,
   Loader2,
   MapPin,
@@ -32,6 +31,7 @@ import { CTA_PILL_LG, PILL_MD } from './cta';
 import { useBooking } from './booking-context';
 import { Rise, StepTransition } from './motion';
 import { PosterFrame } from './poster-frame';
+import { PaymentSection } from './payment-section';
 import { StickyActionBar } from './sticky-action-bar';
 import { YourDetailsSheet } from './your-details-sheet';
 import { CHECKOUT_TRUST, TrustStrip } from './trust';
@@ -99,16 +99,15 @@ export function ReviewStep() {
   // The event page still has one link from here — the "View event" pill, which
   // is a deliberate way OUT of the funnel rather than a step within it.
   const eventHref = eventPath(event);
-  const payHref = booking
-    ? `/booking/${event.id}/pay?${new URLSearchParams({
-        [SELECTION_PARAM]: serialiseSelection(selection),
-        booking: booking.id,
-      }).toString()}`
-    : `/booking/${event.id}/pay${query}`;
 
   // No session, no reservation: the booking belongs to a user.
+  //
+  // Back to the PICKER, which is where the sign-in sheet lives now. This sent
+  // people to `/booking/{id}/login`, a screen that no longer exists — and the
+  // selection rides along in the query, so the picker reopens on the same
+  // tickets and one press of Continue raises the sheet.
   React.useEffect(() => {
-    if (status === 'anonymous') router.replace(`/booking/${event.id}/login${query}`);
+    if (status === 'anonymous') router.replace(`/booking/${event.id}${query}`);
   }, [status, router, event.id, query]);
 
   // Nothing chosen (a bookmarked or hand-edited URL) — back to the picker,
@@ -396,30 +395,38 @@ export function ReviewStep() {
         <TrustStrip marks={CHECKOUT_TRUST} />
       </Rise>
 
-      <div className="hidden justify-end lg:flex">
-        <Button size="lg" asChild className={CTA_PILL_LG}>
-          <Link href={payHref}>
-            Proceed to payment
-            <ArrowRight className="size-4" aria-hidden />
-          </Link>
-        </Button>
-      </div>
+      {/* ── PAYING HAPPENS HERE ─────────────────────────────────────────────
+          There used to be a fourth step at `/pay` whose entire job was to
+          restate the order — the same lines, the same total, the same
+          platform-fee note this screen had shown one press earlier — and then
+          offer a button. A whole navigation and a second chance to abandon, in
+          exchange for showing somebody a summary they had just read.
+
+          The button moved to the summary. Nothing about the payment itself
+          changed, including every guard: no card UI on this origin, the
+          browser's success callback is not treated as proof, and the
+          confirmation screen still polls the BACKEND until it says `paid`. */}
+      <Rise index={5}>
+        <div className="hidden justify-end lg:flex">
+          <PaymentSection event={event} active={booking} layout="full" />
+        </div>
+      </Rise>
 
       <StickyActionBar
         className={cn('lg:hidden')}
         total={total}
-        caption={`${lines.reduce((sum, line) => sum + line.quantity, 0)} ticket(s) reserved`}
+        // Not "ticket(s)". This line sits beside the amount somebody is about
+        // to be charged, and a parenthesised plural reads as a form field that
+        // was never finished — the one impression to avoid at the moment of
+        // payment.
+        caption={(() => {
+          const count = lines.reduce((sum, line) => sum + line.quantity, 0);
+          return `${count} ${count === 1 ? 'ticket' : 'tickets'} reserved`;
+        })()}
       >
-        {/* "Continue", not "Pay". The desktop control on this same screen says
-            "Proceed to payment", and the two disagreeing about what the same
-            link does is worse on the money path than anywhere else — this one
-            opens the payment step, it does not take payment. */}
-        <Button size="lg" asChild className={cn(CTA_PILL_LG, 'shrink-0')}>
-          <Link href={payHref}>
-            Continue
-            <ArrowRight className="size-4" aria-hidden />
-          </Link>
-        </Button>
+        {/* The same action as the block above, with no explanatory copy —
+            the sticky bar is where a thumb is, not where an argument goes. */}
+        <PaymentSection event={event} active={booking} layout="compact" />
       </StickyActionBar>
 
       <YourDetailsSheet open={detailsOpen} onOpenChange={setDetailsOpen} />

@@ -22,21 +22,30 @@
  * The rule that survives from the old note is the one that mattered: ASK
  * ONCE. Whichever screen owns the picker, the other must not have one.
  *
- * ── SIGN IN COMES FIRST, AND THE STEPPER USED TO DISAGREE ─────────────────
+ * ── THE STEPPER MUST AGREE WITH THE ROUTER ────────────────────────────────
  *
  * `stepsFor(false)` once returned `[review, login, payment]`, so a visitor was
  * told they were starting on Review while the router bounced them to Login. A
  * stepper that disagrees with the router is worse than no stepper: it is the
- * only thing on screen claiming to say where you are.
- *
- * ── LOGIN IS CONDITIONAL, and that shapes the model ───────────────────────
- *
- * Showing a signed-in person a step they will never see is an unnecessary
- * screen. So the step LIST depends on auth, and the stepper renders whatever
- * it is given rather than hiding one of a fixed set.
+ * only thing on screen claiming to say where you are. That is also why
+ * `currentStep` still maps the two RETIRED segments rather than falling
+ * through to `booking` — for the frame before a redirect resolves, the shell
+ * still has to place the pathname somewhere true.
  */
 
-export type StepId = 'booking' | 'login' | 'review' | 'payment';
+/**
+ * ── TWO STEPS, AND SIGN-IN IS NOT ONE OF THEM ─────────────────────────────
+ *
+ * `payment` is gone: it was a screen that restated the order and offered a
+ * button, so the button moved onto the summary and the navigation went with
+ * it. `login` is gone as a STEP for a different reason — it is a bottom sheet
+ * over whatever screen asked for it, so signing in no longer costs the
+ * selection, the scroll position or the sense of where you were.
+ *
+ * What is left is the two decisions somebody actually makes: what to buy, and
+ * whether to pay for it.
+ */
+export type StepId = 'booking' | 'review' | 'confirmation';
 
 export type Step = {
   id: StepId;
@@ -45,23 +54,32 @@ export type Step = {
   segment: string;
 };
 
-const ALL: Record<StepId, Step> = {
+/**
+ * `confirmation` is deliberately absent: it is the OUTCOME, not a step. Drawing
+ * it as a fourth disc would tell somebody holding a paid ticket that they have
+ * one more thing to do.
+ */
+const ALL: Record<'booking' | 'review', Step> = {
   booking: { id: 'booking', label: 'Tickets', segment: '' },
-  login: { id: 'login', label: 'Sign in', segment: 'login' },
-  review: { id: 'review', label: 'Review', segment: 'review' },
-  payment: { id: 'payment', label: 'Payment', segment: 'pay' },
+  review: { id: 'review', label: 'Review & pay', segment: 'review' },
 };
 
-export const stepsFor = (authenticated: boolean): Step[] =>
-  authenticated
-    ? [ALL.booking, ALL.review, ALL.payment]
-    : [ALL.booking, ALL.login, ALL.review, ALL.payment];
+// The parameter is kept so callers do not all have to change, and because the
+// list becoming auth-dependent again is a live possibility; it is unused
+// because signing in is a sheet now rather than a screen.
+export const stepsFor = (_authenticated: boolean): Step[] => [ALL.booking, ALL.review];
 
-/** Which step a pathname is on. */
+/**
+ * Which step a pathname is on.
+ *
+ * `/pay` and `/login` are retired routes that 3xx to `/review` and to the
+ * picker. They are still mapped, because for the instant before the redirect
+ * resolves the shell has a pathname to place — and mapping them to a step that
+ * no longer exists is how the stepper ends up highlighting the wrong disc.
+ */
 export function currentStep(pathname: string): StepId {
-  if (pathname.endsWith('/login')) return 'login';
-  if (pathname.endsWith('/review')) return 'review';
-  if (pathname.endsWith('/pay') || pathname.endsWith('/confirmation')) return 'payment';
+  if (pathname.endsWith('/confirmation')) return 'confirmation';
+  if (pathname.endsWith('/review') || pathname.endsWith('/pay')) return 'review';
   return 'booking';
 }
 
