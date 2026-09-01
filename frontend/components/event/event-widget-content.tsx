@@ -245,9 +245,13 @@ export function EventWidgetContent({
       {/* 12. Organiser --------------------------------------------------- */}
       <section className="flex flex-col gap-3">
         <h3 className="text-body font-extrabold text-foreground">Organised by</h3>
+        {/* An explicit name. Without one the button announces as its own
+            contents — an initial and a company name — which says who runs the
+            event but not that pressing it opens anything. */}
         <button
           type="button"
           onClick={() => onOpenSheet('organiser')}
+          aria-label={`About ${event.organization_name}`}
           className="flex items-center gap-3.5 rounded-2xl border border-border bg-surface p-3.5 text-left transition-colors active:bg-muted"
         >
           <span
