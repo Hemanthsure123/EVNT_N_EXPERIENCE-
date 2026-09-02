@@ -4,34 +4,45 @@ import { Footer } from './footer';
 import { SiteFooter } from './site-footer';
 
 /**
- * The mobile footer was compacted from four stacked full-width columns to a
- * 2×2 grid plus a closing legal band. The point of these tests is that it was a
- * COMPACTION and not a cull: a layout change that quietly drops "Refund policy"
- * looks identical in review to one that does not.
+ * The footer's contract.
+ *
+ * ── IT WAS A COMPACTION; NOW IT IS DELIBERATELY A CULL ────────────────────
+ *
+ * These tests were written when four stacked columns became a 2×2 grid, to
+ * prove the change was a COMPACTION and not a cull — a layout change that
+ * quietly drops "Refund policy" looks identical in review to one that does not.
+ *
+ * The footer is now two columns, Help and Quick links, specified link by link
+ * by the product owner. That IS a cull, and the guarantee this file makes has
+ * to change with it: the list below is no longer "everywhere the footer used to
+ * reach", it is "everywhere the footer is responsible for reaching NOW".
+ *
+ * The dropped destinations were checked for reachability rather than assumed:
+ * `/organizer`, `/dashboard`, `/pricing`, `/help` and `/about` are all linked
+ * from elsewhere (the account menu, the organiser page, the contact page).
+ * `/careers` was NOT — nothing else in the product linked to it, so removing it
+ * here would have orphaned the page outright. It is linked from `/about` now,
+ * which is the page somebody is already on when they wonder whether we are
+ * hiring. An orphaned route is the failure mode this codebase already names for
+ * the performer profiles: a crawler cannot reach a page nothing links to, and
+ * neither can a person.
  *
  * jsdom has no layout engine, so nothing here can assert a height. What it can
- * assert is the set of destinations and the structure that makes the compaction
- * safe — which is the part a screenshot would not catch anyway.
+ * assert is the set of destinations and the structure — which is the part a
+ * screenshot would not catch anyway.
  */
 
 /** Every href the footer is responsible for reaching. */
 const EXPECTED_LINKS = [
-  // Discover
+  // Help
+  '/contact',
+  '/support',
+  '/refunds',
+  // Quick links
   '/events',
   '/events?when=weekend',
-  // Organizers. `/dashboard` replaced a SECOND link to `/organizer` that was
-  // labelled "Organizer login" — two rows, one destination, neither a login.
-  '/organizer',
-  '/dashboard',
-  '/pricing',
-  // Support
-  '/help',
-  '/refunds',
-  '/contact',
-  // Company
-  '/about',
-  '/careers',
-  // Legal — moved out of the grid into the closing band, NOT dropped
+  '/hire',
+  // Legal — in the closing band, NOT dropped
   '/terms',
   '/privacy',
   '/cookies',
@@ -72,7 +83,7 @@ describe('SiteFooter', () => {
       within(footer)
         .getAllByRole('heading', { level: 2 })
         .map((h) => h.textContent),
-    ).toEqual(['Discover', 'Organizers', 'Support', 'Company']);
+    ).toEqual(['Help', 'Quick links']);
   });
 
   /**

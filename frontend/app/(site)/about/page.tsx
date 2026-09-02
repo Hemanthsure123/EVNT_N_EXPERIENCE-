@@ -150,6 +150,20 @@ export default function AboutPage() {
           there is something real to name — not a founding date chosen to look established, or a
           team grid assembled to fill the layout.
         </p>
+        {/* ── THE ONLY LINK TO /careers ──────────────────────────────────────
+            The footer used to carry it. The footer is two columns now (Help and
+            Quick links) and Careers is in neither — which left `/careers`
+            reachable from nothing at all: not indexable in practice, and not
+            findable by a person either. An orphaned page is the failure mode
+            this codebase already names for the performer profiles.
+
+            It belongs here rather than back in the footer: "who we are" is the
+            page somebody is already on when they wonder whether we are
+            hiring. */}
+        <p>
+          If that sounds like something you would want to build,{' '}
+          <Link href="/careers">we are hiring</Link>.
+        </p>
       </Prose>
 
       <CtaBand
