@@ -145,6 +145,15 @@ export async function AllEvents() {
                 >
                   <PosterCard
                     event={event}
+                    // ── THE WHOLE GRID, NOT JUST THIS CARD ─────────────────
+                    // Without these two props `PosterCard` falls back to
+                    // `openDeck([event], 0)` — a ONE-ITEM deck. That is why
+                    // tapping an All Events card opened a widget you could not
+                    // swipe, and why "More from {organiser}" was absent from
+                    // it: the organiser list was derived from the deck's pool,
+                    // and the pool held exactly the event you were looking at.
+                    allEvents={events}
+                    index={index}
                     // The first row is above the fold on every width.
                     priority={index < 3}
                     sizes="(min-width: 1024px) 23vw, (min-width: 640px) 31vw, 46vw"

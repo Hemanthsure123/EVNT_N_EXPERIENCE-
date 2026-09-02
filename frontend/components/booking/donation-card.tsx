@@ -92,7 +92,7 @@ export function DonationCard({
         {/* The band the reference fills with a licensed illustration. Ours is
             drawn from tokens: a photograph we do not have the rights to would
             be a worse answer than a shape we do. */}
-        <div className="flex items-center gap-3 bg-gradient-to-r from-primary/12 via-primary/5 to-transparent px-card py-4">
+        <div className="flex items-center gap-3 bg-gradient-to-br from-primary/15 via-primary/5 to-transparent px-card py-4">
           <span
             aria-hidden
             className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-surface text-primary shadow-sm"
@@ -220,12 +220,21 @@ function Chip({
         // 390px screen, and a floor wide enough for "Custom" made "₹5" the same
         // width and wrapped the fourth onto a line of its own.
         'relative inline-flex h-11 flex-1 items-center justify-center rounded-xl border px-3',
-        'text-body-sm font-semibold transition-colors duration-fast',
+        'text-body-sm font-semibold',
+        // Colour AND transform, so a press is felt as well as seen — the chip
+        // dips under the finger and springs back.
+        'transition-[background-color,border-color,color,transform] duration-fast ease-spring',
+        'active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        // ── A DISABLED CHIP MUST NOT READ AS A CHOSEN ONE ────────────────
+        // `disabled:opacity-50` over the default `hover:bg-muted` produced a
+        // soft grey fill — indistinguishable, at a glance, from the selected
+        // state. So while a write was in flight, or after one was refused, a
+        // chip nobody had chosen looked chosen. Explicitly transparent here.
+        'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent',
         selected
-          ? 'border-transparent bg-cta text-cta-foreground'
-          : 'border-border-strong text-foreground hover:bg-muted',
+          ? 'border-transparent bg-cta text-cta-foreground shadow-sm'
+          : 'border-border-strong bg-transparent text-foreground hover:bg-muted',
       )}
     >
       {badge ? (

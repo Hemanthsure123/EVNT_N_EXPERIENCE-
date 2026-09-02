@@ -23,7 +23,7 @@ export function FeatureRail({
       {events.map((event, index) => (
         <li key={event.id} className="w-[78vw] shrink-0 sm:w-80 lg:w-[26rem]">
           <Reveal delayMs={Math.min(index, 4) * 60} className="h-full">
-            <FeatureCard event={event} />
+            <FeatureCard event={event} allEvents={events} index={index} />
           </Reveal>
         </li>
       ))}

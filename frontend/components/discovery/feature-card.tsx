@@ -60,9 +60,19 @@ const CARD_SIZES = '(min-width: 768px) 480px, 85vw';
 
 export function FeatureCard({
   event,
+  allEvents,
+  index = 0,
   priority = false,
 }: {
   event: EventCardData;
+  /**
+   * The list this card belongs to, so the widget opens as a deck you can swipe
+   * rather than a single dead-end card — and so "More from {organiser}" has
+   * something to work from. Absent falls back to `[event]`, which is correct
+   * for a card that genuinely has no siblings.
+   */
+  allEvents?: EventCardData[];
+  index?: number;
   priority?: boolean;
 }) {
   const badge = availabilityBadge(event);
@@ -83,7 +93,7 @@ export function FeatureCard({
           identical and only the destination differs. */}
       <button
         type="button"
-        onClick={() => openDeck([event], 0)}
+        onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
         aria-label={event.title}
         className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
       />

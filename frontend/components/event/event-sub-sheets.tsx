@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Image from 'next/image';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,6 +9,7 @@ import type { EventContent } from '@/lib/api/event-content';
 import type { EventCard as EventCardData, EventDetail } from '@/lib/api/types';
 import { formatEventDateTime, formatFromPrice } from '@/lib/discovery/format';
 import { selectSimilarEvents } from '@/lib/discovery/similar-events';
+import { fetchEventsSafe } from '@/lib/api/events';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import {
   AccessibilityNotes,
@@ -337,14 +339,54 @@ function OrganiserSheet({
   pool: readonly EventCardData[];
 }) {
   const initial = (event.organization_name || '?').trim().charAt(0).toUpperCase();
-  // Their OTHER events — the previous version listed the event you were already
-  // looking at, under the heading "Ongoing events".
   const { openEvent } = useEventDeck();
-  const others = React.useMemo(
-    () => selectSimilarEvents(event, pool, { limit: 6 }).filter(
-      (candidate) => candidate.organization_id === event.organization_id,
-    ),
+
+  /**
+   * ── ASKED FOR, NOT SIFTED OUT OF WHAT WE HAPPENED TO HAVE ───────────────
+   *
+   * This list was derived from `pool` — the events the DECK was holding. That
+   * worked only when the deck had been opened from a grid that passed its whole
+   * list. Opened on a single event (a shared link, a tap in the account area,
+   * any card that passed `[event]`) the pool held one row, the filter returned
+   * nothing, and the section vanished — with no way for the reader to tell an
+   * organiser with one event from a question the product could not answer.
+   *
+   * `GET /events?organization_id=` exists now, so it is asked directly.
+   *
+   * The pool is still the FIRST answer: it is already in memory, so when it has
+   * something the section paints immediately with no request at all. The fetch
+   * is the fallback, which keeps the common path free and the rare path
+   * correct.
+   */
+  const fromPool = React.useMemo(
+    () =>
+      selectSimilarEvents(event, pool, { limit: 6 }).filter(
+        (candidate) => candidate.organization_id === event.organization_id,
+      ),
     [event, pool],
+  );
+
+  const { data: fetched } = useQuery({
+    queryKey: ['organiser-events', event.organization_id],
+    // `fetchEventsSafe`, not `fetchEvents`: a failure here must degrade to an
+    // absent section, never to an error inside a sheet somebody opened to read
+    // about an organiser.
+    queryFn: () =>
+      fetchEventsSafe({ organization_id: event.organization_id, page_size: 7 }).then(
+        (r) => r.events,
+      ),
+    // Only when the pool could not answer, and only when there is an organiser
+    // to ask about.
+    enabled: fromPool.length === 0 && Boolean(event.organization_id),
+    staleTime: 5 * 60_000,
+  });
+
+  const others = React.useMemo(
+    () =>
+      fromPool.length > 0
+        ? fromPool
+        : (fetched ?? []).filter((candidate) => candidate.id !== event.id).slice(0, 6),
+    [fromPool, fetched, event.id],
   );
 
   return (

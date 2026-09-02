@@ -52,6 +52,8 @@ export async function fetchEventSitemapSafe(): Promise<EventSitemapEntry[]> {
 export type EventsQuery = {
   q?: string;
   city?: string;
+  /** Every publicly-visible event by one organiser — "More from {organiser}". */
+  organization_id?: string;
   starts_after?: string;
   starts_before?: string;
   cursor?: string;
@@ -65,6 +67,7 @@ export function eventsQueryString(params: EventsQuery): string {
   if (params.starts_after) search.set('starts_after', params.starts_after);
   if (params.starts_before) search.set('starts_before', params.starts_before);
   if (params.cursor) search.set('cursor', params.cursor);
+  if (params.organization_id) search.set('organization_id', params.organization_id);
   if (params.page_size) search.set('page_size', String(params.page_size));
   const qs = search.toString();
   return qs ? `?${qs}` : '';

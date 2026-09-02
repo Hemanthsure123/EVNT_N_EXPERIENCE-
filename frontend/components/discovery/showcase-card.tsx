@@ -42,9 +42,19 @@ import { AvailabilityBadge } from './availability-badge';
  */
 export function ShowcaseCard({
   event,
+  allEvents,
+  index = 0,
   priority = false,
 }: {
   event: EventCardData;
+  /**
+   * The list this card belongs to, so the widget opens as a deck you can swipe
+   * rather than a single dead-end card — and so "More from {organiser}" has
+   * something to work from. Absent falls back to `[event]`, which is correct
+   * for a card that genuinely has no siblings.
+   */
+  allEvents?: EventCardData[];
+  index?: number;
   /** Only the first few. These are the LCP candidates on the front page. */
   priority?: boolean;
 }) {
@@ -59,7 +69,7 @@ export function ShowcaseCard({
           the anchor below is the real canonical link. */}
       <button
         type="button"
-        onClick={() => openDeck([event], 0)}
+        onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
         aria-label={event.title}
         className="relative flex aspect-[3/4] w-[15rem] shrink-0 overflow-hidden rounded-2xl border border-border bg-sunken shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
       >

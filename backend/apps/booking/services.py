@@ -54,6 +54,7 @@ from .exceptions import (
     BookingNotAssignableError,
     BookingNotCancellableError,
     BookingNotFoundError,
+    BookingNotModifiableError,
     EventNotBookableError,
     InvalidAttendeeAssignmentsError,
     InvalidBookingItemsError,
@@ -566,7 +567,7 @@ class BookingService:
             if str(booking.user_id) != str(actor_id):
                 raise NotBookingOwnerError()
             if booking.status != BookingStatus.RESERVED:
-                raise BookingNotCancellableError(booking.status)
+                raise BookingNotModifiableError(booking.status)
             if booking.donation_amount_minor == donation_minor:
                 return booking  # nothing to do, and no order to churn
 

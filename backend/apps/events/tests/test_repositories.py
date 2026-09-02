@@ -101,6 +101,27 @@ def test_list_published_filters_by_city(repo, make_event):
 
 
 @pytest.mark.django_db
+def test_list_published_filters_by_organisation(
+    repo, make_event, organization, unverified_organization
+):
+    """ "More from {organiser}" on the public event widget.
+
+    Without this filter that section had to be derived from whatever events the
+    caller already held, so a widget opened on a single event — a shared link,
+    a tap from the account area — showed nothing, and there was no way to tell
+    an organiser with one event from a question the API could not answer.
+    """
+    make_event(title="Theirs", org=unverified_organization)
+    make_event(title="Ours One")
+    make_event(title="Ours Two", starts_at=timezone.now() + timedelta(days=20))
+
+    titles = [e.title for e in repo.list_published(organization_id=organization.id)]
+
+    # Soonest first, and somebody else's event is not attributed to them.
+    assert titles == ["Ours One", "Ours Two"]
+
+
+@pytest.mark.django_db
 def test_update_if_version_matches_applies_and_bumps_version(repo, make_event):
     event = make_event(title="Old Title", status=EventStatus.DRAFT)
 

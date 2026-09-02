@@ -59,10 +59,20 @@ export const ROW_SIZES = '(min-width: 1024px) 224px, (min-width: 640px) 200px, 9
 
 export function EventRow({
   event,
+  allEvents,
+  index = 0,
   priority = false,
   className,
 }: {
   event: EventCardData;
+  /**
+   * The list this card belongs to, so the widget opens as a deck you can swipe
+   * rather than a single dead-end card — and so "More from {organiser}" has
+   * something to work from. Absent falls back to `[event]`, which is correct
+   * for a card that genuinely has no siblings.
+   */
+  allEvents?: EventCardData[];
+  index?: number;
   priority?: boolean;
   className?: string;
 }) {
@@ -146,7 +156,7 @@ export function EventRow({
               </Link>
               <button
                 type="button"
-                onClick={() => openDeck([event], 0)}
+                onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
                 className="text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none sm:hidden"
               >
                 {event.title}

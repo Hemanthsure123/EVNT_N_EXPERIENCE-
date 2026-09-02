@@ -80,3 +80,27 @@ class InvalidAttendeeAssignmentsError(DomainError):
 
     def __init__(self, message: str = "Invalid attendee assignments.") -> None:
         super().__init__(message)
+
+
+class BookingNotModifiableError(DomainError):
+    """The donation can only move while the hold is live.
+
+    Its own error rather than reusing `BookingNotCancellableError`, which is
+    what `set_donation` raised first. That produced, on a checkout screen where
+    somebody had just pressed a ₹15 chip, the sentence "A booking in 'expired'
+    state can't be cancelled." — a message about an operation they had not
+    attempted, for a reason they could not connect to what they did. An error
+    that describes the wrong action is worse than a generic one: it sends the
+    reader looking for a cancel button they never pressed.
+    """
+
+    code = "booking_not_modifiable"
+
+    def __init__(self, status: str) -> None:
+        if status == "paid":
+            super().__init__("This booking is already paid, so its total can no longer change.")
+        else:
+            super().__init__(
+                "Your hold has expired and these tickets were released, "
+                "so nothing can be added to this booking."
+            )

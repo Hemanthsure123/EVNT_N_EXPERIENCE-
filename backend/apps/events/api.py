@@ -122,6 +122,12 @@ class EventListCreateView(APIView):
             "search": validated.get("q") or None,
             "city": validated.get("city") or None,
             "category": validated.get("category") or None,
+            # `str()` so the cache key hashes to the same value a query string
+            # would produce — a UUID object and its text form are different
+            # dict values and would split the cache in two.
+            "organization_id": (
+                str(validated["organization_id"]) if validated.get("organization_id") else None
+            ),
             "starts_after": validated.get("starts_after"),
             "starts_before": validated.get("starts_before"),
         }

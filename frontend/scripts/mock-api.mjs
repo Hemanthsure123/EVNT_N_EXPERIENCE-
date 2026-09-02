@@ -724,8 +724,19 @@ const PLATFORM_FEE_BPS = 100;
 const platformFeeFor = (subtotal) => Math.floor((subtotal * PLATFORM_FEE_BPS + 5_000) / 10_000);
 /** Matches backend DONATION_MAX_MINOR. */
 const DONATION_MAX_MINOR = 100_000;
-/** Matches backend BOOKING_HOLD_MINUTES. */
+/**
+ * Matches backend BOOKING_HOLD_MINUTES.
+ *
+ * Overridable so the EXPIRY path can actually be exercised. Ten minutes of
+ * real waiting per attempt is why that branch had never been run: it was
+ * asserted in code and never once observed, and it turned out to leave a live
+ * Pay button beside a band saying the tickets were released.
+ * `MOCK_HOLD_SECONDS=20` makes it a twenty-second wait instead.
+ */
 const HOLD_MINUTES = 10;
+const HOLD_MS = process.env.MOCK_HOLD_SECONDS
+  ? Number(process.env.MOCK_HOLD_SECONDS) * 1_000
+  : HOLD_MINUTES * 60_000;
 
 function issueTokens(email) {
   const access = `fixture.${Buffer.from(email).toString('base64url')}.${Math.random()
@@ -1412,7 +1423,7 @@ const server = createServer((req, res) => {
         total_amount: grandTotal,
         platform_fee: platformFee,
         donation,
-        hold_expires_at: new Date(Date.now() + HOLD_MINUTES * 60_000).toISOString(),
+        hold_expires_at: new Date(Date.now() + HOLD_MS).toISOString(),
         payment_order_id: `order_fixture_${bookings.size + 1}`,
         items,
         created_at: new Date().toISOString(),
@@ -1447,12 +1458,18 @@ const server = createServer((req, res) => {
     }
     void readBody(req).then((body) => {
       if (booking.status !== 'reserved') {
+        // Mirrors `BookingNotModifiableError`. It used to reuse the CANCEL
+        // error, which put "A booking in 'expired' state can't be cancelled."
+        // on a checkout screen where somebody had just pressed a donate chip —
+        // a message about an operation they never attempted.
         return authError(
           res,
           req,
           409,
-          'booking_not_cancellable',
-          'This booking can no longer be changed.',
+          'booking_not_modifiable',
+          booking.status === 'paid'
+            ? 'This booking is already paid, so its total can no longer change.'
+            : 'Your hold has expired and these tickets were released, so nothing can be added to this booking.',
         );
       }
       const next = Number(body.donation_minor ?? 0);

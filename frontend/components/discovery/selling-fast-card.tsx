@@ -31,7 +31,21 @@ import { useEventDeck } from '@/lib/discovery/event-deck-context';
 
 const CARD_SIZES = '(min-width: 768px) 320px, 70vw';
 
-export function SellingFastCard({ event }: { event: EventCardData }) {
+export function SellingFastCard({
+  event,
+  allEvents,
+  index = 0,
+}: {
+  event: EventCardData;
+  /**
+   * The list this card belongs to, so the widget opens as a deck you can swipe
+   * rather than a single dead-end card — and so "More from {organiser}" has
+   * something to work from. Absent falls back to `[event]`, which is correct
+   * for a card that genuinely has no siblings.
+   */
+  allEvents?: EventCardData[];
+  index?: number;
+}) {
   const { openDeck } = useEventDeck();
   const signal = demandSignal(event);
   if (!signal) return null;
@@ -103,7 +117,7 @@ export function SellingFastCard({ event }: { event: EventCardData }) {
           </Link>
           <button
             type="button"
-            onClick={() => openDeck([event], 0)}
+            onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
             className="text-left after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none sm:hidden"
           >
             {event.title}

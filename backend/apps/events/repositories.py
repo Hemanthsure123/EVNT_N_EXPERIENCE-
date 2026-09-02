@@ -207,14 +207,16 @@ class EventRepository(BaseRepository[Event]):
         search: str | None = None,
         city: str | None = None,
         category: str | None = None,
+        organization_id: str | None = None,
         starts_after=None,
         starts_before=None,
     ) -> QuerySet[Event]:
         """Upcoming, published events (soonest first) for the public browse /
         search surface. All filters are index-backed:
         - status + starts_at range -> event_status_starts_idx (or the
-          city-pinned event_status_city_starts_idx when `city` is given, or
-          event_status_category_idx when `category` is);
+          city-pinned event_status_city_starts_idx when `city` is given,
+          event_status_category_idx when `category` is, or
+          event_status_org_starts_idx when `organization_id` is);
         - `search` -> the GIN index on search_vector via `@@`.
         Ordered by starts_at so results stay index-ordered and cursor-paginate
         cleanly (relevance ranking would defeat both — a deliberate tradeoff).
@@ -235,6 +237,20 @@ class EventRepository(BaseRepository[Event]):
             # free to mean what the user typed, instead of the two competing
             # for the same tsquery.
             qs = qs.filter(category=category)
+        if organization_id:
+            # ── "MORE FROM THIS ORGANISER" ─────────────────────────────────
+            #
+            # The event widget's organiser sheet used to derive this list from
+            # whatever events the DECK happened to be holding, because there was
+            # no way to ask for it. So a deck opened on a single event — from a
+            # shared link, from the account area, from any grid that did not
+            # pass its whole list — showed no "More from" section at all, and
+            # the reader had no way to tell an organiser with one event from a
+            # question the API could not answer.
+            #
+            # Index-backed by `event_status_org_starts_idx`; the query is the
+            # same shape as the city-pinned one above.
+            qs = qs.filter(organization_id=organization_id)
         if starts_before:
             qs = qs.filter(starts_at__lte=starts_before)
         if search:

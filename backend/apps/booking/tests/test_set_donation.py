@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from apps.booking.exceptions import (
-    BookingNotCancellableError,
+    BookingNotModifiableError,
     InvalidBookingItemsError,
     NotBookingOwnerError,
 )
@@ -137,7 +137,7 @@ def test_a_paid_booking_refuses(booking_service, buyer, held):
     booking, _ = held
     booking_service.confirm_booking(booking_id=booking.id, payment_ref="pay_test")
 
-    with pytest.raises(BookingNotCancellableError):
+    with pytest.raises(BookingNotModifiableError):
         booking_service.set_donation(booking_id=booking.id, actor_id=buyer.id, donation_minor=500)
 
 
@@ -148,5 +148,5 @@ def test_a_cancelled_booking_refuses(booking_service, buyer, held):
     booking.refresh_from_db()
     assert booking.status == BookingStatus.CANCELLED
 
-    with pytest.raises(BookingNotCancellableError):
+    with pytest.raises(BookingNotModifiableError):
         booking_service.set_donation(booking_id=booking.id, actor_id=buyer.id, donation_minor=500)

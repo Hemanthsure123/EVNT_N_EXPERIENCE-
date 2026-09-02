@@ -283,6 +283,22 @@ class Event(models.Model):
                 name="event_status_category_idx",
                 condition=models.Q(deleted_at__isnull=True),
             ),
+            # Public browse filtered by ORGANISER — "More from {organiser}" in
+            # the event widget. Same shape as the city and category indexes,
+            # with the organization pinned between the status and the date
+            # range. Shipped in the same migration as the filter, per the
+            # performance checklist: the index the query needs is not a
+            # follow-up.
+            #
+            # Distinct from `event_org_created_idx` below, which is the
+            # ORGANIZER's own dashboard: that one sorts by `created_at` over
+            # every status, this one is public, upcoming-only and sorts by
+            # `starts_at`. Neither serves the other's query.
+            models.Index(
+                fields=["status", "organization", "starts_at"],
+                name="event_status_org_starts_idx",
+                condition=models.Q(deleted_at__isnull=True),
+            ),
             # Organizer dashboard + the FK join from an owner's organizations
             # to their events, newest first.
             models.Index(

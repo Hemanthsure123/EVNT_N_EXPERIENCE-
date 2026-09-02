@@ -83,7 +83,7 @@ export async function SellingFastSection() {
           {scarce.map((event, index) => (
             <li key={event.id} className="h-full w-4/5 shrink-0 snap-start sm:w-auto sm:shrink">
               <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
-                <SellingFastCard event={event} />
+                <SellingFastCard event={event} allEvents={scarce} index={index} />
               </Reveal>
             </li>
           ))}

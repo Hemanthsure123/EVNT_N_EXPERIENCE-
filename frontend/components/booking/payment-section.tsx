@@ -87,7 +87,30 @@ export function PaymentSection({
   const total = active.total_amount;
   const isDemo = provider === 'fake';
 
+  /**
+   * ── THE HOLD MUST STILL BE ALIVE ────────────────────────────────────────
+   *
+   * Defence in depth, and the reason it is here rather than only in the screen
+   * above: a pay path guarded solely by what happens to be RENDERED is guarded
+   * by nothing. A stale tab, a clock that jumped, a render that lost a race —
+   * any of them can leave this button on screen past the deadline, and pressing
+   * it opens a real Razorpay checkout against inventory that has been released.
+   * The money is then taken, the webhook finds `hold_expired`, and it is
+   * refunded days later with no ticket ever issued.
+   *
+   * Checked at PRESS time against the row's own timestamp, not against a
+   * boolean computed when the component mounted.
+   */
+  const holdLapsed = () =>
+    Boolean(active.hold_expires_at) &&
+    active.status !== 'paid' &&
+    Date.parse(active.hold_expires_at as string) <= Date.now();
+
   const pay = async () => {
+    if (holdLapsed()) {
+      setError('Your hold has expired and these tickets were released. Nothing has been charged.');
+      return;
+    }
     if (!active.payment_order_id) {
       setError('This order has no payment reference. Please start the booking again.');
       return;
@@ -134,6 +157,10 @@ export function PaymentSection({
   };
 
   const simulate = async () => {
+    if (holdLapsed()) {
+      setError('Your hold has expired and these tickets were released.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {

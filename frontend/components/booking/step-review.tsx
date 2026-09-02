@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Loader2, Ticket } from 'lucide-react';
+import { AlertTriangle, Loader2, Ticket, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { createBooking, setBookingDonation } from '@/lib/api/bookings';
 import { ApiError } from '@/lib/api/errors';
@@ -180,6 +180,26 @@ export function ReviewStep() {
    * says so, because an amount on this screen that disagrees with what will be
    * charged is the one thing that must never happen quietly.
    */
+  /**
+   * ── THE HOLD LAPSED WHILE THIS SCREEN WAS OPEN ──────────────────────────
+   *
+   * Set by `HoldTimer`'s `onExpire`. Until it existed, the countdown reaching
+   * zero changed a colour and nothing else: the band read "these tickets have
+   * been released" while the bar underneath still said `₹998 | Pay`, live.
+   *
+   * The screen SWAPS rather than opening a dialog. A modal can be dismissed —
+   * Escape, a backdrop tap — and dismissing it would leave the payable screen
+   * sitting underneath, which is the one state that must not be reachable. A
+   * state swap has no such hole, and it reuses the shape this screen already
+   * has for a failed reserve, so there is one language for "those tickets are
+   * gone" rather than two.
+   *
+   * It does NOT navigate on a timer. Somebody may be mid-edit — a custom
+   * donation, the details sheet — and a checkout that moves on its own is
+   * indistinguishable from a crash. Ticketmaster, BookMyShow and Eventbrite
+   * all land the same way: change the screen, wait for a press.
+   */
+  const [holdExpired, setHoldExpired] = React.useState(false);
   const [donationPending, setDonationPending] = React.useState(false);
   const [donationError, setDonationError] = React.useState<string | null>(null);
   const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
@@ -255,6 +275,32 @@ export function ReviewStep() {
     );
   }
 
+  if (holdExpired) {
+    return (
+      <FunnelScreen title="Review your booking">
+        <StepTransition stepKey="review-expired" className="flex flex-col gap-4">
+          <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-destructive-subtle bg-destructive-subtle p-card-lg">
+            <TimerOff className="size-6 text-destructive-subtle-foreground" aria-hidden />
+            <div className="flex flex-col gap-1">
+              <h2 className="text-h3 text-destructive-subtle-foreground">Your hold has expired</h2>
+              <p className="text-body-sm text-destructive-subtle-foreground">
+                These tickets went back on sale so somebody else could buy them.{' '}
+                <strong className="font-semibold">Nothing has been charged.</strong> They may still
+                be available — choosing again takes a moment.
+              </p>
+            </div>
+            <Button asChild size="lg" className={CTA_PILL_LG}>
+              {/* Carries the selection, so the picker reopens on the same
+                  tiers rather than making somebody start from an empty list
+                  after already losing their hold. */}
+              <Link href={pickerHref}>Choose tickets again</Link>
+            </Button>
+          </div>
+        </StepTransition>
+      </FunnelScreen>
+    );
+  }
+
   if (reserving || !booking) {
     return (
       <FunnelScreen title="Review your booking">
@@ -299,7 +345,11 @@ export function ReviewStep() {
         // released would be the most alarming sentence on the least
         // appropriate screen.
         booking.hold_expires_at && booking.status !== 'paid' ? (
-          <HoldTimer expiresAt={booking.hold_expires_at} variant="bar" />
+          <HoldTimer
+            expiresAt={booking.hold_expires_at}
+            variant="bar"
+            onExpire={() => setHoldExpired(true)}
+          />
         ) : undefined
       }
     >

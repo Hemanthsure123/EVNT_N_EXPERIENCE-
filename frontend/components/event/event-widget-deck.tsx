@@ -605,7 +605,7 @@ export function EventWidgetDeck() {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={dismiss}
-        className="absolute inset-0 bg-black/70 backdrop-blur-md"
+        className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
         aria-hidden
       />
 
@@ -640,7 +640,9 @@ export function EventWidgetDeck() {
             >
               {/* Tall enough that the sheet can be dragged well down without
                   running off the bottom of the artwork. */}
-              <div className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden bg-muted">
+              {/* Rounded to match the card in front of it, so the artwork
+                  does not show square shoulders past a rounded sheet. */}
+              <div className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden rounded-3xl bg-muted">
                 <Poster event={event} priority={index === currentIndex} />
                 {/* A scrim under the floating controls, so a white poster
                     cannot swallow them. */}
@@ -730,11 +732,22 @@ export function EventWidgetDeck() {
               >
                 <div
                   className={cn(
-                    'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl transition-[border-radius] duration-200',
-                    isFull ? 'rounded-none' : 'rounded-t-3xl border-t border-border',
-                    // The neighbours are context, not content: dimmed so the
-                    // centre reads as the one in focus.
-                    active ? 'opacity-100' : 'opacity-60',
+                    'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl',
+                    // Radius AND opacity on the same spring, so expanding to
+                    // full screen squares the corners as it arrives rather
+                    // than snapping them a beat later.
+                    'transition-[border-radius,opacity] duration-300 ease-spring motion-reduce:transition-none',
+                    // ── ALL FOUR CORNERS ─────────────────────────────────
+                    // It was `rounded-t-3xl` only, so the card met the bottom
+                    // of the screen with two hard corners and the neighbours
+                    // either side read as square slabs rather than as cards.
+                    // The bottom rounding is invisible on the ACTIVE card
+                    // (its CTA bar sits on the screen edge) and is exactly
+                    // what makes the peeking ones look like objects.
+                    isFull ? 'rounded-none' : 'rounded-3xl border border-border',
+                    // The neighbours are context, not content: dimmed and set
+                    // back a little so the centre reads as the one in focus.
+                    active ? 'opacity-100' : 'scale-[0.97] opacity-70',
                   )}
                 >
                   {active ? (
@@ -825,7 +838,7 @@ function Poster({ event, priority }: { event: EventCardData; priority?: boolean 
  */
 function NeighbourCard({ event }: { event: EventCardData }) {
   return (
-    <div className="relative flex h-full w-full items-start overflow-hidden px-3 pt-11">
+    <div className="relative flex h-full w-full items-start overflow-hidden bg-gradient-to-b from-surface to-background px-3 pt-11">
       <p className="line-clamp-3 text-body-sm font-bold text-foreground">{event.title}</p>
     </div>
   );

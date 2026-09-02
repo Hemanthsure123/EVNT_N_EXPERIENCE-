@@ -264,6 +264,13 @@ class EventSearchQuerySerializer(serializers.Serializer):
     #: 400s because a stale link carries a retired slug is worse than one
     #: showing more results than asked for. Same reasoning as the date filters.
     category = serializers.CharField(required=False, allow_blank=True)
+    #: Every publicly-visible event by one organiser — what the event widget's
+    #: "More from {organiser}" section asks for. A UUIDField rather than a
+    #: CharField because, unlike `category`, a malformed value here is not a
+    #: stale slug somebody shared: it is a caller sending the wrong thing, and
+    #: silently widening the list to EVERY event under a heading naming one
+    #: organiser would attribute other people's events to them.
+    organization_id = serializers.UUIDField(required=False)
     starts_after = serializers.DateTimeField(required=False)
     starts_before = serializers.DateTimeField(required=False)
 

@@ -63,9 +63,27 @@ const HOLD_SECONDS = 600;
 export function HoldTimer({
   expiresAt,
   variant = 'card',
+  onExpire,
   className,
 }: {
   expiresAt: string;
+  /**
+   * Fired ONCE, on the tick that crosses zero.
+   *
+   * Without it this component knew the hold had lapsed and nobody else did:
+   * the review screen kept a live Pay button beside a band reading "these
+   * tickets have been released". Pressing it would have created a payment
+   * order against inventory that no longer existed — the webhook finds
+   * `hold_expired`, refuses to issue, and auto-refunds, so money leaves an
+   * account and comes back days later with no ticket. That is the exact
+   * outcome the payments module exists to prevent, reached through the front
+   * door of the UI.
+   *
+   * Guarded by a ref rather than fired from render, because the interval keeps
+   * ticking for one more beat and a parent that navigates on this must not be
+   * told twice.
+   */
+  onExpire?: () => void;
   /**
    * `card` — a bordered pill inside a column of content.
    * `bar`  — full width, pinned under the checkout header.
@@ -81,15 +99,37 @@ export function HoldTimer({
   const target = React.useMemo(() => Date.parse(expiresAt), [expiresAt]);
   const [left, setLeft] = React.useState<number | null>(null);
 
+  // `onExpire` in a ref so a caller that re-creates the callback each render
+  // does not restart the interval — which would reset the countdown to a full
+  // minute on every keystroke elsewhere on the screen.
+  const onExpireRef = React.useRef(onExpire);
+  onExpireRef.current = onExpire;
+  const firedRef = React.useRef(false);
+
   React.useEffect(() => {
+    firedRef.current = false;
+    const announce = () => {
+      if (firedRef.current) return;
+      firedRef.current = true;
+      onExpireRef.current?.();
+    };
     const tick = () => {
       const seconds = Math.max(0, Math.round((target - Date.now()) / 1000));
       setLeft(seconds);
       return seconds;
     };
-    if (tick() <= 0) return;
+    // An ALREADY-lapsed hold still has to announce itself. This is the case a
+    // reload lands in — the row says expired the moment the page opens, and
+    // returning early here left that screen payable.
+    if (tick() <= 0) {
+      announce();
+      return;
+    }
     const timer = window.setInterval(() => {
-      if (tick() <= 0) window.clearInterval(timer);
+      if (tick() <= 0) {
+        window.clearInterval(timer);
+        announce();
+      }
     }, 1000);
     return () => window.clearInterval(timer);
   }, [target]);
