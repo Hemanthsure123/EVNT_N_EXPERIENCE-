@@ -2,7 +2,6 @@ import * as React from 'react';
 import Link from 'next/link';
 import { Facebook, Instagram, Linkedin, Youtube } from 'lucide-react';
 import { Aurora } from '@/components/discovery/aurora';
-import { Button } from '@/components/ui/button';
 import { LEGAL_NAME, SOCIAL_HANDLES } from '@/lib/brand';
 import { cn } from '@/lib/utils/cn';
 import { BrandLockup } from './brand-mark';
@@ -70,46 +69,19 @@ type FooterColumn = { heading: string; links: FooterLink[] };
 
 const COLUMNS: FooterColumn[] = [
   {
-    heading: 'Discover',
+    heading: 'Help',
+    links: [
+      { label: 'Contact us', href: '/contact' },
+      { label: 'Support', href: '/support' },
+      { label: 'Refund policy', href: '/refunds' },
+    ],
+  },
+  {
+    heading: 'Quick links',
     links: [
       { label: 'Browse events', href: '/events' },
       { label: 'This weekend', href: '/events?when=weekend' },
-      // Was a second, identical `Browse events` — the row that replaced the
-      // deleted `/cities` link duplicated the first instead of replacing it,
-      // so the column listed one destination twice.
       { label: 'Hire a band', href: '/hire' },
-    ],
-  },
-  {
-    heading: 'Organizers',
-    links: [
-      { label: 'List your event', href: '/organizer' },
-      // Was a SECOND link to `/organizer`, labelled "Organizer login" — two
-      // rows, one destination, and neither of them a login.
-      { label: 'Organizer dashboard', href: '/dashboard' },
-      { label: 'Pricing', href: '/pricing' },
-    ],
-  },
-  {
-    heading: 'Support',
-    links: [
-      { label: 'Help centre', href: '/help' },
-      // The support desk is now a real queue rather than an email address, so
-      // it earns a place beside the FAQ it cannot answer.
-      { label: 'Support', href: '/support' },
-      { label: 'Refund policy', href: '/refunds' },
-      { label: 'Contact us', href: '/contact' },
-    ],
-  },
-  {
-    heading: 'Company',
-    links: [
-      { label: 'About', href: '/about' },
-      { label: 'Careers', href: '/careers' },
-      // No third row. There WAS one — "Contact", pointing at `/contact`, which
-      // Support already links as "Contact us": two labels, one destination, in
-      // one footer. Exactly the duplication the Organizers group was fixed for
-      // above. A two-item column is better than a padded three-item one.
     ],
   },
 ];
@@ -212,69 +184,82 @@ export function SiteFooter({ className }: { className?: string }) {
           already visually separated by the tint and the hairline, so 32px does
           the job 40px was doing and the saving is free. */}
       <Container className="flex flex-col gap-block py-block-lg sm:py-section lg:gap-block-lg lg:py-section-lg">
-        {/* ── THE ONE THING TO DO NEXT ─────────────────────────────────────
-            A footer that is only links is a dead end: somebody who scrolled
-            this far did not find what they came for, and the most useful
-            thing to offer them is the two doors this product actually has.
-            Both go somewhere real — no mailing list, no app badge, no "get
-            10% off" that nothing would honour. */}
-        <div className="flex flex-col items-start gap-stack rounded-2xl border border-border bg-surface p-card sm:flex-row sm:items-center sm:justify-between sm:gap-block">
-          <div className="min-w-0">
-            <p className="text-h3">Find something on this week</p>
-            <p className="text-body-sm text-muted-foreground">
-              Concerts, comedy, workshops and more, across India.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild>
-              <Link href="/events">Browse events</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/organizer">List your event</Link>
-            </Button>
-          </div>
-        </div>
+        {/* ── CENTRED BRAND, THEN SOCIAL, THEN THE LINK COLUMNS ────────────
+            The reference stacks these down the middle of a phone: the mark,
+            a row of social glyphs, then the columns. The previous layout put
+            the brand on the left with the columns beside it and a marketing
+            panel above the lot.
 
-        <div className="flex flex-col gap-block lg:flex-row lg:items-start lg:justify-between lg:gap-block-lg">
-          {/* Brand + one line. `max-w-xs` only from `lg`, where it sits beside
-              the columns; narrower than that it has the row to itself. */}
-          <div className="flex flex-col gap-2 lg:max-w-xs">
-            <Link
-              href="/"
-              className="inline-flex w-fit items-center rounded-full text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sunken"
-            >
-              <BrandLockup />
-            </Link>
-          </div>
-
-          {/* ONE nav landmark, not one per group. Four `<nav aria-label>`s in a
-              footer is four entries in a screen reader's landmark list for what
-              is one navigation; the groups are headings inside it instead, which
-              is what the heading list is for. */}
-          <nav
-            aria-label="Footer"
-            className="grid grid-cols-2 gap-x-4 gap-y-block sm:grid-cols-4 sm:gap-x-6 lg:gap-x-block-lg"
+            THAT PANEL IS GONE. "Find something on this week" with two buttons
+            was a call to action at the bottom of every page, including the
+            checkout screens that later moved out of this layout precisely to
+            escape it. A footer's job here is to answer "where do I get help"
+            and "what else is there", and it does that with links. */}
+        <div className="flex flex-col items-center gap-stack-lg">
+          <Link
+            href="/"
+            className="inline-flex w-fit items-center rounded-full text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sunken"
           >
-            {COLUMNS.map((col) => (
-              <div key={col.heading}>
-                <h2 className="text-label uppercase tracking-wide text-foreground-subtle">
-                  {col.heading}
-                </h2>
-                {/* No row gap below `sm` — the rows are already 44px tall, and
-                    a gap on top of that is pitch nobody asked for. */}
-                <ul className="mt-1 flex flex-col sm:mt-stack sm:gap-2">
-                  {col.links.map((link) => (
-                    <li key={`${col.heading}-${link.label}`}>
-                      <Link href={link.href} className={linkClass}>
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </nav>
+            <BrandLockup />
+          </Link>
+
+          {/* Absent entirely when no handle is configured — see the note on
+              SOCIAL. An icon linking to a platform's login wall is the one
+              thing in this footer a visitor could catch us at. */}
+          {SOCIAL.length > 0 && (
+            <ul className="flex items-center gap-1" aria-label="Social media">
+              {SOCIAL.map((social) => (
+                <li key={social.label}>
+                  {/* `target`/`rel` because these are the only OFF-SITE links
+                      in the shell: without `noopener` the opened tab keeps a
+                      handle on this one via `window.opener`. */}
+                  <Link
+                    href={social.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`${social.label} (opens in a new tab)`}
+                    className="inline-flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-fast ease-out hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <social.icon className="size-5" aria-hidden />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
+
+        {/* ONE nav landmark, not one per group. Two `<nav aria-label>`s in a
+            footer is two entries in a screen reader's landmark list for what is
+            one navigation; the groups are headings inside it instead, which is
+            what the heading list is for.
+
+            Two columns at every width. There is no `sm:grid-cols-4` any more
+            because there are no longer four groups — "Useful links" and the
+            app-store badges are gone (there is no app), and Organizers and
+            Company folded away with them. */}
+        <nav
+          aria-label="Footer"
+          className="mx-auto grid w-full max-w-md grid-cols-2 gap-x-6 gap-y-block"
+        >
+          {COLUMNS.map((col) => (
+            <div key={col.heading}>
+              <h2 className="text-label uppercase tracking-wide text-foreground-subtle">
+                {col.heading}
+              </h2>
+              {/* No row gap below `sm` — the rows are already 44px tall, and a
+                  gap on top of that is pitch nobody asked for. */}
+              <ul className="mt-1 flex flex-col sm:mt-stack sm:gap-2">
+                {col.links.map((link) => (
+                  <li key={`${col.heading}-${link.label}`}>
+                    <Link href={link.href} className={linkClass}>
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
 
         {/* ── The closing band: social, payments, copyright, legal ────────── */}
         <div className="flex flex-col gap-stack border-t border-border pt-block">
@@ -282,54 +267,27 @@ export function SiteFooter({ className }: { className?: string }) {
               `sm` they take opposite ends of the same line. `flex-wrap` +
               `justify-between` degrades correctly — a wrapped line holding one
               item falls back to flex-start rather than centring it. */}
-          {/* On a phone these two are centred and stacked rather than pushed
-              to opposite ends of a wrapped line — `justify-between` with one
-              item per line falls back to flex-start, which left the icons
-              hard against the rim and the pills adrift under them. That was
-              the clumsiness. From `sm` they take the ends of one line. */}
-          <div className="flex flex-col items-center gap-stack sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-block">
-            {/* `-ml-3` pulls the first 44px hit area back so the GLYPH, not the
-                target's edge, lines up with the text above it. Absent entirely
-                when no handle is configured — see the note on SOCIAL. */}
-            {SOCIAL.length > 0 && (
-              <ul className="flex items-center gap-1 sm:-ml-3" aria-label="Social media">
-                {SOCIAL.map((social) => (
-                  <li key={social.label}>
-                    {/* `target`/`rel` because these are the only OFF-SITE links in
-                      the shell: without `noopener` the opened tab keeps a handle
-                      on this one via `window.opener`. */}
-                    <Link
-                      href={social.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-label={`${social.label} (opens in a new tab)`}
-                      className="inline-flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-fast ease-out hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <social.icon className="size-5" aria-hidden />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <ul
-              className="flex flex-wrap items-center justify-center gap-2"
-              aria-label="Accepted payment methods"
-            >
-              {PAYMENT_METHODS.map((method) => (
-                <li
-                  key={method}
-                  className="rounded-full border border-border bg-surface px-3 py-1 text-caption text-muted-foreground"
-                >
-                  {method}
-                </li>
-              ))}
-            </ul>
-          </div>
+          {/* Payment methods, centred like everything else in this band. The
+              social row moved UP beside the brand — the reference groups the
+              mark and the glyphs together at the top, and having them here as
+              well would be the same four icons twice. */}
+          <ul
+            className="flex flex-wrap items-center justify-center gap-2"
+            aria-label="Accepted payment methods"
+          >
+            {PAYMENT_METHODS.map((method) => (
+              <li
+                key={method}
+                className="rounded-full border border-border bg-surface px-3 py-1 text-caption text-muted-foreground"
+              >
+                {method}
+              </li>
+            ))}
+          </ul>
 
           {/* Copyright first in the DOM so a phone reads it before the legal
               links; from `sm` the two share one line, copyright left. */}
-          <div className="flex flex-col items-center gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-x-block">
+          <div className="flex flex-col items-center gap-1">
             <p className="text-caption text-muted-foreground">
               © {new Date().getFullYear()} {LEGAL_NAME}
             </p>
@@ -337,7 +295,7 @@ export function SiteFooter({ className }: { className?: string }) {
                 links keeps the 44px targets from reading as indented. */}
             <ul
               aria-label="Legal"
-              className="flex flex-wrap items-center justify-center gap-x-3 sm:-ml-1"
+              className="flex flex-wrap items-center justify-center gap-x-3"
             >
               {LEGAL_LINKS.map((link) => (
                 <li key={link.href}>
@@ -353,7 +311,7 @@ export function SiteFooter({ className }: { className?: string }) {
               It names only pages that EXIST — terms, cookies and privacy are
               all real routes — rather than the reference's fuller list, which
               includes a content-guidelines page this product does not have. */}
-          <p className="text-center text-caption text-muted-foreground sm:text-left">
+          <p className="mx-auto max-w-sm text-center text-caption text-muted-foreground">
             By using {LEGAL_NAME} you agree to our{' '}
             <Link href="/terms" className={inlineLinkClass}>
               Terms

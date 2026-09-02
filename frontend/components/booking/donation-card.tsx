@@ -44,6 +44,7 @@ export function DonationCard({
   onChange,
   disabled,
   maxMinor,
+  error,
   className,
 }: {
   /** Currently chosen amount in minor units; 0 means none. */
@@ -52,6 +53,12 @@ export function DonationCard({
   disabled?: boolean;
   /** Mirrors the backend's `DONATION_MAX_MINOR`. */
   maxMinor: number;
+  /**
+   * Set when the last write was refused. Shown HERE rather than as a toast:
+   * a failure that only appeared somewhere else would leave a chip looking
+   * chosen beside a total that never moved.
+   */
+  error?: string | null;
   className?: string;
 }) {
   const [customOpen, setCustomOpen] = React.useState(false);
@@ -167,6 +174,15 @@ export function DonationCard({
                 Add
               </button>
             </div>
+          ) : null}
+
+          {error ? (
+            <p
+              role="status"
+              className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-3 py-2 text-caption text-destructive-subtle-foreground"
+            >
+              {error}
+            </p>
           ) : null}
 
           {/* Said before the press, not after. */}

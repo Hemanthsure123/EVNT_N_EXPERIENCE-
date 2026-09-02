@@ -156,18 +156,57 @@ export function ReviewStep() {
   //
   // The write does not touch the reservation (see `set_donation`), so changing
   // one's mind about ₹15 can never cost somebody their seats.
+  /**
+   * ── WHY THIS IS OPTIMISTIC ──────────────────────────────────────────────
+   *
+   * It used to read the amount straight off `booking.donation` and write on
+   * every press. Two things went wrong with that, and together they are why
+   * the total moved sometimes and not others:
+   *
+   * 1. **The toggle read a stale value.** `choose()` decides between "set" and
+   *    "clear" by comparing against the CURRENT value. Between the press and
+   *    the response that value is still the old one, so a second press inside
+   *    the round trip decided from the wrong state — the classic
+   *    read-modify-write the ticket stepper was fixed for on this same funnel.
+   *
+   * 2. **A rejected write left no trace.** If the request failed — an older
+   *    backend with no donation endpoint, a lapsed hold, a flaky connection —
+   *    the catch swallowed it and the chip simply sprang back with nothing
+   *    said. Indistinguishable from a tap that missed.
+   *
+   * So the chosen amount is LOCAL state, applied immediately, and the server
+   * response reconciles it. `pending` still disables the row, so there is only
+   * ever one write in flight; a failure restores the last known-good value AND
+   * says so, because an amount on this screen that disagrees with what will be
+   * charged is the one thing that must never happen quietly.
+   */
   const [donationPending, setDonationPending] = React.useState(false);
-  const donation = booking?.donation ?? 0;
+  const [donationError, setDonationError] = React.useState<string | null>(null);
+  const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
+  const serverDonation = booking?.donation ?? 0;
+  const donation = optimisticDonation ?? serverDonation;
+
   const changeDonation = (minor: number) => {
-    if (!booking || minor === donation) return;
+    if (!booking || minor === donation || donationPending) return;
+    const previous = donation;
+    setOptimisticDonation(minor);
+    setDonationError(null);
     setDonationPending(true);
     void (async () => {
       try {
-        setBooking(await setBookingDonation(booking.id, minor));
-      } catch {
-        // Left exactly as it was. A donation that silently failed and then
-        // appeared on screen anyway is the worst outcome available here: the
-        // amount shown must always be the amount that will be charged.
+        const updated = await setBookingDonation(booking.id, minor);
+        setBooking(updated);
+        // Hand authority back to the server's number. If the two agree this is
+        // invisible; if they do not, the server wins — it is the amount that
+        // will actually be charged.
+        setOptimisticDonation(null);
+      } catch (thrown) {
+        setOptimisticDonation(previous === serverDonation ? null : previous);
+        setDonationError(
+          thrown instanceof ApiError
+            ? thrown.message
+            : 'We could not add that just now. Nothing has changed.',
+        );
       } finally {
         setDonationPending(false);
       }
@@ -241,10 +280,25 @@ export function ReviewStep() {
     <FunnelScreen
       title="Review your booking"
       banner={
-        booking.status === 'reserved' && booking.hold_expires_at ? (
-          // Full-width, directly under the header, because it is the only thing
-          // on this screen with a deadline. It used to sit inside the order
-          // summary card, where it competed with a poster for attention.
+        // ── SHOWN WHENEVER THERE IS A HOLD TO COUNT ────────────────────────
+        //
+        // The condition was `status === 'reserved' && hold_expires_at`. The
+        // status half is the fragile one: it is a string off the wire, and ANY
+        // value the client did not anticipate — a backend that has not shipped
+        // the field, a serializer that renames it, a deployment mid-rollout —
+        // silently removes the countdown with nothing on screen saying why.
+        // That is exactly how a timer gets reported as missing.
+        //
+        // What actually matters is whether there is a deadline to count and
+        // whether it has already been settled. `hold_expires_at` answers the
+        // first; `status !== 'paid'` answers the second, and it fails SAFE:
+        // an unrecognised status shows the countdown rather than hiding it.
+        // The one case that must never show it is a PAID booking, whose
+        // timestamp is a historical fact about a hold that was honoured —
+        // counting down over issued tickets and then announcing they had been
+        // released would be the most alarming sentence on the least
+        // appropriate screen.
+        booking.hold_expires_at && booking.status !== 'paid' ? (
           <HoldTimer expiresAt={booking.hold_expires_at} variant="bar" />
         ) : undefined
       }
@@ -369,6 +423,7 @@ export function ReviewStep() {
             onChange={changeDonation}
             disabled={donationPending}
             maxMinor={DONATION_MAX_MINOR}
+            error={donationError}
           />
         </Rise>
 

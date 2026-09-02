@@ -239,34 +239,43 @@ export function CitySwitcher({ className }: { className?: string }) {
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
         className={cn(
-          'group inline-flex h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-body-sm font-medium text-foreground transition-colors duration-fast ease-out hover:bg-muted',
+          'group inline-flex h-11 min-w-0 shrink items-center gap-2 rounded-full px-2.5 text-left transition-colors duration-fast ease-out hover:bg-muted',
           'active:scale-95 motion-reduce:active:scale-100',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           className,
         )}
       >
         <MapPin className="size-4 shrink-0 text-primary" aria-hidden />
-        {/* Until storage has been read, render the neutral label so the server
-            HTML and the first client render match exactly.
+        {/* ── IT SAYS WHERE YOU ARE, AT EVERY WIDTH ────────────────────────
+            The label used to be `hidden sm:inline`, so on a phone this control
+            was a pin and a chevron and nothing else — two glyphs that said a
+            menu existed but not what it was set to. Somebody browsing events in
+            the wrong city had no way to notice from the header, which is the
+            one place a location control has to answer for itself.
 
-            The label is hidden below sm because the header row is a width
-            budget and this is the cheapest thing in it to cut: at 360px the
-            brand, search, city, theme and account together overrun the
-            container, and the pin still says what the control does. The city
-            itself is stated in full on the surfaces that depend on it — the
-            homepage location card and the browse toolbar's city chip.
+            A two-line stack rather than one long line: the caption carries the
+            meaning ("events in") and the city gets the weight, so the whole
+            thing reads at a glance and still fits beside the brand at 360px —
+            it is TALLER than the old single line, not wider.
 
-            `display:none` also removes a node from the accessibility tree, so
-            hiding the label would take the city away from a screen reader at
-            every width — which is why the spoken name is its own string rather
-            than whatever happens to be painted. */}
-        <span className="hidden max-w-24 truncate sm:inline" aria-hidden>
-          {ready && city ? city.name : 'All cities'}
+            `aria-hidden` on both lines with a single `sr-only` sentence below,
+            because "events in / Hyderabad / chevron" read out as three
+            fragments is worse than one sentence that says what pressing it
+            does. */}
+        <span className="flex min-w-0 flex-col items-start leading-tight" aria-hidden>
+          <span className="text-[0.625rem] font-medium uppercase tracking-wide text-muted-foreground">
+            Events in
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="max-w-28 truncate text-body-sm font-semibold text-foreground">
+              {ready && city ? city.name : 'All cities'}
+            </span>
+            <ChevronDown
+              className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-base ease-spring group-hover:translate-y-px motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+              aria-hidden
+            />
+          </span>
         </span>
-        <ChevronDown
-          className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-base ease-spring group-hover:translate-y-px motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
-          aria-hidden
-        />
         <span className="sr-only">
           Change city, currently {ready && city ? city.name : 'all cities'}
         </span>
