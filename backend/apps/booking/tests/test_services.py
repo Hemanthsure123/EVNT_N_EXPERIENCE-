@@ -246,7 +246,7 @@ def test_the_same_selection_is_bookable_again_after_the_hold_lapses(
     Booking.objects.filter(id=first.id).update(
         hold_expires_at=timezone.now() - timedelta(minutes=1)
     )
-    assert booking_service.release_expired() == 1
+    assert booking_service.release_expired_bookings() == 1
     assert _reserved(tier.id) == 0
 
     second = booking_service.create_booking(
