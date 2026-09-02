@@ -715,9 +715,18 @@ class SavedEventSerializer(serializers.Serializer):
     tickets_available = serializers.IntegerField(source="event.tickets_available", allow_null=True)
     organization_id = serializers.CharField(source="event.organization.id")
     organization_name = serializers.CharField(source="event.organization.name")
-    #: Whether it is still on sale. A saved event that was cancelled or has
-    #: passed still shows — hiding it would look like the save was lost — but
-    #: the card needs to say so rather than offering a dead "Book" button.
+    #: Whether it is still on sale.
+    #:
+    #: A saved event that was CANCELLED or has PASSED still shows — hiding it
+    #: would look like the save was lost, and a called-off show is exactly the
+    #: thing somebody needs to be told about — but the card says so rather than
+    #: offering a dead "Book" button.
+    #:
+    #: An event that is no longer publicly visible at all (soft-deleted,
+    #: unpublished, withdrawn by moderation) never reaches this serializer:
+    #: `SavedEventRepository.list_cards` filters those out, because a card
+    #: linking to a page that 404s is worse than no card. This flag labels
+    #: what is visible-but-unbuyable, not what is gone.
     is_available = serializers.SerializerMethodField()
 
     def get_is_available(self, row) -> bool:

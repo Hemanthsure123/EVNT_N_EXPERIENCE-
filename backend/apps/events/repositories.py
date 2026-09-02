@@ -292,6 +292,19 @@ class EventRepository(BaseRepository[Event]):
         """Rows a signed-out visitor may see: live and not soft-deleted."""
         return self.get_queryset().filter(status=EventStatus.LIVE, deleted_at__isnull=True)
 
+    #: Statuses whose PUBLIC PAGE still resolves for a visitor.
+    #:
+    #: Wider than `_publicly_visible` on purpose, and the two are not
+    #: interchangeable: a browse LISTING shows only what is sellable, while a
+    #: cancelled event keeps its page because hundreds of people hold a link in
+    #: an email and a 404 there reads as "the platform lost my booking" (see
+    #: `selectors.get_event_detail_payload`).
+    #:
+    #: This is the right predicate for anything that LINKS to an event page —
+    #: a saved list, a shared collection — as opposed to anything that offers
+    #: one for sale.
+    PUBLICLY_RESOLVABLE_STATUSES = (EventStatus.LIVE, EventStatus.CANCELLED)
+
     # --- reads: organizer --------------------------------------------------
 
     def list_by_owner(self, owner_id: uuid.UUID | str) -> QuerySet[Event]:
@@ -1149,9 +1162,40 @@ class SavedEventRepository:
 
     def list_cards(self, *, user_id: uuid.UUID | str) -> QuerySet[SavedEvent]:
         """The saved-events page: the same lean card fields the browse grid
-        uses, joined in ONE query so a list of twenty is not twenty-one."""
+        uses, joined in ONE query so a list of twenty is not twenty-one.
+
+        ── AN EVENT NOBODY CAN SEE IS NOT SAVEABLE EITHER ──────────────────
+
+        This had NO visibility filter at all, so it returned every saved row —
+        soft-deleted events, drafts an organizer had unpublished, events pulled
+        by moderation — and `is_available` merely LABELLED them. A card for a
+        page that 404s is worse than no card: the reader taps it, lands on
+        nothing, and the only conclusion available is that the app is broken.
+
+        The rule is now the one the rest of the platform follows: whatever a
+        visitor can reach from All Events is what can appear here, so a saved
+        list can never advertise what the catalogue has withdrawn.
+
+        CANCELLED AND PAST EVENTS ARE DELIBERATELY STILL SHOWN — they are the
+        two cases where hiding would destroy real information. Somebody who
+        saved a show that was later called off needs to see THAT, not an empty
+        list implying they never saved it; and a past event they attended is a
+        record, not clutter. Both keep a page that resolves, and both carry
+        `is_available: false` so the card says so instead of offering a dead
+        Book button, which is exactly what that flag is for.
+
+        THE SAVED ROW ITSELF IS NOT DELETED, only hidden. An organizer who
+        unpublishes an event for an afternoon and republishes it must not
+        silently cost everybody their save — and `saved_ids`, which the client
+        replaces its local set from, is deliberately left unfiltered for the
+        same reason.
+        """
         return (
-            SavedEvent.objects.filter(user_id=user_id)
+            SavedEvent.objects.filter(
+                user_id=user_id,
+                event__status__in=EventRepository.PUBLICLY_RESOLVABLE_STATUSES,
+                event__deleted_at__isnull=True,
+            )
             .select_related("event", "event__organization")
             .only(
                 "id",

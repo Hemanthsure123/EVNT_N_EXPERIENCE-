@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 
 from django.db.models import Prefetch, Q, QuerySet
+from django.utils import timezone
 
 from core.base_repository import BaseRepository
 
@@ -62,10 +63,70 @@ class BookingRepository(BaseRepository[Booking]):
 
     # --- reads -------------------------------------------------------------
 
-    def get_by_idempotency_key(
+    def get_replayable_by_idempotency_key(
         self, user_id: uuid.UUID | str, idempotency_key: str
     ) -> Booking | None:
-        return Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key).first()
+        """The booking this key may legitimately replay, or None.
+
+        ── WHY THIS IS NOT SIMPLY `filter(user, key)` ──────────────────────
+
+        It was, and that made a booking un-retryable FOREVER. The key the
+        frontend derives is a pure function of the SELECTION — two General
+        tickets for one event is always `book:{event}:{tier}:2`. So:
+
+          1. Somebody reserves two tickets and does not pay.
+          2. The hold lapses; the sweeper releases the seats and marks the
+             booking `expired`. The key stays on the dead row.
+          3. They come back and choose the same two tickets — the same key.
+          4. This lookup returned the EXPIRED booking, so nothing was
+             reserved, and the review screen rendered a hold that had run out
+             before the page opened.
+
+        Every retry reproduced it, because retrying was what triggered it. It
+        presented as "the checkout is broken on my account" and worked
+        perfectly on any other account — which is exactly what it was: a dead
+        row keyed to one user and one selection.
+
+        A lapsed-but-not-yet-swept `RESERVED` booking is excluded for the same
+        reason. The sweeper runs on a schedule, so there is a window where the
+        row still says `reserved` and its hold is already gone; replaying it
+        hands back the same expired screen. Idempotency means "you get the
+        result of your earlier attempt" — and there is no result to get from an
+        attempt that ended with the seats going back on sale.
+        """
+        return (
+            Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key)
+            .filter(
+                Q(status=BookingStatus.PAID)
+                | Q(status=BookingStatus.RESERVED, hold_expires_at__gt=timezone.now())
+            )
+            .first()
+        )
+
+    def release_idempotency_key(self, user_id: uuid.UUID | str, idempotency_key: str) -> int:
+        """Detach a key from any booking that can never replay it again.
+
+        `get_replayable_by_idempotency_key` decides what to REPLAY; this makes
+        the retry it declined actually possible. `(user, idempotency_key)` is
+        UNIQUE, so without this the insert would collide with the very row we
+        just decided to ignore — the lookup would be fixed and the fix would be
+        unreachable.
+
+        It also repairs rows that predate that lookup: a database already
+        holding dead bookings with live keys unblocks itself the first time
+        somebody retries, with no migration and no manual surgery.
+
+        One conditional UPDATE, so a concurrent create either sees the key or
+        does not — never half of it.
+        """
+        return (
+            Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key)
+            .exclude(
+                Q(status=BookingStatus.PAID)
+                | Q(status=BookingStatus.RESERVED, hold_expires_at__gt=timezone.now())
+            )
+            .update(idempotency_key=None)
+        )
 
     def get_amounts_for_refund(self, booking_id: uuid.UUID | str) -> Booking | None:
         """Just enough of a booking to decide what may be refunded.

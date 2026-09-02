@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Bookmark,
   Check,
+  ChevronRight,
   Columns3,
   Download,
   Loader2,
@@ -500,7 +501,106 @@ export function DataGrid<Row>({
     // `visible` forces the same on `overflow-y`), so it is what keeps a hovered
     // or selected LAST row from painting square into the card's rounded bottom
     // corners. Invisible when a footer follows it.
-    <div className={cn('w-full overflow-x-auto rounded-b-xl', className)}>
+    <>
+      {/* ── A TABLE IS NOT A MOBILE LAYOUT ────────────────────────────────
+          Every operator surface on the platform — thirty-three routes across
+          the organizer dashboard and the admin console — renders through this
+          one component, and on a phone every one of them was a horizontally
+          scrolling table: six columns dragged sideways through a 390px window,
+          so reading one row meant scrubbing left and right and holding the
+          identity column in your head while you did it.
+
+          The rows become CARDS below `sm`. Same data, same `column.render`,
+          same selection and same open handler — the columns are the single
+          source of truth for both layouts, so a column added for the desktop
+          table appears here too rather than being quietly missing on mobile.
+
+          The first visible column carries the row's identity (that is how
+          every caller orders them, and `hideable: false` protects it), so it
+          becomes the card's heading and the rest become labelled pairs. */}
+      <ul className="flex flex-col gap-2 px-3 pb-3 sm:hidden">
+        {table.rows.map((row, index) => {
+          const id = table.ids[index];
+          const chosen = table.isSelected(id);
+          const [identity, ...rest] = table.columns;
+          return (
+            <li key={id}>
+              <div
+                role={onOpen ? 'button' : undefined}
+                tabIndex={onOpen ? 0 : undefined}
+                onClick={() => onOpen?.(row, index)}
+                onKeyDown={(event) => {
+                  if (!onOpen) return;
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onOpen(row, index);
+                  }
+                }}
+                className={cn(
+                  'flex w-full flex-col gap-2 rounded-xl border p-3 text-left transition-colors duration-fast',
+                  chosen
+                    ? 'border-transparent bg-nav-active'
+                    : 'border-border bg-surface hover:bg-muted',
+                  onOpen && 'cursor-pointer',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                <div className="flex items-start gap-2.5">
+                  {selectable ? (
+                    <input
+                      type="checkbox"
+                      checked={chosen}
+                      onChange={() => table.toggleRow(id)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label={chosen ? 'Deselect row' : 'Select row'}
+                      className="mt-0.5 size-5 shrink-0 cursor-pointer accent-primary"
+                    />
+                  ) : null}
+                  {identity ? (
+                    <div className="min-w-0 flex-1 text-body-sm font-semibold text-foreground">
+                      {identity.render(row)}
+                    </div>
+                  ) : null}
+                  {onOpen ? (
+                    <ChevronRight
+                      className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
+                      aria-hidden
+                    />
+                  ) : null}
+                </div>
+
+                {rest.length ? (
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                    {rest.map((column) => (
+                      <div key={column.key} className="flex min-w-0 flex-col gap-0.5">
+                        <dt className="truncate text-[0.6875rem] uppercase tracking-wide text-foreground-subtle">
+                          {column.header}
+                        </dt>
+                        <dd
+                          className={cn(
+                            'min-w-0 truncate text-caption text-foreground',
+                            column.numeric && 'tabular-nums',
+                          )}
+                        >
+                          {column.render(row)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+        {loading ? (
+          <li className="flex items-center justify-center gap-2 py-4 text-caption text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Loading more…
+          </li>
+        ) : null}
+      </ul>
+
+      <div className={cn('hidden w-full overflow-x-auto rounded-b-xl sm:block', className)}>
       {/* `border-separate border-spacing-0`, NOT `border-collapse`.
 
           The third and last reason the sticky header never worked: Chrome
@@ -640,13 +740,14 @@ export function DataGrid<Row>({
         </tbody>
       </table>
 
-      {loading ? (
-        <div className="flex items-center justify-center gap-2 border-t border-border py-4 text-caption text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          Loading more…
-        </div>
-      ) : null}
-    </div>
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 border-t border-border py-4 text-caption text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Loading more…
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
 

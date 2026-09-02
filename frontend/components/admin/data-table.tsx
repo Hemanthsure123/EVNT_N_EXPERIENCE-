@@ -262,7 +262,76 @@ export function DataTable<Row extends { id: string }>({
         </div>
       ) : null}
 
-      <div className="overflow-x-auto rounded-xl border border-border">
+      {/* ── CARDS ON A PHONE, THE TABLE FROM `sm` ─────────────────────────
+          `min-w-[40rem]` inside `overflow-x-auto` means this table was 640px
+          wide in a 390px window on every console list — payments, users,
+          moderation, refunds — so an operator read one row by dragging it
+          sideways past the identity column that told them whose row it was.
+
+          The same rows, as cards, below `sm`. `column.cell` is reused
+          verbatim, so the two layouts cannot drift and a column added to the
+          table is not silently absent on mobile. The first visible column is
+          the identity one on every list here, so it heads the card. */}
+      <ul className="flex flex-col gap-2 sm:hidden">
+        {loading
+          ? Array.from({ length: 4 }, (_, index) => (
+              <li
+                key={index}
+                className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-3"
+              >
+                <div className="skeleton h-4 w-32 rounded" />
+                <div className="skeleton h-3 w-full rounded" />
+              </li>
+            ))
+          : sorted.map((row) => {
+              const id = getRowId(row);
+              const [identity, ...rest] = visible;
+              return (
+                <li
+                  key={id}
+                  className={cn(
+                    'flex flex-col gap-2 rounded-xl border p-3 transition-colors',
+                    selected.has(id) || highlightId === id
+                      ? 'border-transparent bg-secondary/40'
+                      : 'border-border bg-surface',
+                  )}
+                >
+                  <div className="flex items-start gap-2.5">
+                    {bulkActions.length ? (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(id)}
+                        onChange={() => toggleRow(id)}
+                        aria-label={`Select row ${id}`}
+                        className="mt-0.5 size-5 shrink-0 accent-primary"
+                      />
+                    ) : null}
+                    {identity ? (
+                      <div className="min-w-0 flex-1 text-body-sm font-semibold text-foreground">
+                        {identity.cell(row)}
+                      </div>
+                    ) : null}
+                  </div>
+                  {rest.length ? (
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                      {rest.map((column) => (
+                        <div key={column.id} className="flex min-w-0 flex-col gap-0.5">
+                          <dt className="truncate text-[0.6875rem] uppercase tracking-wide text-foreground-subtle">
+                            {column.header}
+                          </dt>
+                          <dd className="min-w-0 text-caption text-foreground">
+                            {column.cell(row)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : null}
+                </li>
+              );
+            })}
+      </ul>
+
+      <div className="hidden overflow-x-auto rounded-xl border border-border sm:block">
         <table className="w-full min-w-[40rem] border-collapse text-left">
           <thead className="border-b border-border bg-surface">
             <tr>
@@ -366,32 +435,36 @@ export function DataTable<Row extends { id: string }>({
           </tbody>
         </table>
 
-        {!loading && !sorted.length ? (
-          <div className="flex flex-col items-center gap-3 px-6 py-14 text-center">
-            <span
-              className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground"
-              aria-hidden
-            >
-              <Inbox className="size-6" />
-            </span>
-            <div className="flex max-w-sm flex-col gap-1">
-              <p className="text-body font-medium text-foreground">
-                {query ? `Nothing matches “${query}”` : emptyTitle}
-              </p>
-              <p className="text-body-sm text-muted-foreground">
-                {query ? 'Try a shorter search, or clear it.' : emptyBody}
-              </p>
-            </div>
-            {query ? (
-              <Button variant="outline" size="sm" onClick={() => setQuery('')}>
-                Clear search
-              </Button>
-            ) : (
-              emptyAction
-            )}
-          </div>
-        ) : null}
       </div>
+
+      {/* OUTSIDE the desktop wrapper. Left inside it, an empty list rendered
+          NOTHING on a phone — no "nothing matches", no way to clear the search
+          — which reads as a broken screen rather than an empty one. */}
+      {!loading && !sorted.length ? (
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-6 py-14 text-center sm:rounded-t-none sm:border-t-0">
+          <span
+            className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground"
+            aria-hidden
+          >
+            <Inbox className="size-6" />
+          </span>
+          <div className="flex max-w-sm flex-col gap-1">
+            <p className="text-body font-medium text-foreground">
+              {query ? `Nothing matches “${query}”` : emptyTitle}
+            </p>
+            <p className="text-body-sm text-muted-foreground">
+              {query ? 'Try a shorter search, or clear it.' : emptyBody}
+            </p>
+          </div>
+          {query ? (
+            <Button variant="outline" size="sm" onClick={() => setQuery('')}>
+              Clear search
+            </Button>
+          ) : (
+            emptyAction
+          )}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-caption text-muted-foreground">

@@ -97,8 +97,8 @@ export function resolveSnap({
 }
 
 /**
- * The three resting heights, as fractions of the viewport measured from the
- * TOP. Ascending, so index 0 is full screen.
+ * The resting heights, as fractions of the viewport measured from the TOP.
+ * Ascending, so index 0 is the tallest the sheet is allowed to be.
  *
  * These are fractions rather than pixels because a phone's viewport height
  * changes under it — the URL bar collapses on scroll, the keyboard opens — and
@@ -113,12 +113,47 @@ export function resolveSnap({
  * a sheet that stopped short just showed a strip of dimmed page above it.
  *
  * The poster is anchored behind the sheet now, so where the sheet rests is
- * exactly how much artwork you can see. 45% leaves the poster as the top half
- * of the screen with the title, date and venue below it — which is the whole
- * shape the reference is built around — and 22% is the reading position on the
- * way to full.
+ * exactly how much artwork you can see.
+ *
+ * ── AND THEN THE TOP ONE STOPPED BEING ZERO ───────────────────────────────
+ *
+ * `0` meant the sheet could cover the screen completely, and covering the
+ * artwork is the one thing this layout exists not to do: the poster IS the
+ * event, it is the reason somebody opened the card, and a panel that slides
+ * over all of it turns a widget back into a page. Worse, it made the widget
+ * change identity mid-gesture — square corners, full-bleed, no neighbours —
+ * so a swipe that started on a card ended on something that no longer looked
+ * like one.
+ *
+ * The ceiling is now HALF THE POSTER. `POSTER_FRACTION` is the poster layer's
+ * own height (`h-[62dvh]`), so the cap is derived from it rather than being a
+ * second number that has to be kept in step by hand — change the poster and
+ * the sheet's ceiling follows.
+ *
+ * The two heights that result, as a share of the screen the CARD occupies:
+ *
+ *     rest      0.39  ->  61% card, 39% poster
+ *     expanded  0.31  ->  69% card, 31% poster (half of it still showing)
+ *
+ * `MIN_CARD_FRACTION` is the floor: below it the card stops being the thing
+ * you are reading and becomes a caption under a picture. Rest sits just clear
+ * of it rather than exactly on it, because these resolve to whole pixels and
+ * landing exactly on the boundary rounds under it on some viewport heights.
+ *
+ * Everything past 69% is the content scrolling INSIDE the card, which is what
+ * a reader wants once they have decided to read — not more panel.
  */
-export const SHEET_SNAP_FRACTIONS = [0, 0.22, 0.45] as const;
+
+/** The poster layer's height, mirroring `h-[62dvh]` in the deck. */
+export const POSTER_FRACTION = 0.62;
+/** The card never occupies less of the screen than this. */
+export const MIN_CARD_FRACTION = 0.6;
+
+export const SHEET_SNAP_FRACTIONS = [
+  // Half the poster stays visible, always.
+  Number((POSTER_FRACTION / 2).toFixed(2)),
+  0.39,
+] as const;
 
 export function snapPixels(viewportHeight: number): number[] {
   return SHEET_SNAP_FRACTIONS.map((fraction) => Math.round(fraction * viewportHeight));
@@ -126,4 +161,8 @@ export function snapPixels(viewportHeight: number): number[] {
 
 /** Index into the snaps array for the state a freshly-opened sheet rests at. */
 export const INITIAL_SNAP_INDEX = SHEET_SNAP_FRACTIONS.length - 1;
-export const FULL_SNAP_INDEX = 0;
+/**
+ * The tallest the sheet may go — NOT full screen, which is why it is no longer
+ * called that. See the note above `SHEET_SNAP_FRACTIONS`.
+ */
+export const EXPANDED_SNAP_INDEX = 0;

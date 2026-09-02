@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   DISMISS_FRACTION,
-  FULL_SNAP_INDEX,
+  MIN_CARD_FRACTION,
+  POSTER_FRACTION,
+  EXPANDED_SNAP_INDEX,
   INITIAL_SNAP_INDEX,
   resolveSnap,
   SHEET_SNAP_FRACTIONS,
@@ -19,10 +21,24 @@ const VIEWPORT = 844; // iPhone 13/14 logical height.
 const SNAPS = snapPixels(VIEWPORT);
 
 describe('snapPixels', () => {
-  it('resolves fractions against the live viewport, ascending, 0 = full screen', () => {
-    expect(SNAPS[FULL_SNAP_INDEX]).toBe(0);
+  it('resolves fractions against the live viewport, ascending', () => {
     expect(SNAPS).toHaveLength(SHEET_SNAP_FRACTIONS.length);
     expect([...SNAPS].sort((a, b) => a - b)).toEqual(SNAPS);
+  });
+
+  it('never lets the sheet cover the poster', () => {
+    // The rule the ceiling exists for, asserted as a rule rather than as a
+    // number: the tallest the sheet may go still leaves HALF the artwork
+    // showing. `0` here would mean a card that becomes a page, which is the
+    // one thing this layout is built not to do.
+    expect(SNAPS[EXPANDED_SNAP_INDEX]).toBeGreaterThan(0);
+    expect(SNAPS[EXPANDED_SNAP_INDEX]).toBeCloseTo((POSTER_FRACTION / 2) * VIEWPORT, -1);
+  });
+
+  it('keeps the card above 60% of the screen at every stop', () => {
+    // The floor. Below it the card stops being the thing you are reading and
+    // becomes a caption under a picture.
+    for (const y of SNAPS) expect(VIEWPORT - y).toBeGreaterThan(VIEWPORT * MIN_CARD_FRACTION);
   });
 
   it('rescales when the viewport does — a phone URL bar collapsing must not strand the sheet', () => {
@@ -45,14 +61,12 @@ describe('resolveSnap', () => {
     // nearest the release POSITION sends this straight back where it started —
     // the sheet springs back under the thumb that just threw it upward.
     //
-    // What it must do is ADVANCE. It used to assert `FULL_SNAP_INDEX`
-    // specifically, which was true only because the snaps were 136px apart
-    // (`[0, 0.06, 0.17]`) and one flick's projection cleared all of them. They
-    // are `[0, 0.22, 0.45]` now — the poster is anchored behind the sheet, so
-    // where it rests is how much artwork you can see — and at that spacing a
-    // flick advances one stop, which is what a three-position sheet should do.
-    // Asserting the specific end stop was pinning an artifact of the old
-    // spacing; asserting movement is the rule the projection exists for.
+    // What it must do is ADVANCE. It used to assert a specific end stop, which
+    // was true only because the snaps were 136px apart (`[0, 0.06, 0.17]`) and
+    // one flick's projection cleared all of them. Asserting the stop was
+    // pinning an artifact of that spacing; asserting MOVEMENT is the rule the
+    // projection actually exists for, and it survived two later changes to the
+    // geometry because of that.
     const result = resolveSnap({
       y: SNAPS[INITIAL_SNAP_INDEX] - 6,
       velocity: -1800,

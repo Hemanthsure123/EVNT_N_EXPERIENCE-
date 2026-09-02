@@ -703,6 +703,8 @@ const users = new Map(); // email -> { id, email, full_name, password, tokens }
 const sessions = new Map(); // access token -> email
 const bookings = new Map(); // id -> booking
 const idempotency = new Map(); // `${email}:${key}` -> booking id
+/** Tickets issued by the confirm endpoint below. */
+const issuedTickets = [];
 /**
  * Tickets held by bookings, per tier.
  *
@@ -1357,7 +1359,18 @@ const server = createServer((req, res) => {
       const idKey = key ? `${user.email}:${key}` : null;
       if (idKey && idempotency.has(idKey)) {
         const existing = bookings.get(idempotency.get(idKey));
-        return sendJson(req, res, 201, bookingResponse(existing));
+        // Mirrors `BookingRepository.get_replayable_by_idempotency_key`: a key
+        // only speaks for a booking that can still be acted on. Replaying a
+        // dead one is what made a checkout permanently unusable for one user
+        // and one selection, so the fixture has to be able to reproduce the
+        // FIXED behaviour or the recovery path is untestable here.
+        const replayable =
+          existing &&
+          (existing.status === 'paid' ||
+            (existing.status === 'reserved' &&
+              Date.parse(existing.hold_expires_at) > Date.now()));
+        if (replayable) return sendJson(req, res, 201, bookingResponse(existing));
+        idempotency.delete(idKey);
       }
 
       const tiers = buildTiers(event);
@@ -1440,6 +1453,67 @@ const server = createServer((req, res) => {
       sendJson(req, res, 201, bookingResponse(booking));
     });
     return;
+  }
+
+  // ── Confirm a booking, and issue its tickets ────────────────────────
+  //
+  // The fixture had NO way to reach a paid booking, so the success screen —
+  // the one people screenshot and send to whoever they are going with — could
+  // never be opened locally at all. In the real system this is the signed
+  // webhook's job and the browser is never trusted to do it; here it stands in
+  // for that server-to-server step so the screen after payment is reachable.
+  //
+  // Deliberately idempotent, exactly like `confirm_booking`: a second call
+  // returns the SAME tickets rather than issuing a second set.
+  const confirmMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/confirm\/?$/);
+  if (confirmMatch && req.method === 'POST') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(confirmMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    if (booking.status === 'reserved' && Date.parse(booking.hold_expires_at) <= Date.now()) {
+      return authError(res, req, 409, 'hold_expired', 'Your hold has expired.');
+    }
+    if (booking.status !== 'paid') {
+      if (booking.status !== 'reserved') {
+        return authError(res, req, 409, 'booking_not_modifiable', 'This booking cannot be paid.');
+      }
+      booking.status = 'paid';
+      const event = buildEvents().find((candidate) => candidate.id === booking.event_id);
+      for (const item of booking.items ?? []) {
+        for (let n = 0; n < item.quantity; n += 1) {
+          issuedTickets.push({
+            id: `${booking.id}-${item.ticket_type_id}-${n}`,
+            booking_id: booking.id,
+            event_id: booking.event_id,
+            event_title: event?.title ?? 'Event',
+            ticket_type_id: item.ticket_type_id,
+            ticket_type_name: item.ticket_type_name ?? item.name ?? 'General',
+            status: 'active',
+            // Shaped like the real `v1.<payload>.<hmac>` token so the QR
+            // renders at a realistic density. It is NOT signed — nothing in
+            // the fixture verifies it, and a fake signature that LOOKED valid
+            // would be worse than one that obviously is not.
+            qr_token: `v1.${Buffer.from(JSON.stringify({ t: `${booking.id}-${n}`, e: booking.event_id })).toString('base64url')}.fixture`,
+            created_at: new Date().toISOString(),
+            user_email: user.email,
+          });
+        }
+      }
+    }
+    const { user_email: _paidIgnored, ...paidPayload } = booking;
+    return sendJson(req, res, 200, paidPayload, 'private, no-store');
+  }
+
+  if (path === '/api/v1/me/tickets' && req.method === 'GET') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const mine = issuedTickets
+      .filter((ticket) => ticket.user_email === user.email)
+      .map(({ user_email: _ignored, ...rest }) => rest);
+    return sendJson(req, res, 200, { data: mine, meta: { next: null } }, 'private, no-store');
   }
 
   // ── Set the donation on a live hold ─────────────────────────────────

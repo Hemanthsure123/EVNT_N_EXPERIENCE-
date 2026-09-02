@@ -24,6 +24,7 @@ import {
 // the header and this page end up disagreeing about what exists.
 import { useOrganizations, type Organization } from '@/lib/identity/scope';
 import { Button } from '@/components/ui/button';
+import { IdentityAvatar } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -261,12 +262,43 @@ function OrganizationCard({ organization }: { organization: Organization }) {
 
   return (
     <div className="flex flex-col gap-block rounded-xl border border-border bg-surface p-card shadow-sm lg:p-card-lg">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-h4">{organization.name}</h2>
-          <p className="text-caption text-foreground-subtle">
-            Created {new Date(organization.created_at).toLocaleDateString()}
-          </p>
+      {/* ── AN ORGANISATION IS AN IDENTITY, SO IT GETS A FACE ─────────────
+          This was a bare line of text and a pill. The logo is already on the
+          list payload and is the thing the organizer chose to represent
+          themselves with — showing it makes a card about THEIR business rather
+          than a row in a table. Initials stand in when there is none, the same
+          fallback the account avatar uses.
+
+          The pill drops onto its own line under `sm`: name + status side by
+          side squeezed a long organisation name into two or three characters
+          on a phone. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          {/* The SAME avatar the header and the account page render, so an
+              organisation looks like itself everywhere and there is one place
+              that knows what to do when a logo 404s — it falls back to
+              initials rather than a broken-image glyph. `tile`, because an
+              organisation is not a person. */}
+          <IdentityAvatar
+            name={organization.name}
+            imageUrl={organization.logo_url}
+            size="md"
+            shape="tile"
+          />
+          <div className="min-w-0">
+            <h2 className="truncate text-h4">{organization.name}</h2>
+            <p className="text-caption text-foreground-subtle">
+              {/* `toLocaleDateString()` with no options rendered "8/9/2026" —
+                  ambiguous between two date orders and unlike every other date
+                  on the platform. */}
+              Created{' '}
+              {new Date(organization.created_at).toLocaleDateString('en-IN', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+              })}
+            </p>
+          </div>
         </div>
         <StatusPill state={state} />
       </div>
@@ -317,10 +349,20 @@ function OrganizationCard({ organization }: { organization: Organization }) {
           `state` is the same value the pill above shows, so the card cannot
           say "Pending" and offer the approved-only door in the same breath. */}
       {state === 'verified' ? (
-        <div className="flex flex-wrap gap-2 border-t border-border pt-block">
+        // ── THE TWO ACTIONS ARE NOT EQUALS ──────────────────────────────
+        // They were drawn identically — two outline pills of the same weight —
+        // so the screen offered no opinion about which one an approved
+        // organizer wants. Opening the dashboard is why they are here;
+        // payouts is a setup task done once. Ranking them is the whole job of
+        // this row.
+        //
+        // Full width and stacked on a phone, side by side from `sm`: two pills
+        // wrapping mid-row is how the secondary one ends up looking like an
+        // orphan.
+        <div className="flex flex-col gap-2 border-t border-border pt-block sm:flex-row sm:items-center">
           <Link
             href="/dashboard"
-            className="inline-flex h-control items-center gap-1.5 rounded-full border border-border bg-surface px-pill text-label transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex h-control w-full items-center justify-center gap-1.5 rounded-full bg-cta px-pill text-label font-semibold text-cta-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:w-auto"
           >
             Open organizer dashboard
             <ArrowRight className="size-4" aria-hidden />
@@ -469,7 +511,7 @@ function PayoutAccountButton({ organization }: { organization: Organization }) {
       type="button"
       onClick={() => mutation.mutate()}
       disabled={mutation.isPending}
-      className="inline-flex h-control items-center gap-1.5 rounded-full border border-border bg-surface px-pill text-label transition-colors hover:bg-muted disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      className="inline-flex h-control w-full items-center justify-center gap-1.5 rounded-full border border-border-strong bg-surface px-pill text-label transition-colors hover:bg-muted disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:w-auto"
     >
       {mutation.isPending ? (
         <Loader2 className="size-4 animate-spin" aria-hidden />

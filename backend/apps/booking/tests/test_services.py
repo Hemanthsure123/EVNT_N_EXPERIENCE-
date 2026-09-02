@@ -223,6 +223,90 @@ def test_create_booking_is_idempotent_on_the_idempotency_key(
 
 
 @pytest.mark.django_db
+def test_the_same_selection_is_bookable_again_after_the_hold_lapses(
+    booking_service, event, buyer, make_tier
+):
+    """The bug this test exists for made a checkout permanently unusable.
+
+    The frontend derives the key from the SELECTION, so choosing the same two
+    tickets always produces the same key. When the first attempt expired, the
+    dead row kept that key and every later attempt replayed it — the review
+    screen opened onto a hold that had run out before the page rendered, and
+    the retry was what caused it. It looked like one account being broken,
+    because that is precisely what it was.
+    """
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 2}]
+    key = "book:evt:tier:2"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    # The hold lapses and the sweeper releases the seats.
+    Booking.objects.filter(id=first.id).update(
+        hold_expires_at=timezone.now() - timedelta(minutes=1)
+    )
+    assert booking_service.release_expired() == 1
+    assert _reserved(tier.id) == 0
+
+    second = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert second.id != first.id
+    assert second.status == BookingStatus.RESERVED
+    assert second.hold_expires_at > timezone.now()
+    assert _reserved(tier.id) == 2
+
+
+@pytest.mark.django_db
+def test_a_cancelled_booking_does_not_block_rebooking_the_same_seats(
+    booking_service, event, buyer, make_tier
+):
+    """Changing your mind and then changing it back is the most ordinary thing
+    a person does on a checkout, and it hit the same dead end."""
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 1}]
+    key = "book:evt:tier:1"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    booking_service.cancel_booking(booking_id=first.id, actor_id=buyer.id)
+
+    second = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert second.id != first.id
+    assert _reserved(tier.id) == 1
+
+
+@pytest.mark.django_db
+def test_a_paid_booking_still_replays_rather_than_selling_a_second_set(
+    booking_service, event, buyer, make_tier
+):
+    """The other half of the rule, and the one that must not regress: once
+    money has moved, the same key returns the same booking — a retry after
+    payment must never issue a second set of tickets."""
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 2}]
+    key = "book:evt:tier:2"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    booking_service.confirm_booking(booking_id=first.id, payment_ref="pay_x")
+
+    second = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert second.id == first.id
+    assert Booking.objects.count() == 1
+
+
+@pytest.mark.django_db
 def test_create_booking_rejects_tier_from_another_event(booking_service, event, buyer, make_tier):
     from apps.events.models import Event, EventStatus
     from apps.events.repositories import EventRepository

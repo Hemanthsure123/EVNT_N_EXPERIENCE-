@@ -145,16 +145,54 @@ class TestReading:
         titles = [row["title"] for row in client.get("/api/v1/me/saved-events").json()["data"]]
         assert titles == ["Event 2", "Event 1", "Event 0"]
 
-    def test_a_saved_event_that_is_no_longer_on_sale_still_appears(self, user, events):
-        """Hiding it would look like the save was lost. The card reports that
-        it is unavailable instead of offering a dead Book button."""
+    def test_a_cancelled_event_still_appears_and_says_it_is_unavailable(self, user, events):
+        """A called-off show is the one thing somebody MUST still be told
+        about. Its page still resolves, so the card links somewhere real and
+        reports that it is unavailable instead of offering a dead Book
+        button."""
         client = auth(user)
         client.post("/api/v1/me/saved-events", {"event_ids": [str(events[0].id)]}, format="json")
-        Event.objects.filter(pk=events[0].id).update(status=EventStatus.DRAFT)
+        Event.objects.filter(pk=events[0].id).update(status=EventStatus.CANCELLED)
 
         row = client.get("/api/v1/me/saved-events").json()["data"][0]
         assert row["id"] == str(events[0].id)
         assert row["is_available"] is False
+
+    @pytest.mark.parametrize(
+        "status",
+        [EventStatus.DRAFT, EventStatus.PENDING_REVIEW, EventStatus.ARCHIVED],
+    )
+    def test_an_event_withdrawn_from_view_leaves_the_saved_list(self, user, events, status):
+        """The list had NO visibility filter, so it advertised events whose
+        public page 404s. A card that leads nowhere is worse than no card: the
+        only conclusion available to the reader is that the app is broken.
+
+        Whatever a visitor can reach is what may appear here.
+        """
+        client = auth(user)
+        client.post("/api/v1/me/saved-events", {"event_ids": [str(events[0].id)]}, format="json")
+        Event.objects.filter(pk=events[0].id).update(status=status)
+
+        assert client.get("/api/v1/me/saved-events").json()["data"] == []
+
+    def test_a_soft_deleted_event_leaves_the_saved_list(self, user, events):
+        client = auth(user)
+        client.post("/api/v1/me/saved-events", {"event_ids": [str(events[0].id)]}, format="json")
+        Event.objects.filter(pk=events[0].id).update(deleted_at=timezone.now())
+
+        assert client.get("/api/v1/me/saved-events").json()["data"] == []
+
+    def test_hiding_it_does_not_destroy_the_save(self, user, events):
+        """Hidden, not deleted. An organizer who unpublishes for an afternoon
+        and republishes must not silently cost everybody their save."""
+        client = auth(user)
+        client.post("/api/v1/me/saved-events", {"event_ids": [str(events[0].id)]}, format="json")
+        Event.objects.filter(pk=events[0].id).update(status=EventStatus.DRAFT)
+        assert client.get("/api/v1/me/saved-events").json()["data"] == []
+
+        Event.objects.filter(pk=events[0].id).update(status=EventStatus.LIVE)
+
+        assert client.get("/api/v1/me/saved-events").json()["data"][0]["id"] == str(events[0].id)
 
     def test_the_list_is_one_query_per_page_not_one_per_row(
         self, user, events, django_assert_num_queries

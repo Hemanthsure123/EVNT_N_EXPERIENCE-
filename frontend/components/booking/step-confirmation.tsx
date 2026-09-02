@@ -4,7 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Clock3, Loader2, Mail, Ticket } from 'lucide-react';
+import { Check, Clock3, Copy, Loader2, Mail, Ticket } from 'lucide-react';
 import { SpotTicketIssued } from '@/components/illustrations/spots';
 import { Button } from '@/components/ui/button';
 import { fetchBooking } from '@/lib/api/bookings';
@@ -13,7 +13,8 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { fetchTicketsForBooking } from '@/lib/booking/tickets';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { eventPath } from '@/lib/events/ref';
-import { CTA_PILL_LG, PILL } from './cta';
+import { CTA_PILL_LG } from './cta';
+import { cn } from '@/lib/utils/cn';
 import { useBooking } from './booking-context';
 import { Celebration } from './celebration';
 import { Rise, StepTransition } from './motion';
@@ -194,34 +195,67 @@ export function ConfirmationStep() {
             </p>
           </div>
 
+          {/* ── THE TWO FACTS SOMEBODY COMES BACK FOR ────────────────────
+              These were a `text-caption text-muted-foreground` list — the
+              quietest type on the screen — for the reference every support
+              conversation starts with and the amount that will appear on a
+              statement. They are a receipt strip now, and the reference is
+              TAPPABLE TO COPY, because the alternative on a phone is reading
+              eight characters aloud or screenshotting them. */}
           {booking ? (
-            <dl className="flex flex-col gap-1 text-caption text-muted-foreground">
-              <div className="flex gap-2">
-                <dt>Booking</dt>
-                <dd className="font-mono text-foreground">{booking.id.slice(0, 8)}</dd>
+            <dl className="flex w-full max-w-sm flex-col divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface text-body-sm">
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-muted-foreground">Booking</dt>
+                <dd>
+                  <CopyableRef value={booking.id} />
+                </dd>
               </div>
-              <div className="flex gap-2">
-                <dt>Paid</dt>
-                <dd className="tabular-nums text-foreground">
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-muted-foreground">Paid</dt>
+                <dd className="font-semibold tabular-nums text-foreground">
                   {formatFromPrice(booking.total_amount)}
                 </dd>
               </div>
             </dl>
           ) : null}
 
-          <div className="flex flex-wrap gap-3">
-            {/* The one filled pill points AT the ticket. Everything else on this
-                screen leads away from it, and the ticket is the thing that was
-                just bought. */}
-            <Button asChild size="lg" className={CTA_PILL_LG}>
+          {/* ── ONE ACTION, THEN TWO WAYS OUT ────────────────────────────
+              Three pills in a `flex-wrap` stacked into three ragged rows on a
+              phone — each a different width, all reading as choices of equal
+              standing. Only one of them is what somebody wants here, and the
+              other two lead AWAY from the thing that was just bought. So the
+              ticket gets the full-width press and the exits share a quieter
+              row beneath it. */}
+          <div className="flex w-full max-w-sm flex-col gap-3">
+            <Button asChild size="lg" className={cn(CTA_PILL_LG, 'w-full')}>
               <Link href="/account/tickets">View my tickets</Link>
             </Button>
-            <Button variant="outline" asChild size="lg" className={PILL}>
-              <Link href="/events">Find your next event</Link>
-            </Button>
-            <Button variant="ghost" asChild size="lg" className={PILL}>
-              <Link href={eventPath(event)}>Back to the event</Link>
-            </Button>
+            {/* The two exits are LINKS, not pills.
+                As pills they were `flex-1` in a row, and a pill will not shrink
+                below its own label — so "Back to the event" ran off the right
+                edge of a 390px screen, clipped mid-word, inside a card that had
+                itself overflowed. Three stacked full-width pills was the other
+                option and it gives three actions the same weight when only one
+                of them is what somebody wants after paying.
+                Links carry both exits in one line, in the register they belong
+                to: quiet, available, plainly secondary to the ticket. */}
+            <div className="flex items-center justify-center gap-4 text-body-sm">
+              <Link
+                href="/events"
+                className="rounded text-muted-foreground underline-offset-4 transition-colors duration-fast hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Find your next event
+              </Link>
+              <span aria-hidden className="text-border-strong">
+                ·
+              </span>
+              <Link
+                href={eventPath(event)}
+                className="rounded text-muted-foreground underline-offset-4 transition-colors duration-fast hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Back to the event
+              </Link>
+            </div>
           </div>
         </div>
       </Rise>
@@ -258,7 +292,11 @@ export function ConfirmationStep() {
       ) : null}
 
       <Rise index={2}>
-        <ul className="grid gap-stack-lg sm:grid-cols-3">
+        {/* Three full-width CARDS for three one-line facts filled most of a
+            phone screen with reassurance nobody had asked for twice. Rows on
+            mobile, cards from `sm` where there is room to set them side by
+            side. */}
+        <ul className="flex flex-col gap-2 sm:grid sm:grid-cols-3 sm:gap-stack-lg">
           {[
             {
               icon: Mail,
@@ -278,15 +316,64 @@ export function ConfirmationStep() {
           ].map((item) => (
             <li
               key={item.title}
-              className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-card shadow-sm"
+              className="flex items-start gap-3 rounded-xl border border-border bg-surface p-card shadow-sm sm:flex-col sm:gap-2"
             >
-              <item.icon className="size-5 text-foreground-subtle" aria-hidden />
-              <p className="text-body-sm font-medium text-foreground">{item.title}</p>
-              <p className="text-caption text-muted-foreground">{item.body}</p>
+              <item.icon className="mt-0.5 size-5 shrink-0 text-foreground-subtle" aria-hidden />
+              <div className="flex min-w-0 flex-col gap-0.5 sm:gap-2">
+                <p className="text-body-sm font-medium text-foreground">{item.title}</p>
+                <p className="text-caption text-muted-foreground">{item.body}</p>
+              </div>
             </li>
           ))}
         </ul>
       </Rise>
     </StepTransition>
+  );
+}
+
+/**
+ * The booking reference, and a press that copies it.
+ *
+ * This is the string every support conversation opens with. On a phone the
+ * alternative to copying it is reading eight characters off a screen or taking
+ * a screenshot of them, which is why it is a control rather than a label.
+ *
+ * The FULL id goes to the clipboard while only the short prefix is shown: the
+ * prefix is what the platform quotes back at people, and the whole id is what
+ * anyone looking it up actually needs.
+ *
+ * `navigator.clipboard` is absent on an insecure origin and can be refused
+ * outright, so a failure leaves the label exactly as it was — no error, no
+ * false "Copied". Nothing here is lost by the press not working; the reference
+ * is still on screen and still selectable.
+ */
+function CopyableRef({ value }: { value: string }) {
+  const [copied, setCopied] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard
+          ?.writeText(value)
+          .then(() => setCopied(true))
+          .catch(() => undefined);
+      }}
+      className="inline-flex items-center gap-1.5 rounded-md font-mono text-body-sm text-foreground transition-colors duration-fast hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {value.slice(0, 8)}
+      {copied ? (
+        <Check className="size-3.5 text-success" aria-hidden />
+      ) : (
+        <Copy className="size-3.5 text-foreground-subtle" aria-hidden />
+      )}
+      <span className="sr-only">{copied ? 'Booking reference copied' : 'Copy booking reference'}</span>
+    </button>
   );
 }

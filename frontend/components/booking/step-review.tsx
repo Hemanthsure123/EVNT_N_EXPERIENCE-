@@ -200,6 +200,32 @@ export function ReviewStep() {
    * all land the same way: change the screen, wait for a press.
    */
   const [holdExpired, setHoldExpired] = React.useState(false);
+  /**
+   * Try the SAME tickets again, without leaving the screen.
+   *
+   * A hold running out is not a mistake anybody made, so the recovery should
+   * not read like a punishment: bouncing to the picker means re-reading a tier
+   * list and re-entering a quantity somebody had already decided on, to arrive
+   * back exactly where they were. One press re-reserves what they already
+   * chose and the screen carries on.
+   *
+   * Safe to reuse the derived `Idempotency-Key` because the backend now
+   * declines to replay a booking that has ended and frees the key for the
+   * retry — see `get_replayable_by_idempotency_key`. Before that fix this
+   * press would have returned the same expired booking, which is the whole
+   * reason the screen was a dead end.
+   *
+   * If the tiers really are gone, `error` takes over with the picker link —
+   * so the honest outcome is still reachable, it is just no longer the FIRST
+   * thing offered for a situation that is usually recoverable.
+   */
+  const retryHold = React.useCallback(() => {
+    setHoldExpired(false);
+    setError(null);
+    setOptimisticDonation(null);
+    attempted.current = false;
+    setBooking(null);
+  }, [setBooking]);
   const [donationPending, setDonationPending] = React.useState(false);
   const [donationError, setDonationError] = React.useState<string | null>(null);
   const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
@@ -278,22 +304,47 @@ export function ReviewStep() {
   if (holdExpired) {
     return (
       <FunnelScreen title="Review your booking">
-        <StepTransition stepKey="review-expired" className="flex flex-col gap-4">
-          <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-destructive-subtle bg-destructive-subtle p-card-lg">
-            <TimerOff className="size-6 text-destructive-subtle-foreground" aria-hidden />
-            <div className="flex flex-col gap-1">
-              <h2 className="text-h3 text-destructive-subtle-foreground">Your hold has expired</h2>
-              <p className="text-body-sm text-destructive-subtle-foreground">
-                These tickets went back on sale so somebody else could buy them.{' '}
-                <strong className="font-semibold">Nothing has been charged.</strong> They may still
-                be available — choosing again takes a moment.
-              </p>
-            </div>
-            <Button asChild size="lg" className={CTA_PILL_LG}>
-              {/* Carries the selection, so the picker reopens on the same
-                  tiers rather than making somebody start from an empty list
-                  after already losing their hold. */}
-              <Link href={pickerHref}>Choose tickets again</Link>
+        {/* ── A RECOVERABLE STATE, DRAWN AS ONE ──────────────────────────
+            This was a full-bleed `destructive-subtle` slab pinned to the top
+            of an otherwise empty screen: the loudest possible treatment, at
+            the top of nothing, for a situation that is usually one press from
+            fixed and that the reader did not cause. It reads as a failure
+            page.
+
+            It is centred in the space it has now, and the alarm colour is
+            confined to the ICON — a single red mark that says which kind of
+            state this is — while the words sit on the ordinary surface where
+            everything else on this funnel sits. `justify-center` with `flex-1`
+            rather than a fixed offset, so it is centred on a phone and does
+            not float oddly on a tall desktop viewport. */}
+        <StepTransition
+          stepKey="review-expired"
+          className="flex flex-1 flex-col items-center justify-center gap-stack-lg px-2 py-10 text-center"
+        >
+          <span
+            aria-hidden
+            className="inline-flex size-16 items-center justify-center rounded-full bg-destructive-subtle text-destructive"
+          >
+            <TimerOff className="size-7" />
+          </span>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-h3 text-foreground">Your hold has expired</h2>
+            <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">
+              These tickets went back on sale so somebody else could buy them.{' '}
+              <strong className="font-semibold text-foreground">Nothing has been charged.</strong>{' '}
+              They may still be available.
+            </p>
+          </div>
+          <div className="flex w-full max-w-sm flex-col gap-2">
+            <Button size="lg" className={CTA_PILL_LG} onClick={retryHold}>
+              Get these tickets again
+            </Button>
+            {/* The way out, kept — but secondary. It carries the selection, so
+                the picker reopens on the same tiers rather than making
+                somebody start from an empty list after already losing a hold
+                they did nothing wrong to lose. */}
+            <Button asChild variant="ghost" size="lg" className="w-full">
+              <Link href={pickerHref}>Choose different tickets</Link>
             </Button>
           </div>
         </StepTransition>

@@ -25,19 +25,76 @@ def _make_booking(buyer, event, *, status=BookingStatus.RESERVED, hold_minutes=1
     )
 
 
-@pytest.mark.django_db
-def test_get_by_idempotency_key(repo, buyer, event):
-    booking = Booking.objects.create(
+def _keyed(buyer, event, *, key, status=BookingStatus.RESERVED, hold_minutes=10):
+    return Booking.objects.create(
         user_id=buyer.id,
         event_id=event.id,
-        hold_expires_at=timezone.now() + timedelta(minutes=10),
+        status=status,
+        hold_expires_at=timezone.now() + timedelta(minutes=hold_minutes),
         total_amount_minor=1000,
         platform_fee_minor=10,
-        idempotency_key="key-1",
+        idempotency_key=key,
     )
 
-    assert repo.get_by_idempotency_key(buyer.id, "key-1").id == booking.id
-    assert repo.get_by_idempotency_key(buyer.id, "missing") is None
+
+@pytest.mark.django_db
+def test_a_live_hold_replays(repo, buyer, event):
+    booking = _keyed(buyer, event, key="key-1")
+
+    assert repo.get_replayable_by_idempotency_key(buyer.id, "key-1").id == booking.id
+    assert repo.get_replayable_by_idempotency_key(buyer.id, "missing") is None
+
+
+@pytest.mark.django_db
+def test_a_paid_booking_replays_forever(repo, buyer, event):
+    """The tickets exist. Whatever else is true of the deadline, a retry has to
+    get the SAME booking back rather than buying a second set."""
+    booking = _keyed(buyer, event, key="k", status=BookingStatus.PAID, hold_minutes=-500)
+
+    assert repo.get_replayable_by_idempotency_key(buyer.id, "k").id == booking.id
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("status", "hold_minutes"),
+    [
+        (BookingStatus.EXPIRED, -1),
+        (BookingStatus.CANCELLED, 10),
+        # The window between the hold lapsing and the sweeper noticing. The row
+        # still says `reserved`; the seats are gone all the same.
+        (BookingStatus.RESERVED, -1),
+    ],
+)
+def test_a_dead_booking_does_not_replay(repo, buyer, event, status, hold_minutes):
+    """The bug this whole pair of methods exists for: replaying one of these
+    returned a booking whose hold had run out before the page opened, and did
+    it again on every retry — because retrying was what triggered it."""
+    _keyed(buyer, event, key="k", status=status, hold_minutes=hold_minutes)
+
+    assert repo.get_replayable_by_idempotency_key(buyer.id, "k") is None
+
+
+@pytest.mark.django_db
+def test_releasing_frees_the_key_for_a_fresh_booking(repo, buyer, event):
+    """`(user, idempotency_key)` is UNIQUE, so declining to replay is only half
+    the fix — without this the retry collides with the row it just ignored."""
+    dead = _keyed(buyer, event, key="k", status=BookingStatus.EXPIRED, hold_minutes=-1)
+
+    assert repo.release_idempotency_key(buyer.id, "k") == 1
+    dead.refresh_from_db()
+    assert dead.idempotency_key is None
+    # And the key is now insertable again.
+    fresh = _keyed(buyer, event, key="k")
+    assert repo.get_replayable_by_idempotency_key(buyer.id, "k").id == fresh.id
+
+
+@pytest.mark.django_db
+def test_releasing_never_touches_a_booking_that_can_still_replay(repo, buyer, event):
+    live = _keyed(buyer, event, key="k")
+
+    assert repo.release_idempotency_key(buyer.id, "k") == 0
+    live.refresh_from_db()
+    assert live.idempotency_key == "k"
 
 
 @pytest.mark.django_db

@@ -1558,6 +1558,103 @@ from a 200 instead of inferring it from a status code that cannot tell
 contract explicitly, because the pipeline lives in another directory and
 cannot fail this file's build.
 
+## An idempotency key speaks for a LIVE attempt, never a dead one
+
+`create_booking` deduped on `(user, idempotency_key)` and nothing else, and the
+frontend derives that key from the SELECTION — two General tickets for one event
+is always `book:{event}:{tier}:2`. So the first hold to lapse made that
+selection **permanently unbuyable for that account**:
+
+1. Reserve two tickets, do not pay.
+2. The sweeper releases the seats and marks the booking `expired`. The key stays
+   on the dead row.
+3. Choose the same two tickets again — the same key.
+4. The lookup returned the EXPIRED booking, so nothing was reserved and the
+   review screen opened onto a hold that had run out before the page rendered.
+
+Every retry reproduced it, because retrying was what triggered it. It presented
+as "checkout is broken on my account" and worked perfectly on any other account,
+which is exactly what it was: one dead row, keyed to one user and one selection.
+
+**The rule, binding on every idempotent write after this one:** a stored key
+replays a result that still EXISTS. `get_replayable_by_idempotency_key` returns
+a booking only if it is `paid` (the tickets are real — a retry must never sell a
+second set) or `reserved` **with a hold that has not passed**. A
+lapsed-but-not-yet-swept `reserved` row is excluded too: the sweeper runs on a
+schedule, and replaying that window hands back the same expired screen.
+
+**Declining to replay is only half of it.** `(user, idempotency_key)` is UNIQUE,
+so `release_idempotency_key` detaches the key from any booking that can never
+replay it — otherwise the retry collides with the very row the lookup just
+ignored, and the fix is unreachable. It runs inside the same cache lock as the
+insert, and it repairs rows that predate the fix: a database already holding
+dead bookings with live keys unblocks itself the first time somebody retries,
+with no migration and no manual surgery.
+
+**And the UI recovers rather than dead-ends.** A hold that lapses under the
+reader swaps the screen (never a dismissible dialog — dismissing one leaves the
+payable screen underneath) and offers **"Get these tickets again"**, which
+re-reserves the same selection in place. Bouncing to the picker meant re-reading
+a tier list and re-entering a quantity somebody had already decided on, to
+arrive back where they were. `PaymentSection` re-checks the deadline at press
+time as well: a pay path guarded only by what is rendered is guarded by nothing.
+
+The fixture mirrors the replayable rule and honours `MOCK_HOLD_SECONDS`, so this
+branch is executable in seconds rather than being a ten-minute wait per attempt
+— which is precisely why it had never once been run before it shipped.
+
+## A saved list may only show what the catalogue still shows
+
+`SavedEventRepository.list_cards` had **no visibility filter at all**. It
+returned every saved row — soft-deleted events, drafts an organizer had
+unpublished, events withdrawn by moderation — and `is_available` merely LABELLED
+them. A card linking to a page that 404s is worse than no card: the only
+conclusion available to the reader is that the app is broken.
+
+The predicate is `EventRepository.PUBLICLY_RESOLVABLE_STATUSES` — deliberately
+WIDER than `_publicly_visible`, and the two are not interchangeable. A browse
+LISTING shows what is sellable; a saved list LINKS to a page, and a cancelled
+event keeps its page on purpose. **Cancelled and past events therefore still
+appear**, carrying `is_available: false`: somebody who saved a show that was
+later called off needs to see THAT, not an empty list implying they never saved
+it.
+
+**The row is hidden, never deleted**, and `saved_ids` is deliberately left
+unfiltered — the client REPLACES its local set from that response, so filtering
+it would silently cost everybody their save the moment an organizer unpublished
+an event for an afternoon.
+
+## The widget sheet stops at the poster, and one gesture drives both
+
+Two rules for the mobile event widget, and both came from the same complaint —
+"it only maximises when I drag the handle".
+
+**1. The ceiling is half the poster.** `SHEET_SNAP_FRACTIONS` used to open with
+`0`, meaning the sheet could cover the screen completely. Covering the artwork
+is the one thing this layout exists not to do: the poster IS the event and it is
+why the card was opened. Worse, the widget changed identity mid-gesture — square
+corners, full-bleed, no neighbours — so a swipe that started on a card ended on
+something that no longer looked like one. The top snap is derived from
+`POSTER_FRACTION / 2`, so changing the poster's height moves the ceiling with it,
+and `MIN_CARD_FRACTION` (0.6) is the floor below which the card stops being the
+thing you are reading and becomes a caption under a picture. Expanding now
+WIDENS the card rather than transforming it; the neighbours stay in frame.
+
+**2. The sheet and the scroller are one gesture.** `beginVerticalDrag` used to
+be `applySheet(base + travelled)` and nothing else, so a drag begun on the
+content owned the whole gesture: it raised the sheet to its ceiling and then sat
+there resisting while the article underneath never moved. You had to lift and
+swipe a second time to read — which is why the handle felt like the only thing
+that worked, since raising the sheet is all the handle ever does.
+
+Travel is now spent in order, on DELTAS rather than an offset from the gesture's
+start (the two consumers hand travel back and forth, so an absolute offset stops
+describing either after the first handoff): upward fills the sheet to its
+ceiling and then scrolls the content; downward unwinds the scroll before the
+sheet begins to close. **Downward is only CLAIMED from a content top**, so
+ordinary reverse scrolling keeps its native momentum and collapsing takes a
+second, deliberate gesture — the same trade every native bottom sheet makes.
+
 ## Ticket selection is a screen again — and the rule is ASK ONCE
 
 This has now been both ways, and the history is the point.

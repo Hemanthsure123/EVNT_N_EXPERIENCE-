@@ -16,7 +16,7 @@ import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
 import { useScrollLock } from '@/lib/discovery/use-scroll-lock';
 import {
-  FULL_SNAP_INDEX,
+  EXPANDED_SNAP_INDEX,
   INITIAL_SNAP_INDEX,
   resolveSnap,
   snapPixels,
@@ -132,6 +132,12 @@ const COMMIT_SLOP = 10;
 const CARD_FRACTION = 0.88;
 /** Gap between cards in the track, in px, while the deck is inset. */
 const CARD_GAP = 10;
+/**
+ * The same two, once the sheet is expanded. Wider and tighter, NOT full-bleed:
+ * the neighbours stay in frame so the deck is still a deck at its tallest.
+ */
+const EXPANDED_CARD_FRACTION = 0.96;
+const EXPANDED_CARD_GAP = 6;
 /** Seconds of travel to project a horizontal release along, to pick a card. */
 const FLICK_PROJECTION = 0.14;
 
@@ -186,11 +192,26 @@ export function EventWidgetDeck() {
     return () => window.removeEventListener('resize', measure);
   }, []);
 
-  const isFull = snapIndex === FULL_SNAP_INDEX;
+  const isExpanded = snapIndex === EXPANDED_SNAP_INDEX;
   const snaps = React.useMemo(() => snapPixels(viewport.height), [viewport.height]);
-  // At full screen the card IS the screen: no peek, no gap, no rounded top.
-  const cardWidth = isFull ? viewport.width : Math.round(viewport.width * CARD_FRACTION);
-  const gap = isFull ? 0 : CARD_GAP;
+  /**
+   * ── EXPANDING IS NOT A CHANGE OF IDENTITY ──────────────────────────────
+   *
+   * This used to go full-bleed at the top snap — `viewport.width`, zero gap,
+   * square corners — because the top snap WAS the whole screen. It is not any
+   * more (see `SHEET_SNAP_FRACTIONS`), and the transformation was always the
+   * wrong instinct: a card that becomes a page mid-gesture takes its
+   * neighbours with it, so the swipe that was carrying somebody through a deck
+   * silently stops being available at exactly the moment they are most
+   * engaged.
+   *
+   * It widens instead. Same object, more of it — the neighbours stay in the
+   * frame, narrower, so the deck is still legibly a deck.
+   */
+  const cardWidth = Math.round(
+    viewport.width * (isExpanded ? EXPANDED_CARD_FRACTION : CARD_FRACTION),
+  );
+  const gap = isExpanded ? EXPANDED_CARD_GAP : CARD_GAP;
   const stride = cardWidth + gap;
   const railPadding = Math.round((viewport.width - cardWidth) / 2);
   const restingX = React.useCallback((index: number) => -index * stride, [stride]);
@@ -314,7 +335,7 @@ export function EventWidgetDeck() {
   // screen, and switched the floating controls from white-on-artwork to
   // ink-on-surface at that point. The poster does not scroll any more: it is
   // anchored behind the sheet, and whether it is visible is a function of
-  // where the SHEET is, which `isFull` already answers. A listener computing
+  // where the SHEET is, which `isExpanded` already answers. A listener computing
   // an answer another value already holds is one more thing to keep in sync.
 
   /**
@@ -362,7 +383,7 @@ export function EventWidgetDeck() {
       const horizontal = Math.abs(dx) > Math.abs(dy);
       const atTop = node.scrollTop <= 0;
       const claimsIt =
-        horizontal || (atTop && (dy > 0 || (dy < 0 && snapIndex !== FULL_SNAP_INDEX)));
+        horizontal || (atTop && (dy > 0 || (dy < 0 && snapIndex !== EXPANDED_SNAP_INDEX)));
 
       // `cancelable` guards the case where the browser has already committed to
       // scrolling — calling `preventDefault` there is a no-op that logs a
@@ -422,6 +443,34 @@ export function EventWidgetDeck() {
       let velocity = 0;
       draggedRef.current = false;
 
+      /**
+       * ── THE SHEET AND THE CONTENT ARE ONE GESTURE ────────────────────────
+       *
+       * This used to be `applySheet(base + travelled)` and nothing else, so a
+       * drag that began on the content OWNED the whole gesture: it raised the
+       * sheet to its ceiling and then just sat there resisting, while the
+       * article underneath — the thing the reader was reaching for — never
+       * moved. You had to lift your finger and swipe a second time to read.
+       *
+       * Which is exactly the complaint: "it only maximises when I drag the
+       * handle". The handle worked because the handle is all it ever does.
+       *
+       * A finger moving up now spends its travel in order — first raising the
+       * sheet until it hits the ceiling, then scrolling the content with
+       * whatever is left — and a finger moving down spends it the other way,
+       * scrolling back to the top before the sheet begins to close. That is
+       * the nested-scroll behaviour every native bottom sheet has, and it is
+       * why one continuous movement can take you from a resting card to the
+       * bottom of the page and back.
+       *
+       * Deltas, not `clientY - startY`: the two consumers hand travel back and
+       * forth, so an absolute offset from the start of the gesture stops
+       * describing either of them after the first handoff.
+       */
+      const ceiling = snaps[EXPANDED_SNAP_INDEX] ?? 0;
+      let sheetY = base;
+      let previousY = event.clientY;
+
       const move = (moveEvent: PointerEvent) => {
         const elapsed = moveEvent.timeStamp - lastAt;
         if (elapsed > 0) {
@@ -429,13 +478,37 @@ export function EventWidgetDeck() {
           lastY = moveEvent.clientY;
           lastAt = moveEvent.timeStamp;
         }
-        const travelled = moveEvent.clientY - startY;
-        if (Math.abs(travelled) > 4) draggedRef.current = true;
-        // Above the top snap there is nothing to reveal, so resistance is
-        // heavy; below the resting one there is (a dismissal), so it is light.
-        let next = base + travelled;
-        if (next < 0) next *= 0.12;
-        applySheet(next);
+        if (Math.abs(moveEvent.clientY - startY) > 4) draggedRef.current = true;
+
+        let delta = moveEvent.clientY - previousY;
+        previousY = moveEvent.clientY;
+        const scroller = scrollerRef.current;
+
+        if (delta < 0) {
+          // UP. The sheet rises to its ceiling first; the remainder scrolls.
+          const room = sheetY - ceiling;
+          if (room > 0) {
+            const used = Math.max(delta, -room);
+            sheetY += used;
+            delta -= used;
+          }
+          if (delta < 0 && scroller) scroller.scrollTop -= delta;
+        } else if (delta > 0) {
+          // DOWN. Unwind the scroll first — a sheet that starts closing while
+          // there is still text above the fold is a sheet that closes by
+          // accident.
+          if (scroller && scroller.scrollTop > 0) {
+            const used = Math.min(delta, scroller.scrollTop);
+            scroller.scrollTop -= used;
+            delta -= used;
+          }
+          sheetY += delta;
+        }
+
+        // Past the ceiling there is nothing left to reveal, so resistance is
+        // heavy; below the resting position there is (a dismissal), so it is
+        // light and the sheet follows the finger.
+        applySheet(sheetY < ceiling ? ceiling + (sheetY - ceiling) * 0.12 : sheetY);
       };
 
       const end = (endEvent: PointerEvent) => {
@@ -533,7 +606,7 @@ export function EventWidgetDeck() {
   );
 
   /**
-   * Tap the handle to step one snap taller — or, at full screen, back down.
+   * Tap the handle to step one snap taller — or, at its tallest, back down.
    *
    * Guarded on `draggedRef`, which `handleSheetDragEnd` sets: a drag ends with
    * a click event too, and without the guard every drag would also step the
@@ -544,7 +617,7 @@ export function EventWidgetDeck() {
       draggedRef.current = false;
       return;
     }
-    if (snapIndex === FULL_SNAP_INDEX) snapTo(INITIAL_SNAP_INDEX);
+    if (snapIndex === EXPANDED_SNAP_INDEX) snapTo(INITIAL_SNAP_INDEX);
     else snapTo(snapIndex - 1);
   }, [snapIndex, snapTo]);
 
@@ -582,7 +655,7 @@ export function EventWidgetDeck() {
       // what makes the whole surface draggable rather than just the handle —
       // and it stops exactly when the sheet is full, at which point an upward
       // drag is a request to read further and belongs to the scroller.
-      if (dy < 0 && atTop && !isFull) {
+      if (dy < 0 && atTop && !isExpanded) {
         gesture.committed = true;
         beginVerticalDrag(event);
         return;
@@ -590,7 +663,7 @@ export function EventWidgetDeck() {
       // Neither: the browser scrolls the content, natively, uninterrupted.
       gesture.committed = true;
     },
-    [beginSwipe, beginVerticalDrag, isFull],
+    [beginSwipe, beginVerticalDrag, isExpanded],
   );
 
   if (!isOpen || !currentEvent) return null;
@@ -674,7 +747,7 @@ export function EventWidgetDeck() {
           aria-label="Back to events"
           className={cn(
             'pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90',
-            isFull ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
+            isExpanded ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
           )}
         >
           <ArrowLeft className="size-5" aria-hidden />
@@ -682,7 +755,7 @@ export function EventWidgetDeck() {
         <span
           className={cn(
             'min-w-0 flex-1 truncate text-body-sm font-semibold transition-opacity duration-200',
-            isFull ? 'text-foreground opacity-100' : 'opacity-0',
+            isExpanded ? 'text-foreground opacity-100' : 'opacity-0',
           )}
           aria-hidden
         >
@@ -694,7 +767,7 @@ export function EventWidgetDeck() {
             title={currentEvent.title}
             className={cn(
               'pointer-events-auto size-10 shrink-0 rounded-full transition-transform active:scale-90',
-              isFull ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
+              isExpanded ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
             )}
           />
         ) : null}
@@ -731,20 +804,26 @@ export function EventWidgetDeck() {
                 aria-hidden={active ? undefined : true}
               >
                 <div
+                  data-deck-card={active ? 'active' : 'peek'}
                   className={cn(
                     'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl',
-                    // Radius AND opacity on the same spring, so expanding to
-                    // full screen squares the corners as it arrives rather
-                    // than snapping them a beat later.
-                    'transition-[border-radius,opacity] duration-300 ease-spring motion-reduce:transition-none',
-                    // ── ALL FOUR CORNERS ─────────────────────────────────
+                    // Opacity and scale on one spring, so a neighbour arriving
+                    // in the centre resolves as a single movement rather than
+                    // fading and growing on two different clocks.
+                    'transition-[opacity,transform] duration-300 ease-spring motion-reduce:transition-none',
+                    // ── ALL FOUR CORNERS, IN EVERY STATE ─────────────────
                     // It was `rounded-t-3xl` only, so the card met the bottom
                     // of the screen with two hard corners and the neighbours
                     // either side read as square slabs rather than as cards.
                     // The bottom rounding is invisible on the ACTIVE card
                     // (its CTA bar sits on the screen edge) and is exactly
                     // what makes the peeking ones look like objects.
-                    isFull ? 'rounded-none' : 'rounded-3xl border border-border',
+                    //
+                    // It used to square off at the top snap, because the top
+                    // snap was the whole screen. The sheet no longer reaches
+                    // the top, so there is no state in which this is a page
+                    // rather than a card — and no radius animation to run.
+                    'rounded-3xl border border-border',
                     // The neighbours are context, not content: dimmed and set
                     // back a little so the centre reads as the one in focus.
                     active ? 'opacity-100' : 'scale-[0.97] opacity-70',
@@ -757,7 +836,7 @@ export function EventWidgetDeck() {
                       content={content}
                       tiers={tiers}
                       events={events}
-                      isFull={isFull}
+                      isExpanded={isExpanded}
                       ctaHeight={ctaHeight}
                       price={price}
                       scrollerRef={scrollerRef}
@@ -850,7 +929,7 @@ function ActiveCard({
   content,
   tiers,
   events,
-  isFull,
+  isExpanded,
   ctaHeight,
   price,
   scrollerRef,
@@ -868,7 +947,7 @@ function ActiveCard({
   content: React.ComponentProps<typeof EventWidgetContent>['content'];
   tiers: React.ComponentProps<typeof EventWidgetContent>['tiers'];
   events: readonly EventCardData[];
-  isFull: boolean;
+  isExpanded: boolean;
   ctaHeight: number;
   price: string | null;
   scrollerRef: React.RefObject<HTMLDivElement>;
@@ -909,7 +988,7 @@ function ActiveCard({
         type="button"
         onPointerDown={onStartSheetDrag}
         onClick={onHandleTap}
-        aria-label={isFull ? 'Collapse event' : 'Expand event'}
+        aria-label={isExpanded ? 'Collapse event' : 'Expand event'}
         className="flex h-11 w-full shrink-0 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
       >
         <span className="h-1.5 w-12 rounded-full bg-border-strong" aria-hidden />
@@ -925,6 +1004,7 @@ function ActiveCard({
           of it you can see is the reader's choice, made by dragging. */}
       <div
         ref={scrollerRef}
+        data-deck-scroller
         onPointerDown={onContentPointerDown}
         onPointerMove={onContentPointerMove}
         className="flex-1 overflow-y-auto overscroll-contain"

@@ -64,6 +64,9 @@ export function AccountOverview() {
   // A cursor list gives no total, so the count is rendered as a FLOOR — the
   // same rule the browse page follows rather than inventing a total.
   const more = Boolean(tickets.data?.meta.next);
+  const memberSince = user?.date_joined
+    ? new Date(user.date_joined).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+    : null;
 
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
@@ -79,47 +82,58 @@ export function AccountOverview() {
         />
         <div className="min-w-0">
           <h1 className="truncate text-h3 md:text-h2">{user?.full_name || 'Your account'}</h1>
-          <p className="flex items-center gap-1.5 truncate text-body-sm text-muted-foreground">
+          {/* `truncate` has to be on the TEXT, not on the flex container: a
+              flex parent does not clip its child, so a long address ran past
+              the edge of the screen mid-word with no ellipsis to say it had
+              been cut. */}
+          <p className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
             <Mail className="size-3.5 shrink-0" aria-hidden />
-            {user?.email}
+            <span className="min-w-0 truncate">{user?.email}</span>
           </p>
+          {/* "Member since" was a KPI TILE — a third of a three-up row, next to
+              two numbers somebody navigates by. It is not a metric and nothing
+              acts on it: it is a fact about this profile, so it sits with the
+              profile. Moving it here is what buys the two tiles that ARE
+              navigational the width they need. */}
+          {memberSince ? (
+            <p className="truncate text-caption text-foreground-subtle">Member since {memberSince}</p>
+          ) : null}
         </div>
       </header>
 
-      {/* ── THE TALL TICKETS TILE WAS THE CLUMSY PART ────────────────────
-          `row-span-2` on the first card made a 2-column phone grid where one
-          tile was double height and the two beside it stacked — a ragged,
-          unbalanced block above everything else on the screen. Three equal
-          tiles in a row do the same job: the numbers are short, and at 360px a
-          third of the width is still ample for "20+".
+      {/* ── THREE TILES DID NOT FIT, AND EVERY LINE PROVED IT ─────────────
+          `grid-cols-3` on a 390px screen leaves each tile about 113px, less
+          padding — under which every string in it was clipped by its own
+          `truncate`:
 
-          Still a `<ul>` of `<li>`, because it is a list of facts, and the two
-          that lead somewhere are still links. */}
-      <ul className="grid grid-cols-3 gap-2 sm:gap-stack-lg">
+              SAVED EVEN…   MEMBER SI…   Aug 2…   20 ready to u…
+
+          and the bookmark icon, absolutely positioned at `right-3 top-3`, sat
+          ON TOP of the label it was meant to annotate. Four separate defects
+          from one column too many.
+
+          TWO tiles now, because only two of the three were ever navigational —
+          "Member since" moved up to the profile line where it belongs. That is
+          not a smaller row, it is the right row: these are the two places
+          somebody goes from here, so they read as destinations, with a chevron
+          each rather than a decorative icon competing with the text.
+
+          Still a `<ul>` of `<li>`: it is a list of facts, and both lead
+          somewhere. */}
+      <ul className="grid grid-cols-2 gap-3 sm:gap-stack-lg">
         <Stat
           label="Tickets"
           value={tickets.isPending ? null : `${rows.length}${more ? '+' : ''}`}
           hint={ready > 0 ? `${ready} ready to use` : 'None ready to use'}
           href="/account/tickets"
-          className="flex flex-col justify-between"
+          icon={<TicketIcon className="size-4" />}
         />
         <Stat
-          label="Saved events"
+          label="Saved"
           value={savedIds === null ? null : String(savedIds.length)}
+          hint={savedIds?.length === 1 ? '1 event kept' : 'Events you kept'}
           href="/account/saved"
-          icon={<Bookmark className="size-4 text-muted-foreground" />}
-        />
-        <Stat
-          label="Member since"
-          value={
-            user?.date_joined
-              ? new Date(user.date_joined).toLocaleDateString('en-IN', {
-                  month: 'short',
-                  year: 'numeric',
-                })
-              : null
-          }
-          hint="Thanks for being here"
+          icon={<Bookmark className="size-4" />}
         />
       </ul>
 
@@ -200,24 +214,57 @@ function Stat({
   className?: string;
 }) {
   const body = (
-    <div className="flex h-full flex-col justify-between">
-      <div>
-        <p className="truncate text-caption font-medium uppercase tracking-wide text-foreground-subtle">
-          {label}
-        </p>
-        {value === null ? (
-          <Skeleton className="my-1 h-8 w-16" />
-        ) : (
-          <p className="mt-1 truncate text-h3 tabular-nums font-bold">{value}</p>
+    <div className="flex h-full flex-col gap-1">
+      {/* The icon LEADS the label instead of floating over it. Absolutely
+          positioned at `right-3 top-3` it overlapped the very text it
+          annotated the moment the tile narrowed. */}
+      <p
+        className={cn(
+          'flex items-center gap-1.5 text-caption font-medium uppercase tracking-wide text-foreground-subtle',
+          // Clearance for the chevron, so the label can never run under it —
+          // which is the failure the old absolutely-positioned icon had.
+          href && 'pr-5',
         )}
-      </div>
-      {hint ? <p className="mt-2 truncate text-caption text-muted-foreground">{hint}</p> : null}
+      >
+        {icon ? (
+          <span aria-hidden className="shrink-0 text-muted-foreground">
+            {icon}
+          </span>
+        ) : null}
+        <span className="min-w-0 truncate">{label}</span>
+      </p>
+      {value === null ? (
+        <Skeleton className="h-8 w-16" />
+      ) : (
+        // NOT truncated. A count clipped to "2…" is worse than one that wraps,
+        // and these are two or three characters wide.
+        <p className="text-h3 font-bold tabular-nums">{value}</p>
+      )}
+      {/* `line-clamp-2` rather than `truncate`: a hint is a sentence, and
+          "20 ready to u…" answered nothing. */}
+      {hint ? (
+        <p className="mt-auto line-clamp-2 pt-1 text-caption text-muted-foreground">{hint}</p>
+      ) : null}
+      {href ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-3 top-3 text-foreground-subtle transition-transform duration-fast group-hover:translate-x-0.5"
+        >
+          <ArrowRight className="size-4" />
+        </span>
+      ) : null}
     </div>
   );
 
   return (
-    <li className={cn('relative rounded-2xl border border-border bg-surface p-card shadow-sm', className)}>
-      {icon ? <div className="absolute right-3 top-3">{icon}</div> : null}
+    <li
+      className={cn(
+        'group relative rounded-2xl border border-border bg-surface p-card shadow-sm',
+        // A tile that navigates should feel like it does.
+        href && 'transition-colors duration-fast hover:border-border-strong hover:bg-muted/40',
+        className,
+      )}
+    >
       {href ? (
         <Link
           href={href}

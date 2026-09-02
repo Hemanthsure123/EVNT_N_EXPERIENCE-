@@ -252,7 +252,7 @@ class BookingService:
         requested = self._validate_items(items, tiers)
 
         if idempotency_key:
-            existing = self._bookings.get_by_idempotency_key(user_id, idempotency_key)
+            existing = self._bookings.get_replayable_by_idempotency_key(user_id, idempotency_key)
             if existing is not None:
                 return self._creation_result(self._ensure_payment_order(existing))
             # Serialise concurrent same-key creates so a double-click doesn't do a
@@ -264,9 +264,18 @@ class BookingService:
                 timeout_seconds=15,
                 blocking_timeout_seconds=5,
             ):
-                existing = self._bookings.get_by_idempotency_key(user_id, idempotency_key)
+                existing = self._bookings.get_replayable_by_idempotency_key(
+                    user_id, idempotency_key
+                )
                 if existing is not None:
                     return self._creation_result(self._ensure_payment_order(existing))
+                # Nothing replayable, so anything still holding this key is a
+                # booking that ended — expired, cancelled, or reserved past its
+                # deadline. Detach it, or the insert below collides with the very
+                # row we just decided not to replay and the retry is refused for
+                # the second time. Inside the lock, so no concurrent create can
+                # slip between the release and the insert.
+                self._bookings.release_idempotency_key(user_id, idempotency_key)
                 booking = self._reserve_and_insert(
                     user_id, event_id, requested, donation_minor, idempotency_key
                 )
@@ -430,7 +439,9 @@ class BookingService:
             # A concurrent same-key create won the unique constraint; our reserves
             # rolled back with the transaction → return the winner, no leak.
             if idempotency_key:
-                existing = self._bookings.get_by_idempotency_key(user_id, idempotency_key)
+                existing = self._bookings.get_replayable_by_idempotency_key(
+                    user_id, idempotency_key
+                )
                 if existing is not None:
                     return existing
             raise
