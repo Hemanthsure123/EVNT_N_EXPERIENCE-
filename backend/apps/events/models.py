@@ -26,6 +26,7 @@ from django.conf import settings
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
+from django.db.models import Q
 
 
 class EventCategory(models.TextChoices):
@@ -513,6 +514,133 @@ class SavedEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id} saved {self.event_id}"
+
+
+class CrewMember(models.Model):
+    """Somebody an organizer puts on stage: a DJ, a compere, a support act.
+
+    ── IT IS OWNED BY THE ORGANIZATION, NOT BY AN EVENT ────────────────────
+
+    The whole point is REUSE. A promoter who runs the same night monthly adds
+    their resident once and picks them for every event, which is why this is a
+    roster with a FK to `Organization` and a join table below, rather than a
+    per-event row like `EventFaq`.
+
+    ── AND IT IS NOT A `performers.Performer`. NO `performer` FK HERE, EVER ─
+
+    The temptation is obvious — a Performer is also owned by an Organization
+    and also has photographs — and it is wrong twice over.
+
+    1. `performers` is DOWNSTREAM of `events` in the build order, and
+       `Event`'s only foreign keys are to `organizations` and `accounts`. A
+       reference the other way inverts the rule that keeps the modules
+       separable, the same rule that stops `duplicate_event` reaching into
+       ticketing to clone tiers.
+    2. It would not work anyway. A `Performer` is a SELLABLE LISTING in the
+       Hire-a-Band marketplace and is invisible on every public read path
+       until a platform operator approves it. A club night's own compere would
+       not appear on the event page until somebody at the platform cleared a
+       moderation queue for a person who is not for hire. The lineup would
+       render empty and nothing would say why.
+
+    A crew member is EVENT CONTENT, which is exactly what this module already
+    owns for media, FAQs, the running order and sessions.
+
+    ── WHAT IS DELIBERATELY ABSENT ─────────────────────────────────────────
+
+    No moderation and no publish check: most events have no crew, and a gate
+    that demanded one would refuse to publish a club night. No `search_vector`:
+    a lighting tech has no business surfacing in `/performers`-shaped results.
+    No `user` FK and no permissions — a crew member is a LABEL, not an access
+    decision, and delegated gate staff is the deferred `teams` module.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "organizations.Organization", on_delete=models.PROTECT, related_name="crew_members"
+    )
+    name = models.CharField(max_length=120)
+    #: FREE TEXT, not a choice set. The module uses enums where the set is
+    #: knowable (`MediaKind`, `TimelineKind`) and a plain string where it is
+    #: open (`Event.city`). Stage roles are long-tail — "DJ", "producer",
+    #: "compere", "sound", "aerialist" — and a fixed list would be wrong within
+    #: a week and unfixable without a migration.
+    role = models.CharField(max_length=80, blank=True, default="")
+    details = models.TextField(blank=True, default="")
+    photo_url = models.CharField(max_length=500, blank=True, default="")
+    #: Blank at the column so a backfill survives; REQUIRED by the write API.
+    #: Exactly the `EventMedia.alt_text` rule, for exactly the same reason.
+    photo_alt_text = models.CharField(max_length=200, blank=True, default="")
+    #: Retire somebody without erasing them. A `PROTECT` on the join means a
+    #: person on a past event's lineup cannot be deleted, so "they no longer
+    #: work with us" needs an answer that is not a delete.
+    is_active = models.BooleanField(default=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "events"
+        db_table = "crew_member"
+        ordering = ("name", "id")
+        indexes = [
+            # The roster read and the wizard's picker are the same query —
+            # one organization's live crew, by name. Partial, because a
+            # soft-deleted row is never wanted by either.
+            models.Index(
+                fields=["organization", "name", "id"],
+                name="crew_member_org_name_idx",
+                condition=Q(deleted_at__isnull=True),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class EventCrew(models.Model):
+    """One crew member on one event's lineup, in order.
+
+    An explicit join model rather than a `ManyToManyField`, and that is the
+    house style rather than a preference: there is not one M2M on any model in
+    this codebase. A descriptor would put `event.crew.all()` — an unscoped ORM
+    query — within reach of any serializer, which is a `Model.objects` call in
+    costume and exactly what the repository layer exists to prevent. It also
+    gives the row somewhere to keep `position` and `billed_as`.
+
+    `CASCADE` on the event and `PROTECT` on the member: the lineup is worthless
+    without its event, and deleting a person out from under a live event's page
+    would silently empty a section somebody is reading.
+
+    NO `deleted_at`. It carries no content of its own, so a hard delete is
+    honest — the same reasoning that gives `EventTimelineEntry` no `updated_at`.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="crew")
+    member = models.ForeignKey(CrewMember, on_delete=models.PROTECT, related_name="appearances")
+    #: A per-event override of the roster's `role` — the same person is "DJ" on
+    #: one night and "host" on another. Blank falls back to `member.role`,
+    #: resolved in the selector so the fallback lives in one place.
+    billed_as = models.CharField(max_length=80, blank=True, default="")
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "events"
+        db_table = "event_crew"
+        ordering = ("position", "id")
+        constraints = [
+            # A multi-select toggle double-fires on a slow connection, and the
+            # same face twice in one carousel is the visible symptom.
+            models.UniqueConstraint(fields=["event", "member"], name="event_crew_unique_member"),
+        ]
+        indexes = [
+            models.Index(fields=["event", "position", "id"], name="event_crew_event_pos_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.member_id} on {self.event_id}"
 
 
 class EventSlot(models.Model):

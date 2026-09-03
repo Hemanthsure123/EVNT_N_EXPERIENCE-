@@ -17,7 +17,7 @@ import { BRAND_NAME } from '@/lib/brand';
  * of the 26.
  */
 export const SITE_NAME = BRAND_NAME;
-const SITE_DESCRIPTION =
+export const SITE_DESCRIPTION =
   'Discover events and experiences, book tickets in seconds, and get in with a single scan.';
 
 /** App-wide metadata defaults (title template, OpenGraph, Twitter, robots). */

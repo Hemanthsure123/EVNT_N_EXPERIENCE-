@@ -48,7 +48,16 @@ class TestReads:
         # own: it is already edge-cached and already invalidated on every
         # content write, so it is one cached document instead of a fourth
         # round trip before the ticket panel can draw.
-        assert response.json() == {"media": [], "faqs": [], "timeline": [], "slots": []}
+        # The whole shape, pinned. A collection added to this payload without
+        # a matching frontend fallback is a `TypeError` on the event page, so
+        # the test that notices is this one.
+        assert response.json() == {
+            "media": [],
+            "faqs": [],
+            "timeline": [],
+            "slots": [],
+            "crew": [],
+        }
 
     def test_content_is_edge_cacheable(self, api_client, make_event):
         """Same for every visitor, so a CDN should absorb it — the same

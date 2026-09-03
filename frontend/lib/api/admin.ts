@@ -658,3 +658,34 @@ export const setUserOperator = (userId: string, isStaff: boolean, reason = '') =
     is_staff: isStaff,
     reason,
   });
+
+export type AdminCrewMember = {
+  id: string;
+  name: string;
+  role: string;
+  photo_url: string;
+  is_active: boolean;
+  created_at: string;
+  /** How many events this person is on — the one fact the organizer's own
+   *  screen does not show, and the reason an operator opens this list. */
+  appearance_count: number;
+};
+
+/**
+ * One organization's crew roster, for an operator.
+ *
+ * READ ONLY, like the rest of the console. An operator can see who an
+ * organization puts on stage — which is what makes a report about a lineup
+ * actionable — and cannot edit somebody else's roster: that is the organizer's
+ * own screen, and a console that wrote here could break `events`' invariants.
+ *
+ * It hangs off the organization detail page rather than getting a nav entry,
+ * because there is no platform-wide crew endpoint behind it and a nav item
+ * leading to a page that needs an id it does not have is worse than none.
+ */
+export const fetchAdminOrganizationCrew = (organizationId: string) =>
+  api
+    .get<{ data: AdminCrewMember[] }>(
+      `/admin/organizations/${encodeURIComponent(organizationId)}/crew`,
+    )
+    .then((page) => page.data);

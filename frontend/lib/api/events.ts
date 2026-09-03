@@ -149,7 +149,7 @@ export async function fetchEventContentSafe(
       next: { revalidate },
     });
   } catch {
-    return { media: [], faqs: [], timeline: [], slots: [] };
+    return { media: [], faqs: [], timeline: [], slots: [], crew: [] };
   }
 }
 

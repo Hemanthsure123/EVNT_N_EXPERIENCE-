@@ -10,6 +10,7 @@ import {
   Ticket,
   Undo2,
   Users,
+  UsersRound,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -76,6 +77,12 @@ export const ORGANIZER_SECTIONS: OrganizerSection[] = [
     label: 'Bookings',
     icon: Receipt,
     hint: 'Orders across your events, by customer or payment reference',
+  },
+  {
+    href: '/dashboard/crew',
+    label: 'Crew',
+    icon: UsersRound,
+    hint: 'The people you put on stage, reusable across every event',
   },
   {
     href: '/dashboard/customers',

@@ -3,9 +3,10 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft } from 'lucide-react';
-import { fetchAdminOrganizationAnalytics } from '@/lib/api/admin';
+import { ArrowLeft, UserRound } from 'lucide-react';
+import { fetchAdminOrganizationAnalytics, fetchAdminOrganizationCrew } from '@/lib/api/admin';
 import { TrendChart } from '@/components/admin/charts';
+import { RemoteImage } from '@/components/ui/remote-image';
 import { ErrorState, Panel, Skeleton } from '@/components/organizer/primitives';
 import { formatMoney } from '@/lib/discovery/format';
 import type { SeriesMetric } from '@/lib/api/organizer';
@@ -107,7 +108,83 @@ export function AdminOrganizationDetail({ organizationId }: { organizationId: st
           )}
         </div>
       </Panel>
+
+      <CrewPanel organizationId={organizationId} />
     </div>
+  );
+}
+
+/**
+ * Who this organization puts on stage.
+ *
+ * Here rather than as its own admin section: there is no platform-wide crew
+ * endpoint, and a nav item leading to a page that needs an organization id it
+ * does not have is worse than no nav item. An operator arrives at this
+ * question FROM an organization, which is where the answer lives.
+ *
+ * `appearance_count` is the column the organizer's own roster does not show,
+ * and it is the reason an operator opens this list — a name attached to
+ * fourteen events is a different thing from one attached to none.
+ */
+function CrewPanel({ organizationId }: { organizationId: string }) {
+  const query = useQuery({
+    queryKey: ['admin', 'organization-crew', organizationId],
+    queryFn: () => fetchAdminOrganizationCrew(organizationId),
+    staleTime: 60_000,
+  });
+
+  return (
+    <Panel title="Crew" subtitle="People this organiser puts on stage">
+      {query.isPending ? (
+        <div className="p-card">
+          <Skeleton className="h-24 w-full" />
+        </div>
+      ) : (query.data ?? []).length === 0 ? (
+        // Absent-not-empty does not apply inside an operator console: an
+        // operator asking "who do they book" needs "nobody" to be an answer,
+        // not a missing panel they cannot tell from a broken one.
+        <p className="p-card text-body-sm text-muted-foreground">
+          This organisation has not added anyone to its crew list.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {(query.data ?? []).map((member) => (
+            <li key={member.id} className="flex items-center gap-3 px-card py-3">
+              <span
+                aria-hidden
+                className="inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground"
+              >
+                <RemoteImage
+                  src={member.photo_url}
+                  className="size-full object-cover"
+                  fallback={<UserRound className="size-4" />}
+                />
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-body-sm font-medium text-foreground">
+                  {member.name}
+                </span>
+                {member.role ? (
+                  <span className="truncate text-caption text-muted-foreground">
+                    {member.role}
+                  </span>
+                ) : null}
+              </div>
+              {!member.is_active ? (
+                <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-caption text-muted-foreground">
+                  Retired
+                </span>
+              ) : null}
+              <span className="shrink-0 text-caption tabular-nums text-muted-foreground">
+                {member.appearance_count === 1
+                  ? '1 event'
+                  : `${member.appearance_count} events`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 

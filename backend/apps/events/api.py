@@ -32,6 +32,7 @@ from config.di import build_event_service, cache_port
 from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
 from core.throttling import UploadThrottle
+from core.uploads import CREW_PORTRAIT_SPEC, validate_image
 
 from .exceptions import EventNotFoundError
 from .models import MediaKind
@@ -40,10 +41,14 @@ from .repositories import SavedEventRepository
 from .schemas import (
     CancelEventRequestSerializer,
     CancelEventResultSerializer,
+    CreateCrewMemberRequestSerializer,
     CreateEventRequestSerializer,
     CreateEventSlotSerializer,
+    CrewMemberSerializer,
+    CrewPhotoRequestSerializer,
     EventCardSerializer,
     EventContentSerializer,
+    EventCrewEntrySerializer,
     EventDetailSerializer,
     EventFaqSerializer,
     EventMediaListSerializer,
@@ -57,6 +62,8 @@ from .schemas import (
     SavedEventSerializer,
     SavedIdsSerializer,
     SaveEventsRequestSerializer,
+    SetEventCrewRequestSerializer,
+    UpdateCrewMemberRequestSerializer,
     UpdateEventFaqSerializer,
     UpdateEventMediaSerializer,
     UpdateEventRequestSerializer,
@@ -375,7 +382,11 @@ class EventContentView(APIView):
 
     @extend_schema(responses={200: EventContentSerializer})
     def get(self, request: Request, event_id: str) -> Response:
-        from .repositories import EventContentRepository, EventSlotRepository
+        from .repositories import (
+            EventContentRepository,
+            EventCrewRepository,
+            EventSlotRepository,
+        )
 
         repository = EventContentRepository()
         body = {
@@ -387,6 +398,12 @@ class EventContentView(APIView):
             # on sale, and rendering it greyed out invites the question.
             "slots": EventSlotSerializer(
                 EventSlotRepository().list_for_event(event_id), many=True
+            ).data,
+            # The lineup. One extra query on a response that is edge-cached
+            # for everyone, and the alternative is a second round trip before
+            # a section above the FAQs can paint.
+            "crew": EventCrewEntrySerializer(
+                EventCrewRepository().for_event(event_id), many=True
             ).data,
         }
         etag = make_etag(body)
@@ -652,3 +669,132 @@ class SavedEventDetailView(APIView):
         "this should not be saved", and that is true either way."""
         SavedEventRepository().unsave(user_id=cast(User, request.user).id, event_id=event_id)
         return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+# ── Crew: the organization's roster, and one event's lineup ──────────────────
+#
+# The roster lives under `/me/` because it belongs to the signed-in owner's
+# ORGANIZATION, not to any event — the same shape as `/me/saved-events`. The
+# lineup lives under the event, because that is what it is about.
+
+
+class _CrewView(APIView):
+    """Authenticated at the request layer; OWNERSHIP is proven inside
+    `CrewService`, which scopes every query by organization rather than
+    fetching a row and then comparing — so a row belonging to somebody else is
+    never loaded at all. Same reasoning as the rest of this module."""
+
+    permission_classes: list = [IsAuthenticated]
+
+    @property
+    def _service(self):
+        from config.di import build_crew_service
+
+        return build_crew_service()
+
+    @property
+    def _actor(self):
+        return cast(User, self.request.user).id
+
+
+class CrewRosterView(_CrewView):
+    @extend_schema(responses={200: CrewMemberSerializer(many=True)})
+    def get(self, request: Request, organization_id: str) -> Response:
+        """The roster. `?active_only=true` is what the event wizard's picker
+        asks for — a retired member stays on this screen so they can be brought
+        back, and is absent from the list of people you can add to a new
+        event."""
+        active_only = request.query_params.get("active_only") == "true"
+        rows = self._service.list_roster(
+            organization_id=organization_id, actor_id=self._actor, active_only=active_only
+        )
+        return _no_store(Response({"data": CrewMemberSerializer(rows, many=True).data}))
+
+    @extend_schema(request=CreateCrewMemberRequestSerializer, responses={201: CrewMemberSerializer})
+    def post(self, request: Request, organization_id: str) -> Response:
+        payload = CreateCrewMemberRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        member = self._service.add_member(
+            organization_id=organization_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(
+            Response(CrewMemberSerializer(member).data, status=status.HTTP_201_CREATED)
+        )
+
+
+class CrewMemberDetailView(_CrewView):
+    @extend_schema(request=UpdateCrewMemberRequestSerializer, responses={200: CrewMemberSerializer})
+    def patch(self, request: Request, organization_id: str, member_id: str) -> Response:
+        payload = UpdateCrewMemberRequestSerializer(data=request.data, partial=True)
+        payload.is_valid(raise_exception=True)
+        member = self._service.update_member(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            member_id=member_id,
+            **payload.validated_data,
+        )
+        return _no_store(Response(CrewMemberSerializer(member).data))
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, organization_id: str, member_id: str) -> Response:
+        self._service.remove_member(
+            organization_id=organization_id, actor_id=self._actor, member_id=member_id
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CrewMemberPhotoView(_CrewView):
+    """A portrait for one roster row.
+
+    Multipart, and `alt_text` is REQUIRED on the request even though the column
+    allows blank — text written while looking at the picker is real alt text,
+    where a field appended to a finished grid gets "image1".
+    """
+
+    parser_classes = [MultiPartParser]
+    throttle_classes = [UploadThrottle]
+
+    @extend_schema(request=CrewPhotoRequestSerializer, responses={200: CrewMemberSerializer})
+    def post(self, request: Request, organization_id: str, member_id: str) -> Response:
+        payload = CrewPhotoRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        upload = payload.validated_data["file"]
+        content_type = validate_image(upload, spec=CREW_PORTRAIT_SPEC)
+        member = self._service.attach_photo(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            member_id=member_id,
+            upload=upload,
+            content_type=content_type,
+            alt_text=payload.validated_data["alt_text"],
+        )
+        return _no_store(Response(CrewMemberSerializer(member).data))
+
+
+class EventCrewView(_OwnerWriteView):
+    """One event's lineup. GET for the studio's picker, PUT to set it."""
+
+    @extend_schema(responses={200: EventCrewEntrySerializer(many=True)})
+    def get(self, request: Request, event_id: str) -> Response:
+        rows = self._service.list_event_crew(event_id=event_id, actor_id=self._actor)
+        return _no_store(Response({"data": EventCrewEntrySerializer(rows, many=True).data}))
+
+    @extend_schema(
+        request=SetEventCrewRequestSerializer, responses={200: EventCrewEntrySerializer(many=True)}
+    )
+    def put(self, request: Request, event_id: str) -> Response:
+        """SET REPLACEMENT, not add/remove.
+
+        The control upstream is a multi-select: somebody manipulates a set and
+        presses save once. Diffing that into per-row calls in the browser would
+        make the network the source of truth for what was chosen, and one
+        dropped request would leave a lineup nobody asked for.
+        """
+        payload = SetEventCrewRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        rows = self._service.set_event_crew(
+            event_id=event_id,
+            actor_id=self._actor,
+            member_ids=[str(value) for value in payload.validated_data["member_ids"]],
+        )
+        return _no_store(Response({"data": EventCrewEntrySerializer(rows, many=True).data}))

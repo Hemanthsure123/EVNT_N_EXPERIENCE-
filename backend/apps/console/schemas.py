@@ -426,3 +426,21 @@ class DeleteEventResultSerializer(serializers.Serializer):
     refunds_enqueued = serializers.IntegerField()
     holds_released = serializers.IntegerField()
     attendees_notified = serializers.IntegerField()
+
+
+class AdminCrewMemberSerializer(serializers.Serializer):
+    """A crew member, as an operator sees them.
+
+    `appearance_count` is the one field the organizer's own screens do not
+    show, and it is why this is a separate serializer rather than a reuse: an
+    operator asking "who is this organization putting on stage" wants to know
+    how often, and the organizer already knows.
+    """
+
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+    role = serializers.CharField()
+    photo_url = serializers.CharField()
+    is_active = serializers.BooleanField()
+    created_at = serializers.DateTimeField()
+    appearance_count = serializers.IntegerField()

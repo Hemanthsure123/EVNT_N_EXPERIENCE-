@@ -596,3 +596,36 @@ class ConsoleRepository:
             )
             .order_by("created_at")
         )
+
+    def crew_for_organization(self, organization_id) -> list[dict]:
+        """One organization's crew roster, for an operator.
+
+        Reaches into `events.CrewMember` directly, which is the console's whole
+        pattern: it imports the models it reports on rather than making every
+        module grow an admin-shaped selector nobody else calls, and it never
+        writes, so it cannot break another module's invariants.
+
+        Soft-deleted rows are excluded — an operator is looking at who this
+        organization can put on stage, not at an audit history. `appearances`
+        is counted in the SAME query rather than per row, because an operator
+        page that N+1s over a roster is the slowest screen on the platform for
+        exactly the organizations worth looking at.
+        """
+        from django.db.models import Count
+
+        from apps.events.models import CrewMember
+
+        return list(
+            CrewMember.objects.filter(organization_id=organization_id, deleted_at__isnull=True)
+            .annotate(appearance_count=Count("appearances"))
+            .values(
+                "id",
+                "name",
+                "role",
+                "photo_url",
+                "is_active",
+                "created_at",
+                "appearance_count",
+            )
+            .order_by("name", "id")
+        )

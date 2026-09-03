@@ -2,11 +2,15 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
+import { cancelBooking } from '@/lib/api/bookings';
+import { Button } from '@/components/ui/button';
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/components/ui/drawer';
 import { formatEventDate, formatEventTime } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
 import { BookingProvider, useBooking } from './booking-context';
+import { CTA_PILL_LG } from './cta';
 
 /**
  * The frame both checkout screens render inside.
@@ -126,8 +130,128 @@ export function FunnelScreen({
   );
 }
 
-function FunnelHeader({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) {
+/**
+ * The back arrow, and the one place a hold can be released deliberately.
+ *
+ * ── WHY THIS ASKS, WHEN ALMOST NOTHING ELSE IN THE PRODUCT DOES ──────────
+ *
+ * The house rule is that a reversible action gets UNDO rather than a dialog
+ * (`components/admin/undo.tsx`). This is the exception, and it earns it:
+ * cancelling releases the seats to the PUBLIC pool via `ticketing.release`,
+ * there is no per-user parking of the released quantity, and nothing can take
+ * them back. It is the one action on this flow that cannot be undone.
+ *
+ * ── THE COPY STATES THE TRADE BEFORE THE PRESS, NOT AFTER ────────────────
+ *
+ * "Are you sure?" would be worthless here. What somebody needs to know is that
+ * the tickets go back on sale IMMEDIATELY and may be gone if they return —
+ * which on a tight tier is a real coin flip, not a formality. Saying it after
+ * the fact, on a sold-out screen, would be telling them what we had already
+ * done to them.
+ *
+ * ── AND IT ONLY APPEARS WHEN THERE IS SOMETHING TO LOSE ──────────────────
+ *
+ * No booking, or a hold that has already lapsed, and the arrow is plain
+ * navigation. Prompting to cancel a booking that does not exist is the kind of
+ * dialog people learn to dismiss without reading, which is how the one that
+ * mattered gets dismissed too.
+ *
+ * WHAT IT CANNOT COVER, stated rather than papered over: only this button is
+ * interceptable. Browser back, a swipe-back gesture, the hardware key and
+ * closing the tab cannot be — `beforeunload` cannot await a request, and
+ * hijacking history is hostile. Those keep today's behaviour: the hold lapses
+ * on its own and the sweeper releases it. A dialog on one exit and silence on
+ * the others is still better than no deliberate release at all, because the
+ * deliberate one is the only one where the customer is CHOOSING to leave.
+ */
+function BackControl() {
   const router = useRouter();
+  const { booking, setBooking } = useBooking();
+  const [asking, setAsking] = React.useState(false);
+  const [cancelling, setCancelling] = React.useState(false);
+
+  const live =
+    booking?.status === 'reserved' &&
+    Boolean(booking.hold_expires_at) &&
+    Date.parse(booking.hold_expires_at as string) > Date.now();
+
+  const leave = () => {
+    setAsking(false);
+    router.back();
+  };
+
+  const cancelAndLeave = () => {
+    if (!booking) return leave();
+    setCancelling(true);
+    void (async () => {
+      // Swallowed on purpose: a 409 means the sweeper or another tab got there
+      // first, which is the outcome this call wanted. Blocking the exit on it
+      // would trap somebody on a checkout they have chosen to leave.
+      await cancelBooking(booking.id).catch(() => undefined);
+      setBooking(null);
+      setCancelling(false);
+      leave();
+    })();
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => (live ? setAsking(true) : router.back())}
+        aria-label="Go back"
+        className="-ml-2 inline-flex size-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ArrowLeft className="size-5" aria-hidden />
+      </button>
+
+      <Drawer open={asking} onOpenChange={(next) => !cancelling && setAsking(next)}>
+        <DrawerContent side="responsive" aria-label="Cancel this booking?">
+          <div className="flex flex-col gap-block px-6 py-card-lg">
+            <div className="flex flex-col gap-2">
+              <DrawerTitle>Cancel this booking?</DrawerTitle>
+              <DrawerDescription>
+                Your tickets go back on sale straight away, so they may be gone if you come
+                back. Nothing has been charged.
+              </DrawerDescription>
+            </div>
+            {/* The SAFE action is the primary one and sits under the thumb.
+                A destructive default is how somebody loses their seats to a
+                mis-tap on a control they opened by accident. */}
+            <div className="flex flex-col gap-2">
+              <Button
+                size="lg"
+                className={CTA_PILL_LG}
+                onClick={() => setAsking(false)}
+                disabled={cancelling}
+              >
+                Keep my tickets
+              </Button>
+              <Button
+                variant="ghost"
+                size="lg"
+                className="w-full text-destructive hover:bg-destructive-subtle hover:text-destructive-subtle-foreground"
+                onClick={cancelAndLeave}
+                disabled={cancelling}
+              >
+                {cancelling ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                    Releasing them
+                  </>
+                ) : (
+                  'Cancel booking'
+                )}
+              </Button>
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </>
+  );
+}
+
+function FunnelHeader({ title, subtitle }: { title: string; subtitle?: React.ReactNode }) {
   return (
     // Not sticky itself — the wrapper above pins the header and the countdown
     // as one block, so they can never separate mid-scroll.
@@ -136,15 +260,9 @@ function FunnelHeader({ title, subtitle }: { title: string; subtitle?: React.Rea
         {/* `router.back()`, not a link to the event. The two screens are one
             flow and the browser's own history is the truthful answer to "where
             was I" — a hard-coded href would send somebody who arrived from a
-            shared link to a page they had never seen. */}
-        <button
-          type="button"
-          onClick={() => router.back()}
-          aria-label="Go back"
-          className="-ml-2 inline-flex size-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ArrowLeft className="size-5" aria-hidden />
-        </button>
+            shared link to a page they had never seen. It asks first when there
+            is a live hold to release; see `BackControl`. */}
+        <BackControl />
         <div className="flex min-w-0 flex-col">
           <h1 className="truncate text-body-lg font-semibold leading-tight text-foreground">
             {title}

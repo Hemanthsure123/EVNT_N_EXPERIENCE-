@@ -52,3 +52,26 @@ export const setBookingDonation = (bookingId: string, donationMinor: number) =>
   api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/donation`, {
     donation_minor: donationMinor,
   });
+
+/**
+ * Release a hold the customer no longer wants.
+ *
+ * ── IT IS ALSO THE FIX FOR "IT SAYS SOLD OUT AND I HAD THEM" ──────────────
+ *
+ * `cancel_booking` checks `status == RESERVED` and DELIBERATELY does not check
+ * the deadline (backend/apps/booking/services.py:511). That matters, because an
+ * expired booking keeps occupying `TicketType.reserved` until the sweeper runs
+ * — `booking.release_expired` is scheduled every 60 seconds, so there is up to
+ * a minute where the seats are held by a booking that has already been declared
+ * dead on screen.
+ *
+ * Pressing "Get these tickets again" inside that minute reserved against
+ * inventory that still counted the customer's OWN lapsed hold, so on a tight
+ * tier it was refused `sold_out` for tickets nobody else had taken. Cancelling
+ * first frees them immediately and the retry reserves against the truth.
+ *
+ * No `Idempotency-Key`: cancelling twice is a `booking_not_cancellable` 409,
+ * which is a safe no-op for a caller that has already got what it wanted.
+ */
+export const cancelBooking = (bookingId: string) =>
+  api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/cancel`, {});

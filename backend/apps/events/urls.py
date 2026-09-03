@@ -73,6 +73,25 @@ urlpatterns += [
         api.EventTimelineDetailView.as_view(),
         name="event-timeline-detail",
     ),
+    # ── Crew ────────────────────────────────────────────────────────────
+    # The ROSTER hangs off the organization, because that is what owns it and
+    # the whole point is reuse across events. The LINEUP hangs off the event.
+    path(
+        "organizations/<uuid:organization_id>/crew",
+        api.CrewRosterView.as_view(),
+        name="crew-roster",
+    ),
+    path(
+        "organizations/<uuid:organization_id>/crew/<uuid:member_id>",
+        api.CrewMemberDetailView.as_view(),
+        name="crew-member-detail",
+    ),
+    path(
+        "organizations/<uuid:organization_id>/crew/<uuid:member_id>/photo",
+        api.CrewMemberPhotoView.as_view(),
+        name="crew-member-photo",
+    ),
+    path("events/<uuid:event_id>/crew", api.EventCrewView.as_view(), name="event-crew"),
     path("me/saved-events", api.SavedEventsView.as_view(), name="saved-events"),
     path(
         "me/saved-events/<uuid:event_id>",

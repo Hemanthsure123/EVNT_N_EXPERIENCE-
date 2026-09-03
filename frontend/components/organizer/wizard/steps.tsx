@@ -33,6 +33,7 @@ import { missingForSave } from './details-step';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
+import { CrewPicker } from './crew-picker';
 import { RunningOrder } from './running-order';
 
 type StepProps = {
@@ -450,6 +451,30 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
           <NeedsSavedDraft
             title="The running order unlocks once the draft is saved"
             what="Add the running order once the event exists. Nothing above is lost in the meantime."
+            missing={missingForSave(draft)}
+            save={save}
+          />
+        )}
+      </Section>
+
+      {/* A SECTION HERE, NOT A NINTH STEP.
+          The running order already lives on this step, and a lineup and a
+          running order are the same question asked twice — who is on, and
+          when. A ninth step would also break the "Eight steps" promise the
+          sidebar and the ⌘K palette make, which `nav.test.ts` pins to
+          `STEPS.length`.
+
+          Gated exactly as Sessions and Running order are: it writes to
+          server-backed rows, so it needs an event to write them to, and it
+          names the fields that unlock it rather than rendering a form that
+          404s. */}
+      <Section title="Who's taking the stage">
+        {draft.eventId ? (
+          <CrewPicker eventId={draft.eventId} />
+        ) : (
+          <NeedsSavedDraft
+            title="The lineup unlocks once the draft is saved"
+            what="Pick who is performing once the event exists. Your crew list is kept on the organisation, so it is ready either way."
             missing={missingForSave(draft)}
             save={save}
           />

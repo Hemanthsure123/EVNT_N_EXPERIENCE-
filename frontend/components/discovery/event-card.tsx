@@ -327,7 +327,12 @@ export function EventCardSkeleton({ className }: { className?: string }) {
       )}
       aria-hidden
     >
-      <div className="skeleton aspect-portrait w-24 shrink-0 sm:w-full" />
+      {/* `sm:aspect-[4/3]` MATCHES THE CARD'S POSTER (:165). Without it the
+          skeleton's image box stayed portrait from `sm` up while the loaded
+          card's went 4:3 — so every cell in the grid shrank by roughly 140px
+          the moment results arrived, which is a layout shift on the busiest
+          public surface and reads as the page "jumping" as it loads. */}
+      <div className="skeleton aspect-portrait w-24 shrink-0 sm:aspect-[4/3] sm:w-full" />
       <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 sm:gap-2 sm:p-card lg:p-card-lg">
         <div className="skeleton hidden h-5 w-24 rounded-full sm:block" />
         <div className="skeleton h-5 w-11/12 rounded-md" />

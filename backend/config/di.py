@@ -530,7 +530,9 @@ def build_homepage_service() -> HomepageService:
 def build_event_content_service() -> EventContentService:
     """Media, FAQs and running order. Ownership is checked in the service."""
     from apps.events.repositories import (
+        CrewMemberRepository,
         EventContentRepository,
+        EventCrewRepository,
         EventRepository,
         EventSlotRepository,
     )
@@ -541,6 +543,27 @@ def build_event_content_service() -> EventContentService:
         content=EventContentRepository(),
         storage=storage_port(),
         slots=EventSlotRepository(),
+        crew=CrewMemberRepository(),
+        lineups=EventCrewRepository(),
+    )
+
+
+def build_crew_service():
+    """An organization's crew roster.
+
+    Its own factory rather than a method on the content service, because it is
+    authorised by the ORGANIZATION's owner while everything there is authorised
+    by an EVENT's owner — two different answers to "who may do this" have no
+    business sharing a class.
+    """
+    from apps.events.repositories import CrewMemberRepository
+    from apps.events.services import CrewService
+    from apps.organizations.repositories import OrganizationRepository
+
+    return CrewService(
+        organizations=OrganizationRepository(),
+        crew=CrewMemberRepository(),
+        storage=storage_port(),
     )
 
 

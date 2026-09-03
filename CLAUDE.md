@@ -1558,6 +1558,171 @@ from a 200 instead of inferring it from a status code that cannot tell
 contract explicitly, because the pipeline lives in another directory and
 cannot fail this file's build.
 
+## Crew: an event's lineup is CONTENT, and it is not a `performers.Performer`
+
+`events.CrewMember` (owned by an Organization) and `events.EventCrew` (the join
+to an Event) are the roster and the lineup. The roster hangs off the
+ORGANIZATION because the whole point is reuse — a promoter running the same
+night monthly adds their resident once, not twelve times — and the lineup hangs
+off the event.
+
+**Reusing `performers.Performer` was the obvious move and it fails twice.**
+`performers` is DOWNSTREAM of `events` in the build order and `Event`'s only
+FKs are to `organizations` and `accounts`, so a reference the other way inverts
+the rule that keeps the modules separable. And it would not have worked anyway:
+a `Performer` is a SELLABLE LISTING in the Hire-a-Band marketplace and is
+invisible on every public read path until a platform operator approves it, so a
+club night's own compere would not appear on the event page until somebody at
+the platform cleared a moderation queue for a person who is not for hire. The
+model docstring carries the line **"no `performer` FK here, ever"**, because the
+reason will not be obvious in six months.
+
+**What is deliberately absent:** no moderation and no publish check (most events
+have no crew, and a gate demanding one would refuse to publish a club night); no
+`search_vector` (a lighting tech has no business in `/performers`-shaped
+results); no `user` FK and no permissions (a crew member is a LABEL, not an
+access decision — delegated gate staff is the deferred `teams` module); and no
+`ManyToManyField`, because there is not one on any model in this codebase and a
+descriptor would put `event.crew.all()` — an unscoped ORM query — within reach
+of a serializer.
+
+**The rules that carry weight:**
+
+- **The cross-tenant check is the only real security boundary.**
+  `PUT /events/{id}/crew` takes ids from a browser; every one is verified to
+  belong to THIS event's organization in one `IN` query, and a single stranger's
+  id REFUSES the whole write. Dropping it silently would be worse than refusing
+  — the organizer presses save, sees no error, and never learns one of their
+  choices did not stick. Without the check, a guessed uuid puts another
+  organization's face on your public page.
+- **Set replacement, not add/remove.** The control upstream is a multi-select:
+  somebody manipulates a set and saves once. Diffing that into per-row requests
+  in the browser makes the network the source of truth for what was chosen, and
+  one dropped request leaves a lineup nobody asked for. Duplicates are collapsed
+  while PRESERVING ORDER, because a slow connection double-fires a toggle and
+  `event_crew_unique_member` would turn that into an IntegrityError on a save
+  that was entirely reasonable.
+- **Order is information.** The pressed order is the position on the page, and
+  the picker shows a NUMBER rather than a tick. Sorting alphabetically would put
+  the support act above the headliner.
+- **`role` is free text**, like `Event.city` and unlike `MediaKind`: stage roles
+  are long-tail ("DJ", "compere", "sound", "aerialist") and a fixed list would be
+  wrong within a week and unfixable without a migration.
+- **`PROTECT` on the join's member, soft-delete on the roster row.** Deleting
+  somebody on a live event's lineup would silently empty a section a visitor is
+  reading, so the service refuses with a 409 that NAMES the alternative
+  (deactivate) rather than surfacing an integrity error. A retired member stays
+  on the management screen — that is where they are brought back — and leaves
+  the event picker.
+- **The lineup rides on `GET /events/{id}/content`**, like `slots`: already
+  edge-cached, already invalidated by every content write, so it costs one
+  cached document instead of a round trip before the section paints. One extra
+  query, `select_related("member")`, no N+1.
+- **A clone carries the lineup**, pointing at the SAME roster rows. It is
+  exactly the retyping `duplicate_event` exists to remove, and copying the
+  people would leave an organizer editing one face in four places.
+- **`CREW_PORTRAIT_SPEC`, not `EVENT_IMAGE_SPEC`.** The latter demands landscape
+  between 3:2 and 2:1 and would refuse every headshot; the band here is 2:3
+  through square, with a low floor because most crew photos are phone pictures.
+- **Alt text is REQUIRED by the API though the column allows blank** — the
+  `EventMedia.alt_text` split, for the same reason: the column is permissive so
+  a backfill survives, the API is strict so no new row is created without it.
+  It is collected BEFORE the bytes go up.
+- **No bookmark on a lineup card.** The reference has one; nothing here stores a
+  saved PERSON, and a heart that quietly forgets is worse than no heart.
+- **The section is SECONDARY** — visible on both the widget and the desktop page
+  between "About" and the disclosure rows, not behind a press. For a club night
+  the names ARE the product. **Absent, not empty**, when nobody is named.
+- **Admin gets a READ, on the organization detail page**, with an appearance
+  count — the one fact the organizer's own screen does not show. No
+  `ADMIN_SECTIONS` entry: there is no platform-wide crew endpoint behind it, and
+  a nav item leading to a page that needs an id it does not have is worse than
+  none.
+
+## Going back from a checkout releases the hold, and that is a decision
+
+`POST /bookings/{id}/cancel` existed, was tested, and had **no frontend caller**.
+It has three now, and each is a different failure it fixes.
+
+**1. The back arrow asks first.** The house rule is that a reversible action
+gets UNDO rather than a dialog. This is the exception and it earns it:
+cancelling releases the seats to the PUBLIC pool via `ticketing.release`, there
+is no per-user parking of the released quantity, and nothing can take them back.
+The copy states the trade BEFORE the press — the tickets go back on sale
+immediately and may be gone on return — because saying it afterwards, on a
+sold-out screen, is telling somebody what was already done to them. The SAFE
+action is the primary one: a destructive default is how a mis-tap costs somebody
+their seats.
+
+**Only that button is interceptable, and the code says so.** Browser back, a
+swipe gesture, the hardware key and closing the tab cannot be — `beforeunload`
+cannot await a request, and hijacking history is hostile. Those keep the old
+behaviour: the hold lapses and the sweeper releases it. The cancel is wired to
+the button's `onClick` and NEVER to unmount, or the review screen's
+anonymous/empty-selection `router.replace` guards would silently cancel
+bookings.
+
+**2. The retry cancels before it reserves, and that is the whole fix.**
+`booking.release_expired` is a SCHEDULED job (60s), so between the screen
+declaring a hold dead and the sweeper agreeing there is up to a minute in which
+the tickets are still counted against `TicketType.reserved` by a booking nobody
+can pay for. "Get these tickets again" competed with the customer's OWN lapsed
+hold and came back `sold_out` for tickets no one else had taken.
+`cancel_booking` refuses on status alone and deliberately does not look at the
+deadline, so a lapsed-but-unswept hold cancels cleanly. The failure is
+SWALLOWED: a 409 means the sweeper won, which is the outcome the call wanted.
+
+**3. A changed selection invalidates the booking.** `BookingProvider` lives in
+the checkout LAYOUT, so a reserved booking survives a trip to the picker and
+back; the reserve effect short-circuits on `|| booking`; and the order lines
+render from `booking.items`. Pressing "Change", picking a different quantity and
+coming forward therefore showed — and charged for — the ORIGINAL selection while
+the URL and the picker both said otherwise. No request, no error, no clue.
+`selectionSignature` / `bookingItemsSignature` are extracted from
+`idempotencyKeyFor` so the comparison and the key can never disagree, and the
+stale hold is CANCELLED rather than abandoned — leaving it would hold inventory
+nobody is buying for the rest of its ten minutes.
+
+**The timer only restarts because the BOOKING restarted.** A fresh countdown
+over an unchanged `hold_expires_at` would be a lie: the sweeper still releases
+at the original time. Cancel, re-reserve, new deadline — or the timer keeps
+counting the truth.
+
+**And the fresh reserve works because of the idempotency fix below.** The key is
+derived from the selection, so a retry re-derives it;
+`get_replayable_by_idempotency_key` declines a CANCELLED booking and
+`release_idempotency_key` frees the key for the insert. **Do not add a nonce** —
+it would defeat the double-tap and dropped-connection protection on the money
+path.
+
+## Two desktop regressions from a mobile rebuild
+
+Both were one line, and both are the same mistake: a layout rebuilt to a phone
+reference with no desktop pass.
+
+**The footer** was `mx-auto grid w-full max-w-md grid-cols-2` with **no
+breakpoint variants**. `max-w-md` is 448px inside a 1232px content band, and the
+longest string in it is about 92px — so roughly 180px of ink sat in the middle
+of 1232px with a void either side. It did not read as centred, it read as
+bunched. From `lg` the brand and the links take opposite ends of one row, the
+closing band puts copyright and payment pills on one line, and the left column
+carries `SITE_DESCRIPTION` — the site's OWN sentence, exported rather than
+written a second time, because two descriptions of one product is how they
+drift. Below `lg` nothing changed: the centred stack is right on a phone and is
+the layout that was actually reviewed. `site-footer.test.tsx` pins the link
+contract and asserts no layout class, so this was free.
+
+**The browse grid** was `auto-fill` + `justify-between`. `auto-fill` KEEPS its
+empty tracks, so `justify-between` distributed the free space BETWEEN them: at
+1232px with a 24px declared gap the cards sat ~90px apart, and at 768px there
+was a 256px trough between two cards. It could never look right below a full
+count. The slack goes to the END now (`justify-start`), the cards keep the width
+the `minmax` gives them at every result count, and the SKELETON carries the same
+string — it never had `justify-between`, so the loading state and the loaded
+state had been laying out differently. `EventCardSkeleton` also gained
+`sm:aspect-[4/3]` to match the card's poster: without it every cell shrank
+~140px the moment results arrived.
+
 ## An idempotency key speaks for a LIVE attempt, never a dead one
 
 `create_booking` deduped on `(user, idempotency_key)` and nothing else, and the
@@ -2218,7 +2383,8 @@ serves usable copy) and create whatever rows the test needs itself.
 
 ## Build order
 
-`accounts` (done) → `organizations` (done) → `events` (done) →
+`accounts` (done) → `organizations` (done) → `events` (done, plus the crew
+roster and event lineup — see "Crew" above) →
 `ticketing` (done) → `booking` (done) → `payments` (done) →
 `checkin` (done) → `notifications` (done) → `settlements` (done) →
 `console` (done — the operator console's read side) → `organizer` (done) →

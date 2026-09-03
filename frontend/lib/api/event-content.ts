@@ -88,6 +88,29 @@ export type EventContent = {
    * normal case rather than as missing data.
    */
   slots: EventSlot[];
+  /**
+   * Who is taking the stage, in the organiser's own order.
+   *
+   * On THIS payload rather than an endpoint of its own for the same reason
+   * `slots` is: the response is already edge-cached and already invalidated by
+   * every content write, so a lineup costs one cached document instead of
+   * another round trip before a section above the FAQs can paint.
+   *
+   * `[]` far more often than not — most events have no crew — and the section
+   * is rendered ABSENT rather than empty in that case.
+   */
+  crew: EventCrewEntry[];
+};
+
+export type EventCrewEntry = {
+  /** The ROSTER row's id, not the join's — the same person across events. */
+  id: string;
+  name: string;
+  /** The per-event billing, already resolved against the roster's own role. */
+  role: string;
+  photo_url: string;
+  photo_alt_text: string;
+  position: number;
 };
 
 const base = (eventId: string) => `/events/${encodeURIComponent(eventId)}`;

@@ -22,7 +22,9 @@ from django.utils import timezone
 from core.base_repository import BaseRepository
 
 from .models import (
+    CrewMember,
     Event,
+    EventCrew,
     EventFaq,
     EventMedia,
     EventSlot,
@@ -1267,3 +1269,188 @@ class EventSlotRepository(BaseRepository[EventSlot]):
 
     def delete_slot(self, slot: EventSlot) -> None:
         slot.delete()
+
+
+class CrewMemberRepository(BaseRepository[CrewMember]):
+    """An organization's roster of people it puts on stage.
+
+    Every lookup is scoped by ORGANIZATION as well as by primary key. That is
+    the same rule `EventContentRepository` states for its own rows — a row
+    belonging to somebody else must MISS rather than be found and then refused
+    — and here it is the whole cross-tenant boundary: a guessed uuid must never
+    be able to put a stranger's face on your public event page.
+    """
+
+    model = CrewMember
+
+    def list_for_organization(
+        self, organization_id: uuid.UUID | str, *, active_only: bool = False
+    ) -> list[CrewMember]:
+        """The roster, and the wizard's picker, in ONE index-backed query.
+
+        `active_only` is the picker: a retired member stays visible on the
+        management screen (so they can be brought back) and is absent from the
+        list of people you can add to a new event.
+        """
+        rows = CrewMember.objects.filter(
+            organization_id=organization_id, deleted_at__isnull=True
+        ).only(
+            "id",
+            "name",
+            "role",
+            "details",
+            "photo_url",
+            "photo_alt_text",
+            "is_active",
+            "created_at",
+        )
+        if active_only:
+            rows = rows.filter(is_active=True)
+        return list(rows.order_by("name", "id"))
+
+    def create_member(self, **fields) -> CrewMember:
+        """`BaseRepository` deliberately exposes no generic `create` — every
+        repository names the columns it writes, so a caller cannot invent one."""
+        return CrewMember.objects.create(**fields)
+
+    def get_owned(
+        self, *, organization_id: uuid.UUID | str, member_id: uuid.UUID | str
+    ) -> CrewMember | None:
+        return CrewMember.objects.filter(
+            pk=member_id, organization_id=organization_id, deleted_at__isnull=True
+        ).first()
+
+    def owned_ids(
+        self, *, organization_id: uuid.UUID | str, member_ids: list[uuid.UUID | str]
+    ) -> set[str]:
+        """Which of these ids this organization actually owns — ONE query.
+
+        The lineup write validates a whole selection at once, and doing it with
+        a loop would make a 25-person lineup 25 round trips on a write path.
+        """
+        if not member_ids:
+            return set()
+        return {
+            str(row)
+            for row in CrewMember.objects.filter(
+                organization_id=organization_id,
+                deleted_at__isnull=True,
+                is_active=True,
+                pk__in=member_ids,
+            ).values_list("id", flat=True)
+        }
+
+    def count_for_organization(self, organization_id: uuid.UUID | str) -> int:
+        return CrewMember.objects.filter(
+            organization_id=organization_id, deleted_at__isnull=True
+        ).count()
+
+    def update_owned(
+        self, *, organization_id: uuid.UUID | str, member_id: uuid.UUID | str, **changes
+    ) -> CrewMember | None:
+        """One conditional UPDATE scoped by owner, so a row belonging to
+        somebody else changes nothing and reports nothing."""
+        updated = CrewMember.objects.filter(
+            pk=member_id, organization_id=organization_id, deleted_at__isnull=True
+        ).update(updated_at=timezone.now(), **changes)
+        if updated != 1:
+            return None
+        return self.get_owned(organization_id=organization_id, member_id=member_id)
+
+    def soft_delete_owned(
+        self, *, organization_id: uuid.UUID | str, member_id: uuid.UUID | str
+    ) -> bool:
+        return (
+            CrewMember.objects.filter(
+                pk=member_id, organization_id=organization_id, deleted_at__isnull=True
+            ).update(deleted_at=timezone.now())
+            == 1
+        )
+
+    def is_on_any_lineup(self, member_id: uuid.UUID | str) -> bool:
+        """Whether removing this person would empty a section on a real event.
+
+        `EventCrew.member` is `PROTECT`, so a hard delete would raise anyway;
+        this is what lets the service answer with a 409 that names the fix
+        (deactivate) instead of surfacing a database integrity error.
+        """
+        # django-stubs types the `member_id=` lookup as CrewMember | UUID |
+        # None, which is a stub limitation rather than a real constraint — the
+        # column is a uuid and a string form of one is exactly what a URL
+        # segment produces.
+        return EventCrew.objects.filter(member_id=member_id).exists()  # type: ignore[misc]
+
+
+class EventCrewRepository:
+    """The lineup: which crew members appear on which event, in what order."""
+
+    def for_event(self, event_id: uuid.UUID | str) -> list[EventCrew]:
+        """One event's lineup with its people joined.
+
+        `select_related("member")` is the whole reason this is not an N+1: the
+        public content read renders a name, a role and a photo per entry, and
+        without it a ten-person lineup would be eleven queries on the platform's
+        hottest cached endpoint.
+        """
+        return list(
+            EventCrew.objects.filter(event_id=event_id, member__deleted_at__isnull=True)
+            .select_related("member")
+            .only(
+                "id",
+                "billed_as",
+                "position",
+                "event_id",
+                "member__id",
+                "member__name",
+                "member__role",
+                "member__photo_url",
+                "member__photo_alt_text",
+            )
+            .order_by("position", "id")
+        )
+
+    def replace_for_event(self, *, event_id: uuid.UUID | str, member_ids: list[str]) -> int:
+        """Set the whole lineup. Returns how many entries it now has.
+
+        SET REPLACEMENT rather than add/remove endpoints, because the control
+        upstream is a multi-select: the user manipulates a SET and presses save
+        once. Diffing it into per-row calls in the client would make the
+        network the source of truth for what was chosen, and a dropped request
+        would leave a lineup nobody had asked for.
+
+        Delete-then-insert inside the caller's transaction. `position` comes
+        from the order the ids arrive in, so the organizer's ordering in the
+        picker is the ordering on the page.
+        """
+        EventCrew.objects.filter(event_id=event_id).delete()
+        if not member_ids:
+            return 0
+        EventCrew.objects.bulk_create(
+            [
+                EventCrew(event_id=event_id, member_id=member_id, position=index)
+                for index, member_id in enumerate(member_ids)
+            ]
+        )
+        return len(member_ids)
+
+    def copy_to_event(self, *, source_event_id: uuid.UUID | str, target_event_id: uuid.UUID | str):
+        """Carry a lineup onto a duplicated event.
+
+        A copy is a new event, but the LINEUP is exactly the retyping that
+        `duplicate_event` exists to remove — a monthly residency has the same
+        residents. It points at the same `CrewMember` rows rather than copying
+        them: a person is one person, and duplicating the roster would leave an
+        organizer editing the same face in four places.
+        """
+        entries = EventCrew.objects.filter(event_id=source_event_id).order_by("position", "id")
+        EventCrew.objects.bulk_create(
+            [
+                EventCrew(
+                    event_id=target_event_id,
+                    member_id=entry.member_id,
+                    billed_as=entry.billed_as,
+                    position=entry.position,
+                )
+                for entry in entries
+            ]
+        )

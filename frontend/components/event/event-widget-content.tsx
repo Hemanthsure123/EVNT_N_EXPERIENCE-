@@ -12,6 +12,7 @@ import {
   Ticket,
 } from 'lucide-react';
 import type { EventContent } from '@/lib/api/event-content';
+import { LineupRail } from './lineup-rail';
 import type { EventCard as EventCardData, EventDetail } from '@/lib/api/types';
 import { categoryBySlug } from '@/lib/discovery/categories';
 import { formatEventDateTime, formatEventTime, formatMoney } from '@/lib/discovery/format';
@@ -216,7 +217,13 @@ export function EventWidgetContent({
         </section>
       ) : null}
 
-      {/* 10. Things to know. Four facts, then "See all" — one component
+      {/* 10. Who's taking the stage. SECONDARY — for a club night the names
+              ARE the product, so this is visible rather than filed behind a
+              disclosure row with the refund policy. Absent, not empty, when
+              the organiser has not named anybody. */}
+      <LineupRail crew={content?.crew ?? []} />
+
+      {/* 11. Things to know. Four facts, then "See all" — one component
               renders both lengths, so the preview cannot drift from the list. */}
       {detail ? (
         <section className="flex flex-col gap-3">

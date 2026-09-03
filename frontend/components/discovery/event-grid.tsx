@@ -110,10 +110,29 @@ export function EventGrid({
         //
         // The ceiling is enforced by the grid now rather than asserted by a
         // comment: a card is between 190 and 240px at every width and on every
-        // result count, and `justify-between` spreads the leftover instead of
-        // stretching the cards into it.
+        // result count.
+        //
+        // ── AND `justify-between` WAS THE WRONG WAY TO SPEND THE LEFTOVER ──
+        //
+        // It read as "spread the slack instead of stretching the cards", which
+        // is true of a FULL row and catastrophic on a sparse one. `auto-fill`
+        // keeps its empty tracks, so a 1900px screen has five of them; with two
+        // results, `justify-between` distributed the free space BETWEEN THE
+        // TRACKS and the two cards ended up ~130px apart on a grid whose
+        // declared gap is 24px, with the rest of the row empty. That is the
+        // "gap is not configured properly" report, and it could never look
+        // right below a full count.
+        //
+        // The slack goes to the END instead. The cards keep the width the
+        // minmax gives them — which is the same width whether the page holds
+        // two results or twenty, and that consistency is the whole point of the
+        // note above — and the row simply ends where the results do.
+        //
+        // It also re-aligns the SKELETON below, which never carried
+        // `justify-between` and so had been laying out differently from the
+        // loaded state it stands in for.
         'grid grid-cols-1 gap-3 sm:gap-5 lg:gap-6',
-        'sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:justify-between',
+        'sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:justify-start',
         className,
       )}
     >
@@ -166,7 +185,11 @@ export function EventGrid({
 export function EventGridSkeleton({ count = 6 }: { count?: number }) {
   return (
     <div
-      className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:gap-5 lg:gap-6"
+      // The SAME string as the loaded grid above, `justify-start` included.
+      // The skeleton had no justification while the grid had `justify-between`,
+      // so the placeholders left-packed at a true 24px gutter and then
+      // re-spaced the instant results landed.
+      className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11.875rem,15rem))] sm:justify-start sm:gap-5 lg:gap-6"
       aria-hidden
     >
       {Array.from({ length: count }, (_, i) => (

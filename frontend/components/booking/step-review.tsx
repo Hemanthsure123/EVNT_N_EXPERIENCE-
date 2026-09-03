@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Loader2, Ticket, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { createBooking, setBookingDonation } from '@/lib/api/bookings';
+import { cancelBooking, createBooking, setBookingDonation } from '@/lib/api/bookings';
 import { ApiError } from '@/lib/api/errors';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { rememberProvider } from '@/lib/booking/payment-provider';
@@ -14,6 +14,8 @@ import {
   DONATION_MAX_MINOR,
   SELECTION_PARAM,
   idempotencyKeyFor,
+  bookingItemsSignature,
+  selectionSignature,
   serialiseSelection,
   toBookingItems,
 } from '@/lib/booking/selection';
@@ -101,6 +103,44 @@ export function ReviewStep() {
   React.useEffect(() => {
     if (status !== 'unknown' && !selection.length) router.replace(pickerHref);
   }, [status, selection.length, router, pickerHref]);
+
+  /**
+   * ── THE BOOKING IN CONTEXT MAY DESCRIBE A DIFFERENT ORDER ──────────────
+   *
+   * `BookingProvider` lives in the checkout LAYOUT, so a reserved booking
+   * survives the trip to the picker and back. The reserve effect below then
+   * short-circuits on `|| booking`, and the order lines render from
+   * `booking.items` — so pressing "Change", picking a different quantity and
+   * coming forward showed, and charged for, the ORIGINAL selection while the
+   * URL and the picker both said otherwise. No request, no error, no clue.
+   *
+   * The stale hold is CANCELLED rather than abandoned. Leaving it would hold
+   * inventory the customer is no longer buying for the rest of its ten
+   * minutes, and a person who changes their mind twice would sit on three
+   * holds at once.
+   *
+   * The cancel is fire-and-forget: a 409 means it is already gone, which is
+   * the outcome we wanted. `stale` guards against re-entry, and clearing the
+   * booking re-arms the reserve below for the selection that is actually on
+   * screen.
+   */
+  const staleBooking = React.useMemo(() => {
+    if (!booking?.items?.length || !selection.length) return false;
+    return bookingItemsSignature(booking.items) !== selectionSignature(selection);
+  }, [booking, selection]);
+  const clearing = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!staleBooking || !booking || clearing.current) return;
+    clearing.current = true;
+    const dead = booking;
+    void (async () => {
+      await cancelBooking(dead.id).catch(() => undefined);
+      attempted.current = false;
+      setBooking(null);
+      clearing.current = false;
+    })();
+  }, [staleBooking, booking, setBooking]);
 
   React.useEffect(() => {
     if (status !== 'authenticated' || !selection.length || booking || attempted.current) return;
@@ -218,14 +258,38 @@ export function ReviewStep() {
    * If the tiers really are gone, `error` takes over with the picker link —
    * so the honest outcome is still reachable, it is just no longer the FIRST
    * thing offered for a situation that is usually recoverable.
+   *
+   * ── IT CANCELS FIRST, AND THAT IS THE WHOLE POINT ─────────────────────
+   *
+   * The expired booking is still holding the seats. `booking.release_expired`
+   * is a SCHEDULED job (every 60s), so between the screen declaring the hold
+   * dead and the sweeper agreeing there is up to a minute in which the tickets
+   * are counted against `TicketType.reserved` by a booking nobody can pay for.
+   *
+   * Re-reserving inside that window competed with the customer's OWN lapsed
+   * hold, and on a tight tier came back `sold_out` for tickets no one else had
+   * taken — the "it shows an error and I cannot book again" report, exactly.
+   *
+   * `cancel_booking` refuses on status alone and never looks at the deadline
+   * (services.py:511), so a lapsed-but-unswept hold cancels cleanly. Failures
+   * here are SWALLOWED on purpose: if the sweeper got there first the cancel is
+   * a 409, which means the inventory is already free, which is the outcome the
+   * call was for. Blocking the retry on it would turn a success into an error.
    */
+  const [retrying, setRetrying] = React.useState(false);
   const retryHold = React.useCallback(() => {
-    setHoldExpired(false);
-    setError(null);
-    setOptimisticDonation(null);
-    attempted.current = false;
-    setBooking(null);
-  }, [setBooking]);
+    const dead = booking;
+    setRetrying(true);
+    void (async () => {
+      if (dead) await cancelBooking(dead.id).catch(() => undefined);
+      setHoldExpired(false);
+      setError(null);
+      setOptimisticDonation(null);
+      attempted.current = false;
+      setBooking(null);
+      setRetrying(false);
+    })();
+  }, [booking, setBooking]);
   const [donationPending, setDonationPending] = React.useState(false);
   const [donationError, setDonationError] = React.useState<string | null>(null);
   const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
@@ -283,16 +347,44 @@ export function ReviewStep() {
   if (error) {
     return (
       <FunnelScreen title="Review your booking">
-        <StepTransition stepKey="review-error" className="flex flex-col gap-4">
-          <div className="flex flex-col items-start gap-stack-lg rounded-2xl border border-destructive-subtle bg-destructive-subtle p-card-lg">
-            <AlertTriangle className="size-6 text-destructive-subtle-foreground" aria-hidden />
-            <div className="flex flex-col gap-1">
-              <h2 className="text-h3 text-destructive-subtle-foreground">
-                {error.recoverable ? 'Those tickets just went' : 'We could not hold your tickets'}
-              </h2>
-              <p className="text-body-sm text-destructive-subtle-foreground">{error.message}</p>
-            </div>
-            <Button asChild size="lg" className={CTA_PILL_LG}>
+        {/* Drawn like the expired state next door — centred, the alarm colour
+            confined to the icon — because a full-bleed red slab at the top of
+            an empty screen reads as a crash rather than as a tier selling out
+            while somebody was deciding. */}
+        <StepTransition
+          stepKey="review-error"
+          className="flex flex-1 flex-col items-center justify-center gap-stack-lg px-2 py-10 text-center"
+        >
+          <span
+            aria-hidden
+            className="inline-flex size-16 items-center justify-center rounded-full bg-destructive-subtle text-destructive"
+          >
+            <AlertTriangle className="size-7" />
+          </span>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-h3 text-foreground">
+              {error.recoverable ? 'Those tickets just went' : 'We could not hold your tickets'}
+            </h2>
+            <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">{error.message}</p>
+          </div>
+          <div className="flex w-full max-w-sm flex-col gap-2">
+            {/* A SECOND ATTEMPT, which this screen did not offer.
+                Every reason it can fail is transient — a tier that was
+                momentarily oversubscribed, a request that did not land — and
+                sending somebody back to the picker to re-choose what they had
+                already chosen is a worse answer to "try again" than a button
+                that tries again. */}
+            <Button size="lg" className={CTA_PILL_LG} onClick={retryHold} disabled={retrying}>
+              {retrying ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                  Trying again
+                </>
+              ) : (
+                'Try again'
+              )}
+            </Button>
+            <Button asChild variant="ghost" size="lg" className="w-full">
               <Link href={pickerHref}>Choose different tickets</Link>
             </Button>
           </div>
@@ -336,8 +428,15 @@ export function ReviewStep() {
             </p>
           </div>
           <div className="flex w-full max-w-sm flex-col gap-2">
-            <Button size="lg" className={CTA_PILL_LG} onClick={retryHold}>
-              Get these tickets again
+            <Button size="lg" className={CTA_PILL_LG} onClick={retryHold} disabled={retrying}>
+              {retrying ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                  Getting them back
+                </>
+              ) : (
+                'Get these tickets again'
+              )}
             </Button>
             {/* The way out, kept — but secondary. It carries the selection, so
                 the picker reopens on the same tiers rather than making

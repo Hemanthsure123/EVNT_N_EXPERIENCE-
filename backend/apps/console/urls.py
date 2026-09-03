@@ -84,6 +84,11 @@ urlpatterns = [
         name="console-organization-analytics",
     ),
     path(
+        "admin/organizations/<uuid:organization_id>/crew",
+        api.AdminOrganizationCrewView.as_view(),
+        name="console-organization-crew",
+    ),
+    path(
         "admin/organizations/<uuid:organization_id>/verification",
         api.VerificationDecisionView.as_view(),
         name="console-verification-decision",

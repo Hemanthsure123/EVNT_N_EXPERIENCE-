@@ -141,6 +141,11 @@ export const api = {
     apiFetch<T>(path, { ...opts, method: 'POST', body }),
   patch: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     apiFetch<T>(path, { ...opts, method: 'PATCH', body }),
+  /** For endpoints whose contract is REPLACE-THE-WHOLE-THING rather than
+   *  merge — an event's lineup is the first. PATCH would be the wrong verb
+   *  and PUT is the one that says so. */
+  put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    apiFetch<T>(path, { ...opts, method: 'PUT', body }),
   delete: <T>(path: string, opts?: RequestOptions) =>
     apiFetch<T>(path, { ...opts, method: 'DELETE' }),
 };

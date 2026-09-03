@@ -123,6 +123,28 @@ EVENT_IMAGE_SPEC = ImageSpec(
 )
 
 
+#: A person's portrait for an event lineup.
+#:
+#: `EVENT_IMAGE_SPEC` would refuse every one of these: it demands landscape
+#: between 3:2 and 2:1, and a headshot is portrait or square. The band here is
+#: the mirror of that — 2:3 through square — because the lineup carousel draws
+#: tall cards and a landscape crop of a face inside one is a picture of a
+#: forehead.
+#:
+#: The floor is deliberately low. Most crew photos are phone pictures or
+#: cropped Instagram exports, and a 1280px minimum would refuse the majority of
+#: real submissions to protect a card that is 200px wide.
+CREW_PORTRAIT_SPEC = ImageSpec(
+    label="crew photo",
+    min_width=400,
+    min_height=400,
+    min_ratio=0.6,
+    max_ratio=1.05,
+    recommended_width=800,
+    recommended_height=1000,
+)
+
+
 def _dimensions(upload: UploadedFile) -> tuple[int, int]:
     """The image's pixel size, without decoding the pixels.
 

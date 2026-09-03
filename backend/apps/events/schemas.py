@@ -660,6 +660,74 @@ class UpdateEventSlotSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(required=False)
 
 
+class CrewMemberSerializer(serializers.Serializer):
+    """A roster row, as the organizer's own screens see it."""
+
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(max_length=120)
+    role = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
+    details = serializers.CharField(required=False, allow_blank=True, default="")
+    photo_url = serializers.CharField(read_only=True)
+    photo_alt_text = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(required=False)
+    created_at = serializers.DateTimeField(read_only=True)
+
+
+class CreateCrewMemberRequestSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120)
+    role = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
+    details = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class UpdateCrewMemberRequestSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120, required=False)
+    role = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    details = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
+
+
+class CrewPhotoRequestSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    #: REQUIRED here although the column allows blank — the same split
+    #: `EventMedia.alt_text` makes. The column is permissive so a backfill
+    #: survives; the API is strict so no NEW row is created without it.
+    alt_text = serializers.CharField(max_length=200)
+
+
+class EventCrewEntrySerializer(serializers.Serializer):
+    """One person on a lineup, flattened for the page that draws them.
+
+    `role` resolves the per-event override HERE rather than in the template, so
+    the fallback to the roster's own role lives in exactly one place and the
+    public payload and the organizer's picker can never disagree about what
+    somebody is billed as.
+    """
+
+    id = serializers.UUIDField(source="member_id", read_only=True)
+    name = serializers.CharField(source="member.name", read_only=True)
+    role = serializers.SerializerMethodField()
+    photo_url = serializers.CharField(source="member.photo_url", read_only=True)
+    photo_alt_text = serializers.CharField(source="member.photo_alt_text", read_only=True)
+    position = serializers.IntegerField(read_only=True)
+
+    def get_role(self, row) -> str:
+        return (row.billed_as or row.member.role or "").strip()
+
+
+class SetEventCrewRequestSerializer(serializers.Serializer):
+    """The whole lineup, in order, as a list of roster ids.
+
+    A LIST rather than an add/remove pair, because the control upstream is a
+    multi-select: somebody manipulates a set and saves once. Bounded, because
+    an authenticated endpoint that loops over whatever it is handed is an
+    unbounded write — the same rule `POST /me/saved-events` follows.
+    """
+
+    member_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=True, max_length=25
+    )
+
+
 class EventContentSerializer(serializers.Serializer):
     """Everything the event page renders below the fold, in one payload.
 
@@ -671,6 +739,12 @@ class EventContentSerializer(serializers.Serializer):
     media = EventMediaSerializer(many=True)
     faqs = EventFaqSerializer(many=True)
     timeline = EventTimelineSerializer(many=True)
+    #: Who is taking the stage. On this payload for the same reason `slots` is:
+    #: it is already edge-cached and already invalidated by every content write,
+    #: so it costs one cached document instead of another round trip before the
+    #: section can paint. It is `[]` far more often than not, and the frontend
+    #: renders the section ABSENT rather than empty in that case.
+    crew = EventCrewEntrySerializer(many=True)
     #: The sessions a buyer picks between. On THIS payload rather than an
     #: endpoint of its own because it is already edge-cached and already
     #: invalidated on every content write — one cached document with one

@@ -178,7 +178,7 @@ export function draftToPreview(
    * sections simply do not appear, which is exactly what a visitor would see.
    * The cover image still previews, because it rides `poster_url` on the draft.
    */
-  const content: EventContent = { media: [], faqs: [], timeline: [], slots: [] };
+  const content: EventContent = { media: [], faqs: [], timeline: [], slots: [], crew: [] };
 
   return { event, tiers, content };
 }

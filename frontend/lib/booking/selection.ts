@@ -186,9 +186,41 @@ export const toBookingItems = (selection: Selection) =>
  * authenticated user, so including it here would only make the key longer.
  */
 export function idempotencyKeyFor(eventId: string, selection: Selection): string {
-  const normalised = [...selection]
+  return `book:${eventId}:${selectionSignature(selection)}`;
+}
+
+/**
+ * An order-independent fingerprint of what was chosen.
+ *
+ * Extracted from `idempotencyKeyFor` so the review screen can ask the one
+ * question it could not ask before: **is the booking I am holding still the
+ * booking this URL describes?**
+ *
+ * It could not, and that was a money-path bug. `BookingProvider` lives in the
+ * checkout LAYOUT, so the reserved booking survives a trip back to the picker;
+ * the reserve effect short-circuits on `|| booking`; and the order lines render
+ * from `booking.items`. So changing the quantity and coming forward showed —
+ * and charged for — the ORIGINAL selection, with the URL and the picker both
+ * saying something else. Nothing failed and nothing said anything.
+ *
+ * Both signatures are built the same way, from the same sort, so a booking and
+ * a selection can never disagree for a reason as trivial as ordering.
+ */
+export function selectionSignature(selection: Selection): string {
+  return [...selection]
+    .filter((line) => line.quantity > 0)
     .sort((a, b) => a.tierId.localeCompare(b.tierId))
     .map((line) => `${line.tierId}:${line.quantity}`)
     .join(',');
-  return `book:${eventId}:${normalised}`;
+}
+
+/** The same fingerprint, taken from a booking's own reserved lines. */
+export function bookingItemsSignature(
+  items: ReadonlyArray<{ ticket_type_id: string; quantity: number }>,
+): string {
+  return [...items]
+    .filter((item) => item.quantity > 0)
+    .sort((a, b) => a.ticket_type_id.localeCompare(b.ticket_type_id))
+    .map((item) => `${item.ticket_type_id}:${item.quantity}`)
+    .join(',');
 }

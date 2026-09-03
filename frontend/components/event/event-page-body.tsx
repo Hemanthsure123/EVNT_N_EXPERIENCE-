@@ -25,6 +25,7 @@ import { EventDisclosures, type Disclosure } from '@/components/event/disclosure
 import { EventReviews } from '@/components/reviews/event-reviews';
 import { Building2, CalendarClock, HelpCircle, Info, MapPin, ScrollText } from 'lucide-react';
 import type { EventContent } from '@/lib/api/event-content';
+import { LineupRail } from './lineup-rail';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { ClayIcon } from '@/components/illustrations/clay';
 import { inferCategory } from '@/lib/discovery/categories';
@@ -305,6 +306,13 @@ export function EventPageBody({
                 </p>
               </section>
             ) : null}
+
+            {/* SECONDARY, and in the same slot as the mobile widget's — one
+                information order rendered two ways, so a page and its widget
+                never disagree about what matters. For a club night the names
+                ARE the product, so this sits above the disclosure rows rather
+                than inside one. Absent, not empty. */}
+            <LineupRail crew={content.crew ?? []} className="max-w-2xl" />
 
             {/* ── EVERYTHING ELSE, ONE PRESS AWAY ───────────────────────────
                 These six used to be six full-weight sections stacked here,

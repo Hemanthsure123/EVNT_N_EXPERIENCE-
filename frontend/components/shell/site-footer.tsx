@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { Facebook, Instagram, Linkedin, Youtube } from 'lucide-react';
 import { Aurora } from '@/components/discovery/aurora';
 import { LEGAL_NAME, SOCIAL_HANDLES } from '@/lib/brand';
+import { SITE_DESCRIPTION } from '@/lib/seo/metadata';
 import { cn } from '@/lib/utils/cn';
 import { BrandLockup } from './brand-mark';
 import { Container } from './container';
@@ -195,13 +196,39 @@ export function SiteFooter({ className }: { className?: string }) {
             checkout screens that later moved out of this layout precisely to
             escape it. A footer's job here is to answer "where do I get help"
             and "what else is there", and it does that with links. */}
-        <div className="flex flex-col items-center gap-stack-lg">
+        {/* ── AND ON A LAPTOP IT IS A ROW, NOT A NARROW ISLAND ────────────
+            Everything below was centred, because everything below was built to
+            a phone reference — and nobody re-checked a laptop. The consequence
+            was measurable rather than a matter of taste: the link nav is
+            `max-w-md` (448px) inside a 1232px content band, and the longest
+            string in it is about 92px ("Browse events"), so roughly 180px of
+            ink sat in the middle of 1232px with a void either side. It did not
+            read as "centred", it read as bunched — which is exactly how it was
+            reported.
+
+            From `lg` the brand and the links take opposite ends of one row, the
+            way a footer with two link groups is shaped everywhere else. Below
+            `lg` NOTHING changes: the centred stack is right on a phone and is
+            the layout that was actually reviewed. */}
+        <div className="flex flex-col items-center gap-block lg:flex-row lg:items-start lg:justify-between lg:gap-block-lg">
+        <div className="flex flex-col items-center gap-stack-lg lg:items-start">
           <Link
             href="/"
             className="inline-flex w-fit items-center rounded-full text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sunken"
           >
             <BrandLockup />
           </Link>
+
+          {/* One line about the product, and it is the SAME sentence the site's
+              own metadata uses rather than a second one written for this
+              corner — two descriptions of one product is how they drift.
+              Hidden below `lg`: the phone footer is a compact stack and a
+              paragraph in it is weight nobody asked for. It is what stops the
+              left half of a 1900px row being an empty field beside a 24px
+              logo. */}
+          <p className="hidden max-w-xs text-body-sm text-muted-foreground lg:block">
+            {SITE_DESCRIPTION}
+          </p>
 
           {/* Absent entirely when no handle is configured — see the note on
               SOCIAL. An icon linking to a platform's login wall is the one
@@ -239,7 +266,13 @@ export function SiteFooter({ className }: { className?: string }) {
             Company folded away with them. */}
         <nav
           aria-label="Footer"
-          className="mx-auto grid w-full max-w-md grid-cols-2 gap-x-6 gap-y-block"
+          className={cn(
+            'mx-auto grid w-full max-w-md grid-cols-2 gap-x-6 gap-y-block',
+            // From `lg` it stops being a centred box and becomes the right-hand
+            // half of the row: sized to its content, generous gutter, no
+            // auto-margins fighting the flex parent.
+            'lg:mx-0 lg:w-auto lg:max-w-none lg:gap-x-block-lg',
+          )}
         >
           {COLUMNS.map((col) => (
             <div key={col.heading}>
@@ -260,9 +293,20 @@ export function SiteFooter({ className }: { className?: string }) {
             </div>
           ))}
         </nav>
+        </div>
 
         {/* ── The closing band: social, payments, copyright, legal ────────── */}
-        <div className="flex flex-col gap-stack border-t border-border pt-block">
+        <div
+          className={cn(
+            'flex flex-col gap-stack border-t border-border pt-block',
+            // The same correction as the row above: on a laptop the copyright
+            // and the payment pills take opposite ends of one line instead of
+            // stacking down the middle of 1232px. `order` rather than DOM
+            // reordering, so a phone still reads payments -> copyright ->
+            // terms, which is the order that was reviewed.
+            'lg:grid lg:grid-cols-2 lg:items-center lg:gap-x-block',
+          )}
+        >
           {/* One wrapped row: on a phone the icons sit above the pills, from
               `sm` they take opposite ends of the same line. `flex-wrap` +
               `justify-between` degrades correctly — a wrapped line holding one
@@ -272,7 +316,7 @@ export function SiteFooter({ className }: { className?: string }) {
               mark and the glyphs together at the top, and having them here as
               well would be the same four icons twice. */}
           <ul
-            className="flex flex-wrap items-center justify-center gap-2"
+            className="flex flex-wrap items-center justify-center gap-2 lg:order-2 lg:justify-end"
             aria-label="Accepted payment methods"
           >
             {PAYMENT_METHODS.map((method) => (
@@ -287,7 +331,7 @@ export function SiteFooter({ className }: { className?: string }) {
 
           {/* Copyright first in the DOM so a phone reads it before the legal
               links; from `sm` the two share one line, copyright left. */}
-          <div className="flex flex-col items-center gap-1">
+          <div className="flex flex-col items-center gap-1 lg:order-1 lg:flex-row lg:gap-4">
             <p className="text-caption text-muted-foreground">
               © {new Date().getFullYear()} {LEGAL_NAME}
             </p>
@@ -311,7 +355,7 @@ export function SiteFooter({ className }: { className?: string }) {
               It names only pages that EXIST — terms, cookies and privacy are
               all real routes — rather than the reference's fuller list, which
               includes a content-guidelines page this product does not have. */}
-          <p className="mx-auto max-w-sm text-center text-caption text-muted-foreground">
+          <p className="mx-auto max-w-sm text-center text-caption text-muted-foreground lg:order-3 lg:col-span-2 lg:mx-0 lg:max-w-none lg:text-left">
             By using {LEGAL_NAME} you agree to our{' '}
             <Link href="/terms" className={inlineLinkClass}>
               Terms

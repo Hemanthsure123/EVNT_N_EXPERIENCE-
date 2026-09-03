@@ -149,3 +149,31 @@ class SlotInUseError(ConflictError):
             "This session still has ticket tiers attached. Remove them first, "
             "or turn the session off to stop selling it."
         )
+
+
+class CrewOrganizationNotFoundError(NotFoundError):
+    """No such organization, or it is not yours.
+
+    NOT a `PermissionDeniedError`. A 403 confirms the organization exists to
+    anyone walking uuids, which is the same reasoning `EventNotFoundError`
+    already carries for events.
+    """
+
+    code = "organization_not_found"
+
+
+class CrewMemberNotFoundError(NotFoundError):
+    """No such crew member on this organization's roster."""
+
+    code = "crew_member_not_found"
+
+
+class CrewMemberInUseError(ConflictError):
+    """This person appears on an event's lineup.
+
+    `EventCrew.member` is `PROTECT`, so the database refuses the delete anyway
+    — this exists so the refusal arrives as an actionable sentence naming the
+    alternative rather than as an integrity error.
+    """
+
+    code = "crew_member_in_use"

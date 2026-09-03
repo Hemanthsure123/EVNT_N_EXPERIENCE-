@@ -45,6 +45,7 @@ from .schemas import (
     ActivitySerializer,
     AdminBookingDetailSerializer,
     AdminBookingSerializer,
+    AdminCrewMemberSerializer,
     AdminEnquirySerializer,
     AdminOrganizationSerializer,
     AdminPaymentSerializer,
@@ -844,3 +845,25 @@ class AuditLogView(ConsoleView):
         ]
         data = cast(list, AuditEntrySerializer(rows, many=True).data)
         return _no_store(paginator.get_paginated_response(data))
+
+
+class AdminOrganizationCrewView(ConsoleView):
+    """One organization's crew roster, for an operator.
+
+    READ ONLY, like everything else in this module. An operator can see who an
+    organization puts on stage — which is what makes a report about a lineup
+    actionable — and cannot edit somebody else's roster, because that is the
+    organizer's own screen and a console that writes here would be a console
+    that can break `events`' invariants.
+
+    No `ADMIN_SECTIONS` entry: there is no platform-wide crew endpoint behind
+    it, and a nav item that leads to a page needing an id it does not have is
+    worse than no nav item.
+    """
+
+    @extend_schema(responses={200: AdminCrewMemberSerializer(many=True)})
+    def get(self, request: Request, organization_id: str) -> Response:
+        from . import repositories
+
+        rows = repositories.ConsoleRepository().crew_for_organization(organization_id)
+        return _no_store(Response({"data": AdminCrewMemberSerializer(rows, many=True).data}))

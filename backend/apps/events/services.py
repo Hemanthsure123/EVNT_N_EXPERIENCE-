@@ -23,7 +23,7 @@ from django.db import IntegrityError, transaction
 
 from apps.accounts.repositories import UserRepository
 from apps.organizations.exceptions import OrganizationNotFoundError
-from apps.organizations.models import VerifiedLevel
+from apps.organizations.models import Organization, VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
 from config.di import build_booking_service, task_queue_port
 from core.audit import record_audit
@@ -44,6 +44,9 @@ from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    CrewMemberInUseError,
+    CrewMemberNotFoundError,
+    CrewOrganizationNotFoundError,
     DuplicateSlotError,
     EventNotFoundError,
     EventNotLiveError,
@@ -55,9 +58,14 @@ from .exceptions import (
     SlotInUseError,
     StaleEventVersionError,
 )
-from .models import Event, EventSlot, EventStatus, MediaKind
+from .models import CrewMember, Event, EventSlot, EventStatus, MediaKind
 from .publish_checks import run_publish_checks
-from .repositories import EventRepository, EventSlotRepository
+from .repositories import (
+    CrewMemberRepository,
+    EventCrewRepository,
+    EventRepository,
+    EventSlotRepository,
+)
 from .selectors import invalidate_event_caches
 from .slugs import event_slug
 
@@ -658,6 +666,13 @@ class EventService:
             )
             slot_map = self._events.copy_content_to(source_id=source.id, target_id=clone.id)
 
+            # THE LINEUP COMES ACROSS, and it is exactly the retyping this
+            # method exists to remove — a monthly residency has the same
+            # residents. It points at the SAME `CrewMember` rows rather than
+            # copying them: a person is one person, and duplicating the roster
+            # would leave an organizer editing the same face in four places.
+            EventCrewRepository().copy_to_event(source_event_id=source.id, target_event_id=clone.id)
+
             from apps.ticketing.repositories import TicketTypeRepository
 
             tt_repo = TicketTypeRepository()
@@ -1097,11 +1112,85 @@ class EventContentService:
         content,
         storage: StoragePort,
         slots: EventSlotRepository | None = None,
+        crew: CrewMemberRepository | None = None,
+        lineups: EventCrewRepository | None = None,
     ) -> None:
         self._events = events
         self._content = content
         self._storage = storage
         self._slots = slots or EventSlotRepository()
+        self._crew = crew or CrewMemberRepository()
+        self._lineups = lineups or EventCrewRepository()
+
+    # ---------------------------------------------------------------- crew
+
+    #: How many people may appear on one event's lineup. Not a database
+    #: constraint, because it is a product judgement rather than an invariant:
+    #: a carousel of forty faces is not a lineup, it is a directory.
+    MAX_LINEUP = 25
+
+    def set_event_crew(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        member_ids: list[str],
+    ) -> list:
+        """Replace an event's whole lineup with this ordered set of members.
+
+        ── THE CHECK THAT MATTERS IS THE CROSS-TENANT ONE ──────────────────
+
+        `member_ids` arrives from a browser. Every id is verified to belong to
+        THIS event's organization, in ONE query, and a single stranger's id
+        REFUSES the whole write rather than being silently dropped. Dropping it
+        would be worse than refusing: the organizer would press save, see no
+        error, and never learn that one of their choices did not stick.
+
+        Without that check, a guessed uuid would put another organization's
+        person on your public event page — the only genuine security boundary
+        this feature has.
+
+        Duplicates are collapsed while PRESERVING ORDER: the picker can emit the
+        same id twice on a slow connection, and `event_crew_unique_member` would
+        turn that into an IntegrityError on a save that was entirely reasonable.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for raw in member_ids:
+            key = str(raw)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(key)
+
+        if len(ordered) > self.MAX_LINEUP:
+            raise InvalidInputError(
+                f"An event can list at most {self.MAX_LINEUP} people on its lineup."
+            )
+
+        owned = self._crew.owned_ids(
+            organization_id=event.organization_id, member_ids=list(ordered)
+        )
+        missing = [key for key in ordered if key not in owned]
+        if missing:
+            raise InvalidInputError(
+                "Some of those people are not on this organisation's crew list."
+            )
+
+        with UnitOfWork():
+            self._lineups.replace_for_event(event_id=event.id, member_ids=ordered)
+
+        # AFTER commit, and only when the event is actually public — the same
+        # rule every other content write here follows. Editing a draft's lineup
+        # must not orphan every cached listing page on the platform.
+        self._invalidate_if_public(event)
+        return self._lineups.for_event(event.id)
+
+    def list_event_crew(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> list:
+        """The owner's view of a lineup — used by the studio's picker."""
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        return self._lineups.for_event(event.id)
 
     def _owned(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         event = self._events.get_active_by_id(event_id)
@@ -1644,3 +1733,128 @@ class EventContentService:
             if not self._content.soft_delete_timeline_entry(entry_id):
                 raise EventNotFoundError(str(entry_id))
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
+
+
+class CrewService:
+    """An organization's crew roster — the people it can put on a stage.
+
+    Its own service rather than more methods on `EventContentService`, for the
+    same reason `AccountAdminService` is separate from `AuthService`: every
+    method there acts on ONE EVENT and is authorised by that event's owner,
+    while every method here acts on an ORGANIZATION and is authorised by the
+    organization's owner. Folding them together would mean one class holding two
+    different answers to "who is allowed to do this".
+
+    OWNERSHIP IS CHECKED HERE, not in a DRF permission, and it is checked by
+    SCOPING THE QUERY rather than by fetching-then-comparing: `get_owned` and
+    `update_owned` filter on `organization_id`, so a row belonging to somebody
+    else is never loaded at all. A 404 rather than a 403, so a guessed uuid
+    cannot be used to confirm that a row exists.
+    """
+
+    #: A roster, not a directory. High enough that no real organizer meets it,
+    #: low enough that an unbounded write loop cannot fill a table.
+    MAX_ROSTER = 200
+
+    def __init__(
+        self,
+        *,
+        organizations: OrganizationRepository,
+        crew: CrewMemberRepository | None = None,
+        storage: StoragePort | None = None,
+    ) -> None:
+        self._organizations = organizations
+        self._crew = crew or CrewMemberRepository()
+        self._storage = storage
+
+    def _owned_organization(self, *, organization_id, actor_id) -> Organization:
+        organization = self._organizations.get_active_by_id(organization_id)
+        if organization is None or str(organization.owner_id) != str(actor_id):
+            raise CrewOrganizationNotFoundError("Organization not found.")
+        return organization
+
+    def list_roster(self, *, organization_id, actor_id, active_only: bool = False) -> list:
+        self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        return self._crew.list_for_organization(organization_id, active_only=active_only)
+
+    def add_member(
+        self,
+        *,
+        organization_id,
+        actor_id,
+        name: str,
+        role: str = "",
+        details: str = "",
+        photo_url: str = "",
+        photo_alt_text: str = "",
+    ) -> CrewMember:
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        if self._crew.count_for_organization(organization.id) >= self.MAX_ROSTER:
+            raise InvalidInputError(
+                f"This organisation already has {self.MAX_ROSTER} crew members."
+            )
+        return self._crew.create_member(
+            organization_id=organization.id,
+            name=name.strip(),
+            role=role.strip(),
+            details=details,
+            photo_url=photo_url,
+            photo_alt_text=photo_alt_text,
+        )
+
+    def update_member(self, *, organization_id, actor_id, member_id, **changes) -> CrewMember:
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        updated = self._crew.update_owned(
+            organization_id=organization.id, member_id=member_id, **changes
+        )
+        if updated is None:
+            raise CrewMemberNotFoundError("Crew member not found.")
+        return updated
+
+    def remove_member(self, *, organization_id, actor_id, member_id) -> None:
+        """Retire somebody from the roster.
+
+        REFUSED while they are on any lineup, with a message that names the
+        alternative. `EventCrew.member` is `PROTECT`, so the database would stop
+        this anyway — but it would stop it as an IntegrityError, and an operator
+        deserves to be told that the person is on an event and that deactivating
+        them is the thing they actually want.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        member = self._crew.get_owned(organization_id=organization.id, member_id=member_id)
+        if member is None:
+            raise CrewMemberNotFoundError("Crew member not found.")
+        if self._crew.is_on_any_lineup(member.id):
+            raise CrewMemberInUseError(
+                "This person appears on an event's lineup. Deactivate them instead, "
+                "which keeps those events intact and hides them from new ones."
+            )
+        self._crew.soft_delete_owned(organization_id=organization.id, member_id=member.id)
+
+    def attach_photo(
+        self, *, organization_id, actor_id, member_id, upload, content_type: str, alt_text: str
+    ):
+        """Store a portrait and put it on the roster row.
+
+        THE UPLOAD HAPPENS BEFORE ANY TRANSACTION OPENS, which is the rule
+        every other external call in this codebase follows: a DB transaction
+        should not be held open across a network round trip, and if the storage
+        write succeeds but the row update then fails, the orphaned object is
+        harmless.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        member = self._crew.get_owned(organization_id=organization.id, member_id=member_id)
+        if member is None:
+            raise CrewMemberNotFoundError("Crew member not found.")
+        if self._storage is None:  # pragma: no cover - wiring guard
+            raise InvalidInputError("Photo uploads are not configured.")
+
+        key = f"crew/{organization.id}/{member.id}/{uuid.uuid4().hex}"
+        url = self._storage.upload(path=key, content=upload.read(), content_type=content_type)
+        return self.update_member(
+            organization_id=organization.id,
+            actor_id=actor_id,
+            member_id=member.id,
+            photo_url=url,
+            photo_alt_text=alt_text,
+        )
