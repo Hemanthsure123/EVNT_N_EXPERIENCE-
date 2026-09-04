@@ -95,6 +95,24 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 # `apk upgrade` is the OS half: libcrypto3/libssl3 in the base layer were
 # behind on CVE-2026-45447. Node's TLS is statically linked against its own
 # OpenSSL, so this patches the system copy the rest of the image links to.
+#
+# ── AND THE ARG IS WHAT MAKES THE UPGRADE ACTUALLY RUN ────────────────────
+#
+# This layer is CACHED, and `cache-from: type=gha` in the release workflow
+# means a build that changed only application files reuses it byte for byte.
+# So the image kept whichever Alpine packages were current the day the layer
+# was FIRST built, while Trivy's database kept learning about them — and an
+# `apk upgrade` that never re-runs is an upgrade that never happened.
+#
+# It failed a release exactly that way: libcrypto3/libssl3 3.5.6-r0 were fine
+# when the layer was built and had a fix (3.5.8-r0) by the time the scan next
+# ran, on an image whose Dockerfile had not changed at all. `--ignore-unfixed`
+# does not save you here — the whole point is that a fix EXISTS.
+#
+# `backend/Dockerfile` has carried the same ARG since CVE-2026-6473 caught
+# libpq5 the same way. This is that lesson, applied to the half that was
+# missed; bump the date to pull current security patches on the next build.
+ARG APK_REFRESH=2026-09-03
 RUN apk upgrade --no-cache && \
     rm -rf /usr/local/lib/node_modules/npm \
            /usr/local/lib/node_modules/corepack \

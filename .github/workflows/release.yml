@@ -355,6 +355,17 @@ jobs:
           tags: |
             ${{ steps.tags.outputs.backend }}
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_BACKEND }}:main-${{ needs.resolve.outputs.short }}
+          # ── ALWAYS RE-RESOLVE THE BASE IMAGE ──────────────────────────
+          # `docker/build-push-action` defaults to `pull: false`, so a runner
+          # with `python:3.12-slim` already resolved keeps building on the
+          # digest it saw first. Combined with the GHA layer cache below, the
+          # published image can carry OS packages months older than the tag it
+          # claims to be built from — and the image scan, which is the gate on
+          # this pipeline, is the thing that finds out.
+          #
+          # Pulling costs seconds and only invalidates the layer cache when the
+          # base has genuinely moved, which is exactly when it should.
+          pull: true
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
@@ -373,6 +384,8 @@ jobs:
             NEXT_PUBLIC_MEDIA_BASE_URL=${{ vars.NEXT_PUBLIC_MEDIA_BASE_URL }}
             NEXT_PUBLIC_RAZORPAY_KEY_ID=${{ vars.NEXT_PUBLIC_RAZORPAY_KEY_ID }}
             NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${{ vars.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+          # Same reasoning as the backend above.
+          pull: true
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 

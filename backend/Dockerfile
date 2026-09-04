@@ -36,7 +36,7 @@ WORKDIR /app
 # ran, on an image whose contents had not changed at all. `upgrade` means a
 # rebuild picks up security patches rather than pinning the past, and the
 # ARG is what makes a rebuild happen when nothing else here has moved.
-ARG APT_REFRESH=2026-08-14
+ARG APT_REFRESH=2026-09-03
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libpq5 curl \
