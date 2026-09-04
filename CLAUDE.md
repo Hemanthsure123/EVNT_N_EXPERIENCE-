@@ -1789,6 +1789,67 @@ unfiltered — the client REPLACES its local set from that response, so filterin
 it would silently cost everybody their save the moment an organizer unpublished
 an event for an afternoon.
 
+## The poster is a shared element, and the deck's prominence is interpolated
+
+Opening the mobile event widget used to slide the SHEET up from the bottom
+while the hero appeared INSTANTLY at its full 62dvh. The artwork of the event
+somebody had just tapped had no relationship to the card they tapped, so the
+eye read it as "the card went away and a page arrived" — which is precisely
+what it was. Nothing in the sequence referenced the source geometry, because
+there was no source geometry anywhere in the system.
+
+**A clone flies between the two boxes**, both MEASURED from the DOM. The card
+carries `data-event-poster={id}` and the deck's active hero carries
+`data-deck-poster`; `lib/discovery/shared-poster.ts` reads both and returns the
+transform. Nothing is computed from constants, so it is correct on any viewport
+rather than on the one it was built against.
+
+- **An attribute, not a rect threaded through `openDeck`.** Eight card
+  components can open the deck; giving each of them a rect to carry would be
+  eight signatures to change and eight chances to forget one. It also means the
+  CLOSE targets whichever event is current after a swipe rather than the one
+  originally tapped, and a surface with no card at all (an account ticket, a
+  seeded `openEvent`) simply gets the plain slide.
+- **A clone, not `layoutId`.** framer's own shared-element machinery needs both
+  nodes as motion components in one tree; here the source is inside a scrolling
+  list and the destination inside a `position: fixed` overlay whose track
+  already carries a transform. A throwaway layer cannot leave either component
+  in a bad state if it is interrupted.
+- **Uniform scale, keyed to WIDTH.** A card is 2:3 and the hero roughly 3:4, so
+  no transform matches both. Non-uniform scale matches the box and squashes the
+  photograph; fixing that needs a counter-scale on the image, which then shows a
+  CROP of the final-size picture rather than what the card was showing. Eleven
+  percent of height on a moving element for 300ms is less visible than either.
+- **The layer is positioned at the DESTINATION and transformed back to the
+  source**, so the forward animation ends at identity — pixel-identical to the
+  real hero underneath, and the handover needs no cross-fade to tune.
+- **The real hero is hidden by `opacity`, never unmounted.** Unmounting would
+  make the browser re-decode the image on the way back in, which is the flash
+  the whole thing exists to avoid.
+- **`SharedPoster`'s cleanup must NOT settle.** It used to `cancel()` and then
+  call `onDone`, on the reasonable grounds that an interrupted flight should not
+  leave the hero hidden. In development that made the animation never run AT
+  ALL: React strict mode mounts every effect, tears it down and mounts it again,
+  so the teardown cleared the flight before the second mount could draw a frame.
+  It looked exactly like the old behaviour — the worst way to fail. The deck
+  clears its own `flight` when it closes instead; the state belongs to the thing
+  that owns the transition, not to a layer that is only scenery.
+
+**Prominence is interpolated, not switched.** The deck's neighbours carried a
+static `scale-[0.97] opacity-70` class with a 300ms transition, so an incoming
+card sat dimmed for the whole swipe and cross-faded only after the index
+flipped — the `drag -> wait -> change -> animate` shape, where the visual state
+lags the finger by an entire gesture and reversing mid-swipe animates two cards
+the wrong way at once. The same `offset` that positions the track now derives
+each card's scale and opacity in the same frame, so a card halfway in is halfway
+bright and a reversal is immediate because nothing is running that has to be
+cancelled first. Measured: the outgoing card reads 0.893 mid-gesture and 0.996
+one frame after the finger turns around.
+
+**Transform and opacity only**, one `getBoundingClientRect` per open and per
+close and never inside a gesture, and the flight is 300ms — a booking app has
+to say WHICH event was selected and then get out of the way.
+
 ## The widget sheet stops at the poster, and one gesture drives both
 
 Two rules for the mobile event widget, and both came from the same complaint —

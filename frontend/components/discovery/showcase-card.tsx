@@ -71,6 +71,7 @@ export function ShowcaseCard({
         type="button"
         onClick={() => openDeck(allEvents && allEvents.length > 0 ? allEvents : [event], index)}
         aria-label={event.title}
+        data-event-poster={event.id}
         className="relative flex aspect-[3/4] w-[15rem] shrink-0 overflow-hidden rounded-2xl border border-border bg-sunken shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
       >
         {event.poster_url ? (

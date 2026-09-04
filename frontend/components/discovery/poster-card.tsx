@@ -95,7 +95,10 @@ export function PosterCard({
         className,
       )}
     >
-      <div className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted">
+      <div
+        data-event-poster={event.id}
+        className="relative aspect-portrait w-full overflow-hidden rounded-2xl bg-muted"
+      >
         {event.poster_url ? (
           <Image
             src={event.poster_url}

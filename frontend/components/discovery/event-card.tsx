@@ -162,7 +162,10 @@ export function EventCard({
           'motion-reduce:transform-none motion-reduce:transition-none',
         )}
       >
-        <div className="relative aspect-portrait w-24 shrink-0 overflow-hidden rounded-xl bg-muted m-2 sm:m-0 sm:aspect-[4/3] sm:w-full sm:rounded-none">
+        <div
+          data-event-poster={event.id}
+          className="relative aspect-portrait w-24 shrink-0 overflow-hidden rounded-xl bg-muted m-2 sm:m-0 sm:aspect-[4/3] sm:w-full sm:rounded-none"
+        >
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {event.poster_url ? (
             <Image

@@ -23,9 +23,17 @@ import {
 } from '@/lib/discovery/sheet-snap';
 import { formatFromPrice } from '@/lib/discovery/format';
 import type { EventCard as EventCardData } from '@/lib/api/types';
+import {
+  DECK_POSTER_ATTR,
+  isUsableSource,
+  readCardPoster,
+  readDeckPoster,
+  type Box,
+} from '@/lib/discovery/shared-poster';
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
 import { EventWidgetContent } from './event-widget-content';
+import { SharedPoster } from './shared-poster';
 
 /**
  * The mobile event widget — and on a phone, this IS the event page.
@@ -126,6 +134,26 @@ import { EventWidgetContent } from './event-widget-content';
  */
 
 const SPRING = { type: 'spring', stiffness: 340, damping: 36, mass: 0.9 } as const;
+/**
+ * How long the poster takes to travel between a card and the hero.
+ *
+ * Short on purpose. This is a booking app, not a presentation: the transition
+ * has to explain WHICH event was selected and then get out of the way, and
+ * anything past about a third of a second starts to read as the interface
+ * making the reader wait. It is also the scrim's duration, so the list fading
+ * and the poster arriving are one movement rather than two.
+ */
+const FLIGHT_MS = 300;
+/**
+ * How far back a neighbouring card sits when it is fully off-centre.
+ *
+ * These are the values the static classes carried; what changed is that they
+ * are now the ENDPOINTS of an interpolation rather than a state a card snaps
+ * between. Keeping the numbers identical means the resting appearance of the
+ * deck is unchanged — only the way it gets there is.
+ */
+const PEEK_SCALE = 0.97;
+const PEEK_OPACITY = 0.7;
 /** How far a gesture must travel before it is allowed to commit to an axis. */
 const COMMIT_SLOP = 10;
 /** Fraction of the viewport the active card occupies while the deck is inset. */
@@ -146,6 +174,16 @@ export function EventWidgetDeck() {
   const reduceMotion = useReducedMotion();
 
   const currentEvent = events[currentIndex] ?? events[0] ?? null;
+  /**
+   * The current event, readable without becoming a dependency.
+   *
+   * The enter effect must not list `currentIndex` — re-running it on a swipe
+   * would drop the sheet back to its entry height mid-read, which is why that
+   * effect already carries an eslint-disable saying so. A ref lets it read the
+   * event it is opening on without joining that argument.
+   */
+  const currentEventRef = React.useRef(currentEvent);
+  currentEventRef.current = currentEvent;
 
   // Every hook runs on every render, open or closed — the early return is at
   // the bottom. `null` tells the data hook to fetch nothing.
@@ -270,8 +308,46 @@ export function EventWidgetDeck() {
         node.style.transition = transition;
         node.style.transform = transform;
       }
+
+      /**
+       * ── PROMINENCE IS INTERPOLATED, NOT SWITCHED ──────────────────────
+       *
+       * The neighbours used to carry a STATIC `scale-[0.97] opacity-70` class
+       * with a 300ms transition, so an incoming card sat at its dimmed size
+       * for the whole swipe and then cross-faded once the index flipped. That
+       * is the `drag -> wait -> change -> animate` shape: the visual state
+       * lagged the finger by an entire gesture, and reversing mid-swipe made
+       * two cards animate the wrong way at once.
+       *
+       * The same `offset` that positions the track also says exactly where
+       * each card is relative to the centre, so the state is DERIVED from it
+       * in the same frame. A card halfway in is halfway bright. Reversing
+       * direction reverses it immediately, because there is nothing running
+       * that has to be cancelled first — the only thing moving is the finger.
+       *
+       * Writes only: `transform` and `opacity`, both compositor properties,
+       * and no `getBoundingClientRect` anywhere near a gesture.
+       */
+      const track = trackRef.current;
+      if (!track || stride <= 0) return;
+      const centre = -offset / stride;
+      const cells = track.querySelectorAll<HTMLElement>('[data-deck-card]');
+      const cellTransition =
+        settle && !reduceMotion
+          ? 'transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 340ms cubic-bezier(0.22, 1, 0.36, 1)'
+          : 'none';
+      for (let index = 0; index < cells.length; index += 1) {
+        const cell = cells[index];
+        // Clamped at one card's distance: everything further out is simply
+        // "not the one", and letting it keep shrinking would make a long list
+        // fade to nothing at the edges for no reason.
+        const distance = Math.min(Math.abs(index - centre), 1);
+        cell.style.transition = cellTransition;
+        cell.style.transform = `scale(${1 - distance * (1 - PEEK_SCALE)})`;
+        cell.style.opacity = String(1 - distance * (1 - PEEK_OPACITY));
+      }
     },
-    [reduceMotion],
+    [reduceMotion, stride],
   );
 
   // The bottom padding under the content is the REAL height of the sticky bar
@@ -286,6 +362,30 @@ export function EventWidgetDeck() {
     return () => observer.disconnect();
   }, [isOpen]);
 
+  /**
+   * ── THE POSTER IS A SHARED ELEMENT, NOT A NEW IMAGE ────────────────────
+   *
+   * Before this, opening the deck slid the SHEET up from the bottom while the
+   * hero appeared instantly at its full 62dvh — so the artwork of the event
+   * somebody had just tapped had no relationship to the card they tapped. The
+   * eye read it as "the card went away and a page arrived", which is exactly
+   * what it was.
+   *
+   * Now a clone of that poster flies from the card's box to the hero's box
+   * while the sheet follows it up. `flight` holds the two measured rects for
+   * the life of one animation and nothing else; when it is null the deck
+   * behaves precisely as it did before, which is the fallback for every case
+   * where a source cannot be found — a seeded open from an account ticket, a
+   * card scrolled out of view, reduced motion.
+   */
+  const [flight, setFlight] = React.useState<{
+    from: Box;
+    to: Box;
+    direction: 'in' | 'out';
+    src: string;
+    alt: string;
+  } | null>(null);
+
   // Enter: from just below the viewport up to the resting snap, with the
   // tapped event already centred.
   React.useEffect(() => {
@@ -297,7 +397,35 @@ export function EventWidgetDeck() {
       y.set(resting);
       return;
     }
-    y.set(viewport.height);
+
+    // Measured in the same frame the deck mounts, while the list behind is
+    // still laid out exactly as it was when the card was tapped. One
+    // `getBoundingClientRect` per element, once — never inside a gesture.
+    const opening = currentEventRef.current;
+    const source = opening?.poster_url ? readCardPoster(opening.id) : null;
+    const destination = readDeckPoster();
+    const canFly =
+      source !== null &&
+      destination !== null &&
+      isUsableSource(source, viewport.height, viewport.width);
+
+    if (canFly && opening) {
+      setFlight({
+        from: source,
+        to: destination,
+        direction: 'in',
+        src: opening.poster_url,
+        alt: opening.title,
+      });
+      // The sheet starts from the hero's lower edge rather than from off the
+      // bottom of the screen. It has less distance to cover than the poster,
+      // so both arrive together instead of the panel racing ahead of the image
+      // it is supposed to be carrying.
+      y.set(Math.min(viewport.height, destination.top + destination.height));
+    } else {
+      y.set(viewport.height);
+    }
+
     const controls = animate(y, resting, SPRING);
     return () => controls.stop();
     // `currentIndex` is deliberately absent: this runs on OPEN, and re-running
@@ -306,7 +434,14 @@ export function EventWidgetDeck() {
   }, [isOpen, viewport.height]);
 
   React.useEffect(() => {
-    if (!isOpen) setActiveSubSheet(null);
+    if (!isOpen) {
+      setActiveSubSheet(null);
+      // The flight belongs to the deck, not to the layer that draws it. Clearing
+      // it here is what makes `SharedPoster`'s cleanup able to be a plain
+      // cancel — an interrupted transition can never leave the real hero
+      // hidden, because the only thing that hides it is this state.
+      setFlight(null);
+    }
   }, [isOpen]);
 
   // Keep the active card centred when the index changes (a swipe, a tap on a
@@ -418,13 +553,51 @@ export function EventWidgetDeck() {
     [snaps, y, reduceMotion],
   );
 
+  /**
+   * Close, collapsing the poster back toward the card it came from.
+   *
+   * The source is looked up FRESH rather than remembered from the open,
+   * because the reader may have swiped: the thing that should shrink is the
+   * event they are looking at now, not the one they originally tapped. It also
+   * means a list that has re-rendered underneath is handled for free.
+   *
+   * Every branch that cannot fly falls through to the plain slide the deck has
+   * always done — reduced motion, an event with no poster, a card scrolled out
+   * of view, a seeded open from a surface with no card at all. That is the
+   * graceful handling the brief asks for, and it is the same code path that
+   * shipped before any of this existed.
+   */
   const dismiss = React.useCallback(() => {
     if (reduceMotion || viewport.height === 0) {
       closeDeck();
       return;
     }
+
+    const leaving = currentEventRef.current;
+    const target = leaving?.poster_url ? readCardPoster(leaving.id) : null;
+    const source = readDeckPoster();
+    const canFly =
+      target !== null &&
+      source !== null &&
+      isUsableSource(target, viewport.height, viewport.width);
+
+    if (canFly && leaving) {
+      setFlight({
+        from: target,
+        to: source,
+        direction: 'out',
+        src: leaving.poster_url,
+        alt: leaving.title,
+      });
+      // The sheet drops only as far as the poster's lower edge, so the two
+      // finish together rather than the panel disappearing and leaving the
+      // image to travel alone.
+      animate(y, Math.min(viewport.height, source.top + source.height), SPRING);
+      return;
+    }
+
     animate(y, viewport.height, { ...SPRING, onComplete: closeDeck });
-  }, [closeDeck, viewport.height, y, reduceMotion]);
+  }, [closeDeck, viewport.height, viewport.width, y, reduceMotion]);
 
   /**
    * The vertical gesture, start to finish.
@@ -672,15 +845,46 @@ export function EventWidgetDeck() {
 
   return (
     <div className="fixed inset-0 z-modal sm:hidden" role="dialog" aria-modal="true">
-      {/* Dimmed AND blurred, so nothing bleeds through the active surface. */}
+      {/* Dimmed AND blurred, so nothing bleeds through the active surface.
+
+          The DURATION is what changed: it used to take framer's default and
+          land well before the sheet, so the list was gone before the selected
+          event had arrived — the two halves of one movement running on
+          different clocks. Matched to the poster's flight, it reads as the
+          list receding BEHIND the event rather than being switched off in
+          front of it, which is the "reduce prominence progressively" the brief
+          asks for. The blur itself is untouched: it is the existing look, and
+          this change is about timing, not about redesigning the scrim. */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
+        transition={{ duration: reduceMotion ? 0 : FLIGHT_MS / 1000, ease: [0.22, 1, 0.36, 1] }}
         onClick={dismiss}
         className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
         aria-hidden
       />
+
+      {/* The poster in flight between the card and the hero. Mounted only for
+          the length of one transition, and it removes itself. */}
+      {flight ? (
+        <SharedPoster
+          src={flight.src}
+          alt={flight.alt}
+          from={flight.from}
+          to={flight.to}
+          direction={flight.direction}
+          durationMs={FLIGHT_MS}
+          onDone={() => {
+            setFlight(null);
+            // The close is committed HERE rather than on the sheet's spring,
+            // so the deck survives exactly as long as the picture that is
+            // still moving across it. Unmounting on the spring instead would
+            // cut the poster off mid-flight.
+            if (flight.direction === 'out') closeDeck();
+          }}
+        />
+      ) : null}
 
       {/* ── THE POSTER LAYER: ANCHORED, BEHIND THE SHEET ───────────────────
           The artwork used to live INSIDE the scroller, so a drag or a scroll
@@ -698,7 +902,15 @@ export function EventWidgetDeck() {
           including the ones that begin over the artwork. A poster that
           swallowed touches would be a dead zone across the top third of the
           screen. */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        // Hidden ONLY while a clone is flying, so there is never a moment with
+        // two copies of the same photograph on screen. It is opacity rather
+        // than `display`, because unmounting would make the browser re-decode
+        // the image on the way back in — the visible flash this whole
+        // transition exists to avoid.
+        style={{ opacity: flight ? 0 : 1 }}
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+      >
         <div
           ref={posterTrackRef}
           style={{ paddingLeft: railPadding, paddingRight: railPadding, willChange: 'transform' }}
@@ -715,7 +927,14 @@ export function EventWidgetDeck() {
                   running off the bottom of the artwork. */}
               {/* Rounded to match the card in front of it, so the artwork
                   does not show square shoulders past a rounded sheet. */}
-              <div className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden rounded-3xl bg-muted">
+              <div
+                // Read by `readDeckPoster` to get the destination geometry for
+                // the shared-poster transition — measured, never recomputed
+                // from the constants above, so it stays correct on any
+                // viewport (and if the poster's height ever changes).
+                {...(index === currentIndex ? { [DECK_POSTER_ATTR]: '' } : {})}
+                className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden rounded-3xl bg-muted"
+              >
                 <Poster event={event} priority={index === currentIndex} />
                 {/* A scrim under the floating controls, so a white poster
                     cannot swallow them. */}
@@ -805,12 +1024,17 @@ export function EventWidgetDeck() {
               >
                 <div
                   data-deck-card={active ? 'active' : 'peek'}
+                  // The RESTING values, for the first paint only. `applyTrack`
+                  // takes over on the frame after mount and drives both
+                  // continuously from the track offset — see the note there.
+                  // Without this the neighbours would flash at full prominence
+                  // for exactly one frame on open.
+                  style={{
+                    transform: `scale(${active ? 1 : PEEK_SCALE})`,
+                    opacity: active ? 1 : PEEK_OPACITY,
+                  }}
                   className={cn(
                     'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl',
-                    // Opacity and scale on one spring, so a neighbour arriving
-                    // in the centre resolves as a single movement rather than
-                    // fading and growing on two different clocks.
-                    'transition-[opacity,transform] duration-300 ease-spring motion-reduce:transition-none',
                     // ── ALL FOUR CORNERS, IN EVERY STATE ─────────────────
                     // It was `rounded-t-3xl` only, so the card met the bottom
                     // of the screen with two hard corners and the neighbours
@@ -826,7 +1050,9 @@ export function EventWidgetDeck() {
                     'rounded-3xl border border-border',
                     // The neighbours are context, not content: dimmed and set
                     // back a little so the centre reads as the one in focus.
-                    active ? 'opacity-100' : 'scale-[0.97] opacity-70',
+                    // Those two values now live in `PEEK_SCALE`/`PEEK_OPACITY`
+                    // and are applied as INLINE styles, because they are
+                    // interpolated per frame rather than toggled per index.
                   )}
                 >
                   {active ? (

@@ -64,7 +64,10 @@ export function SellingFastCard({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
       )}
     >
-      <div className="relative aspect-card w-full shrink-0 overflow-hidden bg-muted">
+      <div
+        data-event-poster={event.id}
+        className="relative aspect-card w-full shrink-0 overflow-hidden bg-muted"
+      >
         <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
         {event.poster_url ? (
           <Image

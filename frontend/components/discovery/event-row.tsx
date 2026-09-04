@@ -93,7 +93,10 @@ export function EventRow({
           'motion-reduce:transition-none',
         )}
       >
-        <div className="relative aspect-card w-24 shrink-0 overflow-hidden bg-muted sm:w-48 lg:w-56">
+        <div
+          data-event-poster={event.id}
+          className="relative aspect-card w-24 shrink-0 overflow-hidden bg-muted sm:w-48 lg:w-56"
+        >
           <div className="absolute inset-0 bg-gradient-to-br from-muted to-border" aria-hidden />
           {event.poster_url ? (
             <Image
