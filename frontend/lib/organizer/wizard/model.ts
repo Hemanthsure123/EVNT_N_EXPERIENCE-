@@ -977,6 +977,18 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     ...coordinates(draft),
     starts_at: toIso(draft.startsAt),
     ...(draft.endsAt ? { ends_at: toIso(draft.endsAt) } : {}),
+    // ── THE PICKER USED TO WRITE NOWHERE ─────────────────────────────────
+    // `category` was in the draft, in the model, in the picker, in the
+    // server's editable set and in its update serializer — and in neither this
+    // function nor `patchFingerprint`. So choosing a category updated the
+    // preview, marked the step done, and was never sent: the event stayed
+    // uncategorised and appeared under no browse tile, silently, forever.
+    //
+    // OMITTED when blank rather than sent as `''`, exactly as `toCreateInput`
+    // does: the server's field is a strict `ChoiceField` on write, and `''` is
+    // not one of the choices, so sending it would turn every autosave on an
+    // uncategorised draft into a 400 the organiser cannot act on.
+    ...(draft.category ? { category: draft.category } : {}),
     short_description: draft.shortDescription.trim(),
     duration_minutes: draft.durationMinutes ? Number(draft.durationMinutes) : null,
     language: draft.language.trim(),
@@ -995,9 +1007,22 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
 
 /** Rupees in the field -> paise on the wire. Money is integer minor units
  *  everywhere in this API, and this is the one place the conversion happens. */
-export function toTierInput(tier: DraftTier): CreateTicketTypeInput {
+export function toTierInput(tier: DraftTier, position: number): CreateTicketTypeInput {
   return {
     name: tier.name.trim(),
+    // ── ARRAY ORDER IS THE MERCHANDISING ORDER ───────────────────────────
+    // `position` is REQUIRED here rather than optional, because it was
+    // previously absent and nothing complained: every tier was created and
+    // updated with the column left at its default 0, while the public panel
+    // sorts on `position` FIRST (see `TicketTypeRepository.list_for_event`).
+    // So the drag-and-drop and the up/down arrows in the ticket builder
+    // reordered the local array, the preview obeyed, and the live event
+    // ignored all of it and fell back to cheapest-first.
+    //
+    // A required parameter is the point: the only caller is a loop that
+    // already knows the index, and an optional one with a default is how this
+    // silently regresses the next time somebody adds a call site.
+    position,
     price: Math.round(Number(tier.price) * 100),
     quantity: Number(tier.quantity),
     max_per_order: Number(tier.maxPerOrder) || 10,
@@ -1058,10 +1083,14 @@ export function patchFingerprint(draft: Draft): string {
     draft.accessibilityNotes,
     draft.seoTitle,
     draft.seoDescription,
+    // Part of the PATCH, so it has to be part of the fingerprint — without it,
+    // choosing a category changes nothing the save engine can see and the
+    // field is never sent at all. Same reason the pin is here.
+    draft.category,
   ]);
 }
 
-export function tierFingerprint(tier: DraftTier): string {
+export function tierFingerprint(tier: DraftTier, position: number): string {
   return JSON.stringify([
     tier.name,
     tier.price,
@@ -1069,6 +1098,20 @@ export function tierFingerprint(tier: DraftTier): string {
     tier.maxPerOrder,
     tier.saleStart,
     tier.saleEnd,
+    // ── EVERYTHING THE WRITE CARRIES, OR THE WRITE NEVER HAPPENS ─────────
+    // These three are in `toTierInput` and in the server's
+    // `_EDITABLE_TIER_FIELDS`, and were missing here — so editing a SAVED
+    // tier's description, adding a perk, or dragging it up the list produced
+    // an identical fingerprint, the save engine skipped the PATCH, and the
+    // change existed only on the organiser's own screen until they reloaded.
+    //
+    // `slotId` is deliberately NOT here: it is create-only (a live tier does
+    // not move between showtimes) and the server does not accept it as an
+    // edit, so watching it would schedule a PATCH that could never do
+    // anything.
+    tier.description,
+    tier.perks,
+    position,
     // The schedule is part of the write, so it has to be part of the
     // fingerprint. Without it, editing a phase price changes nothing the save
     // engine can see — the discount is typed, the badge appears in the

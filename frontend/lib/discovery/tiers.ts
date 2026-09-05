@@ -44,7 +44,7 @@ export type AvailabilityState =
   | { kind: 'available'; left: number };
 
 export type TierSummary = {
-  /** Tiers in price order, cheapest first — how people compare them. */
+  /** Tiers in the organiser's own order — what `position` on the server means. */
   tiers: TicketTier[];
   available: number;
   /** Real bookings across all tiers. Zero is a perfectly good answer. */
@@ -90,10 +90,27 @@ export function summariseTiers(tiers: TicketTier[] | null | undefined): TierSumm
     return { tiers: [], available: 0, sold: 0, fromPrice: null, state: { kind: 'unknown' } };
   }
 
-  // Sorted on FACE price, which is the tier ladder the organiser built — Basic
-  // under Gold under Premium — and what `tierRank` reads for elevation. A phase
-  // discount changes what a tier costs today, not where it sits in that ladder.
-  const ordered = [...tiers].sort((a, b) => a.price - b.price);
+  // ── THE SERVER'S ORDER IS THE ORGANISER'S ORDER. DO NOT RE-SORT. ───────
+  //
+  // This used to be `[...tiers].sort((a, b) => a.price - b.price)`, justified
+  // as "the tier ladder the organiser built — Basic under Gold under Premium".
+  // A price sort is a PROXY for that ladder, and it was the best available
+  // when nothing carried the real one.
+  //
+  // Something does now. `TicketType.position` is the organiser's explicit
+  // arrangement, it is the FIRST sort key the tiers endpoint orders by (after
+  // the slot), and the ticket builder has drag-and-drop and arrow keys for
+  // setting it. Re-sorting here threw all of that away at the last step: the
+  // organiser dragged their weekend pass above the day tickets, the server
+  // stored it, sent it in that order, and this line put it back under them —
+  // which is precisely the case the backend note says a price sort cannot
+  // express.
+  //
+  // `fromPrice` below is a `Math.min`, not the first element, so it is
+  // unaffected. `tierRank` now reads the organiser's order rather than the
+  // price order, which means its "entry" and "top" follow the list they
+  // arranged — the intended behaviour of a merchandising control.
+  const ordered = tiers;
   const available = ordered.reduce((sum, tier) => sum + Math.max(tier.available, 0), 0);
   const sold = ordered.reduce((sum, tier) => sum + Math.max(tier.sold, 0), 0);
   const onSale = ordered.filter((tier) => tier.is_on_sale);

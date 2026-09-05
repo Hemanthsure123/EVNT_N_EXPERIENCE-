@@ -39,11 +39,19 @@ import { EmptyState } from '../primitives';
  *
  * ── WHAT ORDER ACTUALLY MEANS ─────────────────────────────────────────────
  *
- * The backend has no `position` column on `TicketType`, and the public tiers
- * endpoint returns them ordered by PRICE. So dragging changes the order in
- * this editor only — it does not change what a buyer sees, and the panel says
- * so rather than implying a merchandising control that does not exist.
- * `BACKLOG.md` covers the column it would need.
+ * The order here IS what a buyer sees. `TicketType.position` is the first sort
+ * key on the public panel (`TicketTypeRepository.list_for_event` orders by
+ * slot, then `position`, then price), and the array index is written to it on
+ * every save.
+ *
+ * This paragraph used to say the opposite — that no `position` column existed
+ * and dragging changed the editor only. That was true when the control was
+ * built and false by the time anyone read it: the column, the serializer and
+ * the server's editable set all arrived, and the note stayed. Because it
+ * stayed, `toTierInput` never sent the field, every tier was written with
+ * position 0, and the reorder control did nothing to the live event while
+ * appearing to work. A stale comment is not a documentation problem when the
+ * code around it is written to match.
  *
  * ── DELETE VS REMOVE ──────────────────────────────────────────────────────
  *
@@ -387,12 +395,13 @@ export function TicketBuilder({
         <Button variant="outline" onClick={add} leftIcon={<Plus className="size-4" aria-hidden />}>
           Add ticket
         </Button>
-        {/* The drag handle and the arrow buttons are on each row; describing
-            them here is the paragraph explaining the control. What an organizer
-            genuinely cannot see is that this order is NOT the order buyers get,
-            so only that survives. */}
+        {/* This line used to read "Buyers always see tiers cheapest first",
+            which was a claim ON SCREEN that the reorder control above it did
+            nothing. It was wrong in both directions once `position` started
+            being saved: the order here IS the order buyers get, and saying
+            otherwise would train an organiser not to bother arranging it. */}
         <p className="text-caption text-muted-foreground">
-          Buyers always see tiers cheapest first.
+          Buyers see tiers in this order.
         </p>
       </div>
     </div>

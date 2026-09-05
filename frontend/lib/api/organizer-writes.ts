@@ -28,6 +28,21 @@ export type CreateEventInput = {
   starts_at: string;
   ends_at?: string | null;
   /**
+   * Which browse tile the event appears under.
+   *
+   * It was NOT declared here even though `toCreateInput` has always set it —
+   * a conditional spread bypasses TypeScript's excess-property check, so the
+   * compiler never mentioned it and the field travelled untyped. Declaring it
+   * is what makes `UpdateEventInput` (a `Partial` of this) accept it too,
+   * which is the half the event PATCH actually needs.
+   *
+   * NOTE: the server's CREATE serializer does not accept this field yet, so a
+   * value sent on `POST /events` is silently dropped by DRF. The category is
+   * stored by the first PATCH, which the wizard issues moments later. Adding
+   * it to the create serializer is a small backend change and a separate one.
+   */
+  category?: string;
+  /**
    * Where the venue is: which Google place, and the pin.
    *
    * All three are written together by the venue picker and cleared together

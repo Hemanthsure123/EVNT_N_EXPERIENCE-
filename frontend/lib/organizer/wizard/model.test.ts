@@ -281,13 +281,13 @@ describe('API mapping', () => {
   it('converts rupees in the field to paise on the wire', () => {
     // The single most expensive unit bug available on this screen: ₹499
     // becoming ₹4.99, or ₹49,900.
-    expect(toTierInput(tierWith({ price: '499' })).price).toBe(49_900);
-    expect(toTierInput(tierWith({ price: '2499.50' })).price).toBe(249_950);
-    expect(toTierInput(tierWith({ price: '0' })).price).toBe(0);
+    expect(toTierInput(tierWith({ price: '499' }), 0).price).toBe(49_900);
+    expect(toTierInput(tierWith({ price: '2499.50' }), 0).price).toBe(249_950);
+    expect(toTierInput(tierWith({ price: '0' }), 0).price).toBe(0);
   });
 
   it('defaults max per order rather than sending NaN', () => {
-    expect(toTierInput(tierWith({ maxPerOrder: '' })).max_per_order).toBe(10);
+    expect(toTierInput(tierWith({ maxPerOrder: '' }), 0).max_per_order).toBe(10);
   });
 
   it('sends the pricing schedule in array order, in paise', () => {
@@ -302,6 +302,7 @@ describe('API mapping', () => {
           { key: 'b', name: 'Phase 1', price: '699.50', endsAt: '', quantity: '250' },
         ],
       }),
+      0,
     );
 
     expect(input.phases).toEqual([
@@ -321,7 +322,7 @@ describe('API mapping', () => {
   it('omits the schedule entirely when there are no phases', () => {
     // Not `[]`: an absent key leaves an existing schedule alone, while an empty
     // array would read as "clear it" on a tier that never had one.
-    expect('phases' in toTierInput(tierWith({ phases: [] }))).toBe(false);
+    expect('phases' in toTierInput(tierWith({ phases: [] }), 0)).toBe(false);
   });
 
   it('includes the schedule in the tier fingerprint', () => {
@@ -331,20 +332,20 @@ describe('API mapping', () => {
     const scheduled = tierWith({
       phases: [{ key: 'a', name: 'Early bird', price: '499', endsAt: '', quantity: '100' }],
     });
-    expect(tierFingerprint(plain)).not.toBe(tierFingerprint(scheduled));
+    expect(tierFingerprint(plain, 0)).not.toBe(tierFingerprint(scheduled, 0));
 
     // And editing a phase's price is a change the save engine can see.
     const repriced = tierWith({
       phases: [{ key: 'a', name: 'Early bird', price: '449', endsAt: '', quantity: '100' }],
     });
-    expect(tierFingerprint(scheduled)).not.toBe(tierFingerprint(repriced));
+    expect(tierFingerprint(scheduled, 0)).not.toBe(tierFingerprint(repriced, 0));
 
     // The React list key is NOT part of it — re-keying identical phases is not
     // an edit worth a write.
     const rekeyed = tierWith({
       phases: [{ key: 'zzz', name: 'Early bird', price: '499', endsAt: '', quantity: '100' }],
     });
-    expect(tierFingerprint(scheduled)).toBe(tierFingerprint(rekeyed));
+    expect(tierFingerprint(scheduled, 0)).toBe(tierFingerprint(rekeyed, 0));
   });
 });
 
@@ -716,5 +717,55 @@ describe('completion and save state', () => {
 
   it('is under 100% while the draft itself has never saved', () => {
     expect(completion(draftWith({ ...saved(), eventId: '' }))).toBeLessThan(100);
+  });
+});
+
+describe('the three fields that used to be written nowhere', () => {
+  it('sends the category on a PATCH, so choosing one is stored', () => {
+    // It was in the draft, the picker, the model, the server's editable set
+    // and its update serializer — and in neither `toPatchInput` nor
+    // `patchFingerprint`. Choosing a category marked the step done and left
+    // the event uncategorised, under no browse tile, silently.
+    const draft = { ...emptyDraft('org-1'), category: 'music' };
+    expect(toPatchInput(draft).category).toBe('music');
+  });
+
+  it('omits a blank category rather than sending an empty string', () => {
+    // The server's field is a strict ChoiceField on write and '' is not a
+    // choice, so sending it would 400 every autosave on an uncategorised draft.
+    expect('category' in toPatchInput(emptyDraft('org-1'))).toBe(false);
+  });
+
+  it('notices a category change, or the PATCH is never scheduled', () => {
+    const before = emptyDraft('org-1');
+    expect(patchFingerprint(before)).not.toBe(
+      patchFingerprint({ ...before, category: 'comedy' }),
+    );
+  });
+
+  it('sends the array index as the tier position', () => {
+    // `position` is the FIRST sort key on the public panel. Every tier was
+    // being written with it left at 0, so the ticket builder's drag-and-drop
+    // reordered the local array and the live event ignored it.
+    expect(toTierInput(tierWith({ name: 'Gold' }), 0).position).toBe(0);
+    expect(toTierInput(tierWith({ name: 'Gold' }), 2).position).toBe(2);
+  });
+
+  it('treats a reorder as a change worth writing', () => {
+    const tier = tierWith({ name: 'Gold' });
+    expect(tierFingerprint(tier, 0)).not.toBe(tierFingerprint(tier, 1));
+  });
+
+  it('treats editing a saved tier description or perks as a change', () => {
+    // Both are in `toTierInput` and in the server's editable set, and were
+    // missing from the fingerprint — so an edit to an ALREADY-SAVED tier
+    // produced an identical fingerprint and the PATCH was skipped.
+    const base = tierWith({ description: 'Front rows', perks: ['Poster'] });
+    expect(tierFingerprint(base, 0)).not.toBe(
+      tierFingerprint(tierWith({ description: 'Back rows', perks: ['Poster'] }), 0),
+    );
+    expect(tierFingerprint(base, 0)).not.toBe(
+      tierFingerprint(tierWith({ description: 'Front rows', perks: ['Poster', 'Drink'] }), 0),
+    );
   });
 });

@@ -375,7 +375,11 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
       // event makes the failure modes much harder to reason about for no
       // meaningful latency win at these counts.
       const tiers: DraftTier[] = [];
-      for (const tier of working.tiers) {
+      // `entries()`, because the INDEX is the merchandising position and the
+      // server stores it — see `toTierInput`. Iterating the values alone is
+      // what left every tier at position 0 while the ticket builder's reorder
+      // controls appeared to work.
+      for (const [position, tier] of working.tiers.entries()) {
         // Includes the sale-phase schedule: a half-typed phase is a payload the
         // serializer refuses, and sending it would make every autosave a 400 the
         // organizer cannot act on. See `tierIsSavable`.
@@ -383,19 +387,22 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
           tiers.push(tier);
           continue;
         }
-        const fingerprint = tierFingerprint(tier);
+        const fingerprint = tierFingerprint(tier, position);
         if (tier.serverId && savedTiers.current[tier.serverId] === fingerprint) {
           tiers.push(tier);
           continue;
         }
         if (!tier.serverId) {
-          const created = await createTicketType(working.eventId as string, toTierInput(tier));
+          const created = await createTicketType(
+            working.eventId as string,
+            toTierInput(tier, position),
+          );
           savedTiers.current[created.id] = fingerprint;
           tiers.push({ ...tier, serverId: created.id, version: created.version });
         } else {
           const updated = await updateTicketType(tier.serverId, {
             version: tier.version ?? 1,
-            ...toTierInput(tier),
+            ...toTierInput(tier, position),
           });
           savedTiers.current[tier.serverId] = fingerprint;
           tiers.push({ ...tier, version: updated.version });
