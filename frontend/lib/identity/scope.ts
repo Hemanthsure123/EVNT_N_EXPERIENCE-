@@ -46,12 +46,19 @@ export type Organization = {
   logo_url: string;
   verified_level: 'unverified' | 'pending' | 'verified';
   /**
-   * The provider's linked-account id, or '' when payouts are not set up.
+   * Whether payouts can reach this organization.
    *
-   * Already on the list payload — it was simply not declared here, so the one
-   * screen that needs to ask "can this organization be paid?" could not.
+   * This used to be declared as `payout_account_id: string`, described as
+   * "already on the list payload". It was not: the summary serializer has
+   * never carried it, so the value was always `undefined` and the account
+   * screen's `Boolean(...)` check was permanently false — the control read
+   * "Add payout account" even for organizations that had linked one.
+   *
+   * It is a BOOLEAN, not the id, because nothing renders the id and the same
+   * serializer family feeds a shared, cached payload that any signed-in reader
+   * can fetch. See OrganizationDetailSerializer for the leak that came from.
    */
-  payout_account_id: string;
+  payout_account_linked: boolean;
   created_at: string;
 };
 

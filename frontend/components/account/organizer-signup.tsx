@@ -484,7 +484,7 @@ function StatusPill({ state }: { state: 'verified' | 'pending' | 'rejected' | 'n
 function PayoutAccountButton({ organization }: { organization: Organization }) {
   const client = useQueryClient();
   const toast = useToast();
-  const linked = Boolean(organization.payout_account_id);
+  const linked = organization.payout_account_linked;
 
   const mutation = useMutation({
     mutationFn: () => linkPayoutAccount(organization.id),

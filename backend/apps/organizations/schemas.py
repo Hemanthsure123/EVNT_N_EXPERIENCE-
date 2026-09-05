@@ -26,6 +26,7 @@ class SubmitVerificationRequestSerializer(serializers.Serializer):
 
 class OrganizationDetailSerializer(serializers.ModelSerializer):
     follower_count = serializers.SerializerMethodField()
+    payout_account_linked = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -34,7 +35,21 @@ class OrganizationDetailSerializer(serializers.ModelSerializer):
             "owner_id",
             "name",
             "verified_level",
-            "payout_account_id",
+            # ── NOT `payout_account_id`. THAT WAS A LEAK. ─────────────────
+            # This payload is cached under one shared `org:{id}` key and read
+            # by anyone signed in — a follower opening a brand they follow gets
+            # the same body the owner does. It used to carry the raw Razorpay
+            # linked-account id, and organization ids are not secret: every
+            # public event card carries `organization_id`, so any account could
+            # read a public event, lift the id, and ask for that business's
+            # payout account.
+            #
+            # A boolean is all any caller ever used it for — the organizer
+            # signup screen does `Boolean(organization.payout_account_id)` to
+            # decide whether to show "link a payout account". Nothing anywhere
+            # renders the id itself. Staff who genuinely need it read it from
+            # the console's own serializer, which is `IsAdminUser`.
+            "payout_account_linked",
             "logo_url",
             "created_at",
             "follower_count",
@@ -47,7 +62,6 @@ class OrganizationDetailSerializer(serializers.ModelSerializer):
             "owner_id",
             "name",
             "verified_level",
-            "payout_account_id",
             "logo_url",
             "created_at",
         ]
@@ -69,12 +83,37 @@ class OrganizationDetailSerializer(serializers.ModelSerializer):
         """
         return getattr(obj, "follower_count", 0)
 
+    def get_payout_account_linked(self, obj: Organization) -> bool:
+        """Whether payouts can reach this organization — never WHERE they go.
+
+        See the note in `Meta.fields`. The truthiness of the column is the whole
+        of what the product needs; the identifier itself is the part that had no
+        business being in a body this many people can read.
+        """
+        return bool(obj.payout_account_id)
+
 
 class OrganizationSummarySerializer(serializers.ModelSerializer):
+    """`GET /organizations/` — the caller's OWN organizations, for the switcher.
+
+    `payout_account_linked` is here because the account screen asks "can this
+    organization be paid?" and had no way to find out. It read
+    `organization.payout_account_id` off this payload, which never carried that
+    field — so the control read "Add payout account" forever, including for
+    organizations that had linked one. The boolean is the honest answer, and it
+    is a boolean rather than the id for the same reason as on the detail
+    serializer: nothing renders the identifier.
+    """
+
+    payout_account_linked = serializers.SerializerMethodField()
+
     class Meta:
         model = Organization
-        fields = ["id", "name", "verified_level", "logo_url", "created_at"]
-        read_only_fields = fields
+        fields = ["id", "name", "verified_level", "payout_account_linked", "logo_url", "created_at"]
+        read_only_fields = ["id", "name", "verified_level", "logo_url", "created_at"]
+
+    def get_payout_account_linked(self, obj: Organization) -> bool:
+        return bool(obj.payout_account_id)
 
 
 class FollowRequestSerializer(serializers.Serializer):

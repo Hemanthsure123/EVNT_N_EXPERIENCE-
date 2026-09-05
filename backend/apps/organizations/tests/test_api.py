@@ -109,6 +109,69 @@ def test_organization_detail_hits_the_db_once_on_a_cold_cache_then_zero_more_tim
 
 
 @pytest.mark.django_db
+def test_the_detail_payload_never_carries_the_raw_payout_account_id(authed_client, owner):
+    """The organization's Razorpay linked-account id is not in a shared body.
+
+    `org:{id}` is ONE cached payload read by every signed-in visitor — a
+    follower opening a brand they follow gets the same body its owner does. It
+    used to include `payout_account_id`, and organization ids are not secret:
+    every public event card carries `organization_id`, so any account could
+    read a public event, lift the id, and ask this endpoint for that business's
+    payout account.
+    """
+    repository = OrganizationRepository()
+    org = repository.create(owner_id=owner.id, name="Acme Events")
+    org.payout_account_id = "acc_TESTLINKED123"
+    org.save(update_fields=["payout_account_id"])
+
+    resp = authed_client.get(f"/api/v1/organizations/{org.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "payout_account_id" not in body
+    assert "acc_TESTLINKED123" not in resp.content.decode()
+    # What the product actually needs, and all it ever needed.
+    assert body["payout_account_linked"] is True
+
+
+@pytest.mark.django_db
+def test_a_stranger_reading_a_warm_cache_gets_no_payout_account_either(
+    api_client, authed_client, owner
+):
+    """The regression that matters, because the payload is SHARED and CACHED.
+
+    A redaction applied per-request but not to the cached body would refuse the
+    first reader and serve every one after them from Redis.
+    """
+    repository = OrganizationRepository()
+    org = repository.create(owner_id=owner.id, name="Acme Events")
+    org.payout_account_id = "acc_TESTLINKED456"
+    org.save(update_fields=["payout_account_id"])
+
+    assert authed_client.get(f"/api/v1/organizations/{org.id}").status_code == 200  # warms it
+
+    stranger = UserRepository().create_user(email="stranger@example.com", password="s3cur3pass")
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {_access_token_for(stranger)}")
+
+    resp = api_client.get(f"/api/v1/organizations/{org.id}")
+
+    assert resp.status_code == 200
+    assert "acc_TESTLINKED456" not in resp.content.decode()
+
+
+@pytest.mark.django_db
+def test_payout_account_linked_is_false_before_one_is_linked(authed_client, owner):
+    """False, not absent: the signup screen branches on it to offer the link
+    step, and a missing key would read as 'already linked' under a truthiness
+    check somewhere down the line."""
+    org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+
+    body = authed_client.get(f"/api/v1/organizations/{org.id}").json()
+
+    assert body["payout_account_linked"] is False
+
+
+@pytest.mark.django_db
 def test_patch_organization_by_owner_updates_and_invalidates_the_cache(
     authed_client, owner, django_capture_on_commit_callbacks
 ):
@@ -262,10 +325,25 @@ def test_verification_status_is_never_shared_cached(authed_client, owner):
 
 
 @pytest.mark.django_db
-def test_link_payout_account_returns_200_with_a_linked_account_id(authed_client, owner):
-    org = OrganizationRepository().create(owner_id=owner.id, name="Acme Events")
+def test_link_payout_account_returns_200_and_reports_the_link(authed_client, owner):
+    """The response confirms payouts can now reach them — it does not echo the
+    identifier back.
+
+    It used to assert the raw `payout_account_id` in the body. That field is
+    gone from this serializer because the same serializer renders the SHARED,
+    CACHED `GET /organizations/{id}` payload that any signed-in reader can
+    fetch. The linking organizer needs to know the step succeeded, which is
+    what the boolean says; nothing in the product ever displayed the id.
+    """
+    repository = OrganizationRepository()
+    org = repository.create(owner_id=owner.id, name="Acme Events")
 
     resp = authed_client.post(f"/api/v1/organizations/{org.id}/payout-account", {}, format="json")
 
     assert resp.status_code == 200
-    assert resp.json()["payout_account_id"].startswith("fake_linked_account_")
+    assert resp.json()["payout_account_linked"] is True
+    assert "payout_account_id" not in resp.json()
+    # The link really happened — the column is set, it is just not published.
+    stored = repository.get_active_by_id(org.id)
+    assert stored is not None
+    assert stored.payout_account_id.startswith("fake_linked_account_")

@@ -17,7 +17,10 @@ export type Organization = {
   owner_id: string;
   name: string;
   verified_level: VerifiedLevel;
-  payout_account_id: string;
+  /** Whether payouts can reach them — never WHERE they go. The API stopped
+   *  publishing the Razorpay linked-account id: this payload is cached under
+   *  one shared key and readable by anyone signed in. */
+  payout_account_linked: boolean;
   logo_url: string;
   created_at: string;
 };

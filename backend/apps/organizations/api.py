@@ -110,6 +110,22 @@ class OrganizationDetailView(APIView):
 
     @extend_schema(responses={200: OrganizationDetailSerializer})
     def get(self, request: Request, organization_id: str) -> Response:
+        """The organization as any signed-in reader sees it.
+
+        Deliberately NOT owner-scoped: a follower reads this to see who they
+        follow and how many others do, which is why the payload is cached under
+        one shared `org:{id}` key and why `get_follower_count` refuses to carry
+        per-user state.
+
+        WHAT CHANGED, AND WHY IT MATTERED: this used to serialize
+        `payout_account_id` — the organization's Razorpay linked-account id —
+        into that shared body. Every event card on the public site carries
+        `organization_id`, so any signed-in account could read a public event,
+        take the id straight off it, and ask this endpoint for the payout
+        account of a business they had nothing to do with. The serializer now
+        publishes `payout_account_linked`, a boolean, which is the only thing
+        any caller ever actually did with the value.
+        """
         payload = get_organization_detail_payload(organization_id)
         if payload is None:
             raise OrganizationNotFoundError(str(organization_id))

@@ -24,7 +24,19 @@ _DETAIL_FIELDS = (
     "logo_url",
     "created_at",
 )
-_SUMMARY_FIELDS = ("id", "name", "verified_level", "logo_url", "created_at")
+# `payout_account_id` is LOADED but never PUBLISHED. The summary serializer
+# turns it into a boolean (`payout_account_linked`), and computing that from a
+# deferred column would cost one extra query per organization in the list — the
+# N+1 the `.only()` here exists to prevent. Loading a column and serializing it
+# are different decisions; this is the one place they differ on purpose.
+_SUMMARY_FIELDS = (
+    "id",
+    "name",
+    "verified_level",
+    "payout_account_id",
+    "logo_url",
+    "created_at",
+)
 # What a followed organization shows on the "following" list: enough to draw
 # the card and link to it, nothing more. Reached through one JOIN
 # (select_related), so a list of twenty is one query, not twenty-one.
