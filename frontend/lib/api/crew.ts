@@ -91,6 +91,39 @@ export function uploadCrewPhoto(
   );
 }
 
+const photo = (organizationId: string, memberId: string) =>
+  `${roster(organizationId)}/${encodeURIComponent(memberId)}/photo`;
+
+/**
+ * Correct a portrait's description without re-uploading it.
+ *
+ * The alt text is collected before the bytes go up, which is the right order —
+ * and the cost of that order was that a typo could only be fixed by choosing
+ * the file again. `photo_alt_text` is `read_only` on the member serializer, so
+ * `updateCrewMember` cannot touch it; this is the path.
+ *
+ * Refused with a `400` when the member has no photo: a description of an image
+ * nobody can see is a row that lies, and the next upload would overwrite it.
+ */
+export const describeCrewPhoto = (organizationId: string, memberId: string, altText: string) =>
+  api.patch<CrewMember>(photo(organizationId, memberId), { alt_text: altText });
+
+/**
+ * Take the portrait off a roster row.
+ *
+ * Answers with the UPDATED MEMBER rather than 204, so the card re-renders as
+ * initials from what the call already returned instead of re-reading the
+ * roster to discover what it just caused.
+ *
+ * Idempotent — a member with no photo comes back unchanged, so a double-press
+ * or a second open tab is not an error. Note this clears the ROW, not the
+ * stored object: every image path in this codebase leaves its old object
+ * behind (the keys carry a uuid, so nothing is overwritten in place), and
+ * bucket lifecycle is the honest place to reap them.
+ */
+export const removeCrewPhoto = (organizationId: string, memberId: string) =>
+  api.delete<CrewMember>(photo(organizationId, memberId));
+
 export type EventCrewEntry = {
   id: string;
   name: string;

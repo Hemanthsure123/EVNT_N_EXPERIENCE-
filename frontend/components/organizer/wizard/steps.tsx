@@ -7,6 +7,7 @@ import {
   CITY_MAX,
   TITLE_MAX,
   VENUE_MAX,
+  isDraftUntouched,
   toLocalInput,
   type Draft,
   type Issue,
@@ -35,6 +36,7 @@ import { CATEGORIES } from '@/lib/discovery/categories';
 import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
 import { CrewPicker } from './crew-picker';
+import { StartFromEvent } from './start-from-event';
 import { RunningOrder } from './running-order';
 
 type StepProps = {
@@ -76,6 +78,12 @@ export function BasicsStep({
       <StepHeader
         title="Basics"
       />
+
+      {/* The offer to copy, made where the retyping is about to happen — and
+          only while there is nothing to lose. `isDraftUntouched` is false the
+          moment a title is typed or the draft reaches the server, so this can
+          never sit above work in progress inviting somebody to discard it. */}
+      {isDraftUntouched(draft) ? <StartFromEvent /> : null}
 
       {organizations.length > 1 ? (
         <SelectField

@@ -11,6 +11,7 @@ import {
   countWords,
   draftStorageKey,
   emptyDraft,
+  isDraftUntouched,
   newTier,
   patchFingerprint,
   priceSummary,
@@ -915,5 +916,42 @@ describe('draftFromEvent', () => {
     expect(toTierInput(draft.tiers[0], 0).quantity).toBe(120);
     expect(toTierInput(draft.tiers[0], 0).max_per_order).toBe(6);
     expect(toTierInput(draft.tiers[0], 0).phases?.[0].price).toBe(199_900);
+  });
+});
+
+describe('isDraftUntouched', () => {
+  /**
+   * The predicate that decides whether the create screen offers "copy a
+   * previous event". It is not a deep-equal against `emptyDraft()`, and both
+   * halves of that matter: `organizationId` is resolved by MACHINE the moment
+   * the account's organisations load, so equality would answer "touched" for
+   * somebody who has done nothing; and `eventId` must veto on its own, because
+   * once the draft exists on the server, cloning a different event strands it.
+   */
+  it('is true for a fresh draft, even once the organisation has resolved', () => {
+    expect(isDraftUntouched(emptyDraft())).toBe(true);
+    expect(isDraftUntouched(emptyDraft('org-1'))).toBe(true);
+  });
+
+  it('is false the moment anything a person types is set', () => {
+    expect(isDraftUntouched({ ...emptyDraft(), title: 'Jazz Night' })).toBe(false);
+    expect(isDraftUntouched({ ...emptyDraft(), venue: 'Phoenix' })).toBe(false);
+    expect(isDraftUntouched({ ...emptyDraft(), city: 'Mumbai' })).toBe(false);
+    expect(isDraftUntouched({ ...emptyDraft(), description: 'a night of jazz' })).toBe(false);
+    expect(isDraftUntouched({ ...emptyDraft(), startsAt: '2030-01-01T20:00' })).toBe(false);
+  });
+
+  it('is false once the draft exists on the server, whatever else is blank', () => {
+    // The decisive one: a saved draft with every visible field still empty is
+    // NOT untouched. Offering a clone here would leave an orphan behind.
+    expect(isDraftUntouched({ ...emptyDraft(), eventId: 'evt-1' })).toBe(false);
+  });
+
+  it('is false once a tier exists, which is a step nobody reaches by accident', () => {
+    expect(isDraftUntouched({ ...emptyDraft(), tiers: [newTier()] })).toBe(false);
+  });
+
+  it('ignores whitespace, so a stray space does not withdraw the offer', () => {
+    expect(isDraftUntouched({ ...emptyDraft(), title: '   ' })).toBe(true);
   });
 });

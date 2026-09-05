@@ -8,13 +8,15 @@ import {
   CREW_PHOTO_TYPES,
   createCrewMember,
   deleteCrewMember,
+  describeCrewPhoto,
   fetchCrew,
+  removeCrewPhoto,
   updateCrewMember,
   uploadCrewPhoto,
   type CrewMember,
 } from '@/lib/api/crew';
 import { errorMessage } from '@/lib/api/errors';
-import { useOrganizations } from '@/lib/identity/scope';
+import { useActiveOrganization } from '@/lib/organizer/active-organization';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/components/ui/drawer';
 import { Input } from '@/components/ui/input';
@@ -42,8 +44,11 @@ import { cn } from '@/lib/utils/cn';
  * matters here.
  */
 export function CrewRoster() {
-  const organizations = useOrganizations();
-  const organization = organizations.data?.data?.[0] ?? null;
+  // The ACTIVE organisation, never `organizations[0]`. A roster written
+  // against a guess attaches real people to the wrong brand while every
+  // request succeeds — see `lib/organizer/active-organization.ts`.
+  const { organization, organizations, ready, needsChoice, hasNone, choose } =
+    useActiveOrganization();
   const [editing, setEditing] = React.useState<CrewMember | null>(null);
   const [adding, setAdding] = React.useState(false);
 
@@ -54,17 +59,44 @@ export function CrewRoster() {
     staleTime: 30_000,
   });
 
-  if (organizations.isPending) return <Skeleton className="h-64 w-full" />;
+  if (!ready) return <Skeleton className="h-64 w-full" />;
 
   // ABSENT, not broken. Somebody with no organization has nothing to build a
   // roster for, and the honest answer names the missing step.
-  if (!organization) {
+  if (hasNone) {
     return (
       <Panel title="Crew">
         <p className="text-body-sm text-muted-foreground">
           Create an organisation first — a crew list belongs to the organisation that books
           them, so it can be reused across every event you run.
         </p>
+      </Panel>
+    );
+  }
+
+  // Several companies and no active one chosen. ASK, never pick: a roster is
+  // per-organisation, so guessing would show one brand's people under
+  // another's heading and file every new person against the wrong one.
+  if (needsChoice || !organization) {
+    return (
+      <Panel title="Crew">
+        <p className="text-body-sm text-muted-foreground">
+          You run more than one organisation. Choose whose crew you are managing — this also
+          sets the organisation for the rest of the dashboard.
+        </p>
+        <ul className="mt-stack flex flex-col gap-2">
+          {organizations.map((candidate) => (
+            <li key={candidate.id}>
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => choose(candidate)}
+              >
+                {candidate.name}
+              </Button>
+            </li>
+          ))}
+        </ul>
       </Panel>
     );
   }
@@ -462,7 +494,35 @@ function PhotoField({
   const [altText, setAltText] = React.useState(member.photo_alt_text ?? '');
   const [progress, setProgress] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState<'describing' | 'removing' | null>(null);
   const handle = React.useRef<{ cancel: () => void } | null>(null);
+
+  // Keyed off the member, so switching people in the drawer does not leave the
+  // previous person's description sitting in the box.
+  React.useEffect(() => {
+    setAltText(member.photo_alt_text ?? '');
+  }, [member.id, member.photo_alt_text]);
+
+  const saveDescription = () => {
+    setError(null);
+    setBusy('describing');
+    void describeCrewPhoto(organizationId, member.id, altText.trim())
+      .then(() => onDone())
+      .catch((thrown: Error) => setError(errorMessage(thrown)))
+      .finally(() => setBusy(null));
+  };
+
+  const removePhoto = () => {
+    setError(null);
+    setBusy('removing');
+    void removeCrewPhoto(organizationId, member.id)
+      .then(() => {
+        setAltText('');
+        return onDone();
+      })
+      .catch((thrown: Error) => setError(errorMessage(thrown)))
+      .finally(() => setBusy(null));
+  };
 
   const pick = (chosen: File | null) => {
     setError(null);
@@ -575,6 +635,68 @@ function PhotoField({
                 </div>
               )}
             </>
+          ) : member.photo_url ? (
+            /* THE OTHER TWO THIRDS OF THE LIFECYCLE.
+               A photo could previously only be REPLACED. `photo_url` and
+               `photo_alt_text` are read-only on the member serializer, so the
+               detail PATCH could not clear them and there was no DELETE — an
+               organizer who attached the wrong face had one remaining move,
+               deleting the person, which the service refuses the moment they
+               are on a lineup. So a mistake on a live event page could not be
+               undone through the product at all. */
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="crew-alt-current" className="text-caption">
+                  Photo description
+                </Label>
+                <Input
+                  id="crew-alt-current"
+                  value={altText}
+                  onChange={(event) => setAltText(event.target.value)}
+                  placeholder="A DJ behind a mixer, smiling"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={saveDescription}
+                  // Nothing to save when it is unchanged, and an empty
+                  // description is what this field exists to prevent.
+                  disabled={
+                    Boolean(busy) ||
+                    !altText.trim() ||
+                    altText.trim() === (member.photo_alt_text ?? '')
+                  }
+                >
+                  {busy === 'describing' ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                  ) : null}
+                  Save description
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={removePhoto}
+                  disabled={Boolean(busy)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  {busy === 'removing' ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Trash2 className="size-4" aria-hidden />
+                  )}
+                  Remove photo
+                </Button>
+              </div>
+              {/* No confirmation dialog. Removing a photo destroys nothing —
+                  the card falls back to initials and another can go up in the
+                  same breath — so the house rule applies: a dialog belongs in
+                  front of the irreversible, and spending one here would teach
+                  people to dismiss the ones that matter. */}
+            </div>
           ) : null}
 
           {error ? (

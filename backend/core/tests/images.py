@@ -48,3 +48,16 @@ def portrait_event_image(name: str = "poster.png"):
 
 
 assert EVENT_IMAGE_SPEC.recommended_width == 1920, "keep `event_image` on the recommended size"
+
+
+def crew_portrait(name: str = "portrait.png", *, width: int = 600, height: int = 800):
+    """An upload `CREW_PORTRAIT_SPEC` accepts.
+
+    Its own helper because the crew spec is deliberately NOT the event one: the
+    event gate demands landscape between 3:2 and 2:1 and would refuse every
+    headshot, so crew photos are banded 2:3 through square with a low floor
+    (most of them are phone pictures). A test reaching for `event_image` here
+    fails on the ratio, which reads as a bug in the endpoint rather than in the
+    fixture.
+    """
+    return SimpleUploadedFile(name, image_bytes(width, height), content_type="image/png")

@@ -24,6 +24,7 @@ from apps.events.services import CrewService
 from apps.organizations.models import Organization
 from apps.organizations.repositories import OrganizationRepository
 from core.errors import ConflictError, InvalidInputError, NotFoundError
+from core.tests.images import crew_portrait
 
 from .conftest import *  # noqa: F401,F403 — reuse the module's fixtures
 
@@ -455,3 +456,202 @@ def test_a_duplicated_event_carries_its_lineup(
 
     assert [row.member_id for row in EventCrewRepository().for_event(clone.id)] == [member.id]
     assert CrewMember.objects.count() == 1  # the person was not duplicated
+
+
+# ── The portrait's whole lifecycle ──────────────────────────────────────────
+
+
+@pytest.fixture
+def photo_service(organization):
+    """A CrewService with storage wired, which the plain `crew_service` fixture
+    deliberately leaves out — every test above it is about names and ownership,
+    and a fake bucket in those would be scenery."""
+    from core.adapters.local.local_storage import LocalStorageAdapter
+
+    return CrewService(
+        organizations=OrganizationRepository(),
+        crew=CrewMemberRepository(),
+        storage=LocalStorageAdapter(),
+    )
+
+
+@pytest.mark.django_db
+class TestThePortrait:
+    """Attach, re-describe, remove.
+
+    Only the first of those existed. A photo could be REPLACED and nothing
+    else: `photo_url`/`photo_alt_text` are `read_only` on the member
+    serializer, so the detail PATCH could not touch them, and there was no
+    DELETE. An organizer who attached the wrong person's face had exactly one
+    remaining move — delete the person — which the service refuses the moment
+    they are on any lineup. So a mistake on a published event page was
+    unfixable through the product.
+    """
+
+    def test_a_photo_is_attached_with_its_description(
+        self, photo_service, organization, owner, member
+    ):
+        updated = photo_service.attach_photo(
+            organization_id=organization.id,
+            actor_id=owner.id,
+            member_id=member.id,
+            upload=crew_portrait(),
+            content_type="image/png",
+            alt_text="DJ Voices behind the decks",
+        )
+
+        assert updated.photo_url
+        assert updated.photo_alt_text == "DJ Voices behind the decks"
+
+    def test_the_description_can_be_corrected_without_re_uploading(
+        self, photo_service, organization, owner, member
+    ):
+        """The reason this endpoint exists.
+
+        Alt text is collected BEFORE the bytes go up, which is the right order
+        — but it means a typo could previously only be fixed by choosing the
+        file again, storing a second object for a text change.
+        """
+        photo_service.attach_photo(
+            organization_id=organization.id,
+            actor_id=owner.id,
+            member_id=member.id,
+            upload=crew_portrait(),
+            content_type="image/png",
+            alt_text="DJ Vocies behind the decks",
+        )
+
+        corrected = photo_service.describe_photo(
+            organization_id=organization.id,
+            actor_id=owner.id,
+            member_id=member.id,
+            alt_text="DJ Voices behind the decks",
+        )
+
+        assert corrected.photo_alt_text == "DJ Voices behind the decks"
+        # The image itself is untouched — this is a text edit, not a re-upload.
+        assert corrected.photo_url
+
+    def test_describing_a_photo_that_does_not_exist_is_refused(
+        self, photo_service, organization, owner, member
+    ):
+        """Alt text beside an empty `photo_url` describes an image nobody can
+        see, and the next upload would overwrite it anyway."""
+        with pytest.raises(InvalidInputError):
+            photo_service.describe_photo(
+                organization_id=organization.id,
+                actor_id=owner.id,
+                member_id=member.id,
+                alt_text="a description of nothing",
+            )
+
+    def test_removing_a_photo_clears_BOTH_columns(self, photo_service, organization, owner, member):
+        """Together, or the row lies: alt text left behind would have a screen
+        reader announce a photograph while sighted readers see initials."""
+        photo_service.attach_photo(
+            organization_id=organization.id,
+            actor_id=owner.id,
+            member_id=member.id,
+            upload=crew_portrait(),
+            content_type="image/png",
+            alt_text="DJ Voices behind the decks",
+        )
+
+        cleared = photo_service.remove_photo(
+            organization_id=organization.id, actor_id=owner.id, member_id=member.id
+        )
+
+        assert cleared.photo_url == ""
+        assert cleared.photo_alt_text == ""
+
+    def test_removing_a_photo_twice_is_a_safe_no_op(
+        self, photo_service, organization, owner, member
+    ):
+        """A double-press, or two open tabs. Not an error — the same 'clamped,
+        so a repeat is harmless' rule ticketing's release primitive follows."""
+        photo_service.remove_photo(
+            organization_id=organization.id, actor_id=owner.id, member_id=member.id
+        )
+        again = photo_service.remove_photo(
+            organization_id=organization.id, actor_id=owner.id, member_id=member.id
+        )
+
+        assert again.photo_url == ""
+
+    def test_another_organization_cannot_touch_a_photo(self, photo_service, rival, owner):
+        """The same boundary the rest of the file protects, on the two new
+        verbs. A 404 rather than a 403, so ids cannot be probed."""
+        with pytest.raises(NotFoundError):
+            photo_service.remove_photo(
+                organization_id=rival["organization"].id,
+                actor_id=owner.id,
+                member_id=rival["member"].id,
+            )
+        with pytest.raises(NotFoundError):
+            photo_service.describe_photo(
+                organization_id=rival["organization"].id,
+                actor_id=owner.id,
+                member_id=rival["member"].id,
+                alt_text="not mine",
+            )
+
+
+@pytest.mark.django_db
+class TestThePortraitOverHttp:
+    """The two new verbs on `/organizations/{id}/crew/{member}/photo`.
+
+    PATCH and DELETE carry no file, so they must not be routed through the
+    multipart parser — a JSON body handed to `MultiPartParser` is a 415 on a
+    request that is perfectly well formed.
+    """
+
+    def test_patch_corrects_the_alt_text(self, authed_client, organization, member):
+        CrewMember.objects.filter(pk=member.id).update(
+            photo_url="https://cdn.example.com/crew/x.png", photo_alt_text="wrong"
+        )
+
+        response = authed_client.patch(
+            f"/api/v1/organizations/{organization.id}/crew/{member.id}/photo",
+            {"alt_text": "DJ Voices behind the decks"},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.data
+        assert response.data["photo_alt_text"] == "DJ Voices behind the decks"
+
+    def test_patch_with_an_empty_body_is_refused(self, authed_client, organization, member):
+        """`alt_text` is required, so "PATCH with nothing in it" cannot read as
+        a successful no-op."""
+        CrewMember.objects.filter(pk=member.id).update(photo_url="https://cdn.example.com/x.png")
+
+        response = authed_client.patch(
+            f"/api/v1/organizations/{organization.id}/crew/{member.id}/photo",
+            {},
+            format="json",
+        )
+
+        assert response.status_code == 400
+
+    def test_delete_answers_with_the_member_rather_than_204(
+        self, authed_client, organization, member
+    ):
+        """The caller is a card that must now re-render as initials. Answering
+        204 would make it re-read the roster to learn what it just caused."""
+        CrewMember.objects.filter(pk=member.id).update(
+            photo_url="https://cdn.example.com/crew/x.png", photo_alt_text="a portrait"
+        )
+
+        response = authed_client.delete(
+            f"/api/v1/organizations/{organization.id}/crew/{member.id}/photo"
+        )
+
+        assert response.status_code == 200, response.data
+        assert response.data["photo_url"] in ("", None)
+        assert response.data["photo_alt_text"] in ("", None)
+
+    def test_a_stranger_cannot_remove_somebody_elses_photo(self, rival, organization, member):
+        response = rival["client"].delete(
+            f"/api/v1/organizations/{organization.id}/crew/{member.id}/photo"
+        )
+
+        assert response.status_code == 404

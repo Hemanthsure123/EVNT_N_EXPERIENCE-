@@ -203,6 +203,31 @@ export type StepId = (typeof STEPS)[number]['id'];
  *  draft before they do anything. The Studio says so rather than failing. */
 export const SERVER_BACKED_STEPS: readonly StepId[] = ['media', 'details'];
 
+/**
+ * Is this draft still untouched — nothing typed, nothing on the server?
+ *
+ * The question the create screen asks before offering "copy a previous event".
+ * It checks the fields somebody types FIRST rather than deep-equalling against
+ * `emptyDraft()`, because `organizationId` is resolved by machine the moment
+ * the account's organisations load, and a resolved organisation is not an
+ * organizer having started work.
+ *
+ * `eventId` is the decisive one: once the draft exists on the server, copying
+ * a different event would strand it, so the offer must be gone by then.
+ */
+export function isDraftUntouched(draft: Draft): boolean {
+  if (draft.eventId) return false;
+  return (
+    !draft.title.trim() &&
+    !draft.description.trim() &&
+    !draft.venue.trim() &&
+    !draft.city.trim() &&
+    !draft.startsAt &&
+    !draft.posterUrl &&
+    draft.tiers.length === 0
+  );
+}
+
 export function emptyDraft(organizationId = ''): Draft {
   return {
     eventId: null,

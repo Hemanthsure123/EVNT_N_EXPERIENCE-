@@ -141,21 +141,36 @@ export const archiveEvent = (eventId: string) =>
  * Returns the NEW event, not the source — the caller needs its id to navigate
  * to, and answering with the original would look like nothing happened.
  *
- * The copy has NO TICKET TYPES: they belong to `ticketing`, whose dependency
- * points at `events` and not back, so the clone cannot reach across to
- * duplicate tier rows. The practical consequence is that the copy cannot be
- * published until a tier is added — the publish check `ticketing` registers —
- * which is why the caller tells the organizer on the way in rather than
- * letting them discover it at the gate.
+ * ── WHAT A COPY BRINGS ACROSS ─────────────────────────────────────────────
+ *
+ * Everything an organizer would otherwise retype: the venue and its
+ * coordinates, the description and every content column, the policies (BY
+ * VALUE), the FAQs, the running order, the sessions, the lineup — and, since
+ * `copy_ticket_types_to` landed, the TICKET TIERS AND THEIR SALE PHASES, with
+ * `sold`/`reserved` zeroed and each tier re-pointed at the copied session.
+ *
+ * This docstring used to say the opposite — "The copy has NO TICKET TYPES …
+ * the copy cannot be published until a tier is added" — and so did the
+ * service's. Both were true when clone shipped and both are now false; the
+ * root CLAUDE.md calls the pair out by name. **A copy can be published
+ * immediately.** Do not write UI copy from a comment; read `duplicate_event`.
+ *
+ * What is deliberately NOT copied is only what the original EARNED or what
+ * cannot be shared: the status (a copy is always a draft), the moderation
+ * history, the display denormals (recomputed from the copied tiers), bookings
+ * and tickets, and the gallery media — an `EventMedia` row points at one
+ * stored object, so two events sharing a storage key means deleting either
+ * one's gallery breaks the other's.
+ *
+ * `describeClone()` in `lib/organizer/clone.ts` is the single sentence every
+ * caller shows, so no two buttons can describe this differently.
+ *
+ * `POST /events/{id}/clone` is a byte-for-byte alias of this route. There is
+ * ONE wrapper on purpose: two functions for one operation is how the two
+ * callers' behaviour drifted in the first place (one navigated, one did not).
  */
 export const duplicateEvent = (eventId: string) =>
   api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/duplicate`, {});
-
-/**
- * Clone a past or existing event into a fresh draft.
- */
-export const cloneEvent = (eventId: string) =>
-  api.post<EventDetail>(`/events/${encodeURIComponent(eventId)}/clone`, {});
 
 /** What a cancellation actually did. A bare 200 would leave an organiser who
  *  just spent money with no idea how much. */

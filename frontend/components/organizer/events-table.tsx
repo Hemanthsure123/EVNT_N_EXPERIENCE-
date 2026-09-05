@@ -22,7 +22,8 @@ import type { EventRow } from '@/lib/api/organizer';
 import { STATUS_FILTERS } from '@/lib/organizer/event-status';
 import { canSubmit, submitBlockers } from '@/lib/organizer/submit-gate';
 import { useEventRows, useInvalidateOrganizer } from '@/lib/organizer/queries';
-import { archiveEvent, duplicateEvent, publishEvent } from '@/lib/api/organizer-writes';
+import { archiveEvent, publishEvent } from '@/lib/api/organizer-writes';
+import { CLONE_HINT, useCloneEvent } from '@/lib/organizer/clone';
 import { ApiError } from '@/lib/api/errors';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
@@ -78,13 +79,18 @@ import { StatusBadge } from './status-badge';
  *
  * ── WHAT THE BULK BAR OFFERS, AND WHY NOT MORE ────────────────────────────
  *
- * Submit-for-review and Archive are real endpoints and are here. **Delete is
- * not**, and will not be: an event is referenced by bookings, tickets and a
- * settlement, all `PROTECT`ed at the database, so a delete would either fail
- * outright or orphan real money. **Duplicate is not**, because there is no
- * duplicate endpoint — doing it client-side means a create plus N tier creates
- * with no transaction around them, so a failure halfway leaves a half-built
- * event that looks real. Both are BACKLOG items rather than buttons that lie.
+ * Submit-for-review, Archive and Duplicate are real endpoints and are here.
+ * **Delete is not**, and will not be: an event is referenced by bookings,
+ * tickets and a settlement, all `PROTECT`ed at the database, so a delete would
+ * either fail outright or orphan real money.
+ *
+ * This paragraph used to say Duplicate was absent "because there is no
+ * duplicate endpoint", while a working Duplicate button calling that very
+ * endpoint sat 300 lines below it. `POST /events/{id}/duplicate` does the
+ * whole copy in ONE `UnitOfWork` — precisely the transaction the old comment
+ * said a client-side version would lack — and it has been there since the
+ * clone slice. Duplicate is bounded to ONE row and navigates to the copy's
+ * editor; see `lib/organizer/clone.ts`.
  *
  * ── NOT VIRTUALIZED, DELIBERATELY ─────────────────────────────────────────
  *
@@ -149,6 +155,7 @@ export function EventsTable() {
   const [failure, setFailure] = React.useState<string | null>(null);
 
   const selectedRows = rows.filter((row) => table.isSelected(row.id));
+  const { clone, cloning } = useCloneEvent();
 
   /**
    * A bulk action, one row at a time.
@@ -398,24 +405,21 @@ export function EventsTable() {
             produces eight drafts called "Copy of …" with nothing to tell them
             apart, which is a mess to undo and not a thing anybody asked for.
             The button reads as single-select and says so when it is not. */}
+        {/* NOT `runBulk`. Duplicate is bounded to one row, and the useful end
+            of it is the EDITOR for the copy — `runBulk` clears the selection,
+            reports "Duplicated 1 of 1" and stays on the table, which is how
+            this button spent its whole life looking like it had done nothing.
+            `useCloneEvent` navigates, so the outcome is a screen rather than a
+            sentence. */}
         <BulkButton
           icon={CopyPlus}
           label="Duplicate"
-          disabled={busy || selectedRows.length !== 1}
-          title={
-            selectedRows.length > 1
-              ? 'Select one event to duplicate.'
-              : 'Copy this event into a new draft'
-          }
-          onClick={() =>
-            void runBulk(
-              'Duplicated',
-              () => true,
-              async (row) => {
-                await duplicateEvent(row.id);
-              },
-            )
-          }
+          disabled={busy || cloning || selectedRows.length !== 1}
+          title={selectedRows.length > 1 ? 'Select one event to duplicate.' : CLONE_HINT}
+          onClick={() => {
+            const row = selectedRows[0];
+            if (row) void clone(row.id, row.title);
+          }}
         />
         <BulkButton
           icon={Archive}

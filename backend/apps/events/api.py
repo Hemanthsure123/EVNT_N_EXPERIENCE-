@@ -21,7 +21,7 @@ from typing import cast
 
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -45,6 +45,7 @@ from .schemas import (
     CreateEventRequestSerializer,
     CreateEventSlotSerializer,
     CrewMemberSerializer,
+    CrewPhotoAltTextRequestSerializer,
     CrewPhotoRequestSerializer,
     EventCardSerializer,
     EventContentSerializer,
@@ -744,15 +745,35 @@ class CrewMemberDetailView(_CrewView):
 
 
 class CrewMemberPhotoView(_CrewView):
-    """A portrait for one roster row.
+    """A portrait for one roster row: attach, re-describe, remove.
 
-    Multipart, and `alt_text` is REQUIRED on the request even though the column
-    allows blank — text written while looking at the picker is real alt text,
-    where a field appended to a finished grid gets "image1".
+    Multipart on POST, and `alt_text` is REQUIRED on the request even though
+    the column allows blank — text written while looking at the picker is real
+    alt text, where a field appended to a finished grid gets "image1".
+
+    PATCH and DELETE close the other two thirds of the lifecycle. Before them a
+    photo could only ever be REPLACED: a typo in the alt text meant choosing
+    the file again, and a portrait attached to the wrong person could not be
+    taken off at all — `photo_url`/`photo_alt_text` are `read_only` on
+    `CrewMemberSerializer`, so the detail PATCH could not clear them either.
+    An organizer's only remaining move was deleting the person, which the
+    service refuses once they are on any lineup.
+
+    Both are JSON, so neither pays the multipart parser or the upload throttle
+    for a request carrying no bytes. `parser_classes` is set per-method for
+    that reason; `throttle_classes` stays on the class, because a description
+    is still a write.
     """
 
     parser_classes = [MultiPartParser]
     throttle_classes = [UploadThrottle]
+
+    def get_parsers(self) -> list:
+        # POST carries a file; PATCH carries a sentence. Handing a JSON body to
+        # the multipart parser is a 415 on a request that is perfectly valid.
+        if self.request and self.request.method in ("PATCH", "DELETE"):
+            return [JSONParser()]
+        return super().get_parsers()
 
     @extend_schema(request=CrewPhotoRequestSerializer, responses={200: CrewMemberSerializer})
     def post(self, request: Request, organization_id: str, member_id: str) -> Response:
@@ -767,6 +788,33 @@ class CrewMemberPhotoView(_CrewView):
             upload=upload,
             content_type=content_type,
             alt_text=payload.validated_data["alt_text"],
+        )
+        return _no_store(Response(CrewMemberSerializer(member).data))
+
+    @extend_schema(request=CrewPhotoAltTextRequestSerializer, responses={200: CrewMemberSerializer})
+    def patch(self, request: Request, organization_id: str, member_id: str) -> Response:
+        """Correct the alt text without re-uploading the image."""
+        payload = CrewPhotoAltTextRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        member = self._service.describe_photo(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            member_id=member_id,
+            alt_text=payload.validated_data["alt_text"],
+        )
+        return _no_store(Response(CrewMemberSerializer(member).data))
+
+    @extend_schema(responses={200: CrewMemberSerializer})
+    def delete(self, request: Request, organization_id: str, member_id: str) -> Response:
+        """Take the portrait off the row.
+
+        Answers 200 with the member rather than 204, because the caller is a
+        card that must now re-render as initials — and re-reading the roster to
+        discover what it already caused is a round trip for a fact the server
+        has in hand.
+        """
+        member = self._service.remove_photo(
+            organization_id=organization_id, actor_id=self._actor, member_id=member_id
         )
         return _no_store(Response(CrewMemberSerializer(member).data))
 

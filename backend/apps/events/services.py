@@ -639,17 +639,28 @@ class EventService:
             a specific event on a specific date.
           - No bookings, tickets, scans or settlement — those belong to the
             original and are `PROTECT`ed to it.
-          - NO TICKET TYPES. They belong to `ticketing`, and dependencies here
-            point one way — ticketing imports events, never the reverse — so
-            reaching across to clone tier rows would invert the one rule that
-            keeps these modules separable. The consequence is honest and
-            deliberate: the copy cannot be published until the organizer adds
-            a tier, because `ticketing` registers exactly that publish check.
-            The API says so in its response rather than leaving them to
-            discover it at the publish gate.
+          - No gallery MEDIA rows. An `EventMedia` row points at one stored
+            object, so two events sharing a storage key means deleting either
+            one's gallery breaks the other's. Copying it safely needs a real
+            object copy in the storage adapter.
 
-        The content collections this module OWNS — FAQs and the running order
-        — are copied, because they are the retyping this exists to remove.
+        TICKET TYPES **ARE** COPIED, with their sale phases, `sold`/`reserved`
+        zeroed and each tier re-pointed at the copied session via `slot_map`.
+        This docstring used to say the opposite — that tiers were left behind
+        because reaching across to `ticketing` would invert the dependency
+        rule, and that a copy therefore could not be published until a tier was
+        added. That was true when clone shipped. The dependency rule is still
+        intact: `events` does not import a ticketing MODEL, it calls a
+        repository method through the same seam the publish check already uses.
+
+        The consequence is the opposite of what the old text said and matters
+        to every caller: **a copy can be published immediately.** Any UI copy
+        telling an organizer to add a tier first is wrong.
+
+        The content collections this module OWNS — FAQs, the running order and
+        the sessions — are copied too, because they are the retyping this
+        exists to remove, and so is the lineup (pointing at the SAME roster
+        rows; a person is one person).
         """
         source = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
 
@@ -1857,4 +1868,70 @@ class CrewService:
             member_id=member.id,
             photo_url=url,
             photo_alt_text=alt_text,
+        )
+
+    def describe_photo(self, *, organization_id, actor_id, member_id, alt_text: str) -> CrewMember:
+        """Correct a portrait's alt text WITHOUT re-uploading the bytes.
+
+        Alt text is collected before the upload, which is the right order — text
+        written while looking at the picker is real alt text where a field
+        appended to a finished grid gets "image1". The cost of that order is
+        that a typo could only be fixed by choosing the file again, so somebody
+        who noticed one after the fact either re-uploaded a duplicate object or
+        left the wrong description on the page. This is the correction path.
+
+        It REFUSES when there is no photo, rather than storing a description of
+        nothing: `photo_alt_text` beside an empty `photo_url` would be a row
+        describing an image that does not exist, and the next upload would
+        silently overwrite it anyway.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        member = self._crew.get_owned(organization_id=organization.id, member_id=member_id)
+        if member is None:
+            raise CrewMemberNotFoundError("Crew member not found.")
+        if not member.photo_url:
+            raise InvalidInputError("There is no photo to describe. Upload one first.")
+        return self.update_member(
+            organization_id=organization.id,
+            actor_id=actor_id,
+            member_id=member.id,
+            photo_alt_text=alt_text,
+        )
+
+    def remove_photo(self, *, organization_id, actor_id, member_id) -> CrewMember:
+        """Take the portrait off a roster row.
+
+        ── THE ROW IS CLEARED; THE OBJECT IS LEFT ────────────────────────────
+
+        `StoragePort` has no `delete`, and adding one for this would be the
+        wrong first caller. Every other place this codebase replaces an image
+        (a poster, an organisation logo, a previous crew photo) already leaves
+        the old object behind — the key carries a uuid, so nothing is ever
+        overwritten in place — and a delete here would be the only path that
+        also destroys bytes. Orphaned objects are a storage-lifecycle concern
+        with one honest fix (a bucket rule over the `crew/` prefix), not
+        something to bolt onto a request that must not fail halfway.
+
+        What matters to the reader is the ROW, and clearing both columns
+        together is what keeps them consistent: a `photo_alt_text` left behind
+        would describe an image nobody can see, and `RemoteImage` would fall
+        back to initials while a screen reader announced a photograph.
+
+        Idempotent. A member with no photo is returned unchanged rather than
+        404ing — a double-press, or two open tabs, is not an error, and this is
+        the same "clamped, so a repeat is a safe no-op" rule the ticketing
+        release primitive follows.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        member = self._crew.get_owned(organization_id=organization.id, member_id=member_id)
+        if member is None:
+            raise CrewMemberNotFoundError("Crew member not found.")
+        if not member.photo_url:
+            return member
+        return self.update_member(
+            organization_id=organization.id,
+            actor_id=actor_id,
+            member_id=member.id,
+            photo_url="",
+            photo_alt_text="",
         )

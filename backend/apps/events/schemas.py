@@ -694,6 +694,19 @@ class CrewPhotoRequestSerializer(serializers.Serializer):
     alt_text = serializers.CharField(max_length=200)
 
 
+class CrewPhotoAltTextRequestSerializer(serializers.Serializer):
+    """Correcting the description of a portrait that is already stored.
+
+    Separate from `CrewPhotoRequestSerializer` rather than reusing it with an
+    optional `file`: a serializer where every field is optional accepts an
+    empty body, and "PATCH with nothing in it" would then read as a successful
+    no-op instead of the mistake it is. `alt_text` is required here for the
+    same reason it is required on upload.
+    """
+
+    alt_text = serializers.CharField(max_length=200)
+
+
 class EventCrewEntrySerializer(serializers.Serializer):
     """One person on a lineup, flattened for the page that draws them.
 
