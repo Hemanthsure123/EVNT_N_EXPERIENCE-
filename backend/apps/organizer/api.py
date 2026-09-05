@@ -45,6 +45,9 @@ from .schemas import (
     EventAnalyticsSerializer,
     EventRowSerializer,
     OrganizerBookingSerializer,
+    OrganizerEarningsSerializer,
+    OrganizerFunnelRowSerializer,
+    OrganizerInsightSerializer,
     OrganizerOverviewSerializer,
     OrganizerRefundSerializer,
     OrganizerReviewSerializer,
@@ -359,3 +362,55 @@ class AudienceView(OrganizerView):
     @extend_schema(responses={200: AudienceSerializer})
     def get(self, request: Request) -> Response:
         return _no_store(Response(AudienceSerializer(selectors.get_audience(self.owner_id)).data))
+
+
+class EarningsView(OrganizerView):
+    """Lifetime and month-to-date money.
+
+    Distinct from `overview`, which is today against yesterday — the right
+    window for "is the on-sale working" and the wrong one for "how is the
+    business doing".
+    """
+
+    @extend_schema(responses={200: OrganizerEarningsSerializer})
+    def get(self, request: Request) -> Response:
+        payload = selectors.get_earnings(self.owner_id)
+        return _no_store(Response(OrganizerEarningsSerializer(payload).data))
+
+
+class FunnelListView(OrganizerView):
+    """Per-event conversion, quota fill and repeat share.
+
+    Cursor-paginated like every other list here, reusing
+    `OrganizerEventRowPagination` rather than declaring a second class: this
+    query is the same page of events in the same `-created_at` order, and two
+    paginator classes carrying one ordering string is two places for it to
+    drift out of step with the queryset — which cursor pagination answers by
+    silently returning wrong pages rather than by failing.
+    """
+
+    pagination_class = OrganizerEventRowPagination
+
+    @extend_schema(responses={200: OrganizerFunnelRowSerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        queryset = OrganizerRepository().funnel_rows(self.owner_id)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        rows = selectors.decorate_funnel_rows(list(page or []), self.owner_id)
+        data = cast(list, OrganizerFunnelRowSerializer(rows, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
+
+
+class InsightsView(OrganizerView):
+    """Automated recommendations, each with the sample size it came from.
+
+    Returns an EMPTY list when the data cannot support advice — see
+    `selectors._best`. A dashboard rendering nothing is the honest outcome for
+    an organizer with three bookings; a confident recommendation drawn from
+    those three is not.
+    """
+
+    @extend_schema(responses={200: OrganizerInsightSerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        payload = selectors.get_insights(self.owner_id)
+        return _no_store(Response({"data": OrganizerInsightSerializer(payload, many=True).data}))

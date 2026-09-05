@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DESCRIPTION_SOFT_MAX,
   SEO_TITLE_MAX,
+  SHORT_DESCRIPTION_MAX,
+  SHORT_DESCRIPTION_WORDS_MAX,
+  SHORT_DESCRIPTION_WORDS_MIN,
   UNSAVED_DRAFT_BLOCKER,
   canCreate,
   completion,
+  countWords,
   draftStorageKey,
   emptyDraft,
   newTier,
@@ -17,6 +22,7 @@ import {
   toPatchInput,
   toTierInput,
   validate,
+  wordRange,
   type Draft,
   type DraftTier,
 } from './model';
@@ -415,6 +421,93 @@ describe('content fields', () => {
 
   it('accepts a blank duration as "not stated"', () => {
     expect(validate(draftWith({ durationMinutes: '' }), NOW)).toEqual([]);
+  });
+});
+
+/**
+ * The description cap is EDITORIAL, and this suite is what stops it becoming a
+ * rule by accident.
+ *
+ * The number moved from 2000 to 1200, so drafts written under the old value
+ * already exist between the two. If any of these assertions is ever made to
+ * fail "correctly", somebody's saved description is being blocked or silently
+ * shortened because a constant in `model.ts` changed — which is not something
+ * the server would ever have done: `description` has no `max_length` on either
+ * serializer.
+ */
+describe('the description cap is a guideline, not a limit', () => {
+  const OVER = 'x'.repeat(DESCRIPTION_SOFT_MAX + 800);
+
+  it('is 1200, the product number', () => {
+    expect(DESCRIPTION_SOFT_MAX).toBe(1200);
+  });
+
+  it('raises no issue for a description past it', () => {
+    // The API accepts it, so the wizard must not be the thing that refuses.
+    expect(validate(draftWith({ description: OVER }), NOW)).toEqual([]);
+  });
+
+  it('does not hold completion under 100%, and does not block publishing', () => {
+    const draft = draftWith({
+      description: OVER,
+      eventId: 'evt-1',
+      startsAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      tiers: [tierWith({ serverId: 'tier-1' })],
+    });
+    expect(completion(draft)).toBe(100);
+    expect(publishBlockers(draft)).toEqual([]);
+  });
+
+  it('sends the whole description, never a truncated one', () => {
+    // Truncating at the boundary would destroy work the organizer can still
+    // see on screen — the single worst outcome available on this field.
+    expect(toPatchInput(draftWith({ description: OVER })).description).toBe(OVER);
+    expect(toCreateInput(draftWith({ description: OVER })).description).toBe(OVER);
+  });
+});
+
+/**
+ * The short summary's word band.
+ *
+ * Advice about the same field the 200-character column already bounds. The
+ * character cap is the rule; this is what a writer actually composes to.
+ */
+describe('short-description word guidance', () => {
+  it('counts words across any whitespace, not just spaces', () => {
+    // A summary pasted out of a document arrives with newlines in it.
+    expect(countWords('Four stages,\ntwelve artists')).toBe(4);
+    expect(countWords('  spaced   out  ')).toBe(2);
+    expect(countWords('   ')).toBe(0);
+    expect(countWords('')).toBe(0);
+  });
+
+  it('separates empty from short, because untouched is not a fault', () => {
+    expect(wordRange('')).toBe('empty');
+    expect(wordRange('   ')).toBe('empty');
+    expect(wordRange('Four stages.')).toBe('short');
+  });
+
+  it('is inclusive at both ends of 15–30', () => {
+    const words = (count: number) => Array.from({ length: count }, () => 'word').join(' ');
+    expect(wordRange(words(SHORT_DESCRIPTION_WORDS_MIN - 1))).toBe('short');
+    expect(wordRange(words(SHORT_DESCRIPTION_WORDS_MIN))).toBe('ok');
+    expect(wordRange(words(SHORT_DESCRIPTION_WORDS_MAX))).toBe('ok');
+    expect(wordRange(words(SHORT_DESCRIPTION_WORDS_MAX + 1))).toBe('long');
+  });
+
+  it('never raises an issue, however far out of band', () => {
+    // A fourteen-word summary that reads well is not wrong, and a thirty-one
+    // word one is not a save failure. Only the COLUMN blocks.
+    for (const shortDescription of ['Two words', 'word '.repeat(60).trim()]) {
+      const issues = validate(draftWith({ shortDescription: shortDescription.slice(0, 200) }), NOW);
+      expect(issues.map((issue) => issue.field)).not.toContain('shortDescription');
+    }
+    // …and the column still does.
+    const tooLong = validate(
+      draftWith({ shortDescription: 'x'.repeat(SHORT_DESCRIPTION_MAX + 1) }),
+      NOW,
+    );
+    expect(tooLong.map((issue) => issue.field)).toContain('shortDescription');
   });
 });
 

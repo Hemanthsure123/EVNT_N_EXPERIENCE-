@@ -49,6 +49,8 @@ export function TextField({
   hint,
   error,
   max,
+  words,
+  action,
   autoFocus,
 }: {
   id: string;
@@ -59,6 +61,20 @@ export function TextField({
   hint?: string;
   error?: string;
   max?: number;
+  /**
+   * A word band to advise on, ALONGSIDE `max` rather than instead of it.
+   *
+   * `max` is the column and is enforced (`maxLength` on the input, an `Issue`
+   * from `validate`). This is advice about the same text and is enforced
+   * nowhere: it never sets `aria-invalid`, never blocks a save, and turns amber
+   * rather than red. See `SHORT_DESCRIPTION_WORDS_MIN` for why the two
+   * measurements are both worth showing.
+   */
+  words?: { count: number; min: number; max: number };
+  /** A control that belongs to this field rather than to the form — a help
+   *  modal's trigger, say. Sits on the label row so it cannot be mistaken for
+   *  the step's own action. */
+  action?: React.ReactNode;
   autoFocus?: boolean;
 }) {
   const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
@@ -66,7 +82,13 @@ export function TextField({
     .join(' ');
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} value={label} count={max ? { used: value.length, max } : undefined} />
+      <Label
+        htmlFor={id}
+        value={label}
+        count={max ? { used: value.length, max } : undefined}
+        words={words}
+        action={action}
+      />
       <Input
         id={id}
         value={value}
@@ -91,6 +113,8 @@ export function TextArea({
   hint,
   error,
   softMax,
+  overHint,
+  action,
   rows = 6,
 }: {
   id: string;
@@ -100,11 +124,26 @@ export function TextArea({
   placeholder?: string;
   hint?: string;
   error?: string;
-  /** Advisory, not enforced — the column is a TextField with no length cap. */
+  /**
+   * Advisory, not enforced — the column is a TextField with no length cap.
+   *
+   * "Not enforced" is load-bearing and is why no `maxLength` is set below. The
+   * `description` cap moved from 2000 to 1200, so drafts already exist between
+   * the two: a `maxLength` here would have let the browser silently drop the
+   * tail of somebody's saved copy on their next keystroke, and a blocking
+   * `Issue` would have made those drafts unsavable over a number the API never
+   * cared about. Going over is a warning, and only a warning.
+   */
   softMax?: number;
+  /** What to say once `softMax` is passed. Shown in place of `hint`, because
+   *  the reason for the number is the only thing worth reading at that point. */
+  overHint?: string;
+  /** A control belonging to this field — see `TextField`'s own `action`. */
+  action?: React.ReactNode;
   rows?: number;
 }) {
-  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+  const over = Boolean(softMax && value.length > softMax);
+  const describedBy = [hint || overHint ? `${id}-hint` : null, error ? `${id}-error` : null]
     .filter(Boolean)
     .join(' ');
   return (
@@ -113,18 +152,22 @@ export function TextArea({
         htmlFor={id}
         value={label}
         count={softMax ? { used: value.length, max: softMax, soft: true } : undefined}
+        action={action}
       />
       <Textarea
         id={id}
         rows={rows}
         value={value}
         placeholder={placeholder}
+        // `error` ONLY. An over-length description is not invalid — the server
+        // takes it — so it must never mark the field, or a screen reader is
+        // told a perfectly savable field is in error.
         aria-invalid={Boolean(error)}
         aria-describedby={describedBy || undefined}
         onChange={(event) => onChange(event.target.value)}
         className="resize-y"
       />
-      <Messages id={id} hint={hint} error={error} />
+      <Messages id={id} hint={over ? (overHint ?? hint) : hint} error={error} tone={over ? 'warning' : undefined} />
     </div>
   );
 }
@@ -229,43 +272,124 @@ function Label({
   htmlFor,
   value,
   count,
+  words,
+  action,
 }: {
   htmlFor: string;
   value: string;
   count?: { used: number; max: number; soft?: boolean };
+  words?: { count: number; min: number; max: number };
+  action?: React.ReactNode;
 }) {
   const near = count ? count.used / count.max >= 0.8 : false;
+  // A SOFT cap can be passed; a hard one cannot, because the input's own
+  // `maxLength` stops the keystroke at the boundary. So `over` only ever
+  // describes advice, which is why it is amber and never red.
+  const over = Boolean(count && count.used > count.max);
   return (
     <div className="flex items-baseline justify-between gap-3">
       <label htmlFor={htmlFor} className="text-body-sm font-medium text-foreground">
         {value}
       </label>
-      {count ? (
-        <span
-          className={cn(
-            'shrink-0 text-caption tabular-nums',
-            // `warning-subtle-foreground`, never `text-warning`: the amber fill
-            // token is 2.15:1 as text on a white page, which is the counter
-            // becoming LESS readable exactly as it starts to matter.
-            near ? 'text-warning-subtle-foreground' : 'text-muted-foreground',
-          )}
-        >
-          {count.used}/{count.max}
-          {count.soft ? ' suggested' : ''}
-        </span>
-      ) : null}
+      <span className="flex shrink-0 items-baseline gap-2.5">
+        {words ? <WordCount {...words} /> : null}
+        {count ? (
+          <span
+            className={cn(
+              'shrink-0 text-caption tabular-nums',
+              // `warning-subtle-foreground`, never `text-warning`: the amber fill
+              // token is 2.15:1 as text on a white page, which is the counter
+              // becoming LESS readable exactly as it starts to matter.
+              over
+                ? 'font-medium text-warning-subtle-foreground'
+                : near
+                  ? 'text-warning-subtle-foreground'
+                  : 'text-muted-foreground',
+            )}
+          >
+            {count.used}/{count.max}
+            {count.soft ? ' suggested' : ''}
+          </span>
+        ) : null}
+        {action}
+      </span>
     </div>
   );
 }
 
-function Messages({ id, hint, error }: { id: string; hint?: string; error?: string }) {
+/**
+ * A live word count against a band.
+ *
+ * ── WHY IT IS WORDS AND NOT ANOTHER CHARACTER BAR ─────────────────────────
+ *
+ * The character counter beside it is the COLUMN — a hard stop the API shares.
+ * This is editorial guidance about the same text, and words are the unit the
+ * guidance is actually in: nobody writes a summary to a character budget, and
+ * "15–30 words" is a sentence somebody can act on where "112/200" is not.
+ *
+ * Three states, never four: untouched, out of band, in band. `empty` renders
+ * the band as a plain instruction rather than as a fault — a form that greets
+ * an organiser by marking every field they have not reached yet is a form that
+ * has told them off for arriving.
+ *
+ * Amber, never red, and no `aria-invalid` anywhere near it: this cannot block
+ * a save and must not look like it can.
+ */
+function WordCount({ count, min, max }: { count: number; min: number; max: number }) {
+  const state = count === 0 ? 'empty' : count < min || count > max ? 'out' : 'ok';
+  return (
+    <span
+      className={cn(
+        'shrink-0 text-caption tabular-nums transition-colors duration-fast motion-reduce:transition-none',
+        state === 'ok'
+          ? 'text-success-subtle-foreground'
+          : state === 'out'
+            ? 'text-warning-subtle-foreground'
+            : 'text-muted-foreground',
+      )}
+    >
+      {/* The band travels with the number, so the target is readable without
+          hunting for a hint line underneath. */}
+      {state === 'empty' ? `${min}–${max} words` : `${count} of ${min}–${max} words`}
+      <span className="sr-only">
+        {state === 'ok'
+          ? ' — in the suggested range'
+          : state === 'out'
+            ? ' — outside the suggested range, which is a suggestion and will not stop you saving'
+            : ''}
+      </span>
+    </span>
+  );
+}
+
+function Messages({
+  id,
+  hint,
+  error,
+  tone,
+}: {
+  id: string;
+  hint?: string;
+  error?: string;
+  /** Colours the HINT line. Deliberately separate from `error`: a warning is
+   *  something to read, an error is something that stopped a save, and drawing
+   *  them the same way is how people stop reading either. */
+  tone?: 'warning';
+}) {
   // One reserved line, so an error appearing does not shove the next field
   // down the page while someone is reading it.
   return (
     <p
       id={error ? `${id}-error` : `${id}-hint`}
       role={error ? 'alert' : undefined}
-      className={cn('min-h-4 text-caption', error ? 'text-destructive' : 'text-muted-foreground')}
+      className={cn(
+        'min-h-4 text-caption',
+        error
+          ? 'text-destructive'
+          : tone === 'warning'
+            ? 'text-warning-subtle-foreground'
+            : 'text-muted-foreground',
+      )}
     >
       {error ?? hint ?? ''}
     </p>

@@ -14,6 +14,8 @@ thing in every key, and nothing in this file builds a key any other way.
   - `organizer:{owner}:series:{m}:{d}`      — 300s
   - `organizer:{owner}:breakdown:{by}:{n}`  — 300s
   - `organizer:{owner}:event:{id}:analytics` — 60s
+  - `organizer:{owner}:earnings`            — 60s
+  - `organizer:{owner}:insights`            — 300s
 
 No invalidation-on-write, for the same reason `console` has none: these are
 aggregates touched by bookings, payments, refunds, check-ins and settlements,
@@ -25,11 +27,13 @@ where an organizer acts on an individual row — are NOT cached at all.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
 from django.utils import timezone
 
+from apps.events.models import EventCategory
 from core.ports.cache_port import CachePort
 
 from .repositories import OrganizerRepository
@@ -38,12 +42,30 @@ OVERVIEW_TTL_SECONDS = 30
 SERIES_TTL_SECONDS = 300
 BREAKDOWN_TTL_SECONDS = 300
 EVENT_ANALYTICS_TTL_SECONDS = 60
+#: Lifetime and month-to-date money. 60s rather than the overview's 30s: these
+#: are all-time totals that a single booking barely moves, and the number an
+#: organizer acts on within the minute is on the overview tile beside it.
+EARNINGS_TTL_SECONDS = 60
+#: Scheduling advice over an organizer's whole history. 300s, matching the
+#: breakdowns — a recommendation that changed between two page loads would not
+#: be a recommendation. No invalidation on write, for the reason at the top of
+#: this file: these aggregates are touched by five other modules.
+INSIGHTS_TTL_SECONDS = 300
 
 MAX_SERIES_DAYS = 365
 DEFAULT_SERIES_DAYS = 30
 MAX_BREAKDOWN_ITEMS = 20
 MAX_ACTIVITY_ITEMS = 50
 MAX_TOP_CITIES = 5
+
+#: The fewest rows behind a ranking before it is allowed to call itself an
+#: insight. Twenty, and the number is a floor rather than a significance test:
+#: the weekday ranking splits into seven buckets, so under twenty paid bookings
+#: the leader is routinely one group booking ahead of the runner-up, and a
+#: recommendation that a single purchase can flip is a coin toss presented as
+#: advice. Every insight carries its own `sample_size` so a reader can weigh a
+#: ranking built on twenty-one rows differently from one built on nine hundred.
+MIN_INSIGHT_SAMPLE = 20
 
 SERIES_METRICS = ("revenue", "bookings", "tickets")
 BREAKDOWN_KINDS = ("revenue_by_event", "revenue_by_city", "bookings_by_status")
@@ -70,6 +92,45 @@ def day_bounds(now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime
         start_local.astimezone(dt.timezone.utc),
         (start_local + dt.timedelta(days=1)).astimezone(dt.timezone.utc),
     )
+
+
+def month_to_date_bounds(
+    now: dt.datetime | None = None,
+) -> tuple[dt.datetime, dt.datetime, dt.datetime, dt.datetime]:
+    """`(month_start, month_end, previous_start, previous_end)` — this calendar
+    month so far, and the SAME ELAPSED SPAN of the previous month.
+
+    ── WHY NOT THE WHOLE OF LAST MONTH ──────────────────────────────────────
+
+    Comparing a partial month against a complete one is the bug this exists to
+    prevent. On the 3rd, three days of revenue against thirty reads as a 90%
+    collapse — and it would read that way every month until the 30th, so the
+    one month it ever looked healthy would be the month it was about to reset.
+    The baseline is therefore last month's start plus however much of this
+    month has actually elapsed, down to the hour.
+
+    ── AND WHY THE BASELINE IS CLAMPED ──────────────────────────────────────
+
+    30 days elapsed in March runs past the end of February. Without the clamp
+    the baseline window would spill into March and count the first days of this
+    month on BOTH sides of the comparison — a month partly measured against
+    itself, which flatters a bad month and hides a good one. `month_start` is
+    both the end of the previous month and the start of this one, so it is the
+    correct ceiling.
+
+    Boundaries are placed in `PLATFORM_TZ` (IST) like `day_bounds`, because a
+    "calendar month" is a local fact: UTC's month starts five and a half hours
+    into India's.
+    """
+    now = now or timezone.now()
+    local = now.astimezone(PLATFORM_TZ)
+    month_start_local = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_start_local = (month_start_local - dt.timedelta(days=1)).replace(day=1)
+
+    month_start = month_start_local.astimezone(dt.timezone.utc)
+    previous_start = previous_start_local.astimezone(dt.timezone.utc)
+    elapsed = now - month_start
+    return month_start, now, previous_start, min(previous_start + elapsed, month_start)
 
 
 def _percent_change(current: int, previous: int) -> float | None:
@@ -701,4 +762,273 @@ def get_audience(
         "customers": customers,
         "repeat_customers": repeats,
         "repeat_pct": round((repeats / customers) * 100, 1) if customers else None,
+    }
+
+
+# ----------------------------------------------------------------- earnings
+
+
+def get_earnings(
+    owner_id: UUID,
+    *,
+    repository: OrganizerRepository | None = None,
+    cache: CachePort | None = None,
+) -> dict[str, Any]:
+    """The three money questions the overview tiles cannot answer.
+
+    `get_overview` is today against yesterday, which is the right window for
+    "is the on-sale working" and the wrong one for "how is the business doing".
+    This is lifetime, month-to-date, and what a customer is worth.
+
+    Cached at `organizer:{owner}:earnings` for EARNINGS_TTL_SECONDS (60s).
+    """
+    repository = repository or OrganizerRepository()
+    cache = cache or _default_cache()
+
+    key = f"organizer:{owner_id}:earnings"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    now = timezone.now()
+    month_start, month_end, previous_start, previous_end = month_to_date_bounds(now)
+    totals = repository.revenue_totals(
+        owner_id,
+        month_start=month_start,
+        month_end=month_end,
+        previous_start=previous_start,
+        previous_end=previous_end,
+    )
+    attendees = repository.count_paying_attendees(owner_id)
+
+    payload = {
+        "lifetime_revenue_minor": totals["lifetime"],
+        "lifetime_tickets": repository.count_tickets_sold_all_time(owner_id),
+        "lifetime_attendees": attendees,
+        # Revenue per ATTENDEE, not per ticket: the denominator is the number
+        # of distinct people who paid. `None` — never 0 — when nobody has,
+        # because "no attendees yet" and "attendees who paid nothing" are
+        # different facts and a zero here would report the second one.
+        #
+        # Rounded to whole minor units. It is a derived average rather than
+        # money that moved, but every other amount on this API is an integer
+        # count of paise and one float in the middle of them is how a client
+        # ends up rendering ₹1234.5678.
+        "avg_revenue_per_attendee_minor": (
+            round(totals["lifetime"] / attendees) if attendees else None
+        ),
+        "month_revenue_minor": totals["month"],
+        "month_change_pct": _percent_change(totals["month"], totals["previous"]),
+        # How much of a month both sides of that comparison cover, counting
+        # today as the day in progress it is. Stated rather than left implicit
+        # so the number can be labelled "vs the first 12 days of last month" —
+        # a percentage whose window is unexplained invites the exact reading
+        # (partial vs whole) the window was built to avoid.
+        "comparison_days": now.astimezone(PLATFORM_TZ).day,
+        "generated_at": now.isoformat(),
+    }
+    cache.set(key, payload, timeout_seconds=EARNINGS_TTL_SECONDS)
+    return payload
+
+
+# ------------------------------------------------------------------- funnel
+
+
+def decorate_funnel_rows(
+    rows: list, owner_id: UUID, *, repository: OrganizerRepository | None = None
+) -> list[dict]:
+    """Merge the funnel's aggregate columns onto ONE page of events.
+
+    Four grouped queries against just this page's ids, merged by key — the same
+    pattern (and the same reason) as `decorate_event_rows`. A per-event query
+    in this loop would be an N+1 that only shows itself once an organizer has
+    enough events to fill a page.
+
+    ── WHAT IS NOT HERE, AND WHY ────────────────────────────────────────────
+
+    No impressions, no detail views, no add-to-cart, no click-through rate. The
+    platform records no page view, no impression and no cart of any kind, so
+    every one of those would be a number invented on a screen an organizer
+    makes scheduling and pricing decisions from. The funnel starts where the
+    data starts: at the booking row.
+    """
+    repository = repository or OrganizerRepository()
+    event_ids = [row.id for row in rows]
+    if not event_ids:
+        return []
+
+    bookings = repository.bookings_by_event(event_ids)
+    capacity = repository.capacity_by_event(event_ids)
+    revenue = repository.revenue_by_event(event_ids)
+    attendees = repository.paying_attendees_by_event(owner_id, event_ids)
+
+    decorated = []
+    for row in rows:
+        started, paid = bookings.get(row.id, (0, 0))
+        cap, sold, _tier_count = capacity.get(row.id, (0, 0, 0))
+        payers, repeat_payers = attendees.get(row.id, (0, 0))
+        decorated.append(
+            {
+                "id": row.id,
+                "title": row.title,
+                "status": row.status,
+                "starts_at": row.starts_at,
+                # Every booking row, whatever became of it — a lapsed hold IS
+                # the abandonment this column measures.
+                "bookings_started": started,
+                "bookings_paid": paid,
+                # Each rate below is `None` rather than 0 when its denominator
+                # is zero, the rule this whole module follows: 0% conversion on
+                # an event nobody has opened is a false statement, and 0% quota
+                # fill on an event with no tickets loaded is a report about a
+                # missing tier dressed up as a sales figure.
+                "conversion_pct": round((paid / started) * 100, 1) if started else None,
+                "capacity": cap,
+                "tickets_sold": sold,
+                "quota_fill_pct": round((sold / cap) * 100, 1) if cap else None,
+                "revenue_minor": revenue.get(row.id, 0),
+                # The denominator is published beside the percentage on
+                # purpose: "50% repeat" reads very differently once you can see
+                # it is one person out of two.
+                "paying_attendees": payers,
+                "repeat_attendee_pct": (
+                    round((repeat_payers / payers) * 100, 1) if payers else None
+                ),
+            }
+        )
+    return decorated
+
+
+# ----------------------------------------------------------------- insights
+
+#: ISO weekday (1–7) is Monday-first, which is what `ExtractIsoWeekDay`
+#: returns. Written out rather than taken from `calendar.day_name`, which is
+#: locale-dependent: the API's strings must not change with the server's LANG.
+_WEEKDAY_NAMES = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def get_insights(
+    owner_id: UUID,
+    *,
+    repository: OrganizerRepository | None = None,
+    cache: CachePort | None = None,
+) -> list[dict[str, Any]]:
+    """Scheduling and market recommendations, each derived from real bookings
+    and each carrying the evidence it was derived from.
+
+    Four rankings — best weekday, best hour, best category, best city — and
+    every one of them is dropped rather than guessed when the data cannot
+    support it (see `_best`). An organizer with three bookings gets an EMPTY
+    LIST, which is the honest answer: there is nothing here yet.
+
+    Cached at `organizer:{owner}:insights` for INSIGHTS_TTL_SECONDS (300s).
+    """
+    repository = repository or OrganizerRepository()
+    cache = cache or _default_cache()
+
+    key = f"organizer:{owner_id}:insights"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    # The weekday and the hour come off the EVENT's start time, not the
+    # booking's creation time. The question is when to SCHEDULE the next one;
+    # when people buy is a different question with a different answer, and
+    # answering it here would tell an organizer to run their next show at
+    # 11pm on a Tuesday because that is when the phone comes out in bed.
+    weekdays = repository.paid_bookings_by_event_weekday(owner_id, PLATFORM_TZ)
+    hours = repository.paid_bookings_by_event_hour(owner_id, PLATFORM_TZ)
+    categories = repository.revenue_by_event_category(owner_id)
+    cities = repository.revenue_by_event_city(owner_id)
+
+    candidates = [
+        _best(
+            "best_weekday",
+            "paid_bookings",
+            [(str(day), total, total) for day, total in weekdays],
+            label=lambda weekday: _WEEKDAY_NAMES[int(weekday) - 1],
+        ),
+        _best(
+            "best_hour",
+            "paid_bookings",
+            [(str(hour), total, total) for hour, total in hours],
+            # 24-hour, because "7 PM" and "19:00" are the same fact and only
+            # one of them is unambiguous in a table. The raw hour is in `key`
+            # for a client that would rather render it its own way.
+            label=lambda hour: f"{int(hour):02d}:00",
+        ),
+        _best(
+            "best_category",
+            "revenue_minor",
+            categories,
+            # The eight display names live on the model's own TextChoices.
+            # Copying them here is how the dashboard ends up calling
+            # `food-drink` something the browse page does not.
+            label=lambda slug: dict(EventCategory.choices).get(slug, slug),
+        ),
+        _best(
+            "best_city",
+            "revenue_minor",
+            cities,
+            label=lambda city: city,
+        ),
+    ]
+    payload = [insight for insight in candidates if insight is not None]
+    cache.set(key, payload, timeout_seconds=INSIGHTS_TTL_SECONDS)
+    return payload
+
+
+def _best(
+    kind: str,
+    metric: str,
+    buckets: list[tuple[str, int, int]],
+    *,
+    label: Callable[[str], str],
+) -> dict[str, Any] | None:
+    """The winning bucket of a ranking, or `None` when there is no advice to give.
+
+    `buckets` is `(key, value, sample)` — the thing ranked, the number it is
+    ranked by, and how many rows are behind it.
+
+    TWO REFUSALS, and both matter more than the recommendation itself:
+
+    1. **Fewer than `MIN_INSIGHT_SAMPLE` rows behind the whole ranking.** See
+       the constant: under twenty, one group booking decides the winner.
+    2. **Only one bucket has any rows.** "Your best weekday is Saturday" when
+       Saturday is the only day you have ever run is a description of the past
+       wearing the clothes of a recommendation — and it is the one an organizer
+       would act on by never trying anything else. A comparison needs something
+       to compare against.
+
+    The winner is taken from a deterministic sort rather than `max()`, so two
+    buckets tied on value always resolve the same way instead of following
+    whatever order Postgres happened to return.
+    """
+    if len(buckets) < 2:
+        return None
+    sample_size = sum(sample for _key, _value, sample in buckets)
+    if sample_size < MIN_INSIGHT_SAMPLE:
+        return None
+    key, value, _sample = sorted(buckets, key=lambda bucket: (-bucket[1], str(bucket[0])))[0]
+    return {
+        "kind": kind,
+        "metric": metric,
+        # The raw bucket value — an ISO weekday, an hour, a category slug, a
+        # city name — so a client can build a filter link or pick the artwork
+        # for it. `label` is what to render.
+        "key": str(key),
+        "label": str(label(key)),
+        "value": int(value),
+        # What the ranking was computed from, published with every insight.
+        # A recommendation without its sample size is indistinguishable from a
+        # guess, and this platform does not ship numbers a reader cannot weigh.
+        "sample_size": int(sample_size),
     }

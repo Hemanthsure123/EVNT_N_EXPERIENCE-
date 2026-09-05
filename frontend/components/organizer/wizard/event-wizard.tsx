@@ -9,9 +9,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  CloudOff,
   Eye,
-  Loader2,
   Redo2,
   RefreshCw,
   Undo2,
@@ -33,6 +31,7 @@ import { SeoStep } from './seo-step';
 import { TicketBuilder } from './ticket-builder';
 import { LivePreview } from './preview';
 import { ReviewStep } from './review';
+import { WizardActionBar, saveSummary } from './action-bar';
 
 /**
  * The event creation wizard.
@@ -441,6 +440,30 @@ export function EventWizard() {
                 </Button>
               ) : null}
             </nav>
+
+            {/* ── THE PERSISTENT ACTION BAR ───────────────────────────────
+                Last child of the editing column, and `sticky bottom-0` rather
+                than `fixed`, so it floats over the form while there is page
+                below it and then comes to rest in flow at the end — the final
+                field and the step footer's Next are never permanently
+                underneath it, and nothing needs a spacer kept in step with the
+                bar's height by hand.
+
+                It repeats the save state that already sits beside the back
+                link at the top of the page. That is deliberate: on Tickets,
+                Media and Details the top of the page is a thousand pixels
+                above whatever somebody is typing, so at the moment they finish
+                a tier and wonder whether it is stored, the answer was
+                off-screen. Both narrations come from `saveSummary`, so they
+                cannot drift into two vocabularies for one fact. */}
+            <WizardActionBar
+              state={wizard.state}
+              error={wizard.error}
+              savedAt={wizard.savedAt}
+              onSaveDraft={() => void wizard.saveNow()}
+              onPreview={() => setPreviewOpen((open) => !open)}
+              previewOpen={previewOpen}
+            />
           </div>
         </main>
 
@@ -618,36 +641,12 @@ function SaveBadge({
     return () => clearInterval(timer);
   }, []);
 
-  const ago = savedAt ? Math.round((Date.now() - savedAt) / 60_000) : null;
-
-  const content: Record<SaveState, { label: string; tone: string; icon?: React.ReactNode }> = {
-    local: { label: 'Saved on this device', tone: 'text-muted-foreground' },
-    dirty: { label: 'Unsaved changes', tone: 'text-muted-foreground' },
-    saving: {
-      label: 'Saving…',
-      tone: 'text-muted-foreground',
-      icon: <Loader2 className="size-3.5 animate-spin" aria-hidden />,
-    },
-    saved: {
-      label: ago && ago > 0 ? `All changes synced · ${ago}m ago` : 'Saved just now',
-      tone: 'text-success-subtle-foreground',
-      icon: <Check className="size-3.5" aria-hidden />,
-    },
-    offline: {
-      // A flush that failed to reach the server also lands here, with its own
-      // message — showing the fixed label over a stored cause would be the
-      // badge knowing more than it says.
-      label: error ?? 'Offline — changes stored on this device, will sync automatically',
-      tone: 'text-warning-subtle-foreground',
-      icon: <CloudOff className="size-3.5" aria-hidden />,
-    },
-    error: {
-      label: error ?? 'Could not save',
-      tone: 'text-destructive',
-      icon: <AlertTriangle className="size-3.5" aria-hidden />,
-    },
-  };
-  const shown = content[state];
+  // ── ONE SOURCE FOR THE SENTENCE, TWO PLACES THAT SHOW IT ──────────────
+  // This used to hold its own copy of the six labels, tones and icons, and the
+  // action bar at the foot of the column now shows the same fact. Two
+  // hand-maintained copies of "what the save is doing" is how one of them ends
+  // up saying "Saved" while the other says "Could not save".
+  const shown = saveSummary(state, error, savedAt);
 
   return (
     <p

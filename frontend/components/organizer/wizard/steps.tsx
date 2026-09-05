@@ -30,6 +30,7 @@ import {
   type DraftSave,
 } from './fields';
 import { missingForSave } from './details-step';
+import { DescriptionExample } from './description-example';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
@@ -108,6 +109,12 @@ export function BasicsStep({
         autoFocus
       />
 
+      {/* `softMax` and not `max`, and the difference matters here more than
+          anywhere else on the form: the server's `description` field has no
+          `max_length`, and this number came DOWN from 2000, so drafts already
+          exist between the two. Enforcing it would block or truncate a
+          description the API accepts and the organiser can see on screen. It
+          warns; `overHint` is what it says. */}
       <TextArea
         id="event-description"
         label="Description"
@@ -115,6 +122,13 @@ export function BasicsStep({
         onChange={(description) => update({ description })}
         placeholder="What happens, who is playing, what is included, and anything an attendee needs to know before buying."
         softMax={DESCRIPTION_SOFT_MAX}
+        overHint={`Past ${DESCRIPTION_SOFT_MAX} characters people stop reading — but this saves and publishes exactly as written.`}
+        action={
+          <DescriptionExample
+            value={draft.description}
+            onInsert={(description) => update({ description })}
+          />
+        }
       />
 
       <Section

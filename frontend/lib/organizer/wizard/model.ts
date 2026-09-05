@@ -389,9 +389,41 @@ export type Issue = { step: StepId; field: string; message: string };
 export const TITLE_MAX = 200;
 export const VENUE_MAX = 255;
 export const CITY_MAX = 120;
-/** No column limit on `description` (it is a TextField), so this is an
- *  editorial cap, not a database one — and it is labelled that way. */
-export const DESCRIPTION_SOFT_MAX = 2000;
+/**
+ * ── THIS ONE IS A GUIDELINE, AND EVERY OTHER CAP IN THIS BLOCK IS A RULE ──
+ *
+ * `description` is `serializers.CharField(required=False, allow_blank=True)` on
+ * BOTH `CreateEventRequestSerializer` and `UpdateEventRequestSerializer`
+ * (`apps/events/schemas.py`) — no `max_length` on either, over a `TextField`
+ * column with no cap. So the server accepts a description of any length, and
+ * 1200 is an EDITORIAL number: the length at which an event description stops
+ * being read.
+ *
+ * That distinction decides the behaviour, and getting it wrong is expensive in
+ * exactly one direction. This value moved from 2000 to 1200, so there are
+ * already-saved drafts sitting between the two. If the counter were treated as
+ * a limit, every one of those would become unsavable — or, worse, silently
+ * truncated — because a number in this file changed. An organiser would lose
+ * eight hundred characters they wrote and the API would have accepted, and
+ * nothing anywhere would say why.
+ *
+ * So the rules for this constant, which the UI must honour:
+ *
+ *   - `TextArea` never sets `maxLength` from it. Typing past 1200 is allowed.
+ *   - Nothing here truncates. `toCreateInput` / `toPatchInput` send the
+ *     description verbatim (they do not even `.trim()` it — see `toPatchInput`).
+ *   - `validate()` deliberately does NOT include `description` in the `capped`
+ *     list below, so an over-length description raises no `Issue`: it cannot
+ *     block a save, cannot turn the Basics step red, and cannot hold
+ *     `completion()` under 100%.
+ *   - The counter WARNS instead (amber, `over` state) and says what the number
+ *     is for.
+ *
+ * Contrast `SHORT_DESCRIPTION_MAX` and the SEO caps immediately below: those
+ * ARE the columns' own `max_length`, so they are hard, they set `maxLength` on
+ * the input, and `validate()` raises on them.
+ */
+export const DESCRIPTION_SOFT_MAX = 1200;
 
 /* Content-field caps. Every one is the column's own `max_length`, so the
  * counter turns red at exactly the point the API would refuse. */
@@ -403,6 +435,60 @@ export const ACCESSIBILITY_MAX = 500;
  *  columns were sized to — the counter and the search preview agree. */
 export const SEO_TITLE_MAX = 70;
 export const SEO_DESCRIPTION_MAX = 160;
+/**
+ * The one-line summary reads best at 15–30 WORDS, and that is a different
+ * measurement from `SHORT_DESCRIPTION_MAX`.
+ *
+ * `short_description` is `max_length=200` — a column, and therefore a rule: at
+ * 201 characters the API refuses, `validate()` raises, and the input's own
+ * `maxLength` stops the keystroke. The word band is advice about the same
+ * field: 200 characters is roughly 30 words of ordinary English, so the two
+ * bite at about the same place, but they answer different questions. "Is this
+ * sentence the right LENGTH to read" is a word question; nobody composes to a
+ * character budget.
+ *
+ * It is advice and stays advice. Nothing here raises an `Issue`, sets an
+ * `aria-invalid`, or blocks a save: an organiser with a fourteen-word summary
+ * that reads perfectly is not wrong, and a form that refuses it would be
+ * asking them to pad a sentence to satisfy a counter.
+ */
+export const SHORT_DESCRIPTION_WORDS_MIN = 15;
+export const SHORT_DESCRIPTION_WORDS_MAX = 30;
+
+/**
+ * How many words a value holds.
+ *
+ * Split on any run of whitespace — not on `' '` — because a summary pasted out
+ * of a document arrives carrying newlines and non-breaking spaces, and
+ * `'a\nb'.split(' ')` is one "word". The leading/trailing trim is what stops a
+ * field containing only spaces counting as one.
+ */
+export function countWords(value: string): number {
+  const trimmed = value.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+/**
+ * Where a value sits against a word band, as a state a counter can colour.
+ *
+ * `empty` is its own answer rather than folding into `short`: a field nobody
+ * has typed in yet is not too brief, it is untouched, and colouring it as a
+ * problem is how a form greets somebody with a page of warnings.
+ */
+export type WordRange = 'empty' | 'short' | 'ok' | 'long';
+
+export function wordRange(
+  value: string,
+  min = SHORT_DESCRIPTION_WORDS_MIN,
+  max = SHORT_DESCRIPTION_WORDS_MAX,
+): WordRange {
+  const words = countWords(value);
+  if (words === 0) return 'empty';
+  if (words < min) return 'short';
+  if (words > max) return 'long';
+  return 'ok';
+}
+
 /** 30 days. `PositiveIntegerField`, so 0 is storable but meaningless. */
 export const DURATION_MAX_MINUTES = 60 * 24 * 30;
 
@@ -579,6 +665,12 @@ export function validate(draft: Draft, now = new Date()): Issue[] {
   // Content fields. Only length and range are checked — every one is
   // optional, so "empty" is never an issue. The caps mirror the columns, so
   // the counter turning red and the API refusing happen at the same character.
+  //
+  // `description` is ABSENT from this list on purpose and must stay absent:
+  // `DESCRIPTION_SOFT_MAX` is editorial, not a column, so raising an `Issue`
+  // on it would block the save of a description the API accepts — and would do
+  // it retroactively to every draft written while the number was 2000. See the
+  // constant's own note.
   const capped: Array<[StepId, string, string, number]> = [
     ['details', 'shortDescription', draft.shortDescription, SHORT_DESCRIPTION_MAX],
     ['details', 'language', draft.language, LANGUAGE_MAX],

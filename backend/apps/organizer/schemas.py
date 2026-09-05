@@ -241,6 +241,82 @@ class OrganizerRefundSerializer(serializers.Serializer):
     event_title = serializers.CharField()
 
 
+class OrganizerEarningsSerializer(serializers.Serializer):
+    """Lifetime and month-to-date money.
+
+    `month_change_pct` compares this calendar month against the SAME NUMBER OF
+    ELAPSED DAYS of last month (`comparison_days` says how many), never against
+    the whole of it — a partial month measured against a complete one reads as
+    a collapse every month until the 30th.
+    """
+
+    lifetime_revenue_minor = serializers.IntegerField()
+    lifetime_tickets = serializers.IntegerField()
+    lifetime_attendees = serializers.IntegerField()
+    #: Lifetime revenue over the number of DISTINCT paying attendees. Null, not
+    #: zero, when nobody has paid yet: "no attendees" and "attendees who paid
+    #: nothing" are different facts and only one of them is true here.
+    avg_revenue_per_attendee_minor = serializers.IntegerField(allow_null=True)
+    month_revenue_minor = serializers.IntegerField()
+    month_change_pct = serializers.FloatField(allow_null=True)
+    #: Days of the month both sides of that comparison cover, today included.
+    comparison_days = serializers.IntegerField()
+    generated_at = serializers.CharField()
+
+
+class OrganizerFunnelRowSerializer(serializers.Serializer):
+    """One event's booking funnel, from real rows only.
+
+    There is deliberately NO impressions, detail-views, add-to-cart or
+    click-through column: the platform records no page view, no impression and
+    no cart, so each would be an invented number on a screen an organizer makes
+    pricing and scheduling decisions from. The funnel starts at the first thing
+    that exists — a booking row.
+    """
+
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    status = serializers.CharField()
+    starts_at = serializers.DateTimeField()
+    #: EVERY booking row for the event, whatever its status. A reserved hold
+    #: that lapsed is exactly the abandonment this measures.
+    bookings_started = serializers.IntegerField()
+    bookings_paid = serializers.IntegerField()
+    conversion_pct = serializers.FloatField(allow_null=True)
+    capacity = serializers.IntegerField()
+    tickets_sold = serializers.IntegerField()
+    quota_fill_pct = serializers.FloatField(allow_null=True)
+    revenue_minor = serializers.IntegerField()
+    #: The denominator of `repeat_attendee_pct`, published beside it: "50%
+    #: repeat" reads very differently once you can see it is one of two people.
+    paying_attendees = serializers.IntegerField()
+    #: Of the distinct users who paid for THIS event, the share who have also
+    #: paid for another event by this same organizer.
+    repeat_attendee_pct = serializers.FloatField(allow_null=True)
+
+
+class OrganizerInsightSerializer(serializers.Serializer):
+    """One automated recommendation, with the evidence behind it.
+
+    `sample_size` is not decoration — a recommendation without it is
+    indistinguishable from a guess, and an endpoint that returns nothing at all
+    when the sample is too thin is the other half of the same rule.
+    """
+
+    #: best_weekday | best_hour | best_category | best_city
+    kind = serializers.CharField()
+    #: paid_bookings | revenue_minor — what `value` counts.
+    metric = serializers.CharField()
+    #: The raw bucket: an ISO weekday (1–7, Monday-first), an hour (0–23), a
+    #: category slug or a city name. For building a filter link or picking the
+    #: artwork; `label` is what to render.
+    key = serializers.CharField()
+    label = serializers.CharField()  # type: ignore[assignment]
+    value = serializers.IntegerField()
+    #: Rows behind the whole ranking, not just the winner.
+    sample_size = serializers.IntegerField()
+
+
 class AudienceSerializer(serializers.Serializer):
     customers = serializers.IntegerField()
     repeat_customers = serializers.IntegerField()

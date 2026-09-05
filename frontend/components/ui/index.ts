@@ -1,4 +1,15 @@
 // Barrel export for the core UI primitives.
+export {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+  type AccordionItemProps,
+  type AccordionProps,
+  type AccordionTriggerProps,
+  type AccordionType,
+  toggleAccordionValue,
+} from './accordion';
 export { Alert, AlertDescription, AlertTitle, alertVariants } from './alert';
 export {
   Avatar,
@@ -38,7 +49,19 @@ export {
 } from './modal';
 export { Pagination, type PaginationProps } from './pagination';
 export { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './popover';
+export {
+  ProgressRing,
+  type ProgressRingGeometry,
+  type ProgressRingProps,
+  type ProgressRingTone,
+  progressRingGeometry,
+} from './progress-ring';
 export { RadioGroup, RadioGroupItem } from './radio';
+export {
+  SegmentedControl,
+  type SegmentedControlOption,
+  type SegmentedControlProps,
+} from './segmented-control';
 export {
   Select,
   SelectContent,
@@ -51,6 +74,7 @@ export {
 } from './select';
 export { Skeleton } from './skeleton';
 export { Spinner, type SpinnerProps } from './spinner';
+export { StatCard, StatCardSkeleton, type StatCardProps, type StatCardTrend } from './stat-card';
 export { Switch } from './switch';
 export { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs';
 export { type ToastOptions, type ToastVariant, ToastProvider, useToast } from './toast';

@@ -23,6 +23,10 @@ are load-bearing:
    key. That is a fixed 4 queries for a page of any size (enforced by
    `test_page_costs_a_fixed_number_of_queries`) — no N+1, no fan-out, and
    each aggregate still computed in the database.
+
+   The funnel table follows the identical pattern with four grouped reads
+   (bookings started/paid, capacity/sold, revenue, distinct payers) — five
+   queries for a page of any size, enforced the same way.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from collections.abc import Iterable, Sequence
 from uuid import UUID
 
 from django.db.models import Count, F, Max, OuterRef, Q, QuerySet, Subquery, Sum
-from django.db.models.functions import TruncDate
+from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDate
 
 from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
 from apps.checkin.models import ScanLog, ScanResult
@@ -82,6 +86,25 @@ class OrganizerRepository:
             status=PaymentStatus.PAID,
             booking__event__organization__owner_id=owner_id,
             booking__event__deleted_at__isnull=True,
+        )
+
+    def _paid_bookings(self, owner_id: UUID):
+        """This organizer's completed bookings.
+
+        UNANNOTATED for exactly the reason `_paid_payments` above is: the new
+        readers below chain `.annotate(...).values(...).annotate(...)` off it,
+        and a typed intermediary in that chain is what crashes mypy. Runtime
+        behaviour is identical and every caller is fully typed.
+
+        Used only by the readers added with the earnings/funnel/insight
+        endpoints. The older methods keep their inline filters — rewriting a
+        working, tested query to share a helper buys nothing and risks
+        changing a number an existing screen depends on.
+        """
+        return Booking.objects.filter(
+            event__organization__owner_id=owner_id,
+            event__deleted_at__isnull=True,
+            status=BookingStatus.PAID,
         )
 
     # -------------------------------------------------------------- counts
@@ -802,6 +825,241 @@ class OrganizerRepository:
             )
             .order_by(F("moderated_at").desc(nulls_last=True), "-submitted_at")[:limit]
         )
+
+    # ------------------------------------------------------------- earnings
+
+    def revenue_totals(
+        self,
+        owner_id: UUID,
+        *,
+        month_start: dt.datetime,
+        month_end: dt.datetime,
+        previous_start: dt.datetime,
+        previous_end: dt.datetime,
+    ) -> dict[str, int]:
+        """Lifetime revenue, this month's, and the comparable slice of last
+        month's — all three in ONE query.
+
+        Three `sum_revenue_between` calls would be three separate scans of the
+        same payment rows for three numbers off one table. Postgres computes
+        all three in a single pass with `FILTER (WHERE ...)` clauses, which is
+        the "aggregate in the database" rule this file already follows, applied
+        one level further. It also guarantees the three figures describe the
+        same instant: read separately, a payment captured between the queries
+        would land in the month total and not in the lifetime one.
+        """
+        row = self._paid_payments(owner_id).aggregate(
+            lifetime=Sum("amount_minor"),
+            month=Sum(
+                "amount_minor",
+                filter=Q(created_at__gte=month_start, created_at__lt=month_end),
+            ),
+            previous=Sum(
+                "amount_minor",
+                filter=Q(created_at__gte=previous_start, created_at__lt=previous_end),
+            ),
+        )
+        return {name: int(value or 0) for name, value in row.items()}
+
+    def count_paying_attendees(self, owner_id: UUID) -> int:
+        """DISTINCT users with at least one paid booking, all time.
+
+        `COUNT(DISTINCT user_id)`, computed in Postgres — never a set built in
+        Python, which would pull every booking this organizer has ever taken
+        into the process to measure its length.
+
+        The distinctness is the point: somebody who bought four times is ONE
+        attendee. Dividing revenue by tickets instead answers a different
+        question (the average ticket price) while looking exactly like this one
+        on a dashboard.
+        """
+        total = self._paid_bookings(owner_id).aggregate(total=Count("user_id", distinct=True))[
+            "total"
+        ]
+        return int(total or 0)
+
+    def count_tickets_sold_all_time(self, owner_id: UUID) -> int:
+        """Every ticket ever issued, voids excluded.
+
+        The SAME definition `count_tickets_sold_between` uses, minus the
+        window — a refunded booking's tickets are voided at refund time, and
+        two screens reporting different lifetime ticket counts because one of
+        them counted voided rows is the disagreement this shares a definition
+        to avoid.
+        """
+        return (
+            Ticket.objects.filter(
+                booking__event__organization__owner_id=owner_id,
+                booking__event__deleted_at__isnull=True,
+            )
+            .exclude(status=TicketStatus.VOID)
+            .count()
+        )
+
+    # --------------------------------------------------------- the funnel table
+
+    def funnel_rows(self, owner_id: UUID) -> QuerySet[Event]:
+        """The funnel table's base query — identity columns only.
+
+        Ordered `-created_at`, the SAME ordering as `event_rows`, so the view
+        can reuse `OrganizerEventRowPagination`. Cursor pagination does not
+        validate that its `ordering` matches the queryset's: given a mismatch
+        it silently returns wrong pages rather than failing, so these two
+        strings have to stay identical or the funnel needs its own paginator.
+
+        No `select_related`: a funnel row shows no column from the
+        organization, and CLAUDE.md's checklist is explicit that a join is
+        added when a query actually crosses an FK, not speculatively.
+        """
+        return (
+            self.owned_events(owner_id)
+            .only("id", "title", "status", "starts_at", "created_at")
+            .order_by("-created_at")
+        )
+
+    def bookings_by_event(self, event_ids: Sequence[UUID]) -> dict[UUID, tuple[int, int]]:
+        """`{event_id: (started, paid)}` for a page of events, in ONE grouped query.
+
+        `started` counts EVERY booking row whatever its status, because a
+        reserved hold that lapsed is precisely the abandonment this funnel
+        measures. Counting only successful ones would make the conversion rate
+        paid-over-paid, i.e. 100% forever.
+
+        Both numbers come from one GROUP BY with a filtered `Count`, not two
+        queries: the second would re-read the same rows to apply one extra
+        predicate.
+        """
+        rows = _grouped(
+            Booking.objects.filter(event_id__in=event_ids),
+            "event_id",
+            started=Count("id"),
+            paid=Count("id", filter=Q(status=BookingStatus.PAID)),
+        )
+        return {row["event_id"]: (int(row["started"]), int(row["paid"])) for row in rows}
+
+    def paying_attendees_by_event(
+        self, owner_id: UUID, event_ids: Sequence[UUID]
+    ) -> dict[UUID, tuple[int, int]]:
+        """`{event_id: (payers, repeat_payers)}` for a page of events, in ONE query.
+
+        `payers` is the distinct users who paid for that event; `repeat_payers`
+        is how many of them have ALSO paid for another of this organizer's
+        events.
+
+        The repeat half is a subquery evaluated by Postgres, not a second pass
+        in Python. The obvious alternative — read every (event, user) pair on
+        the page and intersect the sets here — is unbounded in the number of
+        ATTENDEES rather than the number of events, so a page of five sold-out
+        shows would drag tens of thousands of rows into the process. That is an
+        N+1 by row count wearing a different hat.
+
+        `owner_id` is required where the other per-event readers take ids
+        alone, and that is the whole definition: "another event" means another
+        of THIS organizer's. A customer who also buys from somebody else is not
+        this organizer's repeat attendee, and counting them would flatter the
+        number with loyalty they did not earn.
+        """
+        # Users with paid bookings across MORE THAN ONE of this organizer's
+        # events. `.filter()` after `.values().annotate()` lands in HAVING,
+        # which is exactly what is wanted here (and is why the `customers()`
+        # search filter above is deliberately applied before the grouping).
+        repeat_buyers = (
+            self._paid_bookings(owner_id)
+            .values("user_id")
+            .annotate(events=Count("event_id", distinct=True))
+            .filter(events__gt=1)
+            .values("user_id")
+        )
+        rows = _grouped(
+            Booking.objects.filter(event_id__in=event_ids, status=BookingStatus.PAID),
+            "event_id",
+            payers=Count("user_id", distinct=True),
+            repeat_payers=Count("user_id", distinct=True, filter=Q(user_id__in=repeat_buyers)),
+        )
+        return {row["event_id"]: (int(row["payers"]), int(row["repeat_payers"])) for row in rows}
+
+    # ------------------------------------------------------------- insights
+
+    def paid_bookings_by_event_weekday(
+        self, owner_id: UUID, tzinfo: dt.tzinfo
+    ) -> list[tuple[int, int]]:
+        """`[(iso_weekday, paid_bookings)]` — grouped by the EVENT's start day.
+
+        The question an organizer is asking is "when should I run the next
+        one", so the bucket is the event's `starts_at`, never the booking's
+        `created_at` (which answers "when do people buy", a different question
+        with a different answer).
+
+        `tzinfo` is passed in rather than read here: the timestamps are stored
+        in UTC, and a weekday is a LOCAL fact — a 00:30 IST Sunday show is a
+        Saturday event in UTC. The platform timezone lives in `selectors`, and
+        a repository importing from it would be a cycle.
+        """
+        return self._bucketed_paid_bookings(
+            owner_id, ExtractIsoWeekDay("event__starts_at", tzinfo=tzinfo)
+        )
+
+    def paid_bookings_by_event_hour(
+        self, owner_id: UUID, tzinfo: dt.tzinfo
+    ) -> list[tuple[int, int]]:
+        """`[(hour_of_day, paid_bookings)]` — grouped by the EVENT's start hour,
+        in the same local timezone and for the same reason as the weekday above."""
+        return self._bucketed_paid_bookings(
+            owner_id, ExtractHour("event__starts_at", tzinfo=tzinfo)
+        )
+
+    def _bucketed_paid_bookings(self, owner_id: UUID, expression) -> list[tuple[int, int]]:
+        """GROUP BY a date part of the event's start, counted in Postgres.
+
+        At most 7 or 24 rows come back, so the caller can total them without
+        breaking the "no counting in Python" rule — the database has already
+        reduced the whole booking history to one row per bucket.
+        """
+        rows = _grouped(
+            self._paid_bookings(owner_id).annotate(bucket=expression),
+            "bucket",
+            total=Count("id"),
+        )
+        # A bucket is null only if `starts_at` were null, which the column
+        # forbids — but skipping it costs one comparison and keeps a NULL out
+        # of an int cast if that ever changes.
+        return [
+            (int(row["bucket"]), int(row["total"])) for row in rows if row["bucket"] is not None
+        ]
+
+    def revenue_by_event_category(self, owner_id: UUID) -> list[tuple[str, int, int]]:
+        """`[(category, revenue_minor, payments)]` over captured payments.
+
+        BLANK categories are excluded, not bucketed as "Unknown". A blank is
+        "not categorised yet" (see `EventCategory`), and "your best-performing
+        category is (blank)" is not advice — it is a report on the events an
+        organizer has not finished filling in.
+
+        The payment COUNT rides along in the same GROUP BY because the caller
+        needs a sample size beside the money: 80,000 rupees from one booking
+        and from forty are the same number and completely different evidence.
+        """
+        return self._revenue_bucketed(owner_id, "booking__event__category")
+
+    def revenue_by_event_city(self, owner_id: UUID) -> list[tuple[str, int, int]]:
+        """`[(city, revenue_minor, payments)]`, blanks excluded — same shape and
+        the same reasoning as the category ranking above.
+
+        Deliberately NOT `revenue_by_city`, which exists for the breakdown
+        chart: that one is limited to the top N and carries no sample size, and
+        a recommendation needs the whole distribution to know whether there is
+        anything to compare the winner against.
+        """
+        return self._revenue_bucketed(owner_id, "booking__event__city")
+
+    def _revenue_bucketed(self, owner_id: UUID, field: str) -> list[tuple[str, int, int]]:
+        rows = _grouped(
+            self._paid_payments(owner_id).exclude(**{field: ""}),
+            field,
+            total=Sum("amount_minor"),
+            payments=Count("id"),
+        )
+        return [(row[field], int(row["total"] or 0), int(row["payments"])) for row in rows]
 
 
 def _group_by_day(queryset, aggregate) -> list[tuple[dt.date, int]]:

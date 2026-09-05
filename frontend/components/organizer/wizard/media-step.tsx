@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  EVENT_IMAGE,
   EVENT_IMAGE_HINT,
   addMedia,
   checkImageFile,
@@ -26,12 +27,20 @@ import {
   type UploadHandle,
 } from '@/lib/api/event-content';
 import { ApiError, errorMessage } from '@/lib/api/errors';
-import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
+import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
 import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { Section, StepHeader, type DraftSave } from './fields';
 import { missingForSave } from './details-step';
+import {
+  IMAGE_ZONES,
+  combinedSizeNote,
+  cropAdvice,
+  measureImage,
+  zoneFor,
+  type ImageZone,
+} from './media-zones';
 import { Poster } from '@/components/organizer/primitives';
 
 /**
@@ -104,6 +113,24 @@ const KIND_LABEL: Record<MediaKind, string> = {
   video: 'Video',
 };
 
+/**
+ * One file waiting for its alt text.
+ *
+ * It carries its own `kind` now. It used to be a bare `File` plus a single
+ * `kind` held in step state, which meant the kind was read at FLUSH time — so
+ * a batch described while the selector said "Gallery" and uploaded after it
+ * had been changed went up as something else. Zones removed the selector, and
+ * the kind travels with the file from the moment it is dropped.
+ */
+type Staged = {
+  key: string;
+  file: File;
+  kind: ImageZone['kind'];
+  /** A measured crop advisory, computed once at drop time. Null when the
+   *  picture fits the zone's frame, or when the browser could not measure it. */
+  note: string | null;
+};
+
 export function MediaStep({
   draft,
   onPoster,
@@ -119,11 +146,8 @@ export function MediaStep({
   const eventId = draft.eventId;
   const client = useQueryClient();
   const [pending, setPending] = React.useState<Pending[]>([]);
-  const [staged, setStaged] = React.useState<File[]>([]);
+  const [staged, setStaged] = React.useState<Staged[]>([]);
   const [altDraft, setAltDraft] = React.useState<Record<string, string>>({});
-  const [kind, setKind] = React.useState<MediaKind>('gallery');
-  const [over, setOver] = React.useState(false);
-  const inputRef = React.useRef<HTMLInputElement>(null);
 
   const content = useQuery({
     queryKey: ['event-content', eventId],
@@ -157,6 +181,12 @@ export function MediaStep({
    * in it renumbered from zero. Sending just the two that moved would leave
    * the rest of the list holding whatever positions history gave them, which
    * is how an order drifts until two images claim the same slot.
+   *
+   * The list it is HANDED is now the zone's own — one kind — where it used to
+   * be every row on the event. That was a real defect the zones removed: the
+   * renumbering ran across kinds, so moving one gallery photo rewrote the
+   * hero's position too, and a video row sat in the image grid drawing a
+   * broken tile because its `url` is a YouTube embed, not a picture.
    */
   const move = (list: EventMedia[], index: number, direction: -1 | 1) => {
     const target = index + direction;
@@ -168,10 +198,15 @@ export function MediaStep({
 
   // Paste support: an organizer copying a poster from a design tool expects
   // ⌘V to work, and it is the fastest path there is.
+  //
+  // It lands in the GALLERY, because a paste has no zone under the cursor to
+  // read and the gallery is where several images at once belong. The gallery's
+  // own dropzone is the only one that mentions ⌘V, so the destination is
+  // stated where somebody would look for it rather than guessed at.
   React.useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       const files = Array.from(event.clipboardData?.files ?? []);
-      if (files.length) void stage(files);
+      if (files.length) void stage(files, 'gallery');
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
@@ -182,10 +217,13 @@ export function MediaStep({
   // await is per-file and off the main thread; a dozen dropped files resolve
   // in a few milliseconds, and the alternative is finding out after the bytes
   // have already gone up.
-  const stage = async (files: File[]) => {
-    const accepted: File[] = [];
+  const stage = async (files: File[], forKind: ImageZone['kind']) => {
+    const zone = zoneFor(forKind);
+    const accepted: Staged[] = [];
     const rejected: Pending[] = [];
     for (const file of files) {
+      // The SERVER's rule, mirrored: type, size, then shape against
+      // `EVENT_IMAGE_SPEC`. Everything below this line is advice.
       const problem = await checkImageFile(file);
       if (problem) {
         // Rejected client-side, but shown as a failed tile rather than a toast
@@ -193,15 +231,21 @@ export function MediaStep({
         rejected.push({
           key: `${file.name}-${Math.random()}`,
           file,
-          kind,
+          kind: forKind,
           altText: '',
           percent: 0,
           error: problem,
           handle: null,
         });
-      } else {
-        accepted.push(file);
+        continue;
       }
+      const size = zone ? await measureImage(file) : null;
+      accepted.push({
+        key: `${file.name}-${Date.now()}-${Math.random()}`,
+        file,
+        kind: forKind,
+        note: zone && size ? cropAdvice(file, size, zone) : null,
+      });
     }
     if (rejected.length) setPending((current) => [...rejected, ...current]);
     if (accepted.length) setStaged((current) => [...current, ...accepted]);
@@ -222,12 +266,11 @@ export function MediaStep({
     return existing + taken;
   };
 
-  const start = (file: File, altText: string, forKind: MediaKind = kind) => {
+  const start = (file: File, altText: string, forKind: MediaKind) => {
     // `forKind` is passed rather than read off state, because a QUEUED file is
-    // uploaded later — possibly after the organiser has changed the selector
-    // to something else. Reading `kind` at flush time would file a gallery
-    // photo as the hero, silently, and the hero is the card image on every
-    // list on the platform.
+    // uploaded later — possibly long after it was described. Reading a shared
+    // selector at flush time would file a gallery photo as the hero, silently,
+    // and the hero is the card image on every list on the platform.
     const key = `${file.name}-${Date.now()}-${Math.random()}`;
     const entry: Pending = {
       key,
@@ -301,15 +344,12 @@ export function MediaStep({
     { file: File; altText: string; kind: MediaKind }[]
   >([]);
 
-  const flush = (items: { file: File; altText: string }[]) => {
-    // The kind is CAPTURED here, at the moment of the decision, not read at
-    // upload time — see `start`.
-    const withKind = items.map((item) => ({ ...item, kind }));
+  const flush = (items: { file: File; altText: string; kind: MediaKind }[]) => {
     if (!eventId) {
-      setQueued((current) => [...current, ...withKind]);
+      setQueued((current) => [...current, ...items]);
       return;
     }
-    withKind.forEach((item) => start(item.file, item.altText, item.kind));
+    items.forEach((item) => start(item.file, item.altText, item.kind));
   };
 
   // The id arriving is the signal. `queued` is cleared FIRST so a second
@@ -323,7 +363,40 @@ export function MediaStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId, queued.length]);
 
+  /** Hand a zone's described files to the uploader and clear its staging. */
+  const uploadZone = (forKind: ImageZone['kind']) => {
+    const rows = staged.filter((row) => row.kind === forKind);
+    flush(
+      rows.map((row) => ({
+        file: row.file,
+        altText: (altDraft[row.key] ?? '').trim(),
+        kind: row.kind,
+      })),
+    );
+    forget(rows);
+  };
+
+  const forget = (rows: Staged[]) => {
+    const keys = new Set(rows.map((row) => row.key));
+    setStaged((current) => current.filter((row) => !keys.has(row.key)));
+    setAltDraft((current) => {
+      const next = { ...current };
+      for (const key of keys) delete next[key];
+      return next;
+    });
+  };
+
   const media = content.data?.media ?? [];
+  /**
+   * Rows whose kind has no zone.
+   *
+   * Empty against today's `MediaKind` union — every non-video kind has a zone
+   * — and rendered anyway, because the union is a description of what the API
+   * returned when this was written. If a kind is added server-side, its rows
+   * must show up somewhere an organiser can delete them, not silently
+   * disappear from a step whose whole job is showing what the event holds.
+   */
+  const unzoned = media.filter((item) => item.kind !== 'video' && !zoneFor(item.kind));
 
   return (
     <div className="flex flex-col gap-block">
@@ -344,298 +417,382 @@ export function MediaStep({
         <CoverUploader draft={draft} onPoster={onPoster} posterFile={posterFile} />
       </Section>
 
-      {/* ── NO GATE ────────────────────────────────────────────────────
-          This used to be replaced by a "unlocks once the draft is saved"
-          panel, because gallery images are stored against the event and
-          before the first save there is no event to store them against.
+      {/* ── ONE ZONE PER SLOT, INSTEAD OF ONE DROPZONE AND A DROPDOWN ─────
+          Every zone states what its picture is for, the shape it has to be and
+          how many are left BEFORE the file picker opens. That is the whole
+          change: the machinery underneath — drag and drop, paste, alt text
+          before the bytes, real progress, cancel, retry, reorder, in-place alt
+          editing — is the same code it was, wired per zone instead of through a
+          shared `kind` selector.
 
-          That constraint is real; making it the ORGANISER's problem was the
-          mistake. The cover image above has always solved it the other way —
-          held on this device, uploaded with the next save — and there was no
-          reason the gallery could not do the same. So it does: pick photos,
+          ── NO GATE ────────────────────────────────────────────────────
+          Gallery images are stored against the event, and before the first
+          save there is no event to store them against. That constraint is
+          real; making it the ORGANISER's problem was the mistake. The cover
+          image has always solved it the other way — held on this device,
+          uploaded with the next save — so these do the same: pick photos,
           describe them, keep working, and they upload themselves the moment
-          the draft exists. `flush` below is the whole mechanism.
+          the draft exists. `flush` above is the whole mechanism. */}
+      {content.isError ? (
+        <ErrorState
+          message="Could not load this event's media."
+          onRetry={() => void content.refetch()}
+          className="rounded-xl border border-border bg-surface shadow-sm"
+        />
+      ) : null}
 
-          ── AND IT IS A LABELLED SECTION LIKE ITS NEIGHBOURS ──────────────
-          Cover and Trailer were `Section`s and this -- the longest of the
-          three by far -- was a bare fragment, so the step read as
-          collapsible / unlabelled sprawl / collapsible. It now carries its
-          own heading and count, which also means it can be collapsed once
-          the photos are in and the step stops being a single long scroll. */}
-      <Section title="Gallery" count={`${media.filter((item) => item.kind !== 'video').length} added`}>
-          <div className="flex flex-wrap items-center gap-stack">
-            <label className="text-caption font-medium text-muted-foreground" htmlFor="media-kind">
-              Uploading as
-            </label>
-            <select
-              id="media-kind"
-              value={kind}
-              onChange={(event) => setKind(event.target.value as MediaKind)}
-              className="h-control rounded-md border border-input bg-surface px-2.5 text-body text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              {(Object.keys(KIND_LABEL) as MediaKind[])
-                .filter((value) => value !== 'video')
-                .map((value) => (
-                  <option key={value} value={value}>
-                    {KIND_LABEL[value]}
-                  </option>
-                ))}
-            </select>
-            <p className="text-caption text-muted-foreground">
-              One hero, ten gallery images. The server enforces both.
-            </p>
-          </div>
+      {IMAGE_ZONES.map((zone) => {
+        const rows = media.filter((item) => item.kind === zone.kind);
+        const zoneStaged = staged.filter((row) => row.kind === zone.kind);
+        const zonePending = pending.filter((row) => row.kind === zone.kind);
+        const zoneQueued = queued.filter((item) => item.kind === zone.kind);
+        // Everything that has claimed a slot, wherever it is on its way there.
+        // A failed pending tile does NOT count: its bytes never reached the
+        // server, so counting it would lock somebody out of a slot that is
+        // demonstrably free.
+        const filled =
+          rows.length +
+          zoneStaged.length +
+          zoneQueued.length +
+          zonePending.filter((row) => !row.error).length;
+        const full = filled >= zone.uiCap;
+        // Only the files this browser is holding — see `combinedSizeNote`.
+        const heldBytes = [
+          ...zoneStaged.map((row) => row.file.size),
+          ...zoneQueued.map((item) => item.file.size),
+          ...zonePending.filter((row) => !row.error).map((row) => row.file.size),
+        ];
+        const sizeNote = zone.combinedWarnBytes
+          ? combinedSizeNote(
+              heldBytes.reduce((sum, size) => sum + size, 0),
+              heldBytes.length,
+              zone.combinedWarnBytes,
+            )
+          : null;
 
-          <div
-            onDragOver={(event) => {
-              event.preventDefault();
-              setOver(true);
-            }}
-            onDragLeave={() => setOver(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setOver(false);
-              void stage(Array.from(event.dataTransfer.files));
-            }}
-            className={cn(
-              'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
-              'transition-colors duration-fast motion-reduce:transition-none',
-              // Armed: the accent edge plus the faintest wash of it. `bg-secondary`
-              // is a neutral grey now, which read as "disabled" rather than "let
-              // go here".
-              over ? 'border-primary bg-primary/5' : 'border-border bg-sunken',
+        return (
+          <ZoneFrame key={zone.kind} zone={zone} filled={filled}>
+            {full ? (
+              <p className="rounded-lg border border-dashed border-border bg-sunken px-card py-stack text-caption text-muted-foreground">
+                {/* WHY it is full and HOW to free it, in one line. A zone that
+                    just hides its picker is a zone somebody presses ⌘V at and
+                    concludes is broken. */}
+                {zone.capIsGuideline
+                  ? `${zone.uiCap} is the number this step recommends. Remove one to add another.`
+                  : `This event already has its ${zone.title.toLowerCase()}. Remove it to upload a different one.`}
+              </p>
+            ) : (
+              <ZoneDropzone zone={zone} onFiles={(files) => void stage(files, zone.kind)} />
             )}
-          >
-            <span
-              className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
-              aria-hidden
-            >
-              <ImagePlus className="size-5 text-muted-foreground" />
-            </span>
-            <p className="text-body-sm font-medium">Drop images here, or paste with ⌘V</p>
-            {/* The requirement, before the file picker — not after an
-                upload fails. It said "1200×800 or larger works best", which
-                described a preference where there is now a rule: the event
-                page draws every picture in one 16:9 frame and the server
-                refuses anything that cannot fill it. Copy that under-states a
-                hard constraint is how somebody uploads eight posters and has
-                all eight refused. */}
-            <p className="max-w-sm text-caption text-muted-foreground">
-              {EVENT_IMAGE_HINT} JPEG, PNG, WebP, AVIF or GIF, up to 10 MB.
-            </p>
-            <Button variant="outline" onClick={() => inputRef.current?.click()}>
-              Choose files
-            </Button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="sr-only"
-              aria-label="Choose images to upload"
-              onChange={(event) => {
-                void stage(Array.from(event.target.files ?? []));
-                event.target.value = '';
-              }}
-            />
-          </div>
 
-          {/* Alt text is collected BEFORE the bytes go up — the server refuses a
-          file without it, and text written with the image in mind is real alt
-          text rather than "image1". */}
-          {staged.length ? (
-            <section className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
-              <h3 className="text-body-sm font-semibold">
-                Describe {staged.length === 1 ? 'this image' : 'these images'} before uploading
-              </h3>
-              <ul className="flex flex-col gap-stack">
-                {staged.map((file, index) => {
-                  const id = `${file.name}-${index}`;
-                  return (
-                    <li key={id} className="flex flex-col gap-1.5">
-                      <label htmlFor={`alt-${id}`} className="truncate text-caption font-medium">
-                        {file.name}
+            {sizeNote ? (
+              <p className="text-caption text-warning-subtle-foreground">{sizeNote}</p>
+            ) : null}
+
+            {/* Alt text is collected BEFORE the bytes go up — the server refuses
+                a file without it, and text written with the image in mind is
+                real alt text rather than "image1". */}
+            {zoneStaged.length ? (
+              <section className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">
+                <h3 className="text-body-sm font-semibold">
+                  Describe {zoneStaged.length === 1 ? 'this image' : 'these images'} before
+                  uploading
+                </h3>
+                <ul className="flex flex-col gap-stack">
+                  {zoneStaged.map((row) => (
+                    <li key={row.key} className="flex flex-col gap-1.5">
+                      <label htmlFor={`alt-${row.key}`} className="truncate text-caption font-medium">
+                        {row.file.name}
                       </label>
                       <Input
-                        id={`alt-${id}`}
-                        value={altDraft[id] ?? ''}
+                        id={`alt-${row.key}`}
+                        value={altDraft[row.key] ?? ''}
                         onChange={(event) =>
-                          setAltDraft((current) => ({ ...current, [id]: event.target.value }))
+                          setAltDraft((current) => ({ ...current, [row.key]: event.target.value }))
                         }
                         placeholder="What is in the picture? e.g. The main stage at dusk, crowd in front"
                       />
+                      {/* Measured, not guessed, and explicitly not a refusal —
+                          the server takes this file. See `cropAdvice`. */}
+                      {row.note ? (
+                        <p className="text-caption text-warning-subtle-foreground">{row.note}</p>
+                      ) : null}
                     </li>
-                  );
-                })}
-              </ul>
-              <div className="flex flex-wrap gap-stack">
-                <Button
-                  variant="outline"
-                  disabled={staged.some(
-                    (file, index) => !(altDraft[`${file.name}-${index}`] ?? '').trim(),
-                  )}
-                  onClick={() => {
-                    flush(
-                      staged.map((file, index) => ({
-                        file,
-                        altText: (altDraft[`${file.name}-${index}`] ?? '').trim(),
-                      })),
-                    );
-                    setStaged([]);
-                    setAltDraft({});
-                  }}
-                >
-                  {eventId
-                    ? `Upload ${staged.length === 1 ? 'image' : `${staged.length} images`}`
-                    : // It genuinely is not uploading yet, so it does not say
-                      // it is. The queue below then says when it will.
-                      `Add ${staged.length === 1 ? 'image' : `${staged.length} images`}`}
-                </Button>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap gap-stack">
+                  <Button
+                    variant="outline"
+                    disabled={zoneStaged.some((row) => !(altDraft[row.key] ?? '').trim())}
+                    onClick={() => uploadZone(zone.kind)}
+                  >
+                    {eventId
+                      ? `Upload ${zoneStaged.length === 1 ? 'image' : `${zoneStaged.length} images`}`
+                      : // It genuinely is not uploading yet, so it does not say
+                        // it is. The queue below then says when it will.
+                        `Add ${zoneStaged.length === 1 ? 'image' : `${zoneStaged.length} images`}`}
+                  </Button>
+                  <Button variant="ghost" onClick={() => forget(zoneStaged)}>
+                    Cancel
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+
+            {zoneQueued.length ? (
+              <section className="flex flex-col gap-stack rounded-xl border border-dashed border-border bg-sunken p-card">
+                <h3 className="text-body-sm font-semibold">
+                  {zoneQueued.length === 1 ? '1 image' : `${zoneQueued.length} images`} waiting for
+                  the first save
+                </h3>
+                <ul className="flex flex-col gap-1">
+                  {zoneQueued.map((item) => (
+                    <li key={item.file.name} className="truncate text-caption text-muted-foreground">
+                      {item.file.name} — {item.altText}
+                    </li>
+                  ))}
+                </ul>
+                {/* Names the fields, because "save the draft" is not an action
+                    anybody can take directly — the wizard saves itself once
+                    these exist. */}
+                {missingForSave(draft).length ? (
+                  <div className="flex flex-col gap-1">
+                    <p className="text-caption text-muted-foreground">
+                      They upload on their own once the draft has:
+                    </p>
+                    <ul className="flex flex-col gap-1">
+                      {missingForSave(draft).map((item) => (
+                        <li
+                          key={item}
+                          className="flex items-center gap-2 text-caption text-muted-foreground"
+                        >
+                          <span
+                            className="size-1.5 shrink-0 rounded-full bg-border-strong"
+                            aria-hidden
+                          />
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-caption text-muted-foreground">
+                    {save?.state === 'error'
+                      ? (save.error ?? 'The last save failed.')
+                      : 'Saving now — they go up in a moment.'}
+                  </p>
+                )}
+                {/* A queued file lives in this tab's memory: the draft persists
+                    to localStorage and a `File` does not survive that. Saying so
+                    is the difference between a small window and a surprise. */}
+                <p className="text-caption text-muted-foreground">
+                  They are held in this tab until then — reloading loses them.
+                </p>
                 <Button
                   variant="ghost"
-                  onClick={() => {
-                    setStaged([]);
-                    setAltDraft({});
-                  }}
+                  className="w-fit"
+                  onClick={() =>
+                    setQueued((current) => current.filter((item) => item.kind !== zone.kind))
+                  }
                 >
-                  Cancel
+                  Clear the queue
                 </Button>
-              </div>
-            </section>
-          ) : null}
+              </section>
+            ) : null}
 
-          {queued.length ? (
-            <section className="flex flex-col gap-stack rounded-xl border border-dashed border-border bg-sunken p-card">
-              <h3 className="text-body-sm font-semibold">
-                {queued.length === 1 ? '1 image' : `${queued.length} images`} waiting for the
-                first save
-              </h3>
-              <ul className="flex flex-col gap-1">
-                {queued.map((item) => (
-                  <li key={item.file.name} className="truncate text-caption text-muted-foreground">
-                    {KIND_LABEL[item.kind]} · {item.file.name} — {item.altText}
+            {zonePending.length ? (
+              <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+                {zonePending.map((row) => (
+                  <li key={row.key}>
+                    <PendingTile
+                      row={row}
+                      onCancel={() => {
+                        row.handle?.cancel();
+                        setPending((current) => current.filter((item) => item.key !== row.key));
+                      }}
+                      onRetry={() => {
+                        setPending((current) => current.filter((item) => item.key !== row.key));
+                        // Re-checked, not re-sent blind: the file may have been
+                        // refused for its shape. `zone.kind` rather than
+                        // `row.kind` only because this list is already filtered
+                        // to it — a retry cannot land in another zone either way.
+                        void stage([row.file], zone.kind);
+                      }}
+                    />
                   </li>
                 ))}
               </ul>
-              {/* Names the fields, because "save the draft" is not an action
-                  anybody can take directly — the wizard saves itself once
-                  these exist. */}
-              {missingForSave(draft).length ? (
-                <div className="flex flex-col gap-1">
-                  <p className="text-caption text-muted-foreground">
-                    They upload on their own once the draft has:
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {missingForSave(draft).map((item) => (
-                      <li
-                        key={item}
-                        className="flex items-center gap-2 text-caption text-muted-foreground"
-                      >
-                        <span
-                          className="size-1.5 shrink-0 rounded-full bg-border-strong"
-                          aria-hidden
-                        />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <p className="text-caption text-muted-foreground">
-                  {save?.state === 'error'
-                    ? (save.error ?? 'The last save failed.')
-                    : 'Saving now — they go up in a moment.'}
-                </p>
-              )}
-              {/* A queued file lives in this tab's memory: the draft persists
-                  to localStorage and a `File` does not survive that. Saying so
-                  is the difference between a small window and a surprise. */}
-              <p className="text-caption text-muted-foreground">
-                They are held in this tab until then — reloading loses them.
-              </p>
-              <Button
-                variant="ghost"
-                className="w-fit"
-                onClick={() => setQueued([])}
-              >
-                Clear the queue
-              </Button>
-            </section>
-          ) : null}
+            ) : null}
 
-          {pending.length ? (
-            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-              {pending.map((row) => (
-                <li key={row.key}>
-                  <PendingTile
-                    row={row}
-                    onCancel={() => {
-                      row.handle?.cancel();
-                      setPending((current) => current.filter((item) => item.key !== row.key));
-                    }}
-                    onRetry={() => {
-                      setPending((current) => current.filter((item) => item.key !== row.key));
-                      void checkImageFile(row.file).then((problem) => {
-                        if (!problem) start(row.file, row.altText);
-                        else setStaged((current) => [...current, row.file]);
-                      });
-                    }}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : null}
+            {eventId && content.isPending ? (
+              <Skeleton className="aspect-card w-full max-w-xs rounded-xl" />
+            ) : rows.length ? (
+              <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+                {rows.map((item, index) => (
+                  <li key={item.id}>
+                    <MediaTile
+                      media={item}
+                      busy={drop.isPending || reorder.isPending}
+                      onRemove={() => drop.mutate(item.id)}
+                      onMove={(direction) => move(rows, index, direction)}
+                      onEditAlt={(altText) => editAlt.mutate({ id: item.id, altText })}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < rows.length - 1}
+                      // Redundant inside a zone that is already named after the
+                      // kind — the badge exists for the fallback section below.
+                      showKind={false}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </ZoneFrame>
+        );
+      })}
 
-          {content.isError ? (
-            <ErrorState
-              message="Could not load this event's media."
-              onRetry={() => void content.refetch()}
-              className="rounded-xl border border-border bg-surface shadow-sm"
-            />
-          ) : content.isPending ? (
-            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-              {Array.from({ length: 3 }, (_, index) => (
-                <li key={index}>
-                  <Skeleton className="aspect-card w-full rounded-xl" />
-                </li>
-              ))}
-            </ul>
-          ) : media.length === 0 && pending.length === 0 && staged.length === 0 ? (
-            <div className="rounded-xl border border-border bg-surface shadow-sm">
-              <EmptyState
-                icon={ImagePlus}
-                title="No gallery images yet"
-                body="Photographs from a previous event. Four or five is plenty."
-              />
-            </div>
-          ) : (
-            <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
-              {media.map((item, index) => (
-                <li key={item.id}>
-                  <MediaTile
-                    media={item}
-                    busy={drop.isPending || reorder.isPending}
-                    onRemove={() => drop.mutate(item.id)}
-                    onMove={(direction) => move(media, index, direction)}
-                    onEditAlt={(altText) => editAlt.mutate({ id: item.id, altText })}
-                    canMoveUp={index > 0}
-                    canMoveDown={index < media.length - 1}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-      </Section>
+      {unzoned.length ? (
+        <Section title="Other images" count={`${unzoned.length}`}>
+          <ul className="grid gap-stack sm:grid-cols-2 xl:grid-cols-3">
+            {unzoned.map((item) => (
+              <li key={item.id}>
+                <MediaTile
+                  media={item}
+                  busy={drop.isPending}
+                  onRemove={() => drop.mutate(item.id)}
+                  onMove={() => undefined}
+                  onEditAlt={(altText) => editAlt.mutate({ id: item.id, altText })}
+                  canMoveUp={false}
+                  canMoveDown={false}
+                />
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
 
       {eventId ? (
         <Section
-          title="Trailer"
+          title="Video"
           count={media.some((item) => item.kind === 'video') ? 'Added' : 'None'}
         >
           <VideoLink eventId={eventId} media={media} />
         </Section>
       ) : null}
 
+    </div>
+  );
+}
+
+/**
+ * A zone's frame: what this picture is for, the shape it has to be, and how
+ * many slots are left.
+ *
+ * The requirement line is not decoration. `EVENT_IMAGE_SPEC` refuses anything
+ * outside 1.5:1–2:1 at 1280x720 or better, and the commonest wrong upload is a
+ * portrait poster somebody spent money on — so the rule is stated at the top of
+ * the zone, before the picker, rather than delivered as a refusal after the
+ * bytes have gone up over a phone connection.
+ *
+ * The count reads "1 of 3" and turns to the muted state at the cap rather than
+ * a red one: being full is a normal state of a finished zone, not a fault.
+ */
+function ZoneFrame({
+  zone,
+  filled,
+  children,
+}: {
+  zone: ImageZone;
+  filled: number;
+  children: React.ReactNode;
+}) {
+  return (
+    // A `Section`, like Cover image beside it — so a finished zone can be
+    // folded away and the step stops being one long scroll now that there are
+    // four of them. The count is on the summary, which means a collapsed zone
+    // still says what is in it.
+    //
+    // `{filled} of {cap}` and, for the gallery, the WORD that separates a rule
+    // from a judgement: 3 is this step's opinion and the API takes 10, so an
+    // organiser who genuinely needs a fourth should be able to tell which of
+    // those they are arguing with.
+    <Section
+      title={zone.title}
+      count={`${filled} of ${zone.uiCap}${zone.capIsGuideline ? ' recommended' : ''}`}
+    >
+      <div className="flex flex-col gap-1">
+        <p className="max-w-prose text-body-sm text-muted-foreground">{zone.purpose}</p>
+        {/* The requirement, BEFORE the picker rather than as a refusal after
+            the bytes have gone up over a phone connection.
+            `EVENT_IMAGE_SPEC` refuses anything outside 1.5:1–2:1 at 1280x720
+            or better, and the commonest wrong upload is a portrait poster
+            somebody has paid a designer for. */}
+        <p className="text-caption text-muted-foreground">
+          Landscape {zone.targetLabel} · {EVENT_IMAGE.recommendedWidth} ×{' '}
+          {EVENT_IMAGE.recommendedHeight} ideal, {EVENT_IMAGE.minWidth} × {EVENT_IMAGE.minHeight}{' '}
+          minimum · JPEG, PNG, WebP, AVIF or GIF up to 10 MB
+        </p>
+      </div>
+      {children}
+    </Section>
+  );
+}
+
+/** A zone's own dropzone. Its own `over` state and its own file input, so two
+ *  zones cannot arm each other and a drop always lands in the zone under the
+ *  cursor rather than in whatever a shared selector last said. */
+function ZoneDropzone({ zone, onFiles }: { zone: ImageZone; onFiles: (files: File[]) => void }) {
+  const [over, setOver] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const many = zone.uiCap > 1;
+
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        onFiles(Array.from(event.dataTransfer.files));
+      }}
+      className={cn(
+        'flex flex-col items-center gap-stack rounded-xl border-2 border-dashed p-card-lg text-center',
+        'transition-colors duration-fast motion-reduce:transition-none',
+        // Armed: the accent edge plus the faintest wash of it. `bg-secondary`
+        // is a neutral grey now, which read as "disabled" rather than "let
+        // go here".
+        over ? 'border-primary bg-primary/5' : 'border-border bg-sunken',
+      )}
+    >
+      <span
+        className="inline-flex size-12 items-center justify-center rounded-full bg-muted"
+        aria-hidden
+      >
+        <ImagePlus className="size-5 text-muted-foreground" />
+      </span>
+      <p className="text-body-sm font-medium">
+        {/* ⌘V is named on the gallery only, because that is where a paste
+            lands — see the paste effect. Promising it on a zone it does not
+            reach would be worse than not mentioning it. */}
+        {many ? 'Drop images here, or paste with ⌘V' : `Drop the ${zone.title.toLowerCase()} here`}
+      </p>
+      <Button variant="outline" onClick={() => inputRef.current?.click()}>
+        {many ? 'Choose files' : 'Choose a file'}
+      </Button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple={many}
+        className="sr-only"
+        aria-label={`Choose ${many ? 'images' : 'an image'} for ${zone.title}`}
+        onChange={(event) => {
+          onFiles(Array.from(event.target.files ?? []));
+          event.target.value = '';
+        }}
+      />
     </div>
   );
 }
@@ -851,6 +1008,7 @@ function MediaTile({
   onEditAlt,
   canMoveUp,
   canMoveDown,
+  showKind = true,
 }: {
   media: EventMedia;
   busy: boolean;
@@ -861,6 +1019,11 @@ function MediaTile({
   onEditAlt: (altText: string) => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  /** Off inside a zone, which is already named after the kind — a "Gallery"
+   *  pill on every tile in a section headed Gallery is ink that says nothing.
+   *  On by default, so the fallback section for an unrecognised kind still
+   *  tells an organiser what they are looking at. */
+  showKind?: boolean;
 }) {
   const [armed, setArmed] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
@@ -907,12 +1070,14 @@ function MediaTile({
             four stacked bands -- image, kind, alt, controls -- for what is one
             photograph, and a gallery of them read as a list of cards rather
             than as a gallery. */}
-        {media.kind !== 'hero' ? (
+        {showKind && media.kind !== 'hero' ? (
           <span className="absolute right-2 top-2 rounded-full bg-overlay/85 px-2 py-0.5 text-caption text-on-gradient backdrop-blur-glass">
-            {KIND_LABEL[media.kind]}
+            {/* A kind the union does not know still names itself, rather than
+                drawing the word "undefined" over somebody's photograph. */}
+            {KIND_LABEL[media.kind] ?? media.kind}
           </span>
         ) : null}
-        {media.kind === 'hero' ? (
+        {showKind && media.kind === 'hero' ? (
           // A scrim pill, not a brand fill: what is behind it is an arbitrary
           // photograph, so the contrast has to come from the scrim. `--overlay`
           // and `--on-gradient` are the two tokens that deliberately do NOT
