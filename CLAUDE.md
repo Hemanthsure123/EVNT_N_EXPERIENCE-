@@ -1847,11 +1847,14 @@ as "checkout is broken on my account" and worked perfectly on any other account,
 which is exactly what it was: one dead row, keyed to one user and one selection.
 
 **The rule, binding on every idempotent write after this one:** a stored key
-replays a result that still EXISTS. `get_replayable_by_idempotency_key` returns
-a booking only if it is `paid` (the tickets are real — a retry must never sell a
-second set) or `reserved` **with a hold that has not passed**. A
-lapsed-but-not-yet-swept `reserved` row is excluded too: the sweeper runs on a
-schedule, and replaying that window hands back the same expired screen.
+replays a result that still EXISTS **and is still the attempt that key was
+minted for**. `get_replayable_by_idempotency_key` returns a booking only if it
+is `paid` **within `BOOKING_IDEMPOTENCY_REPLAY_MINUTES`** (the tickets are real
+— a retry must never sell a second set — but a purchase from an hour ago is a
+finished attempt, not a retry; see the next section) or `reserved` **with a hold
+that has not passed**. A lapsed-but-not-yet-swept `reserved` row is excluded
+too: the sweeper runs on a schedule, and replaying that window hands back the
+same expired screen.
 
 **Declining to replay is only half of it.** `(user, idempotency_key)` is UNIQUE,
 so `release_idempotency_key` detaches the key from any booking that can never
@@ -1872,6 +1875,149 @@ time as well: a pay path guarded only by what is rendered is guarded by nothing.
 The fixture mirrors the replayable rule and honours `MOCK_HOLD_SECONDS`, so this
 branch is executable in seconds rather than being a ten-minute wait per attempt
 — which is precisely why it had never once been run before it shipped.
+
+## ...and a key for a FINISHED attempt does not speak for the next one
+
+The section above bounded the `reserved` arm. The `paid` arm was left unbounded,
+and that was the other half of the same bug — bigger, because it needed no
+expiry to trigger. A PAID booking answered for its key FOR EVER, so BUYING a
+selection made it permanently unbuyable by that account:
+
+1. Buy 5 General tickets. Paid. The key stays on the row.
+2. Choose the same 5 again — the same key.
+3. The lookup returns the SETTLED booking. Nothing is reserved, the checkout
+   shows that old order's total beside the new order's line items, and Pay opens
+   a provider order captured minutes ago — which Razorpay refuses with a generic
+   "something went wrong".
+
+**Elapsed time is the only thing that can separate a retry from a new intent.**
+Idempotency protects a retry of ONE request — a double-tap, a dropped
+connection, a reload mid-submit — and all of those arrive within seconds. A
+deliberate second purchase is a different intent, and the server cannot tell them
+apart from the key alone. Hence `BOOKING_IDEMPOTENCY_REPLAY_MINUTES` (15):
+longer than any real retry, far shorter than "somebody decided to buy more".
+
+**The lookup and the release share ONE predicate** (`_replayable_q`). They were
+two hand-written copies of the same `Q`, and a divergence between them is
+silent: the lookup declines a row, the release keeps the key on it, and the retry
+collides with the very row the lookup ignored. Bounding one and forgetting the
+other makes the fix unreachable while looking exactly like no fix at all.
+
+**The client scopes the key per checkout ATTEMPT** (`lib/booking/attempt.ts`),
+and this is NOT the nonce the section above forbids. The attempt number is stable
+for as long as one checkout is in progress — held in `sessionStorage`, keyed by
+event + selection — so a double-tap, a reload and a dropped request all still
+resolve to one booking. It moves only when an attempt has ENDED. Every protection
+the derived key was written for is intact; what changes is that a finished
+attempt stops speaking for the next one.
+
+**Back-after-paying and buy-again produce the identical URL**, and nothing in the
+client can tell them apart — history direction is not reliable, and both wrong
+guesses do real harm. Redirecting to the confirmation strands somebody who came
+to buy again; silently reserving takes stock off sale for somebody who has just
+bought. So the screen SAYS what happened and offers both. One press, and it
+cannot be the wrong one.
+
+## A hold exists only while the review screen is open
+
+The invariant that makes a class of bug impossible rather than merely fixed. It
+is not a new rule — it is the one the funnel already states by reserving on the
+review step rather than the picker, "because holding stock while someone is still
+browsing tiers would take tickets off sale for people who are ready to buy". A
+hold that lingers BEHIND the customer is that same harm, arrived at from the
+other direction.
+
+**What it fixes, measured on the deployed site.** Changing the quantity left the
+booking one step behind on every edit. The fee is what gives it away, because it
+is 1% of the subtotal the LOCK settled on:
+
+    selection 5 -> lines 1,995, fee 7.98   (1% of 798)
+    selection 6 -> lines 2,394, fee 19.95  (1% of 1,995 — the PREVIOUS one)
+    selection 3 -> lines 1,197, fee 23.94  (1% of 2,394 — the PREVIOUS one)
+
+The line items followed the current selection while the fee and the total
+followed the previous booking. Three changes, and all three were needed:
+
+- **The picker releases any hold it finds on arrival.** Not an unmount hook —
+  cancelling on unmount is forbidden here, because the review screen's
+  `router.replace` guards for an anonymous visitor and an empty selection would
+  then silently cancel bookings on paths that were never somebody leaving. This
+  runs on MOUNT of the screen where a hold is wrong, which is a fact about the
+  screen rather than a guess about why it rendered.
+- **The stale guard no longer depends on a payload shape.** It compared
+  `booking.items` against the selection, and `POST /bookings` returned the
+  SUMMARY serializer, which carries none — so it evaluated false for every
+  booking that ever existed. The booking and the selection signature it was
+  reserved FOR are now ONE fused piece of state (`reservation` in
+  `booking-context.tsx`), because two setters is how they drift apart. The
+  endpoint returns its items as well, but a guard a serializer change can switch
+  off is not a guard.
+- **The summary is derived from one row.** Once a booking exists the order amount
+  is `total_amount − platform_fee − donation` rather than a second sum over the
+  selection, so three numbers that come from one row cannot fail to add up
+  however the lock priced them.
+
+**Expiry cancels rather than only swapping the screen.** The seats used to stay
+counted against `TicketType.reserved` until `release_expired_bookings` next ran —
+a scheduled job, every 60 seconds — so for up to a minute the customer's own dead
+hold competed with their retry and came back `sold_out` for tickets nobody had
+taken. The sweeper is still the backstop; this is the fast path. The screen still
+WAITS for a press rather than navigating on a timer (somebody may be mid-edit,
+and a checkout that moves on its own is indistinguishable from a crash), but
+there is nothing stale left behind the press. `HoldTimer` is keyed on the
+deadline, so a new hold can never inherit a timer that already fired.
+
+**Pay is blocked while a donation write is in flight.** Choosing a donation
+re-issues the payment order; between the press and the response the order id and
+the total on screen are the old ones, so a Pay in that window opens the provider
+against a superseded order. The donation row already disabled itself. The button
+that spends the money did not, which is the wrong half.
+
+**The fixture had no cancel endpoint at all**, and that is what hid all of it.
+`cancelBooking` is called on four paths and every one is `.catch(() =>
+undefined)`, because a 409 legitimately means the sweeper won — so against the
+fixture all four 404'd and were swallowed. No cancel had ever worked in local
+dev. A fixture must be exactly as generous as the contract and no more; one that
+is silently LESS generous hides the behaviour it was built to exercise.
+
+## The account's money-path screens share one vocabulary (`components/ticketing/`)
+
+Buying a ticket spans five surfaces — choose, review, pay, confirm, then live
+with it in purchase history, a refund, or a failed payment to retry. They were
+built at different times and each grew its own card recipe, status pill and
+price-breakdown layout, so a person walking that path saw four products.
+Everything shared now lives in `components/ticketing/`, so the confirmation's
+bill, the failed-payment order card and the refund's breakdown are literally the
+same component rather than three that look alike this week.
+
+**`GET /me/bookings` is the purchase history, and `/me/tickets` is not.** The
+account screen read the tickets endpoint, which returns ACTIVE tickets only — so
+its "Used" and "Refunded" filters could only ever count zero, and a booking whose
+payment failed had NO REPRESENTATION anywhere the customer could reach, which is
+precisely the case somebody most urgently opens their account to look at. The new
+endpoint returns every booking in every state with the event joined: 3 flat
+queries, ticket states aggregated in Postgres, never in Python.
+
+**Two surfaces are dark in BOTH themes** — the issued ticket and the pass card.
+They are objects rather than pages, and an object does not invert when the reader
+flips a theme toggle. Their colours come from the theme-INDEPENDENT `ink` ramp; a
+semantic token would swap places and vanish on one of them. (The QR itself is
+dark-on-light for a different reason: a camera needs it that way.)
+
+**What the reference designs showed and this platform cannot back**, each omitted
+rather than approximated: seat numbers (no seat map — `venues` is a deferred
+module), a downloadable invoice (the receipt is EMAILED as a PDF, which is what
+the control now says), a rewards block (no loyalty model exists anywhere), "100%
+genuine" and a live concierge dot (nothing measures either), and the payment
+instrument on a refund (`Payment` stores reference ids and an amount — no method,
+network, last-4 or VPA).
+
+**The refund trail's final step is `unknowable`, on purpose.** Razorpay has no
+bank-credit webhook, `reconcile_pending` polls only for CAPTURES, and no bank
+tells a merchant when a credit landed. The step is drawn with an open marker and
+no timestamp. A tick with an invented time there is the single most damaging
+thing that screen could do: somebody whose money has not arrived would read that
+it had, and stop chasing it.
 
 ## A saved list may only show what the catalogue still shows
 
