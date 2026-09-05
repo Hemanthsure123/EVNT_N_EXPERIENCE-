@@ -53,6 +53,7 @@ export function ReviewStep({
   saveState,
   saveError,
   onSaveNow,
+  eventStatus,
 }: {
   draft: Draft;
   issues: Issue[];
@@ -75,7 +76,21 @@ export function ReviewStep({
   /** Flushes the autosave immediately — the way out of "unsaved" that does not
    *  require going back and making an edit. */
   onSaveNow: () => void;
+  /**
+   * The server's status, when an EXISTING event is being edited.
+   *
+   * Undefined while creating, which is the only time this step's original
+   * assumption held: that the event has never been submitted. The backend
+   * accepts a submission only from `draft` or `rejected` and answers anything
+   * else with `InvalidEventStateError`, so without this the editor offered a
+   * live event a Submit button whose entire job was to fail — the same thing
+   * the sessions editor refuses to do with its Delete.
+   */
+  eventStatus?: string;
 }) {
+  // Submitting is only a real action from these two states; everywhere else
+  // the event is already past this step and editing is all there is to do.
+  const submittable = eventStatus === undefined || eventStatus === 'draft' || eventStatus === 'rejected';
   const blockers = publishBlockers(draft, organizations);
   const publishFailure = publishError ? describePublishFailure(publishError) : null;
   const organization = organizations?.find((entry) => entry.id === draft.organizationId);
@@ -160,9 +175,11 @@ export function ReviewStep({
           chrome. */}
       <header className="flex flex-col items-start gap-1.5">
         <SpotTicketIssued className="size-20" />
-        <h1 className="text-h3">Review and publish</h1>
+        <h1 className="text-h3">{submittable ? 'Review and publish' : 'Review'}</h1>
         <p className="max-w-prose text-body-sm text-muted-foreground">
-          You can keep editing after it is published.
+          {submittable
+            ? 'You can keep editing after it is published.'
+            : 'Changes save as you make them. This event has already been submitted, so there is nothing to send.'}
         </p>
       </header>
 
@@ -341,26 +358,39 @@ export function ReviewStep({
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-stack">
-        {/* `disabled` is passed explicitly rather than left to `loading`:
-            Button resolves `disabled ?? loading`, so an explicit `false` would
-            WIN over a true `loading` and leave the button pressable mid-submit
-            — a second POST on the publish path. */}
-        <Button
-          size="lg"
-          onClick={onPublish}
-          disabled={!ready || publishing}
-          loading={publishing}
-          leftIcon={<Rocket className="size-4" aria-hidden />}
-        >
-          {publishing ? 'Submitting…' : 'Submit for approval'}
-        </Button>
+      {/* ── NO SUBMIT ON AN EVENT THAT IS PAST IT ────────────────────────
+          The server takes a submission only from `draft` or `rejected`. A
+          button offered here on a live event would be refused every time, and
+          a control whose job is to fail is worse than no control: it reads as
+          the editor not knowing what state the event is in. The checklist
+          above still renders, because "is this event actually ready" is a
+          useful question long after it went on sale. */}
+      {submittable ? (
+        <div className="flex flex-wrap items-center gap-stack">
+          {/* `disabled` is passed explicitly rather than left to `loading`:
+              Button resolves `disabled ?? loading`, so an explicit `false` would
+              WIN over a true `loading` and leave the button pressable mid-submit
+              — a second POST on the publish path. */}
+          <Button
+            size="lg"
+            onClick={onPublish}
+            disabled={!ready || publishing}
+            loading={publishing}
+            leftIcon={<Rocket className="size-4" aria-hidden />}
+          >
+            {publishing ? 'Submitting…' : 'Submit for approval'}
+          </Button>
+          <p className="text-caption text-muted-foreground">
+            {draft.eventId
+              ? 'Your draft is already saved. Submitting only puts it in the review queue.'
+              : 'Fill in the required fields and the draft saves itself.'}
+          </p>
+        </div>
+      ) : (
         <p className="text-caption text-muted-foreground">
-          {draft.eventId
-            ? 'Your draft is already saved. Submitting only puts it in the review queue.'
-            : 'Fill in the required fields and the draft saves itself.'}
+          Every change here is saved automatically and is live straight away.
         </p>
-      </div>
+      )}
     </div>
   );
 }

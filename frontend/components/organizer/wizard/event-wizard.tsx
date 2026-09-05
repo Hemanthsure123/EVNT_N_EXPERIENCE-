@@ -482,6 +482,7 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
                 saveState={wizard.state}
                 saveError={wizard.error}
                 onSaveNow={() => void wizard.saveNow()}
+                eventStatus={eventQuery.data?.status}
               />
             )}
 
