@@ -4,7 +4,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import { OpenEventLink } from '@/components/event/open-event-link';
 import { useQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { Star, X } from 'lucide-react';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { fetchPendingReviews, type PendingReview } from '@/lib/api/reviews';
 import { Modal, ModalContent } from '@/components/ui/modal';
@@ -167,59 +167,92 @@ export function PendingReviewCard({ className }: { className?: string }) {
   const [openId, setOpenId] = React.useState<string | null>(null);
   const pending = data?.data ?? [];
 
+  const uniquePending = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: PendingReview[] = [];
+    for (const item of pending) {
+      if (!seen.has(item.event_id)) {
+        seen.add(item.event_id);
+        list.push(item);
+      }
+    }
+    return list;
+  }, [pending]);
+
   // No skeleton and no empty state: an absent section is correct when there is
   // nothing to review, and a placeholder for a thing most people never have is
   // clutter on the page they came to for their tickets.
-  if (isPending || pending.length === 0) return null;
+  if (isPending || uniquePending.length === 0) return null;
 
   return (
     <section
-      className={cn('flex flex-col gap-stack', className)}
-      aria-label="Events you can review"
+      className={cn('flex flex-col gap-3 rounded-2xl border border-border/80 bg-surface/50 p-4', className)}
+      aria-label="Rate your recent experiences"
     >
-      <h2 className="text-body font-semibold text-foreground">
-        {pending.length === 1 ? 'Rate the event you went to' : 'Rate the events you went to'}
-      </h2>
-      <ul className="flex flex-col gap-3">
-        {pending.map((row) => (
-          <li key={row.event_id}>
-            <article className="flex flex-col gap-stack rounded-2xl border border-border bg-surface p-card">
-              <div className="flex items-start gap-3">
-                <EventThumb event={row} />
-                <div className="min-w-0 flex-1">
-                  {/* Opens the WIDGET on a phone. This was a hard link to
-                      `/events/{uuid}`, so tapping an event you had just been
-                      to dropped you out of the app-shaped experience and onto
-                      the standalone page — the one surface the mobile flow is
-                      not supposed to reach. */}
-                  <OpenEventLink
-                    event={{ id: row.event_id, title: row.title, poster_url: row.poster_url ?? '' }}
-                    className="block truncate text-body font-semibold underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {row.title}
-                  </OpenEventLink>
-                  <p className="truncate text-caption text-muted-foreground">
-                    {formatAttended(row.ended_at)} · {row.venue}, {row.city}
-                  </p>
-                </div>
-                {openId !== row.event_id ? (
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex size-6 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <Star className="size-3.5 fill-amber-500 text-amber-500" />
+          </span>
+          <h2 className="text-body font-bold text-foreground">
+            Rate your recent experiences
+          </h2>
+        </div>
+        <p className="pl-8 text-caption text-muted-foreground">
+          Help fellow attendees by sharing how your event went.
+        </p>
+      </div>
+
+      <ul className="flex flex-col gap-2.5 pt-1">
+        {uniquePending.map((row) => {
+          const isOpen = openId === row.event_id;
+          return (
+            <li key={row.event_id}>
+              <article className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-3.5 shadow-sm transition-all">
+                <div className="flex items-center gap-3">
+                  <EventThumb event={row} />
+                  <div className="min-w-0 flex-1">
+                    <OpenEventLink
+                      event={{ id: row.event_id, title: row.title, poster_url: row.poster_url ?? '' }}
+                      className="block truncate text-body-sm font-semibold text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {row.title}
+                    </OpenEventLink>
+                    <p className="mt-0.5 truncate text-caption text-muted-foreground">
+                      {formatAttended(row.ended_at)} · {row.venue}, {row.city}
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setOpenId(row.event_id)}
-                    className="inline-flex h-9 shrink-0 items-center rounded-full border border-border px-4 text-label text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => setOpenId(isOpen ? null : row.event_id)}
+                    className={cn(
+                      'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-caption font-medium transition-colors duration-fast',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      isOpen
+                        ? 'bg-muted text-muted-foreground hover:bg-muted/80'
+                        : 'bg-primary text-primary-foreground hover:bg-primary-hover shadow-sm',
+                    )}
                   >
-                    Rate it
+                    <Star className="size-3.5" />
+                    {isOpen ? 'Close' : 'Rate'}
                   </button>
+                </div>
+
+                {isOpen ? (
+                  <div className="border-t border-border pt-3">
+                    <ReviewForm
+                      eventId={row.event_id}
+                      onDone={() => {
+                        setOpenId(null);
+                        dismiss(row.event_id);
+                      }}
+                    />
+                  </div>
                 ) : null}
-              </div>
-              {/* Progressive disclosure: the form appears where it was asked
-                  for rather than on a page somebody has to navigate to. */}
-              {openId === row.event_id ? (
-                <ReviewForm eventId={row.event_id} className="border-t border-border pt-stack" />
-              ) : null}
-            </article>
-          </li>
-        ))}
+              </article>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

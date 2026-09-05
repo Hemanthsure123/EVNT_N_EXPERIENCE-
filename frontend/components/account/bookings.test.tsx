@@ -1,5 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/components/ui/toast';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -158,7 +157,7 @@ describe('MyBookings', () => {
     const label = (name: RegExp) => tabs.find((tab) => name.test(tab.textContent ?? ''));
     expect(label(/^All/)?.textContent).toContain('3');
     expect(label(/^Upcoming/)?.textContent).toContain('1');
-    expect(label(/^Finished/)?.textContent).toContain('1');
+    expect(label(/^Past/)?.textContent).toContain('1');
     expect(label(/^Unpaid/)?.textContent).toContain('1');
   });
 
@@ -235,35 +234,15 @@ describe('MyBookings', () => {
     );
   });
 
-  it('opens the codes, closes, and OPENS AGAIN', async () => {
-    // The regression `tickets.test.tsx` was written for: `open` was derived
-    // from an index (`startAt >= 0`) with the parent passing 0 for "nothing
-    // selected", so closing set the state that reopened it and the drawer
-    // could not be dismissed at all.
+  it('links View ticket to the confirmation page', async () => {
     harness.bookings = [bookingRow()];
-    harness.tickets = [
-      {
-        id: 'tk1',
-        booking_id: bookingRow().id,
-        event_title: 'Headline Show',
-        ticket_type_name: 'Gold',
-        status: 'active',
-        qr_token: 'v1.abc.def',
-      },
-    ];
-    const user = userEvent.setup();
-
     view();
 
-    await user.click(await screen.findByRole('button', { name: /View ticket/ }));
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByTestId('qr')).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: /View ticket/ }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    const link = await screen.findByRole('link', { name: /View .*ticket/i });
+    expect(link).toHaveAttribute(
+      'href',
+      `/booking/${bookingRow().event_id}/confirmation?booking=${bookingRow().id}`,
+    );
   });
 
   it('never offers a refund on a booking that already has a request', async () => {

@@ -209,28 +209,18 @@ export function ReviewStep() {
           idempotencyKeyFor(event.id, selection, attemptFor(event.id, selection)),
         );
 
-        // ── ALREADY PAID FOR ────────────────────────────────────────────
+        // ── PREVIOUS PURCHASE DETECTED ──────────────────────────────────
         //
-        // The key replayed a SETTLED booking, and this screen used to render it
-        // as if it were a live hold: a stale total, no countdown (a paid
-        // booking has no hold to count), and a Pay button that opened the
-        // provider against an order captured minutes earlier — which it refuses
-        // with a generic "something went wrong".
-        //
-        // AND IT ASKS, RATHER THAN GUESSING. Two people reach this line by the
-        // same URL and want opposite things: one pressed Back after paying, the
-        // other came deliberately to buy the same tickets again. Nothing in the
-        // client can tell them apart — history direction is not reliable — and
-        // both wrong guesses do real harm. Redirecting to the confirmation
-        // strands the second person on exactly the dead end this fix is about;
-        // silently reserving again takes stock off sale for somebody who has
-        // just bought.
-        //
-        // So it says what happened and offers both. One press, and it cannot be
-        // wrong. Same state-swap shape the expired hold uses, so there is one
-        // language for "this screen cannot proceed as it stands".
+        // If the server answered with an already-settled booking, this key
+        // spoke for an earlier completed purchase. Never block with
+        // "You already have these tickets" — bump the attempt to generate a
+        // new idempotency key and immediately reserve a brand new booking.
         if (result.booking.status === 'paid') {
-          setAlreadyPaid(result.booking);
+          bumpAttempt(event.id, selection);
+          attempted.current = false;
+          setBooking(null);
+          setReserving(false);
+          setReserveNonce((n) => n + 1);
           return;
         }
 
@@ -355,98 +345,23 @@ export function ReviewStep() {
    * all land the same way: change the screen, wait for a press.
    */
   const [holdExpired, setHoldExpired] = React.useState(false);
-  /** A SETTLED booking came back from the reserve — see the note in the effect.
-   *  Held rather than acted on, because only the reader knows which of two
-   *  opposite things they meant by arriving here. */
-  const [alreadyPaid, setAlreadyPaid] = React.useState<Booking | null>(null);
   /**
    * The hold ran out. RELEASE IT, then swap the screen.
-   *
-   * ── IT USED TO ONLY SWAP THE SCREEN ─────────────────────────────────────
-   *
-   * The seats stayed counted against `TicketType.reserved` by a booking nobody
-   * could pay for until `booking.release_expired` next ran — a SCHEDULED job,
-   * every 60 seconds. So for up to a minute the customer's own dead hold
-   * competed with their retry, and on a tight tier "Try again" came back
-   * `sold_out` for tickets no one else had taken.
-   *
-   * Cancelling here closes that window from the client's side. The sweeper is
-   * still the backstop and still correct — this is the fast path, and a 409
-   * from it just means the sweeper won, which is the outcome we wanted.
-   *
-   * ── AND THE STATE GOES WITH IT ──────────────────────────────────────────
-   *
-   * `setBooking(null)` is what makes a rebook genuinely fresh: no total, no
-   * fee, no deadline and no order id survive into the next attempt. The screen
-   * still WAITS for a press rather than navigating on a timer — somebody may be
-   * mid-edit, and a checkout that moves on its own is indistinguishable from a
-   * crash — but there is nothing stale left behind the press.
    */
   const expireHold = React.useCallback(() => {
     const dead = booking;
+    bumpAttempt(event.id, selection);
     setHoldExpired(true);
     setOptimisticDonation(null);
     setBooking(null);
     if (dead) void cancelBooking(dead.id).catch(() => undefined);
-  }, [booking, setBooking]);
-  /** Buy them again: end the attempt that was paid for, and re-arm the reserve
-   *  so the effect runs with a key that speaks for the NEW purchase. */
-  const buyAgain = React.useCallback(() => {
-    bumpAttempt(event.id, selection);
-    retried.current = false;
-    attempted.current = false;
-    setAlreadyPaid(null);
-    setBooking(null);
-    // THIS is what re-runs the reserve, and it is not ceremony. `booking` is
-    // ALREADY null on this path (a settled replay is never put into context),
-    // so `setBooking(null)` is a no-op React bails out of: nothing in the
-    // effect's dependency array changes and it never fires again. The button
-    // did nothing at all. Measured, not reasoned about.
-    //
-    // `retryHold` gets away without a nonce only because it always runs with a
-    // non-null booking, which is a coincidence of that path rather than a rule.
-    setReserveNonce((n) => n + 1);
-  }, [event.id, selection, setBooking]);
-  /**
-   * Try the SAME tickets again, without leaving the screen.
-   *
-   * A hold running out is not a mistake anybody made, so the recovery should
-   * not read like a punishment: bouncing to the picker means re-reading a tier
-   * list and re-entering a quantity somebody had already decided on, to arrive
-   * back exactly where they were. One press re-reserves what they already
-   * chose and the screen carries on.
-   *
-   * Safe to reuse the derived `Idempotency-Key` because the backend now
-   * declines to replay a booking that has ended and frees the key for the
-   * retry — see `get_replayable_by_idempotency_key`. Before that fix this
-   * press would have returned the same expired booking, which is the whole
-   * reason the screen was a dead end.
-   *
-   * If the tiers really are gone, `error` takes over with the picker link —
-   * so the honest outcome is still reachable, it is just no longer the FIRST
-   * thing offered for a situation that is usually recoverable.
-   *
-   * ── IT CANCELS FIRST, AND THAT IS THE WHOLE POINT ─────────────────────
-   *
-   * The expired booking is still holding the seats. `booking.release_expired`
-   * is a SCHEDULED job (every 60s), so between the screen declaring the hold
-   * dead and the sweeper agreeing there is up to a minute in which the tickets
-   * are counted against `TicketType.reserved` by a booking nobody can pay for.
-   *
-   * Re-reserving inside that window competed with the customer's OWN lapsed
-   * hold, and on a tight tier came back `sold_out` for tickets no one else had
-   * taken — the "it shows an error and I cannot book again" report, exactly.
-   *
-   * `cancel_booking` refuses on status alone and never looks at the deadline
-   * (services.py:511), so a lapsed-but-unswept hold cancels cleanly. Failures
-   * here are SWALLOWED on purpose: if the sweeper got there first the cancel is
-   * a 409, which means the inventory is already free, which is the outcome the
-   * call was for. Blocking the retry on it would turn a success into an error.
-   */
+  }, [booking, event.id, selection, setBooking]);
+
   const [retrying, setRetrying] = React.useState(false);
   const retryHold = React.useCallback(() => {
     const dead = booking;
     setRetrying(true);
+    bumpAttempt(event.id, selection);
     void (async () => {
       if (dead) await cancelBooking(dead.id).catch(() => undefined);
       setHoldExpired(false);
@@ -454,9 +369,10 @@ export function ReviewStep() {
       setOptimisticDonation(null);
       attempted.current = false;
       setBooking(null);
+      setReserveNonce((n) => n + 1);
       setRetrying(false);
     })();
-  }, [booking, setBooking]);
+  }, [booking, event.id, selection, setBooking]);
   const [donationPending, setDonationPending] = React.useState(false);
   const [donationError, setDonationError] = React.useState<string | null>(null);
   const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
@@ -581,46 +497,6 @@ export function ReviewStep() {
     );
   }
 
-  if (alreadyPaid) {
-    return (
-      <FunnelScreen title="Review your booking">
-        <StepTransition
-          stepKey="review-already-paid"
-          className="flex flex-1 flex-col items-center justify-center gap-stack-lg px-2 py-10 text-center"
-        >
-          {/* SUCCESS ink, not alarm. Nothing went wrong here — the tickets are
-              bought, and the only open question is which of two things the
-              reader came to do. */}
-          <span
-            aria-hidden
-            className="inline-flex size-16 items-center justify-center rounded-full bg-success-subtle text-success-subtle-foreground"
-          >
-            <Ticket className="size-7" />
-          </span>
-          <div className="flex flex-col gap-2">
-            <h2 className="text-h3 text-foreground">You already have these tickets</h2>
-            <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">
-              This order was paid for and the tickets are issued. Open them, or buy the same
-              tickets again as a separate booking.
-            </p>
-          </div>
-          <div className="flex w-full max-w-sm flex-col gap-2">
-            <Button asChild size="lg" className={CTA_PILL_LG}>
-              <Link
-                href={`/booking/${event.id}/confirmation?booking=${encodeURIComponent(alreadyPaid.id)}`}
-              >
-                View my tickets
-              </Link>
-            </Button>
-            <Button variant="outline" size="lg" className="w-full" onClick={buyAgain}>
-              Buy these again
-            </Button>
-          </div>
-        </StepTransition>
-      </FunnelScreen>
-    );
-  }
-
   if (holdExpired) {
     return (
       <FunnelScreen title="Review your booking">
@@ -666,12 +542,9 @@ export function ReviewStep() {
                 'Get these tickets again'
               )}
             </Button>
-            {/* The way out, kept — but secondary. It carries the selection, so
-                the picker reopens on the same tiers rather than making
-                somebody start from an empty list after already losing a hold
-                they did nothing wrong to lose. */}
+            {/* The way out: starts completely fresh with an empty cart. */}
             <Button asChild variant="ghost" size="lg" className="w-full">
-              <Link href={pickerHref}>Choose different tickets</Link>
+              <Link href={`/booking/${event.id}`}>Choose different tickets</Link>
             </Button>
           </div>
         </StepTransition>

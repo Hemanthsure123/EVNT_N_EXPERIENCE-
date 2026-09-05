@@ -16,12 +16,10 @@ import {
   QrCode,
   Send,
   Ticket as TicketIcon,
-  TriangleAlert,
 } from 'lucide-react';
-import { api } from '@/lib/api/client';
 import { cursorFromNextLink } from '@/lib/api/events';
 import { fetchMyBookings } from '@/lib/api/bookings';
-import type { MyBooking, Paginated } from '@/lib/api/types';
+import type { MyBooking } from '@/lib/api/types';
 import { fetchMyRefundRequests, type RefundRequest } from '@/lib/api/refund-requests';
 import { formatMoney } from '@/lib/discovery/format';
 import {
@@ -31,6 +29,7 @@ import {
   eventEndsAt,
   holdIsLive,
   refundSettled,
+  sortDecoratedBookings,
   type BookingState,
   type StateFilter,
 } from '@/lib/ticketing/booking-state';
@@ -47,7 +46,6 @@ import {
   SurfaceCard,
   type TicketingTone,
 } from '@/components/ticketing/primitives';
-import { TicketSheet, type SheetTicket } from '@/components/ticketing/ticket-sheet';
 import { RefundRequestDialog, type RefundTarget } from './refund-request';
 import { ShareReceiptDialog } from './share-receipt';
 import { cn } from '@/lib/utils/cn';
@@ -98,16 +96,6 @@ import { cn } from '@/lib/utils/cn';
 
 /** The signed codes. Only ACTIVE tickets exist here — a used or refunded
  *  ticket has no code to present. */
-type WalletTicket = {
-  id: string;
-  booking_id: string;
-  event_title: string;
-  ticket_type_name: string;
-  status: 'active' | 'used' | 'void';
-  qr_token: string;
-  attendee_name?: string;
-};
-
 const TONE: Record<BookingState, TicketingTone> = {
   upcoming: 'pass',
   finished: 'finished',
@@ -124,7 +112,6 @@ const STATE_LABEL: Record<BookingState, string> = {
 
 export function MyBookings() {
   const [filter, setFilter] = React.useState<StateFilter>('all');
-  const [showing, setShowing] = React.useState<SheetTicket[] | null>(null);
   const [sharing, setSharing] = React.useState<MyBooking | null>(null);
   const [refunding, setRefunding] = React.useState<RefundTarget | null>(null);
 
@@ -150,13 +137,6 @@ export function MyBookings() {
     refetchOnWindowFocus: true,
   });
 
-  const wallet = useQuery({
-    queryKey: ['account', 'tickets'],
-    queryFn: () => api.get<Paginated<WalletTicket>>('/me/tickets'),
-    staleTime: 0,
-    refetchOnWindowFocus: true,
-  });
-
   // One request per booking is a backend invariant (a partial unique index), so
   // a flat map by booking id cannot lose one.
   const requests = useQuery({
@@ -175,17 +155,6 @@ export function MyBookings() {
     for (const row of requests.data?.data ?? []) map.set(row.booking_id, row);
     return map;
   }, [requests.data]);
-
-  const codesByBooking = React.useMemo(() => {
-    const map = new Map<string, SheetTicket[]>();
-    for (const ticket of wallet.data?.data ?? []) {
-      if (ticket.status !== 'active') continue;
-      const list = map.get(ticket.booking_id) ?? [];
-      list.push(ticket);
-      map.set(ticket.booking_id, list);
-    }
-    return map;
-  }, [wallet.data]);
 
   const decorated = React.useMemo(
     () =>
@@ -209,7 +178,15 @@ export function MyBookings() {
     return map;
   }, [decorated]);
 
-  const visible = filter === 'all' ? decorated : decorated.filter((row) => row.state === filter);
+  const subset = React.useMemo(
+    () => (filter === 'all' ? decorated : decorated.filter((row) => row.state === filter)),
+    [decorated, filter],
+  );
+
+  const visible = React.useMemo(
+    () => sortDecoratedBookings(subset, filter, now),
+    [subset, filter, now],
+  );
 
   /**
    * The banner: the soonest live pass, and nothing else.
@@ -232,13 +209,11 @@ export function MyBookings() {
   return (
     <div className="flex flex-col gap-5">
       {nextUp ? (
-        <button
-          type="button"
-          onClick={() => setShowing(codesByBooking.get(nextUp.booking.id) ?? null)}
-          disabled={!codesByBooking.get(nextUp.booking.id)?.length}
+        <Link
+          href={`/booking/${nextUp.booking.event_id}/confirmation?booking=${nextUp.booking.id}`}
           className={cn(
             'group flex w-full items-center gap-3 rounded-2xl bg-primary/10 px-4 py-3 text-left',
-            'transition-colors duration-fast hover:bg-primary/15 disabled:cursor-default disabled:opacity-70',
+            'transition-colors duration-fast hover:bg-primary/15',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             'motion-reduce:transition-none',
           )}
@@ -254,7 +229,7 @@ export function MyBookings() {
             className="size-4 shrink-0 text-primary transition-transform duration-fast group-hover:translate-x-0.5 motion-reduce:transform-none"
             aria-hidden
           />
-        </button>
+        </Link>
       ) : null}
 
       <header className="flex flex-col gap-1.5">
@@ -276,7 +251,7 @@ export function MyBookings() {
         </p>
       </header>
 
-      <PendingReviewCard />
+      {filter === 'all' || filter === 'finished' ? <PendingReviewCard /> : null}
 
       {/* ── ONE LINE THAT SCROLLS, NOT TWO THAT WRAP ──────────────────────
           Five chips wrap to two rows on a phone, which costs a full card of
@@ -344,11 +319,31 @@ export function MyBookings() {
         <div className="rounded-2xl border border-border bg-surface">
           <EmptyState
             icon={TicketIcon}
-            title={decorated.length ? 'Nothing in this view' : 'No bookings yet'}
+            title={
+              decorated.length === 0
+                ? 'No bookings yet'
+                : filter === 'upcoming'
+                  ? 'No upcoming bookings'
+                  : filter === 'unpaid'
+                    ? 'No unpaid bookings'
+                    : filter === 'finished'
+                      ? 'No past bookings'
+                      : filter === 'refunded'
+                        ? 'No cancelled bookings'
+                        : 'Nothing in this view'
+            }
             body={
-              decorated.length
-                ? 'Try another filter — your other bookings are still here.'
-                : 'Anything you book appears here, paid or not.'
+              decorated.length === 0
+                ? 'Anything you book appears here, paid or not.'
+                : filter === 'upcoming'
+                  ? 'When you book tickets for future events, they will appear here.'
+                  : filter === 'unpaid'
+                    ? 'You have no pending payments or held tickets.'
+                    : filter === 'finished'
+                      ? 'Events you have attended will be listed here.'
+                      : filter === 'refunded'
+                        ? 'Cancelled or refunded bookings will appear here.'
+                        : 'Try another filter — your other bookings are still here.'
             }
             action={
               decorated.length ? undefined : (
@@ -371,8 +366,6 @@ export function MyBookings() {
                 request={request}
                 state={state}
                 now={now}
-                codes={codesByBooking.get(booking.id) ?? []}
-                onShowCodes={() => setShowing(codesByBooking.get(booking.id) ?? [])}
                 onShare={() => setSharing(booking)}
                 onRequestRefund={() =>
                   setRefunding({
@@ -433,11 +426,6 @@ export function MyBookings() {
           of the system a reader could go and confirm. */}
       <TrustStrip marks={WALLET_TRUST} />
 
-      <TicketSheet
-        open={showing !== null && showing.length > 0}
-        tickets={showing ?? []}
-        onClose={() => setShowing(null)}
-      />
       <RefundRequestDialog target={refunding} onClose={() => setRefunding(null)} />
       <ShareReceiptDialog
         target={
@@ -462,8 +450,6 @@ function BookingCard({
   request,
   state,
   now,
-  codes,
-  onShowCodes,
   onShare,
   onRequestRefund,
 }: {
@@ -471,8 +457,6 @@ function BookingCard({
   request: RefundRequest | undefined;
   state: BookingState;
   now: number;
-  codes: SheetTicket[];
-  onShowCodes: () => void;
   onShare: () => void;
   onRequestRefund: () => void;
 }) {
@@ -482,30 +466,31 @@ function BookingCard({
   const tierLabel = tiers.length === 1 ? tiers[0] : tiers.length ? `${tiers.length} tiers` : null;
 
   return (
-    <SurfaceCard as="article" rail={state === 'unpaid' ? 'danger' : undefined} className="p-4">
+    <SurfaceCard as="article" className="p-4">
       {/* ── THE STATUS ROW ────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <StatusChip
-            tone={TONE[state]}
-            dot={state === 'upcoming'}
-            icon={
-              state === 'refunded'
-                ? Check
-                : state === 'unpaid'
-                  ? TriangleAlert
-                  : state === 'finished'
-                    ? Check
-                    : undefined
-            }
-          >
-            {STATE_LABEL[state]}
-          </StatusChip>
           {state === 'upcoming' ? (
-            <StatusChip tone="confirmed" icon={Check}>
-              Confirmed
+            <StatusChip tone="pass" dot>
+              Upcoming pass · Confirmed
             </StatusChip>
-          ) : null}
+          ) : (
+            <StatusChip
+              tone={TONE[state]}
+              dot={false}
+              icon={
+                state === 'refunded'
+                  ? Check
+                  : state === 'unpaid'
+                    ? Clock3
+                    : state === 'finished'
+                      ? Check
+                      : undefined
+              }
+            >
+              {STATE_LABEL[state]}
+            </StatusChip>
+          )}
           {/* A live hold IS a countdown, and it is the only number on this
               card that changes while you look at it. */}
           {state === 'unpaid' && live ? (
@@ -573,19 +558,19 @@ function BookingCard({
       <div className="mt-3.5 flex flex-wrap items-center gap-2">
         {state === 'upcoming' ? (
           <>
-            <button
-              type="button"
-              onClick={onShowCodes}
-              disabled={codes.length === 0}
+            <Link
+              href={`/booking/${booking.event_id}/confirmation?booking=${booking.id}`}
               /* `whitespace-nowrap` and a basis floor. As a bare `flex-1` in a
                  wrapping row the pill shrank instead of letting the tertiary
                  "Request refund" wrap below it, so at 360px the primary action
                  on this screen read "View / ticket" over two lines. */
-              className="inline-flex h-control flex-1 basis-40 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-cta px-pill text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className="inline-flex h-control flex-1 basis-40 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-cta px-pill text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
               <QrCode className="size-4" aria-hidden />
-              {codes.length > 1 ? `View ${codes.length} tickets` : 'View ticket'}
-            </button>
+              {booking.active_ticket_count > 1 || booking.ticket_count > 1
+                ? `View ${booking.active_ticket_count || booking.ticket_count} tickets`
+                : 'View ticket'}
+            </Link>
             <IconAction label="Email the receipt" onClick={onShare} icon={Send} />
           </>
         ) : null}
@@ -606,13 +591,11 @@ function BookingCard({
               Email receipt
             </button>
             <Link
-              // `eventPath`, never a hand-built `/events/{slug}-{id}`. The
-              // slug is computed once on the backend and serialized; a second
-              // derivation here is how a link and a canonical drift apart.
-              href={`${eventPath({ id: booking.event_id, slug: booking.event_slug })}#reviews`}
-              className="ml-auto inline-flex h-control items-center justify-center gap-2 rounded-full border border-border bg-surface px-4 text-label text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
+              href={`/booking/${booking.event_id}/confirmation?booking=${booking.id}`}
+              className="ml-auto inline-flex h-control items-center justify-center gap-1.5 rounded-full border border-border bg-surface px-4 text-label text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
-              Rate experience
+              Order details
+              <ChevronRight className="size-4" aria-hidden />
             </Link>
           </>
         ) : null}

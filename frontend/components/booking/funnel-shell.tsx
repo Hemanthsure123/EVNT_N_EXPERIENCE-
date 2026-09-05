@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { cancelBooking } from '@/lib/api/bookings';
+import { bumpAllAttemptsForEvent } from '@/lib/booking/attempt';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/components/ui/drawer';
 import { formatEventDate, formatEventTime } from '@/lib/discovery/format';
@@ -132,41 +133,10 @@ export function FunnelScreen({
 
 /**
  * The back arrow, and the one place a hold can be released deliberately.
- *
- * ── WHY THIS ASKS, WHEN ALMOST NOTHING ELSE IN THE PRODUCT DOES ──────────
- *
- * The house rule is that a reversible action gets UNDO rather than a dialog
- * (`components/admin/undo.tsx`). This is the exception, and it earns it:
- * cancelling releases the seats to the PUBLIC pool via `ticketing.release`,
- * there is no per-user parking of the released quantity, and nothing can take
- * them back. It is the one action on this flow that cannot be undone.
- *
- * ── THE COPY STATES THE TRADE BEFORE THE PRESS, NOT AFTER ────────────────
- *
- * "Are you sure?" would be worthless here. What somebody needs to know is that
- * the tickets go back on sale IMMEDIATELY and may be gone if they return —
- * which on a tight tier is a real coin flip, not a formality. Saying it after
- * the fact, on a sold-out screen, would be telling them what we had already
- * done to them.
- *
- * ── AND IT ONLY APPEARS WHEN THERE IS SOMETHING TO LOSE ──────────────────
- *
- * No booking, or a hold that has already lapsed, and the arrow is plain
- * navigation. Prompting to cancel a booking that does not exist is the kind of
- * dialog people learn to dismiss without reading, which is how the one that
- * mattered gets dismissed too.
- *
- * WHAT IT CANNOT COVER, stated rather than papered over: only this button is
- * interceptable. Browser back, a swipe-back gesture, the hardware key and
- * closing the tab cannot be — `beforeunload` cannot await a request, and
- * hijacking history is hostile. Those keep today's behaviour: the hold lapses
- * on its own and the sweeper releases it. A dialog on one exit and silence on
- * the others is still better than no deliberate release at all, because the
- * deliberate one is the only one where the customer is CHOOSING to leave.
  */
 function BackControl() {
   const router = useRouter();
-  const { booking, setBooking } = useBooking();
+  const { event, booking, setBooking, clearSelection } = useBooking();
   const [asking, setAsking] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(false);
 
@@ -177,6 +147,7 @@ function BackControl() {
 
   const leave = () => {
     setAsking(false);
+    clearSelection();
     router.back();
   };
 
@@ -189,8 +160,11 @@ function BackControl() {
       // would trap somebody on a checkout they have chosen to leave.
       await cancelBooking(booking.id).catch(() => undefined);
       setBooking(null);
+      clearSelection();
+      bumpAllAttemptsForEvent(event.id);
       setCancelling(false);
-      leave();
+      setAsking(false);
+      router.replace(`/booking/${event.id}`);
     })();
   };
 
@@ -198,7 +172,14 @@ function BackControl() {
     <>
       <button
         type="button"
-        onClick={() => (live ? setAsking(true) : router.back())}
+        onClick={() => {
+          if (live) {
+            setAsking(true);
+          } else {
+            clearSelection();
+            router.back();
+          }
+        }}
         aria-label="Go back"
         className="-ml-2 inline-flex size-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >

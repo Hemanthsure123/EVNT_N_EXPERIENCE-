@@ -111,7 +111,83 @@ export type StateFilter = 'all' | BookingState;
 export const STATE_FILTERS: readonly { value: StateFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'upcoming', label: 'Upcoming' },
-  { value: 'finished', label: 'Finished' },
-  { value: 'refunded', label: 'Refunded' },
   { value: 'unpaid', label: 'Unpaid' },
+  { value: 'finished', label: 'Past' },
+  { value: 'refunded', label: 'Cancelled' },
 ] as const;
+
+export type DecoratedBooking = {
+  booking: MyBooking;
+  request: RefundRequest | undefined;
+  state: BookingState;
+};
+
+/**
+ * Sorts decorated bookings according to the selected tab.
+ *
+ * When "all" is active:
+ *   1. Upcoming/active bookings first (soonest event_starts_at first).
+ *   2. Unpaid/incomplete bookings next (live holds first, then newest).
+ *   3. Past/finished bookings next (most recent past event first).
+ *   4. Cancelled/refunded bookings last (newest first).
+ */
+export function sortDecoratedBookings(
+  items: DecoratedBooking[],
+  filter: StateFilter,
+  now: number,
+): DecoratedBooking[] {
+  if (filter === 'upcoming') {
+    return [...items].sort(
+      (a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at),
+    );
+  }
+  if (filter === 'unpaid') {
+    return [...items].sort((a, b) => {
+      const aLive = holdIsLive(a.booking, now);
+      const bLive = holdIsLive(b.booking, now);
+      if (aLive !== bLive) return aLive ? -1 : 1;
+      return Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at);
+    });
+  }
+  if (filter === 'finished') {
+    return [...items].sort(
+      (a, b) => Date.parse(b.booking.event_starts_at) - Date.parse(a.booking.event_starts_at),
+    );
+  }
+  if (filter === 'refunded') {
+    return [...items].sort(
+      (a, b) => Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at),
+    );
+  }
+
+  // filter === 'all'
+  const upcoming: DecoratedBooking[] = [];
+  const unpaid: DecoratedBooking[] = [];
+  const finished: DecoratedBooking[] = [];
+  const refunded: DecoratedBooking[] = [];
+
+  for (const item of items) {
+    if (item.state === 'upcoming') upcoming.push(item);
+    else if (item.state === 'unpaid') unpaid.push(item);
+    else if (item.state === 'finished') finished.push(item);
+    else refunded.push(item);
+  }
+
+  upcoming.sort(
+    (a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at),
+  );
+  unpaid.sort((a, b) => {
+    const aLive = holdIsLive(a.booking, now);
+    const bLive = holdIsLive(b.booking, now);
+    if (aLive !== bLive) return aLive ? -1 : 1;
+    return Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at);
+  });
+  finished.sort(
+    (a, b) => Date.parse(b.booking.event_starts_at) - Date.parse(a.booking.event_starts_at),
+  );
+  refunded.sort(
+    (a, b) => Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at),
+  );
+
+  return [...upcoming, ...unpaid, ...finished, ...refunded];
+}

@@ -52,22 +52,26 @@ export function OpenEventLink({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => openEvent(event)}
-        className={cn('text-left sm:hidden', className)}
-      >
-        {children}
-      </button>
-      <Link
-        // `eventPath` handles a missing slug by falling back to the bare-id
-        // URL, which is what the platform served before slugs existed — so a
-        // seed carrying no slug still produces a URL that resolves.
-        href={eventPath(event)}
-        className={cn('hidden sm:inline', className)}
-      >
-        {children}
-      </Link>
+      <span className="inline-block max-w-full min-w-0 sm:hidden">
+        <button
+          type="button"
+          onClick={() => openEvent(event)}
+          className={cn('text-left max-w-full', className)}
+        >
+          {children}
+        </button>
+      </span>
+      <span className="hidden sm:inline-block max-w-full min-w-0">
+        <Link
+          // `eventPath` handles a missing slug by falling back to the bare-id
+          // URL, which is what the platform served before slugs existed — so a
+          // seed carrying no slug still produces a URL that resolves.
+          href={eventPath(event)}
+          className={cn('max-w-full', className)}
+        >
+          {children}
+        </Link>
+      </span>
     </>
   );
 }

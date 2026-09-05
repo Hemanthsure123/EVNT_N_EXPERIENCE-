@@ -96,3 +96,19 @@ export function bumpAttempt(eventId: string, selection: Selection): number {
   write(store);
   return next;
 }
+
+/**
+ * Bump all attempts for an event so any new booking for this event starts completely fresh.
+ */
+export function bumpAllAttemptsForEvent(eventId: string): void {
+  const store = read();
+  const prefix = `${eventId}:`;
+  let changed = false;
+  for (const key of Object.keys(store)) {
+    if (key.startsWith(prefix)) {
+      store[key] = (Number.isInteger(store[key]) && store[key] >= 1 ? store[key] : 1) + 1;
+      changed = true;
+    }
+  }
+  if (changed) write(store);
+}

@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   CalendarDays,
   Check,
+  ChevronLeft,
   ChevronRight,
   Compass,
   Copy,
@@ -18,6 +19,7 @@ import {
   Ticket as TicketIcon,
 } from 'lucide-react';
 import { fetchBooking } from '@/lib/api/bookings';
+import { bumpAllAttemptsForEvent } from '@/lib/booking/attempt';
 import { verifyPayment } from '@/lib/api/payments';
 import { directionsUrl } from '@/lib/api/maps';
 import { useAuth } from '@/lib/auth/auth-provider';
@@ -28,6 +30,7 @@ import { eventPath } from '@/lib/events/ref';
 import { TicketQrCode } from '@/components/booking/qr-code';
 import { BillLines, bookingBill } from '@/components/ticketing/bill-lines';
 import { ShareReceiptDialog } from '@/components/account/share-receipt';
+import { AddToCalendar } from '@/components/event/add-to-calendar';
 import { cn } from '@/lib/utils/cn';
 import { useBooking } from './booking-context';
 import { Celebration } from './celebration';
@@ -162,7 +165,8 @@ export function ConfirmationStep() {
   // DETAIL serializer and is already being polled here.
   React.useEffect(() => {
     if (booking) setBooking(booking);
-  }, [booking, setBooking]);
+    if (paid && event?.id) bumpAllAttemptsForEvent(event.id);
+  }, [booking, paid, event?.id, setBooking]);
 
   // Only once the BACKEND says paid — the tickets do not exist before that, and
   // asking for them earlier would render an empty state that reads as a loss.
@@ -235,18 +239,23 @@ export function ConfirmationStep() {
         />
 
         {/* ── WHAT IS LEFT TO DO ──────────────────────────────────────── */}
-        <button
-          type="button"
-          onClick={() => setSharing(true)}
-          disabled={!paid}
-          className="inline-flex h-control-lg w-full items-center justify-center gap-2 rounded-full bg-ink-25 px-pill-lg text-label text-ink-950 transition-colors duration-fast hover:bg-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950 motion-reduce:transition-none"
-        >
-          <Send className="size-4" aria-hidden />
-          {/* NOT "Share ticket". A QR is a bearer credential: whoever holds it
-              is admitted. This emails the PDF receipt, which is the thing you
-              actually want whoever you are going with to have. */}
-          Email the receipt
-        </button>
+        <div className="flex flex-col gap-2.5 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => setSharing(true)}
+            disabled={!paid}
+            className="inline-flex h-control-lg flex-1 items-center justify-center gap-2 rounded-full bg-ink-25 px-pill-lg text-label text-ink-950 transition-colors duration-fast hover:bg-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950 motion-reduce:transition-none"
+          >
+            <Send className="size-4" aria-hidden />
+            Email the receipt
+          </button>
+          {event ? (
+            <AddToCalendar
+              event={event}
+              className="h-control-lg flex-1 justify-center border-ink-800 bg-ink-900 text-ink-25 hover:bg-ink-800 hover:text-white focus-visible:ring-offset-ink-950"
+            />
+          ) : null}
+        </div>
 
         {/* ── THE BILL, ONE PRESS AWAY ────────────────────────────────── */}
         {booking ? (
@@ -435,11 +444,33 @@ function TicketObject({
         ) : loadingTickets ? (
           <div className="skeleton size-56 rounded-2xl" aria-hidden />
         ) : current ? (
-          <TicketQrCode
-            token={current.qr_token}
-            label={`QR code for your ${current.ticket_type_name} ticket — ${eventTitle}`}
-            className="w-56 max-w-full rounded-2xl p-3"
-          />
+          <div className="relative flex w-full items-center justify-center">
+            {many ? (
+              <button
+                type="button"
+                onClick={() => setIndex((i) => (i - 1 + tickets.length) % tickets.length)}
+                aria-label="Previous ticket"
+                className="absolute left-1 z-10 inline-flex size-9 items-center justify-center rounded-full bg-ink-800 text-ink-300 transition-colors hover:bg-ink-700 hover:text-ink-25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronLeft className="size-5" />
+              </button>
+            ) : null}
+            <TicketQrCode
+              token={current.qr_token}
+              label={`QR code for your ${current.ticket_type_name} ticket — ${eventTitle}`}
+              className="w-56 max-w-full rounded-2xl p-3"
+            />
+            {many ? (
+              <button
+                type="button"
+                onClick={() => setIndex((i) => (i + 1) % tickets.length)}
+                aria-label="Next ticket"
+                className="absolute right-1 z-10 inline-flex size-9 items-center justify-center rounded-full bg-ink-800 text-ink-300 transition-colors hover:bg-ink-700 hover:text-ink-25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronRight className="size-5" />
+              </button>
+            ) : null}
+          </div>
         ) : (
           // Issued, but this page of /me/tickets did not carry them (a very
           // large account). Say where they are rather than implying a loss.
