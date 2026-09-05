@@ -279,7 +279,7 @@ function MobileFeaturedCarousel({
   }, [handleScroll]);
 
   return (
-    <div className="overflow-x-hidden md:hidden">
+    <div className="overflow-x-hidden sm:hidden">
       <Container className="pb-3 pt-5">
         <h2 className="text-body font-bold tracking-tight text-foreground">{label}</h2>
       </Container>

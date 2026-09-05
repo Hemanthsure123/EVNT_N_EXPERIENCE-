@@ -131,6 +131,13 @@ const config: Config = {
           foreground: rgb('success-foreground'),
           subtle: rgb('success-subtle'),
           'subtle-foreground': rgb('success-subtle-foreground'),
+          // The primitive stops, for the one case the semantic pair cannot
+          // serve: a surface that is DARK IN BOTH THEMES. `--success` and
+          // `--success-subtle` swap places between themes, so a "ready to use"
+          // pill drawn with them reads correctly on a white card and vanishes
+          // on the near-black pass card (account settings on a phone). Same
+          // escape hatch the `ink` / `violet` ramps below already provide.
+          ...ramp('success', [500, 600, 700]),
         },
         warning: {
           DEFAULT: rgb('warning'),
@@ -196,6 +203,8 @@ const config: Config = {
         md: 'var(--shadow-md)',
         lg: 'var(--shadow-lg)',
         xl: 'var(--shadow-xl)',
+        // The event deck's floating card — see tokens.css.
+        deck: 'var(--shadow-deck)',
         // No longer a violet halo — the neutral hover lift. See tokens.css.
         glow: 'var(--shadow-glow)',
         none: 'none',

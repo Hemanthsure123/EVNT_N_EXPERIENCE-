@@ -4,6 +4,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import {
   flipTransform,
+  restrain,
   toCss,
   type Box,
 } from '@/lib/discovery/shared-poster';
@@ -65,7 +66,11 @@ export function SharedPoster({
     const node = ref.current;
     if (!node) return;
 
-    const collapsed = toCss(flipTransform(from, to));
+    // RESTRAINED, not the full FLIP — see `ORIGIN_RESTRAINT`. The clone starts
+    // near the hero, offset toward the card that was pressed, rather than at
+    // the card's own size: a directional arrival instead of a card growing
+    // into a page.
+    const collapsed = toCss(restrain(flipTransform(from, to)));
     const expanded = 'translate3d(0px, 0px, 0) scale(1)';
     const start = direction === 'in' ? collapsed : expanded;
     const end = direction === 'in' ? expanded : collapsed;
@@ -74,10 +79,15 @@ export function SharedPoster({
     // the main thread for transform and opacity, it cannot be interrupted by a
     // re-render, and `finished` gives one settlement callback that fires
     // whether the animation completed or was cancelled.
+    // Opacity carries what the shortened travel no longer can. Arriving, the
+    // clone fades UP over the last of its movement, so the eye reads an image
+    // settling into place rather than a small picture sliding a short way;
+    // leaving, it fades out entirely, which is what lets the return end
+    // wherever the card is without needing to land on it precisely.
     const animation = node.animate(
       [
-        { transform: start, opacity: direction === 'in' ? 1 : 1 },
-        { transform: end, opacity: direction === 'in' ? 1 : 0.92 },
+        { transform: start, opacity: direction === 'in' ? 0.4 : 1 },
+        { transform: end, opacity: direction === 'in' ? 1 : 0 },
       ],
       {
         duration: durationMs,

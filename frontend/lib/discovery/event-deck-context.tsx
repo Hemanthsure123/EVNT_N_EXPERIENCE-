@@ -23,11 +23,32 @@ import type { EventCard as EventCardData } from '@/lib/api/types';
  */
 export type EventSeed = Pick<EventCardData, 'id' | 'title'> & Partial<EventCardData>;
 
+/**
+ * How the deck was opened, which decides how it enters and how it leaves.
+ *
+ * `feed` — a card was tapped on a page that stays underneath. The deck slides
+ * in, the poster flies from that card, and closing reveals the page again.
+ *
+ * `route` — the reader ARRIVED on /events/{slug}-{uuid} directly (a shared
+ * link, a bookmark, a search result). There is no card on the page to fly
+ * from and no feed to reveal on close: the deck is the page, so it opens
+ * already expanded with no entrance, and closing has to GO somewhere.
+ */
+export type DeckOrigin = 'feed' | 'route';
+
+export type OpenDeckOptions = {
+  /** Land at the expanded snap with no entrance animation. */
+  expanded?: boolean;
+  origin?: DeckOrigin;
+};
+
 interface EventDeckContextType {
   isOpen: boolean;
   events: EventCardData[];
   currentIndex: number;
-  openDeck: (eventsList: EventCardData[], initialIndex?: number) => void;
+  /** Set by the most recent `openDeck`; reset on close. */
+  openOptions: OpenDeckOptions;
+  openDeck: (eventsList: EventCardData[], initialIndex?: number, options?: OpenDeckOptions) => void;
   /**
    * Open one event from whatever the caller happens to know about it.
    *
@@ -61,6 +82,7 @@ const EventDeckContext = React.createContext<EventDeckContextType>({
   isOpen: false,
   events: [],
   currentIndex: 0,
+  openOptions: {},
   openDeck: () => {},
   openEvent: () => {},
   closeDeck: () => {},
@@ -71,13 +93,18 @@ export function EventDeckProvider({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [events, setEvents] = React.useState<EventCardData[]>([]);
   const [currentIndex, setCurrentIndex] = React.useState(0);
+  const [openOptions, setOpenOptions] = React.useState<OpenDeckOptions>({});
 
-  const openDeck = React.useCallback((eventsList: EventCardData[], initialIndex = 0) => {
-    if (!eventsList || eventsList.length === 0) return;
-    setEvents(eventsList);
-    setCurrentIndex(Math.max(0, Math.min(initialIndex, eventsList.length - 1)));
-    setIsOpen(true);
-  }, []);
+  const openDeck = React.useCallback(
+    (eventsList: EventCardData[], initialIndex = 0, options: OpenDeckOptions = {}) => {
+      if (!eventsList || eventsList.length === 0) return;
+      setEvents(eventsList);
+      setCurrentIndex(Math.max(0, Math.min(initialIndex, eventsList.length - 1)));
+      setOpenOptions(options);
+      setIsOpen(true);
+    },
+    [],
+  );
 
   const openEvent = React.useCallback(
     (seed: EventSeed) => {
@@ -88,6 +115,7 @@ export function EventDeckProvider({ children }: { children: React.ReactNode }) {
 
   const closeDeck = React.useCallback(() => {
     setIsOpen(false);
+    setOpenOptions({});
   }, []);
 
   const handleSetCurrentIndex = React.useCallback(
@@ -105,6 +133,7 @@ export function EventDeckProvider({ children }: { children: React.ReactNode }) {
         isOpen,
         events,
         currentIndex,
+        openOptions,
         openDeck,
         openEvent,
         closeDeck,

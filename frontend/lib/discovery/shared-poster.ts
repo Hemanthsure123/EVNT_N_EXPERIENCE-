@@ -85,6 +85,45 @@ export function flipTransform(source: Box, target: Box): FlipTransform {
   };
 }
 
+/**
+ * How much of the full card-to-hero journey the opening actually plays.
+ *
+ * ── WHY THIS IS NOT 1 ─────────────────────────────────────────────────────
+ *
+ * At 390px a browse-grid poster is about 171px wide against a 374px hero, so
+ * the honest FLIP starts the clone at scale 0.46 and grows it to 1 across a
+ * couple of hundred pixels of travel. That is a card MORPHING into a page —
+ * technically a perfect shared element and, at this size difference, a piece
+ * of choreography that draws attention to itself rather than to the event.
+ *
+ * Playing a THIRD of it keeps everything the connection is for: the poster
+ * still arrives from the direction of the card that was pressed, and the
+ * return still leaves toward it, so the spatial link is intact. What goes is
+ * the growth — the clone starts near its final size, slightly offset and
+ * slightly small, and settles. Subtle, which is what was asked for; the
+ * alternative on the table was deleting the shared element entirely, and that
+ * would have made the RETURN-to-origin animation impossible rather than quiet.
+ *
+ * One exported constant, because the right value is a judgement about feel and
+ * whoever retunes it should have exactly one number to change.
+ */
+export const ORIGIN_RESTRAINT = 0.35;
+
+/**
+ * The same transform, played only part of the way from the source.
+ *
+ * Interpolating toward identity: `factor = 1` is the raw FLIP, `factor = 0` is
+ * no movement at all. Scale is interpolated from 1 rather than from 0 for the
+ * same reason — a scale of `0.46 * 0.35` would be smaller than either end.
+ */
+export function restrain(transform: FlipTransform, factor = ORIGIN_RESTRAINT): FlipTransform {
+  return {
+    x: transform.x * factor,
+    y: transform.y * factor,
+    scale: 1 - (1 - transform.scale) * factor,
+  };
+}
+
 export function toCss(transform: FlipTransform): string {
   // `translate3d` rather than `translate`: it promotes the element to its own
   // compositor layer, which is the difference between a transform the GPU
@@ -116,15 +155,63 @@ function toBox(element: Element): Box {
  * available" and falls back to the plain transition, which is the behaviour
  * that shipped before this existed.
  */
+/**
+ * ── THE CARD THAT WAS ACTUALLY PRESSED ────────────────────────────────────
+ *
+ * `readCardPoster` finds cards by event id, and an event can legitimately be on
+ * the page twice — the home screen shows one in the featured rail AND again in
+ * the grid below it. The id lookup returned whichever came first in the
+ * document, so pressing the grid card and closing again flew the poster back
+ * to the RAIL: the picture returned to a place the reader had never touched,
+ * which reads as the animation being decorative rather than spatial.
+ *
+ * A capture-phase listener on the document records the poster element under
+ * the last press. It is deliberately not a prop threaded through the six card
+ * components — that is six signatures to change and six chances to forget one,
+ * and this has to be right for every surface or it is worse than not having it.
+ */
+let lastPressed: { id: string; element: Element } | null = null;
+let trackerInstalled = false;
+
+export function installPosterOriginTracker(): () => void {
+  if (typeof document === 'undefined' || trackerInstalled) return () => {};
+  trackerInstalled = true;
+  const onDown = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const poster = target.closest(`[${POSTER_ATTR}]`);
+    const id = poster?.getAttribute(POSTER_ATTR);
+    // Only ever REPLACED by another press, never cleared: the press that opens
+    // the deck is the last one that happened, and the close reads it minutes
+    // later.
+    if (poster && id) lastPressed = { id, element: poster };
+  };
+  document.addEventListener('pointerdown', onDown, true);
+  return () => {
+    document.removeEventListener('pointerdown', onDown, true);
+    trackerInstalled = false;
+  };
+}
+
 export function readCardPoster(eventId: string): Box | null {
   if (typeof document === 'undefined' || !eventId) return null;
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
+
+  // The pressed card wins, when it is still the event being looked at and is
+  // still on the page. `isConnected` is the guard that matters: a list can
+  // re-render, or be a different route entirely, between the open and the
+  // close, and a detached node reports a zero rect.
+  if (lastPressed && lastPressed.id === eventId && lastPressed.element.isConnected) {
+    const pressed = toBox(lastPressed.element);
+    if (isUsableSource(pressed, viewportHeight, viewportWidth)) return pressed;
+  }
+
   // Two surfaces can legitimately hold the same event at once — a rail and the
   // grid below it. The LAST match is preferred only if the first is unusable;
   // see the caller, which validates before committing.
   const nodes = document.querySelectorAll(`[${POSTER_ATTR}="${CSS.escape(eventId)}"]`);
   if (nodes.length === 0) return null;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
   let fallback: Box | null = null;
   for (const node of nodes) {
     const box = toBox(node);

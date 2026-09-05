@@ -4,6 +4,7 @@ import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { EventGrid, EventGridSkeleton } from '@/components/discovery/event-grid';
+import { DeckBoot } from '@/components/event/deck-boot';
 import { EventPageBody } from '@/components/event/event-page-body';
 import { SectionHeading } from '@/components/event/sections';
 import {
@@ -216,6 +217,13 @@ export default async function EventDetailPage({ params }: { params: { id: string
           </Suspense>
         }
       />
+
+      {/* ON A PHONE, THIS PAGE IS NOT THE PRESENTATION — the deck is, and a
+          shared link has to arrive at the same thing every card on the site
+          opens. Everything above stays exactly as it was: this renders an
+          overlay on top of a complete server render, never in place of one.
+          See the component for why the route is not redirected or hidden. */}
+      <DeckBoot event={event} content={content} />
     </>
   );
 }

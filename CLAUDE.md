@@ -1856,7 +1856,10 @@ Two rules for the mobile event widget, and both came from the same complaint —
 "it only maximises when I drag the handle".
 
 **1. The ceiling is half the poster.** `SHEET_SNAP_FRACTIONS` used to open with
-`0`, meaning the sheet could cover the screen completely. Covering the artwork
+`0`, meaning the sheet could cover the screen completely. (The stop later moved
+from 0.31 to 0.34 — a slightly shorter card — by raising `POSTER_FRACTION` to
+0.68, never by editing the ceiling directly: it is DERIVED from the poster so the
+two cannot drift, and `sheet-snap.test.ts` pins that derivation.) Covering the artwork
 is the one thing this layout exists not to do: the poster IS the event and it is
 why the card was opened. Worse, the widget changed identity mid-gesture — square
 corners, full-bleed, no neighbours — so a swipe that started on a card ended on
@@ -1880,6 +1883,141 @@ ceiling and then scrolls the content; downward unwinds the scroll before the
 sheet begins to close. **Downward is only CLAIMED from a content top**, so
 ordinary reverse scrolling keeps its native momentum and collapsing takes a
 second, deliberate gesture — the same trade every native bottom sheet makes.
+
+## The deck is the mobile event page — including on ARRIVAL
+
+Every card on every mobile surface already opened the deck. What was never
+covered is arriving: `/events/{slug}-{uuid}` is the URL the deck itself hands
+out through Share, the `.ics`, the booking emails and web push, so a link
+someone was SENT opened the desktop page — the one presentation the mobile work
+exists to replace, reached by the commonest route into the product.
+
+**`components/event/deck-boot.tsx` opens the deck over that page, maximized.**
+Three things about it are load-bearing:
+
+- **The route is not deleted, redirected or hidden.** It is the platform's only
+  emitter of `Event` structured data, it carries the canonical, and every entry
+  in `sitemap.ts` points at it. A viewport-conditional redirect in
+  `middleware.ts` would be cloaking (middleware sees a user agent, never a
+  viewport), and `sm:hidden` on `EventPageBody` would remove the content backing
+  the structured data from the render Googlebot Smartphone performs at ~412px.
+  So the deck is an OPAQUE OVERLAY on an unchanged server render.
+- **A cover, in the server HTML, because hydration is not instant.** The deck can
+  only open once JS has run; the few hundred milliseconds before that were the
+  desktop page. `DeckShell` (`components/event/deck-skeleton.tsx`) paints the
+  deck's opening frame — same artwork, same geometry — and comes off in the same
+  commit that opens the deck. Its geometry is IMPORTED from `sheet-snap`
+  (`EXPANDED_CARD_FRACTION` moved there for exactly this), never copied: a cover
+  with the poster height written out as a literal is correct until the next time
+  that constant moves, and then it jumps at precisely the instant the handover is
+  meant to be invisible. `<noscript>` removes it, so a JS-off phone gets the
+  working route page.
+- **`y` is placed in a LAYOUT effect, not a passive one.** `useMotionValue(0)`
+  plus a sheet styled `height: calc(100dvh - var(--deck-y))` means the frame
+  before the passive enter effect is a full-screen card at the resting position
+  of nothing. Invisible from the feed — a previous close had left `y` off-screen
+  — and the FIRST thing a shared link would have shown.
+
+**Closing has to GO somewhere,** and it lives in `dismiss`, never in a watcher on
+`isOpen`: "Book tickets" calls `closeDeck` on its way to checkout, so a watcher
+would fire a second client navigation against the money path. A route-origin
+close is `router.replace('/events')` — `push` would leave the event behind the
+list, so back returns to it, `DeckBoot` remounts and reopens, and the reader can
+never get past the event they arrived on. A feed-origin open pushes ONE history
+entry so hardware back closes the deck instead of navigating the feed away
+underneath it, and the dismiss pops it again.
+
+**A mis-tap must not eject a shared link.** The overlay's tap-to-close is
+feed-only; from a URL somebody was sent, leaving takes Escape, a downward drag or
+browser back.
+
+### The gesture plate: an upward swipe belongs to the whole screen
+
+Only the handle and the content scroller could start a vertical drag. Everything
+above the sheet — the artwork, the scrim, the space either side — was a
+`pointer-events-none` poster layer over a scrim whose only handler was
+`onClick={dismiss}`. So a swipe up on the picture did nothing while the finger
+moved and then, on release, fired the click and CLOSED the deck: not ignored, the
+opposite of what was asked.
+
+A plate sits between the poster and the sheet in DOM order, so it is below the
+sheet, the handle, the scroller, the CTA and every sub-sheet — each keeps its own
+touches — and above the artwork. Four rules came out of wiring it:
+
+- **One commit rule, two origins.** `gestureRef` records where the finger LANDED.
+  From the content the `atTop`/`isExpanded` gates still apply, because there is a
+  scroller under the finger whose turn it might be. From the overlay there is
+  not, so every vertical movement is the sheet's and the drag handler's existing
+  ceiling resistance is the honest answer to "it will not go further up".
+- **`ownsScroller`.** `beginVerticalDrag` writes `scroller.scrollTop`; a finger on
+  the artwork would have spun an article it is nowhere near.
+- **A dominance MARGIN, not a bare `>`.** A thumb pivots from a knuckle, so an
+  upward swipe over a large empty poster crosses 45° for a frame or two near the
+  start. On a bare comparison that frame decides the gesture — "I swiped up and
+  it changed the event" is how this reads as broken.
+- **The click guard covers BOTH axes.** `draggedRef` was written only by the
+  vertical drag, so a horizontal swipe on the plate ended in a click the plate
+  read as "dismiss" — swiping to the next event closed the deck.
+
+And two the plate exposed rather than caused: the commit slop is now CARRIED into
+the drag (starting from the commit point left the sheet ten pixels behind the
+finger for the rest of the gesture, on the content path only), and both drags
+filter on `pointerId`, since their listeners are on `window` and a second finger
+was driving one gesture from two sources.
+
+### Removals, and what replaces the one that was an exit
+
+Three things are gone at the owner's instruction: the "Things to know" section,
+the floating back arrow and the floating heart. Two consequences are worth
+knowing rather than discovering:
+
+- **The arrow was the only visible exit and the only keyboard-reachable one.**
+  The deck is a hand-rolled `role="dialog"`, not Radix, so nothing gave it
+  Escape. It has Escape now, plus browser/hardware back, plus the tap and the
+  downward drag it always had. Removing the arrow without those would have made
+  an `aria-modal` dialog inescapable for keyboard, screen-reader and switch
+  users.
+- **Saving is no longer offered on the mobile event surface.** The heart was the
+  only one there; the card-level hearts across the feed are untouched, so the
+  affordance still exists — just not while reading an event. That is a product
+  decision, not an oversight, and the one-line place to put it back is the
+  actions row in `event-widget-content.tsx`.
+
+The poster's top gradient went with them: it existed to keep those two controls
+legible over a pale image, and all it does now is darken the top quarter of the
+one photograph the page is about.
+
+### The origin connection is a restrained arrival, not a card morphing
+
+`flipTransform` is honest — a 171px grid poster against a 374px hero is a scale
+of 0.46 — and playing all of it is a card visibly becoming a page, which is what
+"NOT DRAMATIC CARD MORPHING" was reacting to. `restrain()` plays
+`ORIGIN_RESTRAINT` (0.35) of it: the clone starts at ~0.82 scale, offset toward
+the card that was pressed, and settles, with opacity carrying what the shortened
+travel no longer can. Everything the connection is for survives — the poster
+still arrives from, and returns toward, the card — and deleting the shared
+element outright would have satisfied "subtle" by making return-to-origin
+impossible.
+
+**It returns to the card that was actually PRESSED.** `readCardPoster` finds
+cards by event id and the home page legitimately holds one event twice (the
+featured rail and the grid below), so the return flew back to whichever came
+first in the document — the picture landing somewhere the reader had never
+touched. A capture-phase `pointerdown` listener records the poster under the last
+press; the id lookup stays as the fallback, guarded on `isConnected` because the
+list can have re-rendered in between.
+
+### Two smaller swipe defects the finalize pass fixed
+
+- **A swipe interrupting a settle teleported.** `beginSwipe` took
+  `restingX(currentIndex)` — where the track is HEADING — while a 340ms
+  transition was still running, so the first move wrote that final offset with
+  the transition off. One computed read per gesture (never per frame) takes the
+  interpolated position instead; during a CSS transition that is the only place
+  the live value exists.
+- **`resolveSnap` was handed `y.get() + (endEvent.clientY - startY) * 0`.** The
+  term was multiplied by zero, so it described nothing and only made the line
+  look like it accounted for travel.
 
 ## Ticket selection is a screen again — and the rule is ASK ONCE
 

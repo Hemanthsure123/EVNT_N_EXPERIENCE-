@@ -133,7 +133,13 @@ export function resolveSnap({
  * The two heights that result, as a share of the screen the CARD occupies:
  *
  *     rest      0.39  ->  61% card, 39% poster
- *     expanded  0.31  ->  69% card, 31% poster (half of it still showing)
+ *     expanded  0.34  ->  66% card, 34% poster (half of it still showing)
+ *
+ * The expanded stop moved from 0.31 to 0.34 — 25px shorter at 844 — because
+ * 69% read as slightly too tall against the artwork it sits under. It is
+ * moved by raising `POSTER_FRACTION`, never by editing the ceiling directly:
+ * the ceiling is DERIVED from the poster so the two cannot drift, and the
+ * test pins that derivation.
  *
  * `MIN_CARD_FRACTION` is the floor: below it the card stops being the thing
  * you are reading and becomes a caption under a picture. Rest sits just clear
@@ -144,8 +150,8 @@ export function resolveSnap({
  * a reader wants once they have decided to read — not more panel.
  */
 
-/** The poster layer's height, mirroring `h-[62dvh]` in the deck. */
-export const POSTER_FRACTION = 0.62;
+/** The poster layer's height, mirroring `h-[68dvh]` in the deck. */
+export const POSTER_FRACTION = 0.68;
 /** The card never occupies less of the screen than this. */
 export const MIN_CARD_FRACTION = 0.6;
 
@@ -158,6 +164,17 @@ export const SHEET_SNAP_FRACTIONS = [
 export function snapPixels(viewportHeight: number): number[] {
   return SHEET_SNAP_FRACTIONS.map((fraction) => Math.round(fraction * viewportHeight));
 }
+
+/**
+ * How much of the screen's width the card occupies once the sheet is expanded.
+ *
+ * It lives here rather than in the deck because it is now read in two places —
+ * the deck itself and the pre-hydration cover a shared link paints before the
+ * deck can open. A cover that copied the number instead of importing it would
+ * be correct until the next time this moved, which is exactly how the poster
+ * height came to be written as `62dvh` in three files and `68dvh` in one.
+ */
+export const EXPANDED_CARD_FRACTION = 0.96;
 
 /** Index into the snaps array for the state a freshly-opened sheet rests at. */
 export const INITIAL_SNAP_INDEX = SHEET_SNAP_FRACTIONS.length - 1;

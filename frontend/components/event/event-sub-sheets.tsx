@@ -17,7 +17,6 @@ import {
   Faqs,
   OrganizerPolicies,
   Policies,
-  QuickFacts,
   RunningOrder,
   VenueCard,
 } from './sections';
@@ -62,7 +61,6 @@ export type SubSheetType =
   | 'venue'
   | 'schedule'
   | 'about'
-  | 'things_to_know'
   | 'organiser'
   | 'faq'
   | 'terms'
@@ -74,7 +72,6 @@ const SHEET_TITLES: Record<NonNullable<SubSheetType>, string> = {
   venue: 'Venue details',
   schedule: 'Schedule and timeline',
   about: 'About this event',
-  things_to_know: 'Things to know',
   organiser: 'About the organiser',
   faq: 'Frequently asked questions',
   terms: 'Terms and conditions',
@@ -186,8 +183,6 @@ function SheetBody({
       return <ScheduleSheet event={event} detail={detail} content={content} />;
     case 'about':
       return <AboutSheet event={event} detail={detail} />;
-    case 'things_to_know':
-      return <ThingsToKnowSheet detail={detail} />;
     case 'organiser':
       return <OrganiserSheet event={event} pool={pool} />;
     case 'faq':
@@ -304,28 +299,6 @@ function AboutSheet({ event, detail }: { event: EventCardData; detail: EventDeta
 /* -------------------------------------------------------------------------- */
 /* Things to know                                                             */
 /* -------------------------------------------------------------------------- */
-
-function ThingsToKnowSheet({ detail }: { detail: EventDetail | null }) {
-  if (!detail) {
-    return <p className="pb-2 text-body-sm text-muted-foreground">Loading event details…</p>;
-  }
-
-  return (
-    <div className="flex flex-col gap-6 pb-2">
-      {/* The same component the page renders, unlimited here and limited to
-          four on the widget itself. One source, two lengths — a hand-written
-          preview drifts from the full list the first time a fact is added. */}
-      <QuickFacts event={detail} />
-
-      {detail.accessibility_notes ? (
-        <section className="flex flex-col gap-2">
-          <h3 className="text-body font-semibold text-foreground">Accessibility</h3>
-          <AccessibilityNotes notes={detail.accessibility_notes} />
-        </section>
-      ) : null}
-    </div>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Organiser                                                                  */

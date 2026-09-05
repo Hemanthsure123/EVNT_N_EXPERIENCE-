@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { flipTransform, isUsableSource, toCss, type Box } from './shared-poster';
+import {
+  ORIGIN_RESTRAINT,
+  flipTransform,
+  isUsableSource,
+  restrain,
+  toCss,
+  type Box,
+} from './shared-poster';
 
 /**
  * The arithmetic behind the card → hero poster transition.
@@ -118,5 +125,52 @@ describe('toCss', () => {
 
   it('round-trips an identity transform', () => {
     expect(toCss({ x: 0, y: 0, scale: 1 })).toBe('translate3d(0px, 0px, 0) scale(1)');
+  });
+});
+
+describe('restrain', () => {
+  /**
+   * The opening used to play the whole FLIP: a 171px grid poster growing to a
+   * 374px hero is a scale of 0.46, which is a card visibly morphing into a
+   * page. Restrained, it starts near its final size and arrives from the right
+   * direction — the spatial link without the choreography.
+   */
+  const CARD: Box = { top: 420, left: 16, width: 171, height: 256 };
+
+  it('starts the poster near its final size rather than at the card size', () => {
+    const raw = flipTransform(CARD, HERO);
+    const eased = restrain(raw);
+    expect(raw.scale).toBeCloseTo(0.499, 3);
+    expect(eased.scale).toBeGreaterThan(0.8);
+    expect(eased.scale).toBeLessThan(1);
+  });
+
+  it('keeps the direction of travel, at a third of the distance', () => {
+    const raw = flipTransform(CARD, HERO);
+    const eased = restrain(raw);
+    expect(Math.sign(eased.x)).toBe(Math.sign(raw.x));
+    expect(Math.sign(eased.y)).toBe(Math.sign(raw.y));
+    expect(eased.y).toBeCloseTo(raw.y * ORIGIN_RESTRAINT, 6);
+  });
+
+  it('is the identity at factor 1 and no movement at factor 0', () => {
+    const raw = flipTransform(CARD, HERO);
+    const full = restrain(raw, 1);
+    // `toBeCloseTo`, not `toEqual`: `1 - (1 - s) * 1` is arithmetically `s` and
+    // is not the same double.
+    expect(full.x).toBe(raw.x);
+    expect(full.y).toBe(raw.y);
+    expect(full.scale).toBeCloseTo(raw.scale, 12);
+    // Scale interpolates from 1, not from 0 — the poster at rest is full size.
+    const none = restrain(raw, 0);
+    // `toBeCloseTo`, because `-171.5 * 0` is negative zero and `Object.is`
+    // does not consider that the same as zero.
+    expect(none.x).toBeCloseTo(0, 10);
+    expect(none.y).toBeCloseTo(0, 10);
+    expect(none.scale).toBe(1);
+  });
+
+  it('does nothing when the card and the hero are already the same box', () => {
+    expect(restrain(flipTransform(HERO, HERO))).toEqual({ x: 0, y: 0, scale: 1 });
   });
 });

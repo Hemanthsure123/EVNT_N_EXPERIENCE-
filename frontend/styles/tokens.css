@@ -577,6 +577,14 @@
   --shadow-md: 0 1px 2px rgb(var(--ink-950) / 0.04), 0 6px 16px rgb(var(--ink-950) / 0.08);
   --shadow-lg: 0 2px 4px rgb(var(--ink-950) / 0.05), 0 16px 40px rgb(var(--ink-950) / 0.1);
   --shadow-xl: 0 4px 8px rgb(var(--ink-950) / 0.06), 0 32px 72px rgb(var(--ink-950) / 0.14);
+  /* The mobile event deck's card, floating over a dimmed feed. One step past
+     `xl`: the same two-layer shape (tight contact + wide ambient) so it stays
+     in the family, with a longer, softer ambient because this surface is the
+     only thing on screen and has the whole scrim to cast into. Alphas are
+     still LOW — the point is separation from the artwork behind, not a halo.
+     It used Tailwind's stock `shadow-2xl`, which is not a token here and does
+     not carry the warm ink tint every other shadow in this file does. */
+  --shadow-deck: 0 6px 12px rgb(var(--ink-950) / 0.1), 0 40px 90px rgb(var(--ink-950) / 0.28);
   /* MEANING CHANGED -- this was a violet halo (`violet-600 / 0.28`) used as the
      hover language on cards and as Button's `emphasis` variant. A coloured
      glow is off-language in a quiet, image-forward product, and the halo tinted
@@ -729,6 +737,7 @@
   --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45);
   --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
   --shadow-xl: 0 24px 64px rgb(0 0 0 / 0.6);
+  --shadow-deck: 0 8px 20px rgb(0 0 0 / 0.5), 0 40px 90px rgb(0 0 0 / 0.75);
   --shadow-glow: 0 8px 28px rgb(0 0 0 / 0.55);
 
   /* Dark needs a brighter hairline to read at all, and a denser frost: the

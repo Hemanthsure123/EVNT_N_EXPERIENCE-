@@ -24,7 +24,6 @@ import type { TicketTier } from '@/lib/api/types';
 import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
 import { HeroGallery, type GalleryImage } from './hero-gallery';
-import { QuickFacts } from './sections';
 import { ShareMenu } from './share-menu';
 import type { SubSheetType } from './event-sub-sheets';
 
@@ -50,7 +49,7 @@ import type { SubSheetType } from './event-sub-sheets';
  *
  * ── AND IT REUSES THE PAGE'S COMPONENTS ───────────────────────────────────
  *
- * `Countdown`, `QuickFacts`, `HeroGallery`, `ShareMenu` and `AddToCalendar` are
+ * `Countdown`, `HeroGallery`, `ShareMenu` and `AddToCalendar` are
  * the same ones the desktop event page renders. They are token-styled, and this
  * surface is always dark, which the deck handles by scoping `dark` around the
  * whole widget. So there is one lightbox, one calendar builder and one clock —
@@ -222,22 +221,6 @@ export function EventWidgetContent({
               disclosure row with the refund policy. Absent, not empty, when
               the organiser has not named anybody. */}
       <LineupRail crew={content?.crew ?? []} />
-
-      {/* 11. Things to know. Four facts, then "See all" — one component
-              renders both lengths, so the preview cannot drift from the list. */}
-      {detail ? (
-        <section className="flex flex-col gap-3">
-          <h3 className="text-body font-extrabold text-foreground">Things to know</h3>
-          <QuickFacts event={detail} limit={4} />
-          <button
-            type="button"
-            onClick={() => onOpenSheet('things_to_know')}
-            className="flex items-center gap-1 self-start text-body-sm font-bold text-foreground"
-          >
-            See all <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
-          </button>
-        </section>
-      ) : null}
 
       {/* 11. Gallery. Thumbnails only — `hideMainImage` keeps the big
               duplicate copy of the poster off a screen that already has one,

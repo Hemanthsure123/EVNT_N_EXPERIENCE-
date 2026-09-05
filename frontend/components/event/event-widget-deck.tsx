@@ -3,7 +3,8 @@
 import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Ticket } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Ticket } from 'lucide-react';
 import {
   animate,
   motion,
@@ -11,20 +12,21 @@ import {
   useMotionValueEvent,
   useReducedMotion,
 } from 'framer-motion';
-import { FavouriteButton } from '@/components/discovery/favourite-button';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
 import { useScrollLock } from '@/lib/discovery/use-scroll-lock';
 import {
+  EXPANDED_CARD_FRACTION,
   EXPANDED_SNAP_INDEX,
   INITIAL_SNAP_INDEX,
   resolveSnap,
   snapPixels,
 } from '@/lib/discovery/sheet-snap';
-import { formatFromPrice } from '@/lib/discovery/format';
+import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
 import type { EventCard as EventCardData } from '@/lib/api/types';
 import {
   DECK_POSTER_ATTR,
+  installPosterOriginTracker,
   isUsableSource,
   readCardPoster,
   readDeckPoster,
@@ -143,7 +145,7 @@ const SPRING = { type: 'spring', stiffness: 340, damping: 36, mass: 0.9 } as con
  * making the reader wait. It is also the scrim's duration, so the list fading
  * and the poster arriving are one movement rather than two.
  */
-const FLIGHT_MS = 300;
+const FLIGHT_MS = 220;
 /**
  * How far back a neighbouring card sits when it is fully off-centre.
  *
@@ -156,21 +158,73 @@ const PEEK_SCALE = 0.97;
 const PEEK_OPACITY = 0.7;
 /** How far a gesture must travel before it is allowed to commit to an axis. */
 const COMMIT_SLOP = 10;
+/**
+ * How much longer the horizontal component must be before a gesture is read as
+ * a swipe rather than a drag. See the commit rule.
+ */
+const AXIS_DOMINANCE = 1.2;
+/**
+ * The same, for a gesture that began on the overlay rather than the content.
+ * Smaller, because there is no scroller under the finger whose scroll it
+ * might be stealing — the only thing to protect against is a tap, and a tap
+ * does not travel eight pixels.
+ */
+const OVERLAY_SLOP = 8;
 /** Fraction of the viewport the active card occupies while the deck is inset. */
 const CARD_FRACTION = 0.88;
 /** Gap between cards in the track, in px, while the deck is inset. */
 const CARD_GAP = 10;
 /**
- * The same two, once the sheet is expanded. Wider and tighter, NOT full-bleed:
- * the neighbours stay in frame so the deck is still a deck at its tallest.
+ * The gap between cards once the sheet is expanded. Wider cards and a tighter
+ * gap, NOT full-bleed: the neighbours stay in frame so the deck is still a deck
+ * at its tallest. The width itself is `EXPANDED_CARD_FRACTION`, which lives in
+ * `sheet-snap` because the pre-hydration cover reads it too.
  */
-const EXPANDED_CARD_FRACTION = 0.96;
 const EXPANDED_CARD_GAP = 6;
-/** Seconds of travel to project a horizontal release along, to pick a card. */
-const FLICK_PROJECTION = 0.14;
+/**
+ * How far a horizontal drag must go, as a share of one card stride, before a
+ * release ADVANCES rather than springs back — when there is no flick to carry it.
+ *
+ * It was implicitly HALF a stride, because the rule was `Math.round(-x / stride)`:
+ * a slow drag had to cross ~176px of a 390px screen to change card, while the
+ * vertical axis on the same surface commits at a fraction of that. A quarter
+ * reads as "I clearly meant it" without making a hesitant drag jump.
+ */
+const ADVANCE_FRACTION = 0.25;
+/** A flick faster than this advances even if the finger barely moved. px/s. */
+const ADVANCE_VELOCITY = 350;
+/**
+ * A velocity sample older than this is treated as ZERO.
+ *
+ * Velocity was a single instantaneous reading from the last `pointermove`. If
+ * the finger paused for 300ms before lifting, no move fired, the stale reading
+ * from before the pause survived, and the deck advanced on a gesture that had
+ * visibly stopped. The vertical axis had the identical defect. A finger that
+ * has been still for more than a few frames has no velocity, whatever the last
+ * event said.
+ */
+const VELOCITY_STALE_MS = 90;
+
+/** The release velocity, unless the finger had already come to rest. */
+function liveVelocity(velocity: number, lastAt: number, now: number): number {
+  return now - lastAt > VELOCITY_STALE_MS ? 0 : velocity;
+}
 
 export function EventWidgetDeck() {
-  const { isOpen, events, currentIndex, closeDeck, setCurrentIndex } = useEventDeck();
+  const { isOpen, events, currentIndex, closeDeck, setCurrentIndex, openOptions } = useEventDeck();
+  const router = useRouter();
+  const pathname = usePathname();
+  // Mirrors, so callbacks read the latest values without re-binding on every
+  // render — the gesture handlers are captured by window listeners for the
+  // life of a drag and must not go stale mid-gesture.
+  const openOptionsRef = React.useRef(openOptions);
+  openOptionsRef.current = openOptions;
+  const isOpenRef = React.useRef(isOpen);
+  isOpenRef.current = isOpen;
+  /** Set once a FEED open has pushed a history entry, so back can close it. */
+  const pushedHistoryRef = React.useRef(false);
+  /** The URL the deck was opened on, so a route-origin close knows it has left. */
+  const openedPathRef = React.useRef<string | null>(null);
   const reduceMotion = useReducedMotion();
 
   const currentEvent = events[currentIndex] ?? events[0] ?? null;
@@ -192,13 +246,34 @@ export function EventWidgetDeck() {
   );
   useScrollLock(isOpen);
 
+  // Records which card was last pressed, so the RETURN flies back to the one
+  // the reader actually touched rather than to whichever copy of that event
+  // happens to come first in the document. Installed from here because the
+  // deck is mounted for the life of the site shell, so it is installed exactly
+  // once and is listening before any card can be pressed.
+  React.useEffect(() => installPosterOriginTracker(), []);
+
   const [activeSubSheet, setActiveSubSheet] = React.useState<SubSheetType>(null);
   const [snapIndex, setSnapIndex] = React.useState(INITIAL_SNAP_INDEX);
   const [viewport, setViewport] = React.useState({ width: 0, height: 0 });
   const [ctaHeight, setCtaHeight] = React.useState(0);
 
   const y = useMotionValue(0);
-  const gestureRef = React.useRef({ x: 0, y: 0, committed: false });
+  /**
+   * The gesture in progress. `origin` is where the finger LANDED — on the
+   * scrolling content, or on the overlay (poster, scrim, empty space) — and it
+   * is what lets one commit rule serve both: the content path has a scroller
+   * under the finger that may want the vertical movement, the overlay path
+   * never does. `pointerId` stops a second finger, or a descendant that has
+   * already claimed this one, from arming the same gesture twice.
+   */
+  const gestureRef = React.useRef<{
+    x: number;
+    y: number;
+    committed: boolean;
+    origin: 'content' | 'overlay';
+    pointerId: number;
+  }>({ x: 0, y: 0, committed: false, origin: 'content', pointerId: -1 });
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const ctaRef = React.useRef<HTMLDivElement>(null);
   /** True when the gesture that just ended actually moved the sheet, so the
@@ -386,13 +461,45 @@ export function EventWidgetDeck() {
     alt: string;
   } | null>(null);
 
+  /**
+   * ── WHERE THE SHEET IS ON ITS FIRST PAINTED FRAME ──────────────────────
+   *
+   * `y` is a motion value initialised to 0, and until now it was first set
+   * inside the passive enter effect below — which runs AFTER the browser has
+   * painted. On the very first open of a session that painted one frame with
+   * the sheet at translateY(0): a full-height card covering the whole screen,
+   * poster hidden, at the resting position of nothing. From the feed nobody
+   * ever saw it, because a previous close had left `y` off-screen. From a
+   * shared link it is the first frame the reader sees, on the platform's
+   * most-shared URL.
+   *
+   * A layout effect runs before paint. A deep link lands the sheet directly at
+   * its expanded snap — it IS the page, and the brief is explicit that it must
+   * not arrive minimized and wait for a gesture. A feed open parks it below
+   * the viewport, where the passive effect then decides how it enters.
+   */
+  React.useLayoutEffect(() => {
+    if (!isOpen || viewport.height === 0) return;
+    const snaps = snapPixels(viewport.height);
+    if (openOptionsRef.current.expanded) {
+      setSnapIndex(EXPANDED_SNAP_INDEX);
+      y.set(snaps[EXPANDED_SNAP_INDEX]);
+      return;
+    }
+    y.set(viewport.height);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, viewport.height]);
+
   // Enter: from just below the viewport up to the resting snap, with the
   // tapped event already centred.
   React.useEffect(() => {
     if (!isOpen || viewport.height === 0) return;
+    justOpenedRef.current = true;
+    // Opened already expanded — a deep link. There is no card on the page to
+    // fly from and no entrance to play; the layout effect above has placed it.
+    if (openOptionsRef.current.expanded) return;
     const resting = snapPixels(viewport.height)[INITIAL_SNAP_INDEX];
     setSnapIndex(INITIAL_SNAP_INDEX);
-    justOpenedRef.current = true;
     if (reduceMotion) {
       y.set(resting);
       return;
@@ -432,6 +539,17 @@ export function EventWidgetDeck() {
     // it when the reader swipes would drop the sheet back to its entry height.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, viewport.height]);
+
+  // A LAYOUT effect, so the neighbours are already dimmed and set back in the
+  // first frame the deck paints. `applyTrack` runs again from the ordinary
+  // effects a frame later, which is fine — it is idempotent for the same offset.
+  React.useLayoutEffect(() => {
+    if (!isOpen || viewport.width === 0) return;
+    applyTrack(restingX(currentIndex), false);
+    // Only on open and on a viewport change. `currentIndex` is handled by the
+    // centring effect, which also knows whether to settle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, viewport.width]);
 
   React.useEffect(() => {
     if (!isOpen) {
@@ -567,9 +685,44 @@ export function EventWidgetDeck() {
    * graceful handling the brief asks for, and it is the same code path that
    * shipped before any of this existed.
    */
+  /**
+   * What happens once the close animation has finished — the ONE place that
+   * decides where the reader ends up.
+   *
+   * From the feed: the page underneath is still there, so simply close, and
+   * pop the history entry the open pushed (see below) so the browser's own
+   * back stack stays honest.
+   *
+   * From a route (a shared link): there is no feed underneath — the page
+   * under the deck is the standalone event page, which on a phone must never
+   * be shown. So closing NAVIGATES to the list instead, and the deck stays
+   * mounted over the outgoing page until the new route has arrived (see the
+   * pathname effect), which is what keeps the old page from ever painting.
+   *
+   * This is deliberately NOT triggered by `closeDeck` itself, which the
+   * "Book tickets" link calls on its way to checkout. Wiring navigation to the
+   * close STATE would race two client navigations on the money path — one to
+   * the booking, one back to the list.
+   */
+  const finishClose = React.useCallback(() => {
+    if (openOptionsRef.current.origin === 'route') {
+      // REPLACE, not push. Push would leave the event URL in the stack behind
+      // the list, so browser back returns to it, `DeckBoot` mounts fresh and
+      // reopens the deck, and closing pushes the list again — the reader can
+      // never get PAST the event they arrived on.
+      router.replace('/events');
+      return;
+    }
+    closeDeck();
+    if (pushedHistoryRef.current) {
+      pushedHistoryRef.current = false;
+      window.history.back();
+    }
+  }, [closeDeck, router]);
+
   const dismiss = React.useCallback(() => {
     if (reduceMotion || viewport.height === 0) {
-      closeDeck();
+      finishClose();
       return;
     }
 
@@ -596,8 +749,61 @@ export function EventWidgetDeck() {
       return;
     }
 
-    animate(y, viewport.height, { ...SPRING, onComplete: closeDeck });
-  }, [closeDeck, viewport.height, viewport.width, y, reduceMotion]);
+    animate(y, viewport.height, { ...SPRING, onComplete: finishClose });
+  }, [finishClose, viewport.height, viewport.width, y, reduceMotion]);
+
+  // ── THE THREE NON-POINTER WAYS OUT ─────────────────────────────────────
+  //
+  // The back arrow is gone, so these are no longer conveniences — without
+  // them the deck is a dialog with no keyboard exit at all.
+
+  // Escape. The deck is a hand-rolled `role="dialog"`, not a library one, so
+  // nothing gave it this for free.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, dismiss]);
+
+  // Hardware / browser back. A FEED open pushes one history entry so that
+  // back closes the deck rather than navigating the page underneath while
+  // the deck stays up — which is what it did. A ROUTE open pushes nothing:
+  // the URL already is the event, and back leaving it is correct.
+  React.useEffect(() => {
+    if (!isOpen || openOptionsRef.current.origin === 'route') return;
+    window.history.pushState({ eeDeck: true }, '');
+    pushedHistoryRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  React.useEffect(() => {
+    const onPop = () => {
+      if (!isOpenRef.current || openOptionsRef.current.origin === 'route') return;
+      pushedHistoryRef.current = false;
+      closeDeck();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [closeDeck]);
+
+  // A route-origin deck closes only once the NEXT route is on screen, so the
+  // standalone page it was covering never gets a frame of its own.
+  React.useEffect(() => {
+    if (!isOpen) {
+      openedPathRef.current = null;
+      return;
+    }
+    if (openedPathRef.current === null) {
+      openedPathRef.current = pathname;
+      return;
+    }
+    if (openOptionsRef.current.origin === 'route' && pathname !== openedPathRef.current) {
+      closeDeck();
+    }
+  }, [isOpen, pathname, closeDeck]);
 
   /**
    * The vertical gesture, start to finish.
@@ -610,7 +816,11 @@ export function EventWidgetDeck() {
   const beginVerticalDrag = React.useCallback(
     (event: React.PointerEvent) => {
       const base = y.get();
-      const startY = event.clientY;
+      const pointerId = event.pointerId;
+      // A finger on the artwork or the scrim has no article under it. Without
+      // this the overlay path would scroll the content it is nowhere near —
+      // the poster would move the sheet AND spin the text behind it.
+      const ownsScroller = gestureRef.current.origin === 'content';
       let lastY = event.clientY;
       let lastAt = event.timeStamp;
       let velocity = 0;
@@ -642,16 +852,30 @@ export function EventWidgetDeck() {
        */
       const ceiling = snaps[EXPANDED_SNAP_INDEX] ?? 0;
       let sheetY = base;
-      let previousY = event.clientY;
+      /**
+       * The gesture's ORIGIN, not the point at which it was allowed to commit.
+       *
+       * Committing costs `COMMIT_SLOP` (or `OVERLAY_SLOP`) of travel spent
+       * proving which axis was meant, and starting from the commit point threw
+       * that away: the sheet arrived ten pixels behind the finger and stayed
+       * there for the rest of the drag. Only the content path paid it, which
+       * is why dragging the handle always felt tighter than dragging the page.
+       */
+      let previousY =
+        gestureRef.current.pointerId === pointerId ? gestureRef.current.y : event.clientY;
 
       const move = (moveEvent: PointerEvent) => {
+        // A second finger's moves are not this gesture's. Both listeners are
+        // on `window`, so without the filter a two-finger touch drives one
+        // drag from two sources.
+        if (moveEvent.pointerId !== pointerId) return;
         const elapsed = moveEvent.timeStamp - lastAt;
         if (elapsed > 0) {
           velocity = ((moveEvent.clientY - lastY) / elapsed) * 1000;
           lastY = moveEvent.clientY;
           lastAt = moveEvent.timeStamp;
         }
-        if (Math.abs(moveEvent.clientY - startY) > 4) draggedRef.current = true;
+        if (Math.abs(moveEvent.clientY - event.clientY) > 4) draggedRef.current = true;
 
         let delta = moveEvent.clientY - previousY;
         previousY = moveEvent.clientY;
@@ -665,12 +889,12 @@ export function EventWidgetDeck() {
             sheetY += used;
             delta -= used;
           }
-          if (delta < 0 && scroller) scroller.scrollTop -= delta;
+          if (delta < 0 && scroller && ownsScroller) scroller.scrollTop -= delta;
         } else if (delta > 0) {
           // DOWN. Unwind the scroll first — a sheet that starts closing while
           // there is still text above the fold is a sheet that closes by
           // accident.
-          if (scroller && scroller.scrollTop > 0) {
+          if (scroller && ownsScroller && scroller.scrollTop > 0) {
             const used = Math.min(delta, scroller.scrollTop);
             scroller.scrollTop -= used;
             delta -= used;
@@ -685,13 +909,20 @@ export function EventWidgetDeck() {
       };
 
       const end = (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', end);
         window.removeEventListener('pointercancel', end);
         gestureRef.current.committed = false;
+        gestureRef.current.pointerId = -1;
         const resolution = resolveSnap({
-          y: y.get() + (endEvent.clientY - startY) * 0,
-          velocity,
+          // `y.get()` IS the live, resistance-damped position — the term that
+          // used to be added here was multiplied by zero, so it described
+          // nothing and only made the line look like it accounted for travel.
+          y: y.get(),
+          // A finger that paused before lifting has no velocity, whatever the
+          // last `pointermove` measured — see `liveVelocity`.
+          velocity: liveVelocity(velocity, lastAt, endEvent.timeStamp),
           snaps,
           viewportHeight: viewport.height,
         });
@@ -713,20 +944,61 @@ export function EventWidgetDeck() {
    * the pointer leaving the card it started on — which it always does, because
    * the card is moving out from under the finger.
    */
+  /**
+   * Where the track is RIGHT NOW, mid-settle included.
+   *
+   * `beginSwipe` used to take `restingX(currentIndex)` as its base — the
+   * position the track is heading FOR. Start a second swipe during the 340ms
+   * settle and the first `move` wrote that final offset with the transition
+   * switched off, so the deck jumped up to a whole card before it began
+   * following the finger. A swipe interrupting a swipe is the commonest thing
+   * a person does to a carousel they are browsing quickly.
+   *
+   * One computed read, once per gesture, on pointerdown — never per frame.
+   * During a CSS transition the computed transform is the INTERPOLATED value,
+   * which is exactly the number wanted and the only place it exists.
+   */
+  const readTrackX = React.useCallback(
+    (fallback: number) => {
+      const node = trackRef.current;
+      if (!node || typeof window === 'undefined') return fallback;
+      try {
+        const transform = window.getComputedStyle(node).transform;
+        if (!transform || transform === 'none') return fallback;
+        const matrix = new DOMMatrixReadOnly(transform);
+        return Number.isFinite(matrix.m41) ? matrix.m41 : fallback;
+      } catch {
+        // DOMMatrix is missing in some test environments, and a browser that
+        // hands back something unparseable is not worth a thrown gesture.
+        return fallback;
+      }
+    },
+    [],
+  );
+
   const beginSwipe = React.useCallback(
     (event: React.PointerEvent) => {
       if (stride === 0) return;
+      const pointerId = event.pointerId;
       swipeRef.current = {
         startX: event.clientX,
-        base: restingX(currentIndex),
+        base: readTrackX(restingX(currentIndex)),
         lastX: event.clientX,
         lastAt: event.timeStamp,
         velocity: 0,
       };
 
+      draggedRef.current = false;
       const move = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
         const swipe = swipeRef.current;
         if (!swipe) return;
+        // The click that follows a drag must be suppressed for THIS axis as
+        // much as for the vertical one. It was not: `draggedRef` was written
+        // only inside `beginVerticalDrag`, so a horizontal swipe begun on the
+        // overlay ended in a `click` that the overlay read as "dismiss" — the
+        // reader swiped to the next event and the deck closed on it.
+        if (Math.abs(moveEvent.clientX - swipe.startX) > 4) draggedRef.current = true;
         const elapsed = moveEvent.timeStamp - swipe.lastAt;
         if (elapsed > 0) {
           swipe.velocity = ((moveEvent.clientX - swipe.lastX) / elapsed) * 1000;
@@ -743,21 +1015,41 @@ export function EventWidgetDeck() {
       };
 
       const end = (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', end);
         window.removeEventListener('pointercancel', end);
         const swipe = swipeRef.current;
         swipeRef.current = null;
         gestureRef.current.committed = false;
+        gestureRef.current.pointerId = -1;
         if (!swipe) return;
 
-        // Projected along the release velocity, exactly like the vertical
-        // snap: a quick flick that has barely moved still lands on the next
-        // card, instead of springing back under the thumb that threw it.
+        /**
+         * The release rule, and both halves of it are deliberate.
+         *
+         * A flick that has barely moved still carries — that is what
+         * `liveVelocity` is for, and it is what makes a fast swipe feel
+         * responsive rather than ignored. A slow drag commits once it has
+         * covered `ADVANCE_FRACTION` of a stride, which is far less than the
+         * half a stride the old `Math.round` demanded and is the difference
+         * between "it follows me" and "it resists me". Either one is enough;
+         * neither alone is required.
+         *
+         * One card at a time. A projection that would skip two cards is the
+         * flick projection outrunning what a person can see, and landing two
+         * events away from where the finger was is disorienting rather than
+         * fast.
+         */
         const travelled = endEvent.clientX - swipe.startX;
-        const projected = swipe.base + travelled + swipe.velocity * FLICK_PROJECTION;
-        const nearest = Math.round(-projected / stride);
-        const clamped = Math.max(0, Math.min(nearest, events.length - 1));
+        const velocity = liveVelocity(swipe.velocity, swipe.lastAt, endEvent.timeStamp);
+        const farEnough = Math.abs(travelled) >= stride * ADVANCE_FRACTION;
+        const fastEnough =
+          Math.abs(velocity) >= ADVANCE_VELOCITY && Math.sign(velocity) === Math.sign(travelled);
+        const direction = travelled < 0 ? 1 : travelled > 0 ? -1 : 0;
+        const next =
+          direction !== 0 && (farEnough || fastEnough) ? currentIndex + direction : currentIndex;
+        const clamped = Math.max(0, Math.min(next, events.length - 1));
         if (clamped === currentIndex) applyTrack(restingX(clamped), true);
         else goTo(clamped);
       };
@@ -766,13 +1058,24 @@ export function EventWidgetDeck() {
       window.addEventListener('pointerup', end);
       window.addEventListener('pointercancel', end);
     },
-    [applyTrack, currentIndex, events.length, goTo, restingX, stride],
+    [applyTrack, currentIndex, events.length, goTo, readTrackX, restingX, stride],
   );
 
   /** The handle always drags the SHEET — nothing scrolls there. */
   const startSheetDrag = React.useCallback(
     (event: React.PointerEvent) => {
-      gestureRef.current.committed = true;
+      // The WHOLE record, not just `committed`. The overlay now sits under the
+      // handle in the same stacking context; a handle press that left the
+      // pointer id unset would let the overlay arm a second vertical drag on
+      // the same finger, and two drags each holding their own `base` drive the
+      // sheet at double speed.
+      gestureRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        committed: true,
+        origin: 'content',
+        pointerId: event.pointerId,
+      };
       beginVerticalDrag(event);
     },
     [beginVerticalDrag],
@@ -795,24 +1098,114 @@ export function EventWidgetDeck() {
   }, [snapIndex, snapTo]);
 
   const onContentPointerDown = React.useCallback((event: React.PointerEvent) => {
-    gestureRef.current = { x: event.clientX, y: event.clientY, committed: false };
+    gestureRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      committed: false,
+      origin: 'content',
+      pointerId: event.pointerId,
+    };
   }, []);
 
-  const onContentPointerMove = React.useCallback(
+  /**
+   * ── THE OVERLAY IS A GESTURE SURFACE, NOT A DEAD ZONE ──────────────────
+   *
+   * Only two elements could start a vertical drag: the handle and the content
+   * scroller. Everything above the sheet — the artwork, the scrim, the empty
+   * space either side — was a poster layer with `pointer-events: none` over a
+   * scrim whose only handler was `onClick={dismiss}`. So an upward swipe that
+   * began on the picture did nothing while the finger moved and, on release,
+   * fired the click and CLOSED the deck. Not ignored: the opposite of what
+   * was asked.
+   *
+   * A finger landing here has no scroller under it, so there is nothing to
+   * arbitrate with: any upward movement is the sheet's, any downward movement
+   * is the sheet's, and sideways is the deck's. The slop is smaller than the
+   * content's because there is no scroll to protect — a tap is still a tap,
+   * because a tap does not move eight pixels.
+   */
+  const onOverlayPointerDown = React.useCallback((event: React.PointerEvent) => {
+    // A descendant (the handle, the scroller) that already claimed this finger
+    // wins. React bubbles child-first, so its record is already written.
+    if (gestureRef.current.pointerId === event.pointerId && gestureRef.current.committed) return;
+    gestureRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      committed: false,
+      origin: 'overlay',
+      pointerId: event.pointerId,
+    };
+    draggedRef.current = false;
+  }, []);
+
+  /** Tap the overlay to leave — unless that "tap" was the end of a drag. */
+  const onOverlayClick = React.useCallback(() => {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    // On a shared link there is no feed to go back to, and a mis-tap on the
+    // artwork ejecting the reader from the URL they were sent is the wrong
+    // outcome. Escape, a downward drag and the browser's back all still leave.
+    if (openOptionsRef.current.origin === 'route') return;
+    dismiss();
+  }, [dismiss]);
+
+  /**
+   * The gesture has already moved further than a tap ever does.
+   *
+   * ── WHY IT IS SET HERE AND NOT ONLY IN THE DRAG ───────────────────────
+   *
+   * Both `begin*` helpers write `draggedRef.current = false` on entry and only
+   * raise it from their own window `pointermove` — which needs a move AFTER the
+   * gesture committed. A finger that travels the slop in one event and lifts
+   * (a short flick on the artwork, and every synthetic drag a test performs)
+   * therefore released with the flag still false, the plate's click fired, and
+   * the DECK CLOSED on a swipe.
+   *
+   * Committing is itself proof of travel — `COMMIT_SLOP` / `OVERLAY_SLOP` px of
+   * it — so the flag is raised at that moment. It is raised AFTER the helper
+   * runs, because the helper clears it.
+   */
+  const markDragged = React.useCallback(() => {
+    draggedRef.current = true;
+  }, []);
+
+  const commitGesture = React.useCallback(
     (event: React.PointerEvent) => {
       const gesture = gestureRef.current;
-      if (gesture.committed) return;
+      if (gesture.committed || gesture.pointerId !== event.pointerId) return;
       const dx = event.clientX - gesture.x;
       const dy = event.clientY - gesture.y;
-      if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
+      const slop = gesture.origin === 'overlay' ? OVERLAY_SLOP : COMMIT_SLOP;
+      if (Math.abs(dx) < slop && Math.abs(dy) < slop) return;
 
       // Horizontal always belongs to the deck, AT EVERY SNAP STATE — there is
       // nothing to scroll sideways inside the content, and a full-screen event
       // that can no longer be swiped past is the thing this deck exists not to
       // be.
-      if (Math.abs(dx) > Math.abs(dy)) {
+      //
+      // A MARGIN, not a bare comparison. The poster is a large empty surface
+      // and a thumb pivots from a knuckle, so an upward swipe over it draws an
+      // arc that crosses 45 degrees for a frame or two near the start. On a
+      // bare `>` that frame decides the gesture, and "I swiped up and it
+      // changed the event" is the commonest way this reads as broken.
+      if (Math.abs(dx) > Math.abs(dy) * AXIS_DOMINANCE) {
         gesture.committed = true;
         beginSwipe(event);
+        markDragged();
+        return;
+      }
+
+      // From the overlay every vertical movement is the sheet's — there is no
+      // scroller under the finger whose turn it might be. No `atTop` gate and
+      // no `isExpanded` gate: at the ceiling an upward drag simply meets the
+      // resistance the drag handler already applies, which is the honest
+      // answer to "it will not go any further".
+      if (gesture.origin === 'overlay') {
+        gesture.committed = true;
+        beginVerticalDrag(event);
+        markDragged();
         return;
       }
 
@@ -822,6 +1215,7 @@ export function EventWidgetDeck() {
       if (dy > 0 && atTop) {
         gesture.committed = true;
         beginVerticalDrag(event);
+        markDragged();
         return;
       }
       // Upward from the top, while there is still room to grow: expand. This is
@@ -831,13 +1225,16 @@ export function EventWidgetDeck() {
       if (dy < 0 && atTop && !isExpanded) {
         gesture.committed = true;
         beginVerticalDrag(event);
+        markDragged();
         return;
       }
       // Neither: the browser scrolls the content, natively, uninterrupted.
       gesture.committed = true;
     },
-    [beginSwipe, beginVerticalDrag, isExpanded],
+    [beginSwipe, beginVerticalDrag, isExpanded, markDragged],
   );
+  const onContentPointerMove = commitGesture;
+  const onOverlayPointerMove = commitGesture;
 
   if (!isOpen || !currentEvent) return null;
 
@@ -860,8 +1257,9 @@ export function EventWidgetDeck() {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: reduceMotion ? 0 : FLIGHT_MS / 1000, ease: [0.22, 1, 0.36, 1] }}
-        onClick={dismiss}
-        className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
+        // Decoration only. Its tap-to-close moved to the gesture plate below,
+        // where it can be guarded against the click that follows a drag.
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
         aria-hidden
       />
 
@@ -881,7 +1279,7 @@ export function EventWidgetDeck() {
             // so the deck survives exactly as long as the picture that is
             // still moving across it. Unmounting on the spring instead would
             // cut the poster off mid-flight.
-            if (flight.direction === 'out') closeDeck();
+            if (flight.direction === 'out') finishClose();
           }}
         />
       ) : null}
@@ -933,64 +1331,40 @@ export function EventWidgetDeck() {
                 // from the constants above, so it stays correct on any
                 // viewport (and if the poster's height ever changes).
                 {...(index === currentIndex ? { [DECK_POSTER_ATTR]: '' } : {})}
-                className="absolute inset-x-0 top-0 h-[62dvh] overflow-hidden rounded-3xl bg-muted"
+                className="absolute inset-x-0 top-0 h-[68dvh] overflow-hidden rounded-3xl bg-muted"
               >
                 <Poster event={event} priority={index === currentIndex} />
-                {/* A scrim under the floating controls, so a white poster
-                    cannot swallow them. */}
-                <div
-                  className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent"
-                  aria-hidden
-                />
+                {/* NO scrim across the top of the artwork. It existed to keep
+                    the floating back arrow and heart legible over a pale
+                    poster; both are gone, so all it does now is darken the
+                    top quarter of the one image the page is about. */}
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ── THE CONTROLS BELONG TO THE SCREEN, NOT TO THE SHEET ────────────
-          They used to float over the card, which was right when the card WAS
-          the whole screen and the poster scrolled inside it. With the poster
-          anchored behind and the sheet resting at 45%, a control pinned to the
-          sheet's top edge sits on the white panel halfway down the screen —
-          nowhere near where a thumb reaches for Back.
+      {/* ── THE GESTURE PLATE ──────────────────────────────────────────────
+          Sits between the artwork and the sheet in DOM order, so it is BELOW
+          the sheet, the handle, the scroller, the CTA and every sub-sheet —
+          each of those keeps its own touches exactly as before — and above
+          the poster layer, which is `pointer-events-none` on purpose. Its live
+          hit region is therefore precisely the strip that used to be dead: the
+          picture, the scrim, the space either side. A drag beginning anywhere
+          there now moves the sheet; a sideways one changes event; a tap
+          leaves. `touch-none` keeps the browser from taking the gesture for
+          its own scrolling first.
 
-          Here they are pinned to the deck root, over the artwork, and they
-          stay there whatever the sheet does. Once the sheet is FULL the poster
-          is covered, so they take a surface of their own rather than sitting
-          on an event's title. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-3 pt-3">
-        <button
-          type="button"
-          onClick={dismiss}
-          aria-label="Back to events"
-          className={cn(
-            'pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90',
-            isExpanded ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
-          )}
-        >
-          <ArrowLeft className="size-5" aria-hidden />
-        </button>
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-body-sm font-semibold transition-opacity duration-200',
-            isExpanded ? 'text-foreground opacity-100' : 'opacity-0',
-          )}
-          aria-hidden
-        >
-          {currentEvent?.title}
-        </span>
-        {currentEvent ? (
-          <FavouriteButton
-            eventId={currentEvent.id}
-            title={currentEvent.title}
-            className={cn(
-              'pointer-events-auto size-10 shrink-0 rounded-full transition-transform active:scale-90',
-              isExpanded ? 'bg-surface text-foreground shadow-md' : 'bg-black/50 text-white backdrop-blur-md',
-            )}
-          />
-        ) : null}
-      </div>
+          The back arrow and the favourite button that used to float here are
+          gone — see the keyboard and history effects for the exits that
+          replace the arrow, and the account area for saving. */}
+      <div
+        aria-hidden
+        onPointerDown={onOverlayPointerDown}
+        onPointerMove={onOverlayPointerMove}
+        onClick={onOverlayClick}
+        className="absolute inset-0 touch-none"
+      />
 
       {/* The SHEET. Drags on Y only; it is transparent, because the visible
           panels are the cards inside the track. */}
@@ -1024,17 +1398,23 @@ export function EventWidgetDeck() {
               >
                 <div
                   data-deck-card={active ? 'active' : 'peek'}
-                  // The RESTING values, for the first paint only. `applyTrack`
-                  // takes over on the frame after mount and drives both
-                  // continuously from the track offset — see the note there.
-                  // Without this the neighbours would flash at full prominence
-                  // for exactly one frame on open.
-                  style={{
-                    transform: `scale(${active ? 1 : PEEK_SCALE})`,
-                    opacity: active ? 1 : PEEK_OPACITY,
-                  }}
+                  // The peeking strips are part of "the sides". They sit
+                  // INSIDE the sheet, so the gesture plate behind it never
+                  // sees them — a drag begun on the sliver of the next event
+                  // did nothing at all. They carry no controls and no
+                  // scroller, so the overlay rule applies to them exactly.
+                  onPointerDown={active ? undefined : onOverlayPointerDown}
+                  onPointerMove={active ? undefined : onOverlayPointerMove}
+                  // NO inline transform/opacity here, deliberately. There was
+                  // one, meant as a first-paint value for `applyTrack` to take
+                  // over — but React re-applies inline styles on every render,
+                  // so each index flip re-landed both properties instantly
+                  // while the cell's transition was still `none`, and the
+                  // settle cross-fade never ran. `applyTrack` is the ONLY
+                  // writer; the layout effect gives the first paint its values
+                  // before the browser draws.
                   className={cn(
-                    'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-2xl',
+                    'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-deck',
                     // ── ALL FOUR CORNERS, IN EVERY STATE ─────────────────
                     // It was `rounded-t-3xl` only, so the card met the bottom
                     // of the screen with two hard corners and the neighbours
@@ -1142,9 +1522,36 @@ function Poster({ event, priority }: { event: EventCardData; priority?: boolean 
  * cost a fetch and a subtree each for a sliver.
  */
 function NeighbourCard({ event }: { event: EventCardData }) {
+  /**
+   * Shaped like the TOP of an active card — handle, title, date line — rather
+   * than a title alone on a gradient.
+   *
+   * On release the incoming neighbour is swapped for a full `ActiveCard` in the
+   * same frame the index changes. When the neighbour looked nothing like the
+   * card that replaces it, that swap read as a REPLACE: a slab with three lines
+   * of text became a page with a handle, rows and a CTA bar in one frame. When
+   * the neighbour already carries the same first hundred pixels, the swap only
+   * fills in what was below the fold, and the eye reads the card as having
+   * been there all along.
+   *
+   * Still no data fetch and no subtree: twenty of these are mounted at once.
+   */
   return (
-    <div className="relative flex h-full w-full items-start overflow-hidden bg-gradient-to-b from-surface to-background px-3 pt-11">
-      <p className="line-clamp-3 text-body-sm font-bold text-foreground">{event.title}</p>
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
+      <div className="flex shrink-0 justify-center pb-1 pt-2.5" aria-hidden>
+        <span className="h-1.5 w-12 rounded-full bg-border-strong" />
+      </div>
+      <div className="flex flex-col gap-1.5 px-5 pt-5">
+        <p className="line-clamp-2 text-h3 font-extrabold leading-tight text-foreground">
+          {event.title}
+        </p>
+        {event.starts_at ? (
+          <p className="text-body-sm font-semibold text-primary">
+            {formatEventDate(event.starts_at)}
+            {formatEventTime(event.starts_at) ? ` · ${formatEventTime(event.starts_at)}` : ''}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
