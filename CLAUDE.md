@@ -1044,6 +1044,104 @@ auth-panel.tsx` is rendered by BOTH the standalone `/sign-in` route and the
   never leaves the origin. One line in `config/settings/base.py` —
   `frontend/BACKLOG.md` item 17.
 
+## The organizer portal: money that is real, and a wizard you can reopen
+
+A pass over the organizer surface added three read endpoints, an editor for
+events that already exist, and fixed four controls that wrote nowhere. Six
+rules come out of it.
+
+**1. THE FUNNEL HAS NO IMPRESSIONS, AND THAT IS THE FEATURE.**
+`GET /organizer/funnel` reports bookings started, bookings paid, conversion,
+capacity, tickets sold, quota fill, revenue and repeat-attendee share. It was
+asked to also carry Impressions, Detail Views, Add to Cart and CTR. The platform
+measures none of them — there is no view, impression, session or analytics-event
+model anywhere in the backend, no beacon and no middleware — so they are ABSENT
+rather than faked or shown empty. An organizer reading "Impressions: 0"
+concludes nobody saw their event, which is a specific and false claim; a column
+that was never promised makes no claim at all. Getting them means a tracking
+pipeline, a decision about the CDN-cached public read whose warm path is 0
+queries, and its own release.
+
+`bookings_started` counts EVERY booking row including expired holds — a
+reserved-then-lapsed hold IS the abandonment conversion measures, so it belongs
+in the denominator.
+
+**2. A MONTH IS COMPARED AGAINST THE SAME ELAPSED SPAN OF THE PREVIOUS ONE.**
+`get_earnings` compares this month so far against last month's first N days,
+clamped at `month_start`. Comparing a partial month against a complete one reads
+as a 90% collapse on the 3rd and would read that way every month until the 30th.
+The clamp matters separately: 30 days elapsed in March runs past the end of
+February, and without it the baseline spills into March and counts the first
+days of this month on BOTH sides of the comparison. `comparison_days` is
+returned so the UI can say what it compared instead of implying a full month.
+
+**3. NULL IS NOT ZERO, ON EVERY RATE.** Conversion with no bookings started,
+quota fill on an event with no tiers, revenue-per-attendee with nobody who has
+paid — each is `null` and renders as a blank with a reason, never `0`. "0%
+conversion" and "nothing has happened yet" look identical to a careless renderer
+and completely different to the person reading them. This is the property with
+tests, and each was confirmed to FAIL with the bug reintroduced.
+
+**4. AN EDITOR MUST NOT READ ITS OPTIMISTIC LOCKS OUT OF A SHARED CACHE.**
+`/dashboard/events/{id}/edit` is the create wizard hydrated from the server. Its
+tiers come from `GET /organizer/events/{id}/ticket-types` (`private, no-store`),
+NOT the public `GET /events/{id}/ticket-types`, which is `public` with an
+`s-maxage` and a stale-while-revalidate window.
+
+The public one is correct for the ticket panel and wrong here. Every row carries
+`version`; the editor's writes are conditional `UPDATE ... WHERE version =
+:expected`; a version from a shared cache may be one save behind. The failure is
+not a stale figure on a screen — it is a 409 the save engine answers by
+RELOADING rather than retrying, so the organizer edits, saves, is reset, and
+never learns why. The window is ~15s, which is exactly wide enough to cover
+"saved, then reopened the editor". It answers 404 identically for "not yours"
+and "does not exist", so it cannot be used to test whether an id is real.
+
+**`draftFromEvent` is pure and tested because its failure is DATA LOSS.**
+`toPatchInput` sends the whole editable surface on every save — it is not a
+diff — so a field the mapper drops is not merely missing from the form, it is
+BLANKED on the next keystroke. A dropped `place_id` unpins the map; dropped
+`policies` deletes the refund terms. It loads the FACE price, never
+`effective_price`: a tier inside a live early-bird phase would otherwise have
+its discount saved as the permanent price and the real one lost.
+
+**The server wins, except where local is genuinely newer.** A stored draft is
+kept only when its `version` still matches what the server returned — the
+crash-recovery case. Any other version means somebody saved in between, and
+restoring over it would silently revert them. Dropped rather than merged.
+`savedEvent`/`savedTiers` are seeded from the SERVER draft, never the restored
+one, or a recovered edit would be marked already-saved and never written.
+
+**5. A CONTROL WHOSE JOB IS TO FAIL IS WORSE THAN NO CONTROL.** The edit route
+made a previously-unreachable state possible: a LIVE event open in a wizard
+whose Review step offered Submit unconditionally. `publish_event` accepts only
+`draft` and `rejected`. Review takes the status now and withdraws the action
+past those, keeping the checklist — "is this event complete" stays useful long
+after it is selling.
+
+**6. A STALE COMMENT IS NOT A DOCUMENTATION PROBLEM WHEN CODE IS WRITTEN TO
+MATCH IT.** Four organizer controls changed the draft, updated the preview,
+marked their step done and wrote NOTHING:
+
+- `category` was absent from `toPatchInput` and `patchFingerprint`, so every
+  event created through the wizard landed uncategorised, under no browse tile.
+  TypeScript never noticed because `category` was undeclared on
+  `CreateEventInput` and a conditional spread bypasses excess-property checks.
+- Tier `position` was never sent, so every tier was written at 0 while the
+  public panel sorts on it first. The cause was a comment in `ticket-builder`
+  asserting no such column existed — true when written, false once the column,
+  serializer and editable set arrived. An on-screen line told organizers
+  "Buyers always see tiers cheapest first".
+- Tier `description`/`perks` were missing from `tierFingerprint`, so edits to an
+  already-saved tier produced an identical fingerprint and no PATCH.
+- And `summariseTiers` re-sorted by price on the client, throwing the arranged
+  order away at the last step. A price sort was a reasonable PROXY when nothing
+  carried the organiser's real order; it is not one now.
+
+`toTierInput(tier, position)` takes position as a REQUIRED parameter rather than
+an optional one with a default — optional-with-default is how this regresses the
+next time somebody adds a call site.
+
 ## The organizer module's operations surface (four additions)
 
 `apps/organizer` is the per-organizer twin of `console` and is almost entirely
@@ -1478,12 +1576,19 @@ with it:
   nothing behind it.
 - **No bookings, tickets, scans or settlement.** They are `PROTECT`ed to the
   original.
-- **NO TICKET TYPES.** They belong to `ticketing`, and dependencies point one
-  way — ticketing imports events, never the reverse — so reaching across to
-  clone tier rows would invert the rule that keeps the modules separable. The
-  consequence is deliberate and stated in the API docstring: the copy cannot be
-  published until a tier is added, which is the publish check `ticketing`
-  registers.
+- **TICKET TYPES ARE COPIED.** This paragraph used to say the opposite — that
+  tiers were deliberately left behind because reaching across to clone them
+  would invert the events→ticketing dependency, and that a copy therefore could
+  not be published until a tier was added. That was true when clone shipped and
+  is not true now: `duplicate_event` calls
+  `TicketTypeRepository.copy_ticket_types_to(source, target, slot_map)` and then
+  recomputes the display denormals through `set_ticketing_fields`, so a copy
+  arrives with its tiers, its sessions, and a price. The dependency rule is
+  intact — `events` still does not import `ticketing` models, it calls a
+  repository method through the same seam the publish check uses.
+
+  Consequences worth knowing: a clone CAN be published immediately, and any UI
+  copy telling an organizer to add a tier first is wrong.
 
 FAQs and the running order ARE copied — they belong to `events`, and they are
 the retyping this exists to remove. **Media is not**, and that is not an
