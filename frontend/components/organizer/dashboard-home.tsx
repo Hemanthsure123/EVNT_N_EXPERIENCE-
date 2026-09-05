@@ -10,6 +10,7 @@ import { owedTotal } from '@/lib/organizer/attention';
 import type { EventRow } from '@/lib/api/organizer';
 import { EmptyState, ErrorState, Panel, Poster, Skeleton } from './primitives';
 import { ActivityFeed } from './activity-feed';
+import { EarningsStrip, InsightsCard } from './earnings';
 import { TodayPanel } from './today-panel';
 import { StatusBadge } from './status-badge';
 
@@ -78,6 +79,16 @@ export function DashboardHome() {
           the money column comes SECOND in the DOM so a phone gets "what's
           next" before "what you're owed", which is the order somebody checking
           between tasks needs them in. */}
+      {/* ── HOW THE BUSINESS IS DOING, THEN HOW TODAY IS GOING ───────────
+          Three cards, not six tiles. The six that were cut were six phrasings
+          of "today", sitting above a panel that already owned today — so they
+          competed with it and lost. These three answer a question the panel
+          cannot: lifetime, this month, and what a customer is worth. They come
+          FIRST because they are the slowest-moving numbers on the page and the
+          ones somebody scans once and stops thinking about; today's figures
+          are what they came to watch. */}
+      <EarningsStrip />
+
       <TodayPanel />
 
       <div className="grid gap-block xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] xl:gap-block-lg">
@@ -86,6 +97,7 @@ export function DashboardHome() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-block">
+          <InsightsCard />
           <MoneyStrip />
           <section className="flex flex-col gap-stack">
             <SectionHeading

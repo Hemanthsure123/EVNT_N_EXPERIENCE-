@@ -410,3 +410,79 @@ export type OrganizerReview = {
 
 export const fetchOrganizerReviews = (params: { event_id?: string; cursor?: string } = {}) =>
   api.get<Paginated<OrganizerReview>>(`/organizer/reviews${query(params)}`);
+
+/* ────────────────────────── earnings, funnel, insights ────────────────── */
+
+/**
+ * The three money questions `overview` cannot answer.
+ *
+ * `overview` is today against yesterday, which is the right window for "is the
+ * on-sale working" and the wrong one for "how is the business doing".
+ *
+ * `month_change_pct` compares this month so far against the SAME ELAPSED SPAN
+ * of last month, not against the whole of it — `comparison_days` is how many
+ * days that is, and it is exposed so the UI can say so rather than implying a
+ * full-month comparison it did not make.
+ */
+export type OrganizerEarnings = {
+  lifetime_revenue_minor: number;
+  lifetime_tickets: number;
+  lifetime_attendees: number;
+  /** Null, never 0, when nobody has paid yet: "no attendees" and "attendees
+   *  who paid nothing" are different facts and must not render alike. */
+  avg_revenue_per_attendee_minor: number | null;
+  month_revenue_minor: number;
+  month_change_pct: number | null;
+  comparison_days: number;
+  generated_at: string;
+};
+
+export const fetchOrganizerEarnings = () => api.get<OrganizerEarnings>('/organizer/earnings');
+
+/**
+ * Per-event conversion, quota fill and repeat share.
+ *
+ * ── WHAT IS DELIBERATELY NOT HERE ────────────────────────────────────────
+ *
+ * No impressions, no detail views, no add-to-cart, no CTR. The platform does
+ * not measure any of them — there is no view, impression, session or
+ * analytics-event model anywhere in the backend. Every field below is a count
+ * of rows that exist. Adding the other four means building a tracking
+ * pipeline, not widening this type.
+ */
+export type OrganizerFunnelRow = {
+  id: string;
+  title: string;
+  status: EventStatus;
+  starts_at: string;
+  /** EVERY booking row, any status. A reserved-then-expired hold is exactly
+   *  the abandonment the conversion rate measures, so it is the denominator. */
+  bookings_started: number;
+  bookings_paid: number;
+  conversion_pct: number | null;
+  capacity: number;
+  tickets_sold: number;
+  quota_fill_pct: number | null;
+  revenue_minor: number;
+  paying_attendees: number;
+  repeat_attendee_pct: number | null;
+};
+
+export const fetchOrganizerFunnel = (params: { cursor?: string } = {}) =>
+  api.get<Paginated<OrganizerFunnelRow>>(`/organizer/funnel${query(params)}`);
+
+/** What the server found worth saying, with the evidence it found it from. */
+export type OrganizerInsight = {
+  kind: string;
+  metric: string;
+  key: string;
+  label: string;
+  value: number;
+  /** How many rows the recommendation came from. Rendered, not hidden: advice
+   *  drawn from nine bookings and advice drawn from nine hundred are different
+   *  advice, and the server already refuses to answer below its minimum. */
+  sample_size: number;
+};
+
+export const fetchOrganizerInsights = () =>
+  api.get<{ data: OrganizerInsight[] }>('/organizer/insights').then((response) => response.data);

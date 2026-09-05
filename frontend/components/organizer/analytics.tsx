@@ -16,6 +16,7 @@ import {
 } from '@/lib/organizer/queries';
 import { EmptyState, ErrorState, Panel, Percent, Skeleton } from './primitives';
 import { cn } from '@/lib/utils/cn';
+import { FunnelTable } from './funnel-table';
 
 /**
  * Analytics.
@@ -248,6 +249,8 @@ export function Analytics() {
         />
         <BookingStatuses />
       </div>
+
+      <FunnelTable />
 
       <TopEvents />
 

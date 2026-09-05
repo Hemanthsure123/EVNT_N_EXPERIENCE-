@@ -16,7 +16,10 @@ import {
   fetchOrganizerActivity,
   fetchOrganizerBookings,
   fetchOrganizerBreakdown,
+  fetchOrganizerEarnings,
   fetchOrganizerFeed,
+  fetchOrganizerFunnel,
+  fetchOrganizerInsights,
   fetchOrganizerOverview,
   fetchOrganizerRefunds,
   fetchOrganizerReviews,
@@ -66,6 +69,9 @@ const KEY = {
   settlements: ['organizer', 'settlements'] as const,
   feed: (limit: number) => ['organizer', 'feed', limit] as const,
   refunds: (eventId: string) => ['organizer', 'refunds', eventId] as const,
+  earnings: ['organizer', 'earnings'] as const,
+  funnel: ['organizer', 'funnel'] as const,
+  insights: ['organizer', 'insights'] as const,
 };
 
 /** 15s. Fast enough to feel live during an on-sale, slow enough to be polite. */
@@ -156,6 +162,57 @@ export function useRefunds(eventId = '') {
     // somebody refunds a booking that was already refunded.
     staleTime: 0,
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Lifetime and month-to-date money.
+ *
+ * A LONGER `staleTime` than the overview's, on purpose: this answers "how is
+ * the business doing", and a lifetime total that visibly ticks while somebody
+ * reads it invites them to watch it instead of the page. It is cached
+ * server-side too, so the client window only stops a tab-switch refetching
+ * numbers that cannot meaningfully have moved. No polling, for the same
+ * reason — the overview is the surface that stays open during an on-sale.
+ */
+export function useOrganizerEarnings() {
+  return useQuery({
+    queryKey: KEY.earnings,
+    queryFn: fetchOrganizerEarnings,
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * The per-event funnel table.
+ *
+ * `staleTime: 0` like every other TABLE here, not like the aggregates: an
+ * organizer reads these rows to act on a specific event, and a stale quota-fill
+ * is how somebody concludes a show has room it does not have.
+ */
+export function useOrganizerFunnel() {
+  return useInfiniteQuery({
+    queryKey: KEY.funnel,
+    queryFn: ({ pageParam }) => fetchOrganizerFunnel({ cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => cursorFromNextLink(last.meta.next),
+    staleTime: 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Automated recommendations.
+ *
+ * The server returns an EMPTY list rather than a guess when there is not
+ * enough data, so an empty array here is a real answer and the caller must
+ * render nothing rather than a spinner or a placeholder.
+ */
+export function useOrganizerInsights() {
+  return useQuery({
+    queryKey: KEY.insights,
+    queryFn: fetchOrganizerInsights,
+    staleTime: 300_000,
   });
 }
 
