@@ -165,9 +165,9 @@ export function ReviewPrompt() {
 export function PendingReviewCard({ className }: { className?: string }) {
   const { data, isPending } = usePendingReviews();
   const [openId, setOpenId] = React.useState<string | null>(null);
-  const pending = data?.data ?? [];
 
   const uniquePending = React.useMemo(() => {
+    const pending = data?.data ?? [];
     const seen = new Set<string>();
     const list: PendingReview[] = [];
     for (const item of pending) {
@@ -177,7 +177,7 @@ export function PendingReviewCard({ className }: { className?: string }) {
       }
     }
     return list;
-  }, [pending]);
+  }, [data?.data]);
 
   // No skeleton and no empty state: an absent section is correct when there is
   // nothing to review, and a placeholder for a thing most people never have is
