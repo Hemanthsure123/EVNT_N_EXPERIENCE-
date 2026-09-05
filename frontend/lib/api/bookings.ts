@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Booking, CreateBookingResponse } from './types';
+import type { Booking, CreateBookingResponse, MyBooking, Paginated } from './types';
 
 /**
  * Creating a booking is the moment inventory is actually RESERVED — the backend
@@ -31,6 +31,17 @@ export function createBooking(
 
 export const fetchBooking = (bookingId: string) =>
   api.get<Booking>(`/bookings/${encodeURIComponent(bookingId)}`);
+
+/**
+ * The account's purchase history — every booking, in every state.
+ *
+ * Cursor-paginated and deliberately NOT a widening of `/me/tickets`: that
+ * endpoint answers "what can admit me at a gate", which is a strictly narrower
+ * question than "what have I bought". A refunded, used, cancelled or unpaid
+ * booking has no active ticket and belongs on this list.
+ */
+export const fetchMyBookings = (cursor?: string | null) =>
+  api.get<Paginated<MyBooking>>(`/me/bookings${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
 
 /**
  * Set (or clear, with `0`) the donation on a live hold.

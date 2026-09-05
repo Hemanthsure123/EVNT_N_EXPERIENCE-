@@ -26,5 +26,6 @@ urlpatterns = [
         api.ShareReceiptView.as_view(),
         name="booking-share-receipt",
     ),
+    path("me/bookings", api.MyBookingsView.as_view(), name="my-bookings"),
     path("me/tickets", api.MyTicketsView.as_view(), name="my-tickets"),
 ]

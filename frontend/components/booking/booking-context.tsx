@@ -47,7 +47,33 @@ type BookingContextValue = {
   clearSelection: () => void;
   /** The created booking, once the review step has reserved inventory. */
   booking: Booking | null;
-  setBooking: (booking: Booking | null) => void;
+  /**
+   * The selection signature `booking` was reserved FOR — `''` when unknown
+   * (a booking adopted from elsewhere, e.g. the confirmation screen's poll).
+   *
+   * ── WHY THIS IS HELD BESIDE THE BOOKING RATHER THAN DERIVED ─────────────
+   *
+   * The review screen has to answer one question every render: "is the hold I
+   * am about to charge for the order the URL is describing?" It used to answer
+   * it by comparing `booking.items` to the selection — and `POST /bookings`
+   * returned the SUMMARY serializer, which carries no items, so the comparison
+   * silently evaluated false and the screen rendered a mismatch. Measured on
+   * the live site: line items followed the current selection while the fee and
+   * the total followed the PREVIOUS one, one step behind on every quantity
+   * change.
+   *
+   * The endpoint returns its items now, but a guard that depends on the shape
+   * of a payload is a guard that a serializer change can switch off again
+   * without anything failing. This is the signature the client itself sent,
+   * recorded at the moment it sent it, so the comparison cannot be defeated by
+   * what comes back.
+   *
+   * It is ONE piece of state with the booking (see `reservation` below), not a
+   * second `useState`, because two setters is exactly how a booking and its
+   * signature drift apart.
+   */
+  reservedFor: string;
+  setBooking: (booking: Booking | null, reservedFor?: string) => void;
   /** The public Razorpay key that came back with the order; '' when unset. */
   paymentKeyId: string;
   setPaymentKeyId: (key: string) => void;
@@ -112,7 +138,22 @@ export function BookingProvider({
     [searchParams],
   );
 
-  const [booking, setBooking] = React.useState<Booking | null>(null);
+  /**
+   * The hold and what it was reserved for, as ONE value.
+   *
+   * A hold exists only while the review screen is open — the picker cancels any
+   * it finds on arrival, because holding stock while somebody is still choosing
+   * tiers is precisely what this funnel reserves late to avoid.
+   */
+  const [reservation, setReservation] = React.useState<{
+    booking: Booking | null;
+    reservedFor: string;
+  }>({ booking: null, reservedFor: '' });
+  const booking = reservation.booking;
+  const reservedFor = reservation.reservedFor;
+  const setBooking = React.useCallback((next: Booking | null, forSelection = '') => {
+    setReservation({ booking: next, reservedFor: next ? forSelection : '' });
+  }, []);
   const [paymentKeyId, setPaymentKeyId] = React.useState('');
   const [paymentProvider, setPaymentProvider] = React.useState('');
 
@@ -177,6 +218,7 @@ export function BookingProvider({
       setQuantity,
       clearSelection,
       booking,
+      reservedFor,
       setBooking,
       paymentKeyId,
       setPaymentKeyId,
@@ -195,6 +237,8 @@ export function BookingProvider({
       setQuantity,
       clearSelection,
       booking,
+      reservedFor,
+      setBooking,
       paymentKeyId,
       paymentProvider,
       step,

@@ -175,18 +175,38 @@ export const toBookingItems = (selection: Selection) =>
   selection.map((line) => ({ ticket_type_id: line.tierId, quantity: line.quantity }));
 
 /**
- * A stable idempotency key for a selection.
+ * A stable idempotency key for one checkout ATTEMPT at a selection.
  *
  * Derived from the intent (this event, these tiers, these quantities) rather
  * than randomly generated, so a double-tap, a retry after a dropped connection,
  * and a reload-then-continue all resolve to ONE booking. A random key would
  * make each of those reserve a fresh set of tickets against the same person.
  *
+ * ── AND THE ATTEMPT, WHICH IS WHY IT IS NOT JUST THE SELECTION ────────────
+ *
+ * Without it "two General tickets for this event" was the same string for ever,
+ * so the key could not tell a RETRY from a SECOND PURCHASE. Buying those two
+ * tickets made them permanently unbuyable by that account: the server replayed
+ * the settled booking, the checkout showed its stale total, and Pay opened a
+ * provider order that had already been captured.
+ *
+ * `attempt` is STABLE for as long as one checkout is in progress and is bumped
+ * only when the booking that came back cannot be paid for — see
+ * `lib/booking/attempt.ts`. Every protection the derived key was written for is
+ * intact; what changes is that a finished attempt stops speaking for the next.
+ *
+ * It defaults to 1 so a caller with no attempt store (a test, a server render)
+ * produces exactly the key this function produced before attempts existed.
+ *
  * The user id is deliberately absent: the backend already scopes the key to the
  * authenticated user, so including it here would only make the key longer.
  */
-export function idempotencyKeyFor(eventId: string, selection: Selection): string {
-  return `book:${eventId}:${selectionSignature(selection)}`;
+export function idempotencyKeyFor(
+  eventId: string,
+  selection: Selection,
+  attempt = 1,
+): string {
+  return `book:${eventId}:${selectionSignature(selection)}:a${attempt}`;
 }
 
 /**

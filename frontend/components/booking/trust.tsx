@@ -73,6 +73,27 @@ export const BOOKING_TRUST: TrustMark[] = [
   { icon: Lock, label: 'No card details stored' },
 ];
 
+/**
+ * The account's Bookings & Purchases list.
+ *
+ * The same rule as every other set here: each claim is a property of the system
+ * a reader could go and confirm. The reference this screen was built to shows
+ * "100% Genuine Passes" and "Curatix Protected" — the first is a guarantee
+ * nobody underwrites and the second names a programme that does not exist, and
+ * a trust badge with nothing behind it is worst on the screen somebody opens
+ * when they are already worried.
+ *
+ * "No card details stored" replaces the checkout's "Encrypted payment": on a
+ * history screen no payment is in flight, and what matters after the fact is
+ * what was KEPT — which is only the provider's reference ids and an amount.
+ */
+export const WALLET_TRUST: TrustMark[] = [
+  { icon: QrCode, label: 'Signed QR passes' },
+  { icon: Ticket, label: 'One scan at the gate' },
+  { icon: Lock, label: 'No card details stored' },
+  { icon: Receipt, label: 'Refunds void tickets' },
+];
+
 /** A horizontal strip — used under the ticket picker and on review. */
 export function TrustStrip({ marks, className }: { marks: TrustMark[]; className?: string }) {
   return (

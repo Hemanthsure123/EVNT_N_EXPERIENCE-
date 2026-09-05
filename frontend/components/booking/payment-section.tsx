@@ -1,11 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { FlaskConical, Info, Lock, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { ApiError } from '@/lib/api/errors';
+import { rememberFailure } from '@/lib/booking/payment-failure';
 import { simulatePayment, verifyPayment } from '@/lib/api/payments';
 import { resolveProvider } from '@/lib/booking/payment-provider';
 import { openCheckout, resolveKeyId } from '@/lib/booking/razorpay';
@@ -59,6 +60,7 @@ export function PaymentSection({
   event,
   active,
   layout,
+  pending = false,
 }: {
   event: EventDetail;
   active: Booking;
@@ -75,10 +77,26 @@ export function PaymentSection({
    * component exists to prevent.
    */
   layout: 'full' | 'compact' | 'notice';
+  /**
+   * Block the press while the ORDER IS BEING RE-ISSUED.
+   *
+   * Choosing a donation writes to the booking and the backend re-creates the
+   * payment order for the new total. Between the press and the response,
+   * `active.payment_order_id` and `active.total_amount` are the OLD ones — so a
+   * Pay pressed in that window opens the provider against a superseded order.
+   * Best case it is refused; worst case it captures an amount the webhook's own
+   * check then rejects, and the money is auto-refunded days later with no
+   * ticket ever issued.
+   *
+   * The donation row already disabled itself. The button that spends the money
+   * did not, which is the wrong half.
+   */
+  pending?: boolean;
 }) {
   const { paymentKeyId, paymentProvider } = useBooking();
   const { user } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -149,9 +167,38 @@ export function PaymentSection({
         setBusy(false);
         setError(null);
       },
-      onFailure: (message) => {
+      /**
+       * ── A REFUSED PAYMENT GETS ITS OWN SCREEN ──────────────────────────
+       *
+       * It used to be a red paragraph above a Pay button, on a screen already
+       * carrying an order, a donation row, a countdown and a total. Somebody
+       * whose bank had just declined them had to find one sentence in all of
+       * that, and everything they might want to know next — what the gateway
+       * actually said, whether money had left, how long the seats were still
+       * held for — either was not shown or did not exist.
+       *
+       * `/booking/{id}/failed` is that screen. The diagnostic goes through
+       * `sessionStorage` rather than the URL (see `payment-failure.ts`), and
+       * the navigation is a `push`, so Back returns to the review screen with
+       * the hold still live.
+       *
+       * `onDismiss` deliberately does NOT come here: closing the provider's
+       * modal is not a failure, it is a person changing their mind, and
+       * bouncing them to an error screen for it would be the product shouting
+       * at a decision it had no opinion about.
+       */
+      onFailure: (message, failure) => {
         setBusy(false);
         setError(message);
+        if (failure) rememberFailure(active.id, failure, Date.now());
+        const destination = `/booking/${event.id}/failed?booking=${encodeURIComponent(active.id)}`;
+        // PUSH from the review screen, so Back returns to it with the hold
+        // still live. REPLACE when the retry that just failed was pressed ON
+        // the failure screen — otherwise a customer trying three times leaves
+        // three identical entries in their history, and Back appears to do
+        // nothing at the moment they are most likely to reach for it.
+        if (pathname?.endsWith('/failed')) router.replace(destination);
+        else router.push(destination);
       },
     });
   };
@@ -270,6 +317,7 @@ export function PaymentSection({
           size="lg"
           onClick={() => void simulate()}
           loading={busy}
+          disabled={pending}
           className={cn(PILL, 'h-control-lg shrink-0 gap-2')}
         >
           <span className="tabular-nums">{formatFromPrice(total)}</span>
@@ -289,6 +337,7 @@ export function PaymentSection({
         size="lg"
         onClick={() => void pay()}
         loading={busy}
+        disabled={pending}
         className={cn(CTA_PILL_LG, 'shrink-0 gap-2')}
       >
         <Lock className="size-4" aria-hidden />
@@ -333,6 +382,7 @@ export function PaymentSection({
               size="lg"
               onClick={() => void simulate()}
               loading={busy}
+              disabled={pending}
               className={cn(PILL, 'h-control-lg')}
             >
               Simulate paying {formatFromPrice(total)}
@@ -401,6 +451,7 @@ export function PaymentSection({
             size="lg"
             onClick={() => void pay()}
             loading={busy}
+            disabled={pending}
             className={cn(CTA_PILL_LG, 'hidden lg:inline-flex')}
           >
             <Lock className="size-4" aria-hidden />

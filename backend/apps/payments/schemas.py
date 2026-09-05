@@ -117,3 +117,9 @@ class RefundRequestSerializer(serializers.Serializer):
     event_id = serializers.CharField()
     event_title = serializers.CharField()
     event_starts_at = serializers.CharField()
+    #: Set ONLY once a `Refund` row exists — i.e. the provider accepted the
+    #: refund and money genuinely moved. `status == "approved"` is a decision,
+    #: not a transfer; see `_settled_refund` in selectors.py.
+    refund_reference = serializers.CharField(allow_null=True)
+    refund_amount_minor = serializers.IntegerField(allow_null=True)
+    refunded_at = serializers.CharField(allow_null=True)

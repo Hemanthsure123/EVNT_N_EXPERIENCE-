@@ -60,7 +60,11 @@ export function EventReviews({ eventId }: { eventId: string }) {
   const count = summary.data?.count ?? 0;
 
   return (
-    <div className="flex flex-col gap-block">
+    // `id="reviews"` is the anchor the account's finished-booking card links to
+    // ("Rate experience"). A fragment that resolves to nothing is a link that
+    // silently drops somebody at the top of a long page and leaves them to find
+    // the thing they pressed for.
+    <div id="reviews" className="scroll-mt-header-lg flex flex-col gap-block">
       <RatingSummary
         average={count ? (summary.data?.average ?? 0) : null}
         count={count}

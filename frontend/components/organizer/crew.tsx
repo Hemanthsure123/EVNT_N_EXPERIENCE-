@@ -238,30 +238,67 @@ function MemberSheet({
   const [role, setRole] = React.useState('');
   const [details, setDetails] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
+  /**
+   * The member this sheet just created, if it did.
+   *
+   * `subject` is what the body reads, so the form does not have to know whether
+   * it is in "add" or "edit" mode — it is editing whoever exists, and after a
+   * create that is the person who was just added.
+   */
+  const [created, setCreated] = React.useState<CrewMember | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
+    setCreated(null);
     setName(member?.name ?? '');
     setRole(member?.role ?? '');
     setDetails(member?.details ?? '');
     setError(null);
   }, [open, member]);
 
+  /** Whoever this sheet is acting on: the member it was opened for, or the one
+   *  it just created. One value, so no control below has to ask which. */
+  const subject = member ?? created;
+
   const invalidate = () =>
     client.invalidateQueries({ queryKey: ['organizer', 'crew', organizationId] });
 
   const save = useMutation({
+    // `subject`, NOT `member`. After a create the sheet stays open on the person
+    // it just added, so a second Save has to UPDATE them — branching on `member`
+    // would create a duplicate crew member every time somebody corrected a
+    // typo before closing.
     mutationFn: () =>
-      member
-        ? updateCrewMember(organizationId, member.id, {
+      subject
+        ? updateCrewMember(organizationId, subject.id, {
             name: name.trim(),
             role: role.trim(),
             details,
           })
         : createCrewMember(organizationId, { name: name.trim(), role: role.trim(), details }),
-    onSuccess: async () => {
+    /**
+     * A NEW member stays on screen so the photo can go on now.
+     *
+     * The sheet used to close on every save, and the photo control only exists
+     * for a member who already has a row — so adding somebody meant: fill the
+     * form, save, watch it close, find them in the list, press edit, then
+     * upload. Five steps for one person, and the only signposting was a line of
+     * small print saying to save first. It reads as "there is no option to add
+     * their photo", which is what it amounted to.
+     *
+     * The two-step ORDER is still real and is not a limitation to design away:
+     * a portrait attaches to a row, so the row has to exist. What was wrong was
+     * making somebody navigate back to the thing they had just created. The
+     * created member is adopted here, the sheet switches to its edit state, and
+     * the photo field appears in place.
+     *
+     * EDITING still closes: that form was opened to change a field, the change
+     * is saved, and the photo control was already there the whole time.
+     */
+    onSuccess: async (saved) => {
       await invalidate();
-      onClose();
+      if (subject) return onClose();
+      setCreated(saved);
     },
     onError: (thrown) => setError(errorMessage(thrown)),
   });
@@ -291,7 +328,10 @@ function MemberSheet({
 
   return (
     <Drawer open={open} onOpenChange={(next) => !next && onClose()}>
-      <DrawerContent side="responsive" aria-label={member ? 'Edit crew member' : 'Add crew member'}>
+      <DrawerContent
+        side="responsive"
+        aria-label={subject ? 'Edit crew member' : 'Add crew member'}
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -300,7 +340,7 @@ function MemberSheet({
           className="flex min-h-0 flex-1 flex-col"
         >
           <header className="flex shrink-0 flex-col gap-stack border-b border-border px-6 pb-card pt-card-lg">
-            <DrawerTitle>{member ? 'Edit crew member' : 'Add crew member'}</DrawerTitle>
+            <DrawerTitle>{subject ? 'Edit crew member' : 'Add crew member'}</DrawerTitle>
             <DrawerDescription>
               They appear on your event pages under &ldquo;Who&rsquo;s taking the stage&rdquo;.
             </DrawerDescription>
@@ -345,11 +385,19 @@ function MemberSheet({
               />
             </div>
 
-            {member ? (
-              <PhotoField organizationId={organizationId} member={member} onDone={invalidate} />
+            {subject ? (
+              <PhotoField
+                organizationId={organizationId}
+                member={subject}
+                onDone={invalidate}
+                /* Named the moment they are created, because that is when the
+                   step is not obvious. On an ordinary edit the control needs no
+                   explanation. */
+                hint={created ? `${created.name} is saved. Add a photo now, or close.` : undefined}
+              />
             ) : (
               <p className="rounded-xl border border-dashed border-border px-card py-3 text-caption text-muted-foreground">
-                Save them first, then add a photo — a picture attaches to somebody who exists.
+                A photo attaches to somebody who exists, so it appears here the moment you save.
               </p>
             )}
 
@@ -402,10 +450,13 @@ function PhotoField({
   organizationId,
   member,
   onDone,
+  hint,
 }: {
   organizationId: string;
   member: CrewMember;
   onDone: () => void | Promise<unknown>;
+  /** Shown only where the step is not obvious — right after a create. */
+  hint?: string;
 }) {
   const [file, setFile] = React.useState<File | null>(null);
   const [altText, setAltText] = React.useState(member.photo_alt_text ?? '');
@@ -455,6 +506,7 @@ function PhotoField({
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="crew-photo">Photo</Label>
+      {hint ? <p className="text-caption text-muted-foreground">{hint}</p> : null}
       <div className="flex items-start gap-3 rounded-xl border border-border p-card">
         <Portrait member={member} size="sm" />
         <div className="flex min-w-0 flex-1 flex-col gap-2">

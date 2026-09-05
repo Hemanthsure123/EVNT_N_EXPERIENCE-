@@ -435,10 +435,17 @@ class TestReading:
         _open_request(world)
 
         client = auth(world["owner"])
-        # ONE query: the page. `force_authenticate` attaches the user
-        # directly, so there is no JWT user lookup to pay for here — and
-        # cursor pagination issues no COUNT(*).
-        with django_assert_num_queries(1):
+        # THREE queries, and the number that matters is that it is the same
+        # three for ten rows as for one.
+        #
+        #   1. the page itself, with the customer / event / booking joined.
+        #      `force_authenticate` attaches the user directly, so there is no
+        #      JWT lookup to pay for, and cursor pagination issues no COUNT(*).
+        #   2 + 3. the prefetch behind `_settled_refund` — payments for those
+        #      bookings, then refunds for those payments. Every row reports
+        #      whether money ACTUALLY moved (an approval is a decision, not a
+        #      transfer), and without the prefetch that is two queries PER ROW.
+        with django_assert_num_queries(3):
             body = client.get(ORGANIZER).json()
         assert len(body["data"]) == 10
 

@@ -7,6 +7,8 @@ import { AlertTriangle, Loader2, Ticket, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cancelBooking, createBooking, setBookingDonation } from '@/lib/api/bookings';
 import { ApiError } from '@/lib/api/errors';
+import type { Booking } from '@/lib/api/types';
+import { attemptFor, bumpAttempt } from '@/lib/booking/attempt';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { rememberProvider } from '@/lib/booking/payment-provider';
 import { rememberKeyId } from '@/lib/booking/razorpay';
@@ -69,14 +71,33 @@ import { YourDetailsSheet } from './your-details-sheet';
  * nobody has agreed to has no business moving the number they are checking.
  */
 export function ReviewStep() {
-  const { event, selection, totals, booking, setBooking, setPaymentKeyId, setPaymentProvider } =
-    useBooking();
+  const {
+    event,
+    selection,
+    totals,
+    booking,
+    reservedFor,
+    setBooking,
+    setPaymentKeyId,
+    setPaymentProvider,
+  } = useBooking();
   const { status, user } = useAuth();
   const router = useRouter();
 
   const [error, setError] = React.useState<{ message: string; recoverable: boolean } | null>(null);
   const [reserving, setReserving] = React.useState(false);
   const attempted = React.useRef(false);
+  /**
+   * Bumped to re-run the reserve when nothing else in its dependencies moved.
+   *
+   * Declared up here because the effect's dependency array names it — see
+   * `buyAgain`, where clearing an already-null booking is a no-op React bails
+   * out of, so the press would otherwise do nothing at all.
+   */
+  const [reserveNonce, setReserveNonce] = React.useState(0);
+  /** One re-reserve, ever. See the note in the effect: an ungated retry here
+   *  would take inventory as fast as the network allows. */
+  const retried = React.useRef(false);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
 
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
@@ -125,9 +146,22 @@ export function ReviewStep() {
    * screen.
    */
   const staleBooking = React.useMemo(() => {
-    if (!booking?.items?.length || !selection.length) return false;
-    return bookingItemsSignature(booking.items) !== selectionSignature(selection);
-  }, [booking, selection]);
+    if (!booking || !selection.length) return false;
+    const current = selectionSignature(selection);
+    // PRIMARY: the signature the client recorded when it sent the reserve. It
+    // cannot be switched off by a serializer change, which is what happened to
+    // the items comparison below — `POST /bookings` returned no items, so this
+    // guard evaluated false for every booking and the screen rendered a hold
+    // for one order beside the line items of another.
+    if (reservedFor) return reservedFor !== current;
+    // FALLBACK for a booking adopted from elsewhere (the confirmation screen
+    // publishes the one it polled). Still worth having: it catches a replay
+    // whose lines genuinely differ.
+    if (booking.items?.length) return bookingItemsSignature(booking.items) !== current;
+    // Neither available: do NOT guess. Cancelling a hold on a hunch is worse
+    // than showing one, and the picker cancels anything left over anyway.
+    return false;
+  }, [booking, reservedFor, selection]);
   const clearing = React.useRef(false);
 
   React.useEffect(() => {
@@ -142,6 +176,26 @@ export function ReviewStep() {
     })();
   }, [staleBooking, booking, setBooking]);
 
+  /**
+   * ── A RESERVE MUST COME BACK WITH A HOLD YOU CAN PAY FOR ────────────────
+   *
+   * It did not check, and that is how the worst bug on this screen stayed
+   * invisible. `POST /bookings` can legitimately answer with a booking that is
+   * NOT a live hold — the idempotency key replayed an earlier attempt — and the
+   * screen accepted whatever came back. A settled booking then rendered with a
+   * live Pay button over a stale total, and pressing it opened the provider's
+   * checkout against an order that had already been captured.
+   *
+   * `payable` is the one question worth asking, and it is asked of the row
+   * itself rather than of `status` alone: a RESERVED booking whose deadline has
+   * passed is not payable either, and the sweeper runs on a schedule so that
+   * state is genuinely reachable.
+   */
+  const payable = (row: Booking): boolean =>
+    row.status === 'reserved' &&
+    Boolean(row.hold_expires_at) &&
+    Date.parse(row.hold_expires_at as string) > Date.now();
+
   React.useEffect(() => {
     if (status !== 'authenticated' || !selection.length || booking || attempted.current) return;
     attempted.current = true;
@@ -152,9 +206,60 @@ export function ReviewStep() {
         const result = await createBooking(
           event.id,
           toBookingItems(selection),
-          idempotencyKeyFor(event.id, selection),
+          idempotencyKeyFor(event.id, selection, attemptFor(event.id, selection)),
         );
-        setBooking(result.booking);
+
+        // ── ALREADY PAID FOR ────────────────────────────────────────────
+        //
+        // The key replayed a SETTLED booking, and this screen used to render it
+        // as if it were a live hold: a stale total, no countdown (a paid
+        // booking has no hold to count), and a Pay button that opened the
+        // provider against an order captured minutes earlier — which it refuses
+        // with a generic "something went wrong".
+        //
+        // AND IT ASKS, RATHER THAN GUESSING. Two people reach this line by the
+        // same URL and want opposite things: one pressed Back after paying, the
+        // other came deliberately to buy the same tickets again. Nothing in the
+        // client can tell them apart — history direction is not reliable — and
+        // both wrong guesses do real harm. Redirecting to the confirmation
+        // strands the second person on exactly the dead end this fix is about;
+        // silently reserving again takes stock off sale for somebody who has
+        // just bought.
+        //
+        // So it says what happened and offers both. One press, and it cannot be
+        // wrong. Same state-swap shape the expired hold uses, so there is one
+        // language for "this screen cannot proceed as it stands".
+        if (result.booking.status === 'paid') {
+          setAlreadyPaid(result.booking);
+          return;
+        }
+
+        // ── REPLAYED SOMETHING THAT HAS ENDED ───────────────────────────
+        //
+        // Cancelled, expired, or reserved past its deadline. The previous
+        // attempt is over, so this is a new one: bump the attempt (which
+        // changes the key) and let the effect run again. ONCE — `retried`
+        // guards it, because a loop here would reserve inventory as fast as
+        // the network allows.
+        if (!payable(result.booking)) {
+          if (!retried.current) {
+            retried.current = true;
+            bumpAttempt(event.id, selection);
+            attempted.current = false;
+            setBooking(null);
+            setReserving(false);
+            return;
+          }
+          setError({
+            message: 'We could not hold these tickets. Please choose them again.',
+            recoverable: true,
+          });
+          return;
+        }
+
+        // The signature goes in WITH the booking, from the same `selection` this
+        // request was built from — so the pair cannot describe two orders.
+        setBooking(result.booking, selectionSignature(selection));
         setPaymentKeyId(result.payment.key_id);
         rememberKeyId(result.payment.key_id);
         // `provider` is newer than the hand-written response type in
@@ -184,7 +289,17 @@ export function ReviewStep() {
         setReserving(false);
       }
     })();
-  }, [status, selection, booking, event.id, setBooking, setPaymentKeyId, setPaymentProvider]);
+  }, [
+    status,
+    selection,
+    booking,
+    event.id,
+    reserveNonce,
+    router,
+    setBooking,
+    setPaymentKeyId,
+    setPaymentProvider,
+  ]);
 
   // ── THE DONATION ────────────────────────────────────────────────────────
   //
@@ -240,6 +355,58 @@ export function ReviewStep() {
    * all land the same way: change the screen, wait for a press.
    */
   const [holdExpired, setHoldExpired] = React.useState(false);
+  /** A SETTLED booking came back from the reserve — see the note in the effect.
+   *  Held rather than acted on, because only the reader knows which of two
+   *  opposite things they meant by arriving here. */
+  const [alreadyPaid, setAlreadyPaid] = React.useState<Booking | null>(null);
+  /**
+   * The hold ran out. RELEASE IT, then swap the screen.
+   *
+   * ── IT USED TO ONLY SWAP THE SCREEN ─────────────────────────────────────
+   *
+   * The seats stayed counted against `TicketType.reserved` by a booking nobody
+   * could pay for until `booking.release_expired` next ran — a SCHEDULED job,
+   * every 60 seconds. So for up to a minute the customer's own dead hold
+   * competed with their retry, and on a tight tier "Try again" came back
+   * `sold_out` for tickets no one else had taken.
+   *
+   * Cancelling here closes that window from the client's side. The sweeper is
+   * still the backstop and still correct — this is the fast path, and a 409
+   * from it just means the sweeper won, which is the outcome we wanted.
+   *
+   * ── AND THE STATE GOES WITH IT ──────────────────────────────────────────
+   *
+   * `setBooking(null)` is what makes a rebook genuinely fresh: no total, no
+   * fee, no deadline and no order id survive into the next attempt. The screen
+   * still WAITS for a press rather than navigating on a timer — somebody may be
+   * mid-edit, and a checkout that moves on its own is indistinguishable from a
+   * crash — but there is nothing stale left behind the press.
+   */
+  const expireHold = React.useCallback(() => {
+    const dead = booking;
+    setHoldExpired(true);
+    setOptimisticDonation(null);
+    setBooking(null);
+    if (dead) void cancelBooking(dead.id).catch(() => undefined);
+  }, [booking, setBooking]);
+  /** Buy them again: end the attempt that was paid for, and re-arm the reserve
+   *  so the effect runs with a key that speaks for the NEW purchase. */
+  const buyAgain = React.useCallback(() => {
+    bumpAttempt(event.id, selection);
+    retried.current = false;
+    attempted.current = false;
+    setAlreadyPaid(null);
+    setBooking(null);
+    // THIS is what re-runs the reserve, and it is not ceremony. `booking` is
+    // ALREADY null on this path (a settled replay is never put into context),
+    // so `setBooking(null)` is a no-op React bails out of: nothing in the
+    // effect's dependency array changes and it never fires again. The button
+    // did nothing at all. Measured, not reasoned about.
+    //
+    // `retryHold` gets away without a nonce only because it always runs with a
+    // non-null booking, which is a coincidence of that path rather than a rule.
+    setReserveNonce((n) => n + 1);
+  }, [event.id, selection, setBooking]);
   /**
    * Try the SAME tickets again, without leaving the screen.
    *
@@ -339,9 +506,30 @@ export function ReviewStep() {
       }));
   const total = booking?.total_amount ?? totals.grandTotal;
   const fee = booking?.platform_fee ?? totals.platformFee;
-  // The lines added up, from the SAME rows the list renders — so the order
-  // amount and the rows can never disagree.
-  const orderAmount = lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
+  /**
+   * ── THE SUMMARY HAS TO ADD UP ───────────────────────────────────────────
+   *
+   * It did not, and the screenshot of it is the reason this comment exists:
+   * "Order amount ₹1,995 / Fees ₹3.99 / Donation ₹5 / Grand total ₹407.99".
+   *
+   * Both numbers were computed correctly from different sources. `total` came
+   * from the BOOKING — the price the row lock actually settled on, with a live
+   * sale phase applied. `orderAmount` summed `lines`, which fell back to the
+   * SELECTION whenever `booking.items` was absent — and it was always absent,
+   * because `POST /bookings` returned the summary serializer. So the order
+   * amount was an estimate off the cached tier payload and the total was the
+   * truth, and a phase between the two made them disagree by a factor of five.
+   *
+   * Two changes, and both were needed. The endpoint returns its line items now,
+   * so `lines` is authoritative. And once a booking exists the order amount is
+   * DERIVED FROM THE SAME ROW as the total rather than re-summed from anything
+   * — `total_amount` contains the fee and the donation, so the subtotal is a
+   * subtraction, and three numbers that come from one row cannot fail to add up
+   * however the lock priced them.
+   */
+  const orderAmount = booking
+    ? booking.total_amount - booking.platform_fee - booking.donation
+    : lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
   const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
 
   if (error) {
@@ -386,6 +574,46 @@ export function ReviewStep() {
             </Button>
             <Button asChild variant="ghost" size="lg" className="w-full">
               <Link href={pickerHref}>Choose different tickets</Link>
+            </Button>
+          </div>
+        </StepTransition>
+      </FunnelScreen>
+    );
+  }
+
+  if (alreadyPaid) {
+    return (
+      <FunnelScreen title="Review your booking">
+        <StepTransition
+          stepKey="review-already-paid"
+          className="flex flex-1 flex-col items-center justify-center gap-stack-lg px-2 py-10 text-center"
+        >
+          {/* SUCCESS ink, not alarm. Nothing went wrong here — the tickets are
+              bought, and the only open question is which of two things the
+              reader came to do. */}
+          <span
+            aria-hidden
+            className="inline-flex size-16 items-center justify-center rounded-full bg-success-subtle text-success-subtle-foreground"
+          >
+            <Ticket className="size-7" />
+          </span>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-h3 text-foreground">You already have these tickets</h2>
+            <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">
+              This order was paid for and the tickets are issued. Open them, or buy the same
+              tickets again as a separate booking.
+            </p>
+          </div>
+          <div className="flex w-full max-w-sm flex-col gap-2">
+            <Button asChild size="lg" className={CTA_PILL_LG}>
+              <Link
+                href={`/booking/${event.id}/confirmation?booking=${encodeURIComponent(alreadyPaid.id)}`}
+              >
+                View my tickets
+              </Link>
+            </Button>
+            <Button variant="outline" size="lg" className="w-full" onClick={buyAgain}>
+              Buy these again
             </Button>
           </div>
         </StepTransition>
@@ -496,9 +724,16 @@ export function ReviewStep() {
         // appropriate screen.
         booking.hold_expires_at && booking.status !== 'paid' ? (
           <HoldTimer
+            /* KEYED ON THE DEADLINE. `HoldTimer` re-arms on a changed `target`,
+               but the surrounding component keeps its `firedRef` across a
+               prop change — so a NEW booking created after an expiry inherited
+               a timer that had already announced, and its countdown could not
+               fire again. A key remounts it, which is the only way to be sure a
+               fresh hold gets a fresh timer. */
+            key={booking.hold_expires_at}
             expiresAt={booking.hold_expires_at}
             variant="bar"
-            onExpire={() => setHoldExpired(true)}
+            onExpire={expireHold}
           />
         ) : undefined
       }
@@ -611,7 +846,16 @@ export function ReviewStep() {
             </div>
             <div className="flex items-baseline justify-between gap-4 border-t border-border px-card py-card">
               <span className="text-body font-semibold text-foreground">Grand total</span>
-              <span className="text-h4 tabular-nums text-foreground">{formatFromPrice(total)}</span>
+              {/* Summed from the three rows ABOVE it, not read separately off
+                  the booking. While a donation write is in flight the row shows
+                  the chosen amount and `booking.total_amount` is still the old
+                  one — read separately, the summary stops adding up for the
+                  length of a round trip on the screen where that matters most.
+                  Once the write lands the two are the same number by
+                  construction: `total_amount` IS subtotal + fee + donation. */}
+              <span className="text-h4 tabular-nums text-foreground">
+                {formatFromPrice(booking ? orderAmount + fee + donation : total)}
+              </span>
             </div>
           </div>
         </Rise>
@@ -673,7 +917,7 @@ export function ReviewStep() {
       </StepTransition>
 
       <StickyActionBar total={total} caption="Total" leading={<PayUsing />}>
-        <PaymentSection event={event} active={booking} layout="compact" />
+        <PaymentSection event={event} active={booking} layout="compact" pending={donationPending} />
       </StickyActionBar>
 
       <YourDetailsSheet open={detailsOpen} onOpenChange={setDetailsOpen} />

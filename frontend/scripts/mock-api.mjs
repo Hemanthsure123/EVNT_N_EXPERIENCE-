@@ -705,6 +705,8 @@ const bookings = new Map(); // id -> booking
 const idempotency = new Map(); // `${email}:${key}` -> booking id
 /** Tickets issued by the confirm endpoint below. */
 const issuedTickets = [];
+/** Customer refund requests. See the endpoints further down. */
+const refundRequests = [];
 /**
  * Tickets held by bookings, per tier.
  *
@@ -1018,16 +1020,21 @@ const etagFor = (body) => `"${createHash('md5').update(JSON.stringify(body)).dig
  * the fixture is where that path gets exercised.
  */
 function bookingResponse(booking) {
-  // `items` is deliberately STRIPPED. The real `POST /bookings` returns
-  // `BookingSummarySerializer`, which has no line items — only
-  // `GET /bookings/{id}` (BookingDetailSerializer) does. An earlier version of
-  // this fixture included them, and that single inaccuracy hid a real bug: the
-  // review screen rendered an empty ticket list against the actual backend
-  // while looking perfect locally. A fixture that is kinder than the contract
-  // is worse than no fixture.
-  const { user_email: _ignored, items: _items, ...summary } = booking;
+  // `items` ARE included, and that is a contract change rather than a
+  // convenience. `POST /bookings` used to return `BookingSummarySerializer`,
+  // which has none — so the review screen priced the order from the SELECTION
+  // while the total came from the booking, and a live sale phase made the two
+  // disagree on screen ("Order amount ₹1,995" over "Grand total ₹407.99"). The
+  // endpoint returns `BookingDetailSerializer` now.
+  //
+  // The rule this fixture is held to is unchanged: it must be EXACTLY as
+  // generous as the contract and no more. It was stripping items to match the
+  // old summary for precisely that reason, and it follows the contract here for
+  // the same one. `tickets` is empty by construction — a booking has none until
+  // it is paid.
+  const { user_email: _ignored, ...detail } = booking;
   return {
-    booking: summary,
+    booking: { ...detail, items: booking.items ?? [], tickets: [] },
     payment: {
       order_id: booking.payment_order_id,
       amount_minor: booking.total_amount,
@@ -1364,9 +1371,18 @@ const server = createServer((req, res) => {
         // dead one is what made a checkout permanently unusable for one user
         // and one selection, so the fixture has to be able to reproduce the
         // FIXED behaviour or the recovery path is untestable here.
+        // The PAID arm is time-bounded, exactly as the backend's
+        // `BOOKING_IDEMPOTENCY_REPLAY_MINUTES` bounds it. Unbounded, a paid
+        // booking answered for its key for ever, so the same selection could
+        // never be bought twice: the replay handed back a settled booking, the
+        // checkout showed its stale total beside the new order's lines, and Pay
+        // opened a provider order that had already been captured. A fixture that
+        // replays for ever cannot reproduce the fix.
+        const replayWindowMs = Number(process.env.MOCK_REPLAY_MINUTES ?? 15) * 60_000;
         const replayable =
           existing &&
-          (existing.status === 'paid' ||
+          ((existing.status === 'paid' &&
+            Date.now() - Date.parse(existing.created_at) < replayWindowMs) ||
             (existing.status === 'reserved' &&
               Date.parse(existing.hold_expires_at) > Date.now()));
         if (replayable) return sendJson(req, res, 201, bookingResponse(existing));
@@ -1455,6 +1471,52 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // ── Release a hold the customer no longer wants ─────────────────────
+  //
+  // THE FIXTURE HAD NO CANCEL ENDPOINT AT ALL, and that hid a bug rather than
+  // merely lacking a feature. `cancelBooking` is called on four paths — the
+  // back arrow's deliberate release, a changed selection invalidating a hold,
+  // the retry after an expiry, and the picker releasing anything left behind —
+  // and every one of them is `.catch(() => undefined)` because a 409 is a
+  // legitimate "the sweeper got there first". So against this fixture all four
+  // 404'd, were swallowed, and did nothing. Inventory was never released
+  // locally, and the one behaviour those calls exist to produce could not be
+  // observed or tested here. Exactly the "kinder than the contract" failure the
+  // note on `bookingResponse` warns about.
+  //
+  // Faithful on the rule that matters: it checks STATUS ONLY and deliberately
+  // does NOT look at the deadline (backend services.py:511). A lapsed-but-
+  // unswept hold must cancel cleanly, because that is what stops a retry
+  // competing with the customer's own dead reservation.
+  const cancelMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/cancel\/?$/);
+  if (cancelMatch && req.method === 'POST') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(cancelMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    if (booking.status !== 'reserved') {
+      return authError(
+        res,
+        req,
+        409,
+        'booking_not_cancellable',
+        `A booking in '${booking.status}' state can't be cancelled.`,
+      );
+    }
+    booking.status = 'cancelled';
+    // The seats go back on sale, which is the whole point of the call.
+    for (const item of booking.items ?? []) {
+      reservedByTier.set(
+        item.ticket_type_id,
+        Math.max(0, (reservedByTier.get(item.ticket_type_id) ?? 0) - item.quantity),
+      );
+    }
+    const { user_email: _cancelIgnored, ...cancelled } = booking;
+    return sendJson(req, res, 200, cancelled, 'private, no-store');
+  }
+
   // ── Confirm a booking, and issue its tickets ────────────────────────
   //
   // The fixture had NO way to reach a paid booking, so the success screen —
@@ -1505,6 +1567,122 @@ const server = createServer((req, res) => {
     }
     const { user_email: _paidIgnored, ...paidPayload } = booking;
     return sendJson(req, res, 200, paidPayload, 'private, no-store');
+  }
+
+  // ── Refund requests, the customer's half ──────────────────────────────
+  //
+  // The fixture had none, so the Bookings list's refund states and the whole
+  // refund-detail screen were unreachable locally. Faithful on the two facts
+  // that matter: ONE open request per booking (a 409 otherwise, exactly like
+  // the backend's partial unique index), and `refund_reference` / `refunded_at`
+  // set only once money has genuinely moved — a request is not a refund.
+  if (path === '/api/v1/me/refund-requests' && req.method === 'GET') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const mine = refundRequests
+      .filter((row) => row.user_email === user.email)
+      .map(({ user_email: _ignored, ...rest }) => rest);
+    return sendJson(req, res, 200, { data: mine, meta: { next: null } }, 'private, no-store');
+  }
+
+  const refundMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/refund-requests\/?$/);
+  if (refundMatch && req.method === 'POST') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(refundMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    if (booking.status !== 'paid') {
+      return authError(
+        res,
+        req,
+        409,
+        'booking_not_refundable',
+        'Only a paid booking can be refunded.',
+      );
+    }
+    if (refundRequests.some((row) => row.booking_id === booking.id && row.status === 'pending')) {
+      return authError(
+        res,
+        req,
+        409,
+        'refund_request_already_open',
+        'A refund request is already open on this booking.',
+      );
+    }
+    void readBody(req).then((body) => {
+      const event = buildEvents().find((candidate) => candidate.id === booking.event_id);
+      const row = {
+        id: `rfr_${refundRequests.length + 1}`,
+        status: 'pending',
+        reason: String(body?.reason ?? ''),
+        decision_note: '',
+        created_at: new Date().toISOString(),
+        decided_at: null,
+        decided_by_email: null,
+        booking_id: booking.id,
+        booking_total_minor: booking.total_amount,
+        booking_status: booking.status,
+        requested_by_email: user.email,
+        requested_by_name: user.full_name ?? '',
+        event_id: booking.event_id,
+        event_title: event?.title ?? 'Event',
+        event_starts_at: event?.starts_at ?? new Date().toISOString(),
+        refund_reference: null,
+        refund_amount_minor: null,
+        refunded_at: null,
+        user_email: user.email,
+      };
+      refundRequests.push(row);
+      const { user_email: _ignored, ...payload } = row;
+      sendJson(req, res, 201, payload, 'private, no-store');
+    });
+    return;
+  }
+
+  // ── The account's purchase history ────────────────────────────────────
+  //
+  // Mirrors `GET /me/bookings`: every booking in every state, with the event
+  // joined and the ticket states aggregated. The fixture had no equivalent at
+  // all, so the Bookings & Purchases screen — the one that exists BECAUSE a
+  // failed or refunded booking has nowhere else to appear — could not be
+  // opened locally.
+  if (path === '/api/v1/me/bookings' && req.method === 'GET') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const catalogue = buildEvents();
+    const mine = [...bookings.values()]
+      .filter((booking) => booking.user_email === user.email)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      .map((booking) => {
+        const event = catalogue.find((candidate) => candidate.id === booking.event_id);
+        const tickets = issuedTickets.filter((ticket) => ticket.booking_id === booking.id);
+        return {
+          id: booking.id,
+          status: booking.status,
+          created_at: booking.created_at,
+          hold_expires_at: booking.hold_expires_at ?? null,
+          payment_order_id: booking.payment_order_id ?? null,
+          total_amount: booking.total_amount,
+          platform_fee: booking.platform_fee,
+          donation: booking.donation ?? 0,
+          event_id: booking.event_id,
+          event_title: event?.title ?? booking.event_title ?? 'Event',
+          event_slug: event?.slug ?? '',
+          event_starts_at: event?.starts_at ?? new Date().toISOString(),
+          event_ends_at: event?.ends_at ?? null,
+          event_venue: event?.venue ?? '',
+          event_city: event?.city ?? '',
+          event_poster_url: event?.poster_url ?? '',
+          event_status: event?.status ?? 'live',
+          ticket_count: tickets.length,
+          active_ticket_count: tickets.filter((ticket) => ticket.status === 'active').length,
+          used_ticket_count: tickets.filter((ticket) => ticket.status === 'used').length,
+          items: booking.items ?? [],
+        };
+      });
+    return sendJson(req, res, 200, { data: mine, meta: { next: null } }, 'private, no-store');
   }
 
   if (path === '/api/v1/me/tickets' && req.method === 'GET') {

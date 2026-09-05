@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.booking.exceptions import (
@@ -257,6 +258,104 @@ def test_the_same_selection_is_bookable_again_after_the_hold_lapses(
     assert second.status == BookingStatus.RESERVED
     assert second.hold_expires_at > timezone.now()
     assert _reserved(tier.id) == 2
+
+
+@pytest.mark.django_db
+def test_a_paid_selection_can_be_bought_again_once_the_replay_window_passes(
+    booking_service, event, buyer, make_tier
+):
+    """THE BUG: buying something made it permanently unbuyable.
+
+    The key is a pure function of the order, so "two General tickets for this
+    event" is always the same string. A PAID booking used to answer for that key
+    for ever, so the second purchase replayed the FIRST one: nothing was
+    reserved, the checkout showed a settled booking's total beside the new
+    order's lines, and Pay opened a provider order that had already been
+    captured — which the provider refuses with a generic error page.
+
+    Every retry reproduced it, because retrying was what triggered it.
+    """
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 2}]
+    key = "book:evt:tier:2"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    booking_service.confirm_booking(booking_id=first.id, payment_ref="pay_1")
+    first.refresh_from_db()
+    assert first.status == BookingStatus.PAID
+
+    # Long enough after the purchase that this cannot be a retry of it.
+    Booking.objects.filter(id=first.id).update(created_at=timezone.now() - timedelta(minutes=30))
+
+    second = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert second.id != first.id
+    assert second.status == BookingStatus.RESERVED
+    assert second.hold_expires_at > timezone.now()
+    # And the seats were actually taken — a replay would have reserved none.
+    assert _reserved(tier.id) == 2
+    # The dead key was detached, which is what let the insert happen at all.
+    first.refresh_from_db()
+    assert first.idempotency_key is None
+
+
+@pytest.mark.django_db
+def test_a_retry_moments_after_paying_still_replays_rather_than_charging_twice(
+    booking_service, event, buyer, make_tier
+):
+    """The other half of the same rule, and the reason it is a WINDOW.
+
+    A double-tap, a dropped connection or a reload mid-submit arrives within
+    seconds. Handing that a second reservation would take a second set of
+    tickets off sale and put a second charge in front of somebody who pressed
+    once. Inside the window the key still answers with the original booking.
+    """
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 2}]
+    key = "book:evt:tier:2"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    booking_service.confirm_booking(booking_id=first.id, payment_ref="pay_1")
+
+    replayed = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert replayed.id == first.id
+    assert Booking.objects.count() == 1
+    assert _reserved(tier.id) == 0  # confirmed: moved to sold, not reserved twice
+
+
+@pytest.mark.django_db
+@override_settings(BOOKING_IDEMPOTENCY_REPLAY_MINUTES=0)
+def test_the_replay_window_is_configurable(booking_service, event, buyer, make_tier):
+    """Set to zero, a paid booking stops replaying immediately.
+
+    Worth pinning because the window is read from settings on every call rather
+    than captured at import — a module-level constant would ignore
+    `override_settings`, and the one rule deciding whether somebody can buy the
+    same tickets twice would be untestable.
+    """
+    tier = make_tier(quantity=100)
+    items = [{"ticket_type_id": tier.id, "quantity": 1}]
+    key = "book:evt:tier:1"
+
+    first = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+    booking_service.confirm_booking(booking_id=first.id, payment_ref="pay_1")
+
+    second = booking_service.create_booking(
+        user_id=buyer.id, event_id=event.id, items=items, idempotency_key=key
+    ).booking
+
+    assert second.id != first.id
 
 
 @pytest.mark.django_db

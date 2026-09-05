@@ -330,6 +330,55 @@ export type Booking = {
   created_at: string;
 };
 
+/**
+ * One row of `GET /me/bookings` — the account's Bookings & Purchases list.
+ *
+ * ── WHY THIS IS NOT `Ticket` ──────────────────────────────────────────────
+ *
+ * `GET /me/tickets` returns ACTIVE tickets only, and carries a title and
+ * nothing else. So a booking that was refunded, checked in, cancelled or never
+ * paid was invisible to the person who made it, the account screen's "Used" and
+ * "Refunded" filters could only ever count zero, and a payment that failed left
+ * nothing behind on any surface the buyer could reach — which is the case
+ * somebody most urgently wants to look at.
+ *
+ * This row is a BOOKING in every state, with the event joined, so a card can
+ * say when and where the thing is and what it cost without a request per row.
+ *
+ * Money is minor units, and `total_amount` CONTAINS `platform_fee` and
+ * `donation` — see the note on `Booking`. The ticket subtotal is
+ * `total_amount - platform_fee - donation`.
+ */
+export type MyBooking = {
+  id: string;
+  status: 'reserved' | 'paid' | 'cancelled' | 'expired';
+  created_at: string;
+  /** A real deadline while `reserved`: the sweeper releases the seats past it. */
+  hold_expires_at: string | null;
+  payment_order_id: string | null;
+  total_amount: number;
+  platform_fee: number;
+  donation: number;
+
+  event_id: string;
+  event_title: string;
+  /** Decoration in the URL; the uuid beside it is the identity. */
+  event_slug: string;
+  event_starts_at: string;
+  event_ends_at: string | null;
+  event_venue: string;
+  event_city: string;
+  event_poster_url: string;
+  event_status: string;
+
+  /** Aggregated in Postgres by `BookingRepository.list_for_user`, never in Python. */
+  ticket_count: number;
+  active_ticket_count: number;
+  used_ticket_count: number;
+
+  items: BookingItem[];
+};
+
 /** POST /bookings — the booking plus everything Razorpay Checkout needs. */
 export type CreateBookingResponse = {
   booking: Booking;

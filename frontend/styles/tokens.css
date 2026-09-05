@@ -1519,7 +1519,13 @@ a:focus-visible .illo-r-hop {
 /* A ring rather than a fade: an opacity blink on a 6px dot is close to
    invisible, and the expanding shadow reads at a glance without moving
    anything around it. */
-.settings-live-dot {
+/* Two names, one animation. `settings-live-dot` is the account screen's;
+   `ticketing-live-dot` is the same beat on a "ready to use" pass in the
+   bookings list, the confirmation and the pass card. One rule rather than two
+   keyframe blocks that drift apart, and both are stopped by the
+   reduced-motion block below. */
+.settings-live-dot,
+.ticketing-live-dot {
   animation: settings-live-dot-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
@@ -1555,6 +1561,7 @@ a:focus-visible .illo-r-hop {
   .settings-aura,
   .settings-sheen,
   .settings-live-dot,
+  .ticketing-live-dot,
   .settings-wave {
     animation: none;
   }

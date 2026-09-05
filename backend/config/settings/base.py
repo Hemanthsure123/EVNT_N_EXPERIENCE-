@@ -399,6 +399,38 @@ DONATION_MAX_MINOR = env.int("DONATION_MAX_MINOR", default=100_000)
 # the sweeper auto-releases it. Short, so unpaid holds don't starve inventory.
 BOOKING_HOLD_MINUTES = env.int("BOOKING_HOLD_MINUTES", default=10)
 
+# How long a PAID booking keeps answering to its `Idempotency-Key`.
+#
+# ── WHY THIS IS BOUNDED AT ALL ───────────────────────────────────────────
+#
+# It was not, and that made a selection PERMANENTLY UNBUYABLE once it had been
+# bought. The key the checkout derives is a pure function of the order — two
+# General tickets for one event is always `book:{event}:{tier}:2` — so:
+#
+#   1. Buy two General tickets. The booking is paid, the key stays on the row.
+#   2. Come back a week later and choose the same two tickets.
+#   3. The replay lookup returns the PAID booking from step 1. Nothing is
+#      reserved, the review screen shows that old order's total beside the new
+#      order's line items, and pressing Pay opens the provider's checkout
+#      against an order that was settled days ago — which the provider refuses
+#      with a generic "something went wrong".
+#
+# Every retry reproduced it, because retrying was what triggered it.
+#
+# ── WHY A WINDOW IS THE RIGHT SHAPE ──────────────────────────────────────
+#
+# Idempotency protects a RETRY OF ONE REQUEST: a double-tap, a dropped
+# connection, a reload mid-submit. All of those arrive within seconds. A
+# deliberate second purchase of the same tickets is a different intent, and the
+# only thing that can tell the two apart is elapsed time — the server cannot
+# distinguish them from the key alone.
+#
+# Fifteen minutes is comfortably longer than any real retry (the hold itself is
+# ten) and far shorter than "somebody decided to buy more tickets". The client
+# ALSO scopes its key per checkout attempt, so this is the safety net for that
+# rather than the only guard — see `lib/booking/selection.ts`.
+BOOKING_IDEMPOTENCY_REPLAY_MINUTES = env.int("BOOKING_IDEMPOTENCY_REPLAY_MINUTES", default=15)
+
 # --- Payment reconciliation (payments.reconcile_pending) ------------------
 # The job that asks the provider "was this booking's order actually paid?",
 # so fulfilment never depends on the customer's browser completing a call.

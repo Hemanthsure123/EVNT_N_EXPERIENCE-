@@ -185,6 +185,15 @@ class RefundRequestRepository(BaseRepository[RefundRequest]):
     #: Everything a queue row renders, in one query. Without the chain down to
     #: the organization, an organizer's queue of 25 is 100 extra queries — and
     #: the ownership check itself needs `event.organization.owner_id`.
+    #: The `Refund` rows behind a request, for `_settled_refund`.
+    #:
+    #: PREFETCHED rather than joined, and applied to EVERY list that feeds
+    #: `refund_request_payload`: that function reads `booking.payments[].refunds`
+    #: to answer "did money actually move", and a list without this issues two
+    #: queries PER ROW to find out. Two constant queries for a whole page is the
+    #: right trade; a per-row cost on the queue an organizer lives in is not.
+    _REFUND_RELATIONS = ("booking__payments__refunds",)
+
     _ROW_RELATIONS = (
         "booking",
         "booking__user",
@@ -198,7 +207,10 @@ class RefundRequestRepository(BaseRepository[RefundRequest]):
         """One request with its ownership chain — for the authorization check
         that precedes a decision."""
         return (
-            RefundRequest.objects.select_related(*self._ROW_RELATIONS).filter(pk=request_id).first()
+            RefundRequest.objects.select_related(*self._ROW_RELATIONS)
+            .prefetch_related(*self._REFUND_RELATIONS)
+            .filter(pk=request_id)
+            .first()
         )
 
     def lock_for_update(self, request_id: uuid.UUID | str) -> RefundRequest | None:
@@ -263,8 +275,20 @@ class RefundRequestRepository(BaseRepository[RefundRequest]):
         ).exists()
 
     def list_for_user(self, user_id: uuid.UUID | str):
+        """The customer's own requests — and, where one was actually paid out,
+        the `Refund` row that proves it.
+
+        The refunds are PREFETCHED rather than joined: a request has at most a
+        handful of payments and each at most a couple of refunds, and a
+        prefetch is two extra queries for the whole page instead of a row
+        multiplication on the join. Without them the customer's screen can say
+        "approved" and nothing more — no reference to quote to a bank, no
+        amount, and no date the money actually moved, which is exactly what
+        somebody chasing a missing refund is looking for.
+        """
         return (
             RefundRequest.objects.select_related(*self._ROW_RELATIONS)
+            .prefetch_related(*self._REFUND_RELATIONS)
             .filter(requested_by_id=user_id)  # type: ignore[misc]
             .order_by("-created_at")
         )
@@ -276,7 +300,11 @@ class RefundRequestRepository(BaseRepository[RefundRequest]):
         rule every other organizer read uses, applied in the query rather than
         filtered in Python, so a page is a page of THEIRS.
         """
-        queryset = RefundRequest.objects.select_related(*self._ROW_RELATIONS).filter(
+        queryset = (
+            RefundRequest.objects.select_related(*self._ROW_RELATIONS).prefetch_related(
+                *self._REFUND_RELATIONS
+            )
+        ).filter(
             booking__event__organization__owner_id=owner_id  # type: ignore[misc]
         )
         if status:
@@ -291,7 +319,9 @@ class RefundRequestRepository(BaseRepository[RefundRequest]):
 
     def list_all(self, *, status: str | None = None):
         """Platform-wide, for the operator console."""
-        queryset = RefundRequest.objects.select_related(*self._ROW_RELATIONS)
+        queryset = RefundRequest.objects.select_related(*self._ROW_RELATIONS).prefetch_related(
+            *self._REFUND_RELATIONS
+        )
         if status:
             queryset = queryset.filter(status=status)
         if status == RefundRequestStatus.PENDING:

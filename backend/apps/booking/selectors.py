@@ -23,6 +23,21 @@ def get_booking_detail(
     return bookings.get_detail(booking_id)
 
 
+def list_my_bookings(
+    user_id: uuid.UUID | str, *, bookings: BookingRepository | None = None
+) -> QuerySet[Booking]:
+    """This account's purchase history — every booking, in every state.
+
+    Distinct from `list_my_tickets`, which returns only ACTIVE tickets. A
+    refunded, checked-in, cancelled or never-paid booking has no active ticket
+    and so had no representation anywhere the customer could see; a payment
+    that failed left nothing on screen at all. This is what the account's
+    Bookings & Purchases list reads.
+    """
+    bookings = bookings or BookingRepository()
+    return bookings.list_for_user(user_id)
+
+
 def list_my_tickets(
     user_id: uuid.UUID | str, *, tickets: TicketRepository | None = None
 ) -> QuerySet[Ticket]:

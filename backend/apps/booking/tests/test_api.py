@@ -347,6 +347,158 @@ def test_cancel_booking_returns_200_and_releases(
     assert result.booking.status == BookingStatus.CANCELLED
 
 
+@pytest.mark.django_db
+def test_create_booking_returns_its_line_items_so_the_checkout_need_not_estimate(
+    authed_client, event, make_tier
+):
+    """The response used to be the SUMMARY serializer, which has no `items`.
+
+    Two things broke on that, both silently:
+
+    1. The review screen fell back to pricing the order from the SELECTION —
+       an estimate off the cached tier payload — while the total beside it came
+       from the booking. Those disagree the moment the locked reserve decides a
+       different price from the one the display was cached with, which is what a
+       live sale phase does. The screen showed an order amount and a grand total
+       that did not add up, and neither number was wrong on its own.
+    2. The guard that notices somebody went back and changed their order
+       compares `booking.items` against the URL's selection. With no items it
+       could never fire, so a changed selection kept charging for the original.
+
+    The items must therefore sum to exactly the subtotal the booking recorded:
+    `total_amount - platform_fee - donation`.
+    """
+    tier = make_tier(price_minor=50000, quantity=100)
+
+    body = authed_client.post(
+        "/api/v1/bookings",
+        {"event_id": str(event.id), "items": [{"ticket_type_id": str(tier.id), "quantity": 3}]},
+        format="json",
+    ).json()
+
+    booking = body["booking"]
+    lines = booking["items"]
+    assert [(line["ticket_type_name"], line["quantity"], line["unit_price"]) for line in lines] == [
+        ("General", 3, 50000)
+    ]
+    subtotal = sum(line["unit_price"] * line["quantity"] for line in lines)
+    assert subtotal == booking["total_amount"] - booking["platform_fee"] - booking["donation"]
+    # Empty by construction — a booking has no tickets until it is paid.
+    assert booking["tickets"] == []
+
+
+# --- GET /me/bookings ------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_my_bookings_lists_every_state_not_just_active_tickets(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    """THE WHOLE REASON THIS ENDPOINT EXISTS.
+
+    `/me/tickets` returns ACTIVE tickets, so a booking that was never paid had
+    no representation anywhere the customer could reach — no record of the
+    attempt, no way to finish it, no explanation. That is precisely the case
+    somebody opens their account to look at.
+    """
+    tier = make_tier(quantity=100)
+    paid = _create_via_service(booking_service, buyer, event, tier, quantity=2)
+    booking_service.confirm_booking(booking_id=paid.booking.id, payment_ref="pay_1")
+    unpaid = _create_via_service(booking_service, buyer, event, tier, quantity=1)
+
+    resp = authed_client.get("/api/v1/me/bookings")
+
+    assert resp.status_code == 200
+    assert resp.headers["Cache-Control"] == "private, no-store"
+    rows = {row["id"]: row for row in resp.json()["data"]}
+    assert set(rows) == {str(paid.booking.id), str(unpaid.booking.id)}
+
+    settled = rows[str(paid.booking.id)]
+    assert settled["status"] == "paid"
+    assert settled["ticket_count"] == 2
+    assert settled["active_ticket_count"] == 2
+    assert settled["used_ticket_count"] == 0
+
+    # The unpaid one is the row that used to be invisible.
+    held = rows[str(unpaid.booking.id)]
+    assert held["status"] == "reserved"
+    assert held["ticket_count"] == 0
+    assert held["hold_expires_at"]
+
+
+@pytest.mark.django_db
+def test_my_bookings_carries_the_event_so_a_card_can_be_drawn(
+    authed_client, booking_service, buyer, event, make_tier
+):
+    """A title alone is not a card.
+
+    The wallet could name the event and nothing else, so every row was a
+    headline with no date, venue, artwork or amount. All four are columns on a
+    row this query already joins.
+    """
+    tier = make_tier(price_minor=50000, quantity=10)
+    _create_via_service(booking_service, buyer, event, tier, quantity=2)
+
+    row = authed_client.get("/api/v1/me/bookings").json()["data"][0]
+
+    assert row["event_title"] == "Headline Show"
+    assert row["event_venue"] == "Phoenix Arena"
+    assert row["event_city"] == "Mumbai"
+    assert row["event_starts_at"]
+    assert "event_poster_url" in row
+    # 2 x 50000 + 1% platform fee, ADDED on top. `total_amount` contains the
+    # fee and the donation — never add either back on.
+    assert row["total_amount"] == 101000
+    assert row["platform_fee"] == 1000
+    assert row["donation"] == 0
+    assert [(line["ticket_type_name"], line["quantity"]) for line in row["items"]] == [
+        ("General", 2)
+    ]
+
+
+@pytest.mark.django_db
+def test_my_bookings_only_shows_mine(
+    authed_client, booking_service, buyer, other_user, event, make_tier
+):
+    tier = make_tier(quantity=100)
+    _create_via_service(booking_service, buyer, event, tier, quantity=1)
+    booking_service.create_booking(
+        user_id=other_user.id,
+        event_id=event.id,
+        items=[{"ticket_type_id": tier.id, "quantity": 1}],
+    )
+
+    assert len(authed_client.get("/api/v1/me/bookings").json()["data"]) == 1
+
+
+@pytest.mark.django_db
+def test_my_bookings_requires_authentication(api_client):
+    assert api_client.get("/api/v1/me/bookings").status_code == 401
+
+
+@pytest.mark.django_db
+def test_my_bookings_query_budget_is_flat_in_the_number_of_bookings(
+    authed_client, booking_service, buyer, event, make_tier, django_assert_num_queries
+):
+    """Five bookings must cost what one costs.
+
+    auth lookup + the page (event joined, ticket states aggregated in Postgres)
+    + one prefetch for the line items. The counts are conditional aggregates
+    rather than a prefetch of every ticket row, which is what keeps a customer
+    with five bookings of five tickets from loading twenty-five rows to produce
+    three integers.
+    """
+    tier = make_tier(quantity=100)
+    for index in range(5):
+        result = _create_via_service(booking_service, buyer, event, tier, quantity=2)
+        booking_service.confirm_booking(booking_id=result.booking.id, payment_ref=f"pay_{index}")
+
+    with django_assert_num_queries(3):
+        body = authed_client.get("/api/v1/me/bookings").json()
+    assert len(body["data"]) == 5
+    assert all(row["active_ticket_count"] == 2 for row in body["data"])
+
+
 # --- GET /me/tickets -------------------------------------------------------
 
 

@@ -56,6 +56,20 @@ export type RefundRequest = {
   event_id: string;
   event_title: string;
   event_starts_at: string;
+  /**
+   * ── THE THREE FIELDS THAT MEAN MONEY ACTUALLY MOVED ────────────────────
+   *
+   * Null until a `Refund` row exists — that row is written only after the
+   * provider accepted the transfer. `status === 'approved'` is a DECISION and
+   * these are the TRANSFER, and the whole reason a request and a refund are
+   * two objects is that the gap between them is real and sometimes days long.
+   *
+   * `refund_reference` is the provider's refund id: the string a bank asks for
+   * when somebody rings to say the credit has not landed.
+   */
+  refund_reference: string | null;
+  refund_amount_minor: number | null;
+  refunded_at: string | null;
 };
 
 /* ── The customer's half ────────────────────────────────────────────────── */

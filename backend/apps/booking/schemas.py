@@ -140,6 +140,82 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class MyBookingSerializer(serializers.ModelSerializer):
+    """One row of the customer's Bookings & Purchases list.
+
+    ── IT CARRIES THE EVENT, AND THAT IS THE POINT ────────────────────────
+
+    `TicketSerializer` returns a title and nothing else, so the account screen
+    could name the event and could not say when it was, where it was, or what
+    it cost. Every one of those is a column on a row this query has already
+    joined — the comment in `components/account/tickets.tsx` calls widening
+    this payload "one cheap join" and asks for it to be done before anybody
+    reaches for a request per card. This is that join.
+
+    ── THE COUNTS ARE ANNOTATIONS, NOT PYTHON ─────────────────────────────
+
+    `ticket_count` / `active_ticket_count` / `used_ticket_count` come from
+    conditional aggregates in `list_for_user`. They are declared with a default
+    so this serializer is still usable against a plain `Booking` (a test, a
+    single row) without exploding on a missing attribute.
+
+    ── NO REFUND FIELDS HERE, DELIBERATELY ────────────────────────────────
+
+    Whether a refund was asked for lives in `payments`, and `booking` must not
+    import it — dependencies point one way. The client already reads
+    `/me/refund-requests` and joins by `booking_id`; that join is one request
+    for the whole screen, not one per row.
+    """
+
+    event_title = serializers.CharField(source="event.title", read_only=True)
+    event_slug = serializers.CharField(source="event.slug", read_only=True)
+    event_starts_at = serializers.DateTimeField(source="event.starts_at", read_only=True)
+    event_ends_at = serializers.DateTimeField(source="event.ends_at", read_only=True)
+    event_venue = serializers.CharField(source="event.venue", read_only=True)
+    event_city = serializers.CharField(source="event.city", read_only=True)
+    event_poster_url = serializers.CharField(source="event.poster_url", read_only=True)
+    event_status = serializers.CharField(source="event.status", read_only=True)
+
+    total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
+    platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
+    donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
+
+    #: Annotated by `BookingRepository.list_for_user`. `default=0` keeps the
+    #: serializer total against a row loaded without the annotation.
+    ticket_count = serializers.IntegerField(read_only=True, default=0)
+    active_ticket_count = serializers.IntegerField(read_only=True, default=0)
+    used_ticket_count = serializers.IntegerField(read_only=True, default=0)
+
+    items = BookingItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Booking
+        fields = [
+            "id",
+            "status",
+            "created_at",
+            "hold_expires_at",
+            "payment_order_id",
+            "total_amount",
+            "platform_fee",
+            "donation",
+            "event_id",
+            "event_title",
+            "event_slug",
+            "event_starts_at",
+            "event_ends_at",
+            "event_venue",
+            "event_city",
+            "event_poster_url",
+            "event_status",
+            "ticket_count",
+            "active_ticket_count",
+            "used_ticket_count",
+            "items",
+        ]
+        read_only_fields = fields
+
+
 class TicketSerializer(serializers.ModelSerializer):
     event_id = serializers.UUIDField(source="booking.event_id", read_only=True)
     event_title = serializers.CharField(source="booking.event.title", read_only=True)

@@ -46,6 +46,45 @@ def refund_request_payload(request) -> dict:
         "event_id": str(booking.event_id),
         "event_title": booking.event.title,
         "event_starts_at": booking.event.starts_at.isoformat(),
+        **_settled_refund(booking),
+    }
+
+
+def _settled_refund(booking) -> dict:
+    """The `Refund` row for this booking, flattened — or three nulls.
+
+    ── A REQUEST IS NOT A REFUND, AND THE SCREEN HAS TO SAY WHICH ─────────
+
+    `status == "approved"` means a human said yes and the vendor call was
+    enqueued. It does NOT mean money moved: `execute_refund` writes a `Refund`
+    only after the provider accepted it, which is the one fact a customer
+    chasing their bank actually needs. Reading `approved` as "refunded" is the
+    single mistake this whole two-table design exists to prevent, so the
+    settled facts are separate fields rather than an interpretation of status.
+
+    `reference` is the provider's own refund id — the string a bank asks for
+    when somebody rings to say the credit has not landed. It is not a secret
+    (it identifies a refund the caller already owns and nothing else), and
+    withholding it just means the customer has to open a support ticket to be
+    read a number back.
+
+    Null everywhere until the money has genuinely moved. Nothing here is
+    inferred from a status.
+
+    Relies on `list_for_user`'s prefetch; a caller that loaded the request
+    without it pays two queries here rather than returning something wrong.
+    """
+    settled = None
+    for payment in booking.payments.all():
+        for refund in payment.refunds.all():
+            if settled is None or refund.created_at > settled.created_at:
+                settled = refund
+    if settled is None:
+        return {"refund_reference": None, "refund_amount_minor": None, "refunded_at": None}
+    return {
+        "refund_reference": settled.rzp_refund_id,
+        "refund_amount_minor": settled.amount_minor,
+        "refunded_at": settled.created_at.isoformat(),
     }
 
 

@@ -122,6 +122,38 @@ export function resolveKeyId(fromServer: string): string {
   return process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ?? '';
 }
 
+/**
+ * What the gateway actually said when it refused.
+ *
+ * ── ALL OF THIS WAS ALREADY ARRIVING, AND ALL BUT ONE FIELD WAS DISCARDED ──
+ *
+ * `checkout.on('payment.failed')` hands over Razorpay's full `error` object.
+ * This module read `description` and threw the rest away, so a customer whose
+ * payment failed was told one sentence and could be told nothing more — no
+ * reason to quote to their bank, no payment reference for support, and no way
+ * for the UI to tell "your bank declined it" apart from "you closed the app".
+ *
+ * Nothing here is inferred or invented: every field is Razorpay's own, passed
+ * through verbatim, and every one is optional because the SDK does not promise
+ * them. A failure screen renders only what actually arrived.
+ *
+ *   `code`     the class of failure — BAD_REQUEST_ERROR, GATEWAY_ERROR …
+ *   `reason`   the machine reason — payment_timed_out, insufficient_funds …
+ *   `source`   whose side it happened on — customer | bank | gateway | business
+ *   `step`     where in the flow — payment_authentication, payment_authorization
+ *   `paymentId` / `orderId`  the references support asks for
+ */
+export type CheckoutFailure = {
+  /** Razorpay's human sentence, or ours when the SDK gave none. */
+  message: string;
+  code?: string;
+  reason?: string;
+  source?: string;
+  step?: string;
+  paymentId?: string;
+  orderId?: string;
+};
+
 export type CheckoutArgs = {
   keyId: string;
   orderId: string;
@@ -131,7 +163,12 @@ export type CheckoutArgs = {
   customer: { name?: string; email?: string };
   onSuccess: (response: RazorpaySuccess) => void;
   onDismiss: () => void;
-  onFailure: (message: string) => void;
+  /**
+   * The second argument is the whole diagnostic. It is OPTIONAL to every
+   * caller that only wants the sentence, so adding it broke nothing — but the
+   * failure screen exists because of it.
+   */
+  onFailure: (message: string, failure?: CheckoutFailure) => void;
 };
 
 export async function openCheckout(args: CheckoutArgs): Promise<void> {
@@ -154,9 +191,34 @@ export async function openCheckout(args: CheckoutArgs): Promise<void> {
   });
 
   checkout.on('payment.failed', (payload) => {
-    const description = (payload as { error?: { description?: string } } | undefined)?.error
-      ?.description;
-    args.onFailure(description ?? 'The payment did not go through. No money has been taken.');
+    // Read defensively at every level. This is a third-party SDK's event
+    // payload on the money path: a shape change must degrade to the generic
+    // sentence, never throw inside a handler the customer cannot see.
+    const error = (
+      payload as
+        | {
+            error?: {
+              code?: string;
+              description?: string;
+              reason?: string;
+              source?: string;
+              step?: string;
+              metadata?: { payment_id?: string; order_id?: string };
+            };
+          }
+        | undefined
+    )?.error;
+    const message =
+      error?.description ?? 'The payment did not go through. No money has been taken.';
+    args.onFailure(message, {
+      message,
+      code: error?.code,
+      reason: error?.reason,
+      source: error?.source,
+      step: error?.step,
+      paymentId: error?.metadata?.payment_id,
+      orderId: error?.metadata?.order_id ?? args.orderId,
+    });
   });
 
   checkout.open();

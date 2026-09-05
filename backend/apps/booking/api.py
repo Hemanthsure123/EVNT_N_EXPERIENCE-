@@ -20,18 +20,19 @@ from config.di import build_booking_service
 from core.throttling import ShareReceiptThrottle
 
 from .exceptions import BookingNotFoundError, NotBookingOwnerError
-from .pagination import MyTicketsCursorPagination
+from .pagination import MyBookingsCursorPagination, MyTicketsCursorPagination
 from .schemas import (
     AssignAttendeesRequestSerializer,
     BookingDetailSerializer,
     BookingSummarySerializer,
     CreateBookingRequestSerializer,
+    MyBookingSerializer,
     SetDonationRequestSerializer,
     ShareReceiptRequestSerializer,
     ShareReceiptResponseSerializer,
     TicketSerializer,
 )
-from .selectors import get_booking_detail, list_my_tickets
+from .selectors import get_booking_detail, list_my_bookings, list_my_tickets
 
 
 def _no_store(response: Response) -> Response:
@@ -42,9 +43,7 @@ def _no_store(response: Response) -> Response:
 class BookingCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(
-        request=CreateBookingRequestSerializer, responses={201: BookingSummarySerializer}
-    )
+    @extend_schema(request=CreateBookingRequestSerializer, responses={201: BookingDetailSerializer})
     def post(self, request: Request) -> Response:
         payload = CreateBookingRequestSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
@@ -75,9 +74,38 @@ class BookingCreateView(APIView):
         # says what it is, so the backend now names the provider it is actually
         # configured with and only sends the key when that provider is the one
         # the key belongs to.
+        # Re-read with the DETAIL shape — one query plus two prefetches, and
+        # bounded. Serializing `result.booking` directly would lazily load
+        # `items` and then `ticket_type` ONCE PER LINE, which is an N+1 on the
+        # money path; this is also the identical query `GET /bookings/{id}`
+        # issues, so the two responses cannot describe the same booking
+        # differently. It picks up `payment_order_id`, which is written after
+        # the reserve transaction commits.
+        detail = get_booking_detail(result.booking.id) or result.booking
+
         is_razorpay = settings.PAYMENTS_BACKEND == "razorpay"
         body = {
-            "booking": BookingSummarySerializer(result.booking).data,
+            # ── THE DETAIL SERIALIZER, NOT THE SUMMARY ───────────────────
+            #
+            # The summary carries no `items`, and the checkout's review screen
+            # is the one surface that most needs them. Without them it fell back
+            # to pricing the order from the SELECTION — an estimate built from
+            # the tier payload — while the total beside it came from the booking.
+            # The two disagree whenever the locked reserve decides a different
+            # price from the one the display was cached with, which is exactly
+            # what a live sale phase does: the screen showed "Order amount
+            # ₹1,995" over "Grand total ₹407.99" and neither number was wrong on
+            # its own.
+            #
+            # It also re-arms a guard that had quietly stopped working. The
+            # review screen compares `booking.items` against the URL's selection
+            # to notice that somebody went back and changed their order — with
+            # no items on this response that comparison could never fire, so a
+            # changed selection kept charging for the original one.
+            #
+            # `tickets` comes with it and is empty here by construction: a
+            # booking has none until it is paid.
+            "booking": BookingDetailSerializer(detail).data,
             "payment": {
                 "order_id": result.payment_order_id,
                 "amount_minor": result.amount_minor,
@@ -169,6 +197,29 @@ class BookingAttendeesView(APIView):
             assignments=list(payload.validated_data["assignments"]),
         )
         return _no_store(Response({"tickets": TicketSerializer(tickets, many=True).data}))
+
+
+class MyBookingsView(APIView):
+    """Everything this account has ever bought, newest first.
+
+    `private, no-store` like every other booking read: it is one person's
+    purchase history, including money and event attendance.
+
+    Cursor-paginated with no `COUNT(*)`, on the same `(-created_at, id)`
+    ordering the repository sorts by — see `MyBookingsCursorPagination` for why
+    that agreement is load-bearing rather than incidental.
+    """
+
+    permission_classes = [IsAuthenticated]
+    pagination_class = MyBookingsCursorPagination
+
+    @extend_schema(responses={200: MyBookingSerializer(many=True)}, tags=["booking"])
+    def get(self, request: Request) -> Response:
+        queryset = list_my_bookings(cast(User, request.user).id)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        data = cast(list, MyBookingSerializer(page, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
 
 
 class MyTicketsView(APIView):

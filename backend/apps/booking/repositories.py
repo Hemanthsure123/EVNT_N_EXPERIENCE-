@@ -5,9 +5,10 @@ keep the locked window on the booking row minimal."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from django.db.models import Prefetch, Q, QuerySet
+from django.conf import settings
+from django.db.models import Count, Prefetch, Q, QuerySet
 from django.utils import timezone
 
 from core.base_repository import BaseRepository
@@ -20,8 +21,53 @@ from .models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
 _CHECKIN_LOCK_FIELDS = ("id", "status", "used_at", "gate")
 
 
+def _replayable_q(now: datetime, replay_window: timedelta) -> Q:
+    """The rows an `Idempotency-Key` may legitimately answer for.
+
+    ONE definition, used by `get_replayable_by_idempotency_key` (which reads it)
+    and `release_idempotency_key` (which excludes it). They were two
+    hand-written copies of the same `Q`, and a divergence between them is
+    silent: the lookup declines a row, the release keeps the key on it, and the
+    retry is refused by the unique constraint with nothing on screen explaining
+    why.
+
+    Two kinds of row qualify, for two different reasons:
+
+    · A live RESERVED hold — the attempt is still in flight, so a second submit
+      is the same submit and must return the same booking.
+
+    · A recently PAID booking — the attempt SUCCEEDED, and a retry arriving
+      after that must be handed the result rather than charged again.
+
+    The window on the second one is the whole point, and it is not an
+    optimisation. Unbounded, a paid booking answered for its key for ever, so
+    the same selection could never be bought twice by the same account: the
+    replay handed back a settled booking, the checkout showed its stale total,
+    and the pay button opened a provider order that had already been captured.
+    See `BOOKING_IDEMPOTENCY_REPLAY_MINUTES` for why elapsed time is the only
+    thing that can separate a retry from a new intent.
+
+    A lapsed-but-unswept RESERVED row deliberately qualifies for NEITHER: the
+    sweeper runs on a schedule, and replaying that window hands back a hold that
+    has already run out.
+    """
+    return Q(status=BookingStatus.PAID, created_at__gt=now - replay_window) | Q(
+        status=BookingStatus.RESERVED, hold_expires_at__gt=now
+    )
+
+
 class BookingRepository(BaseRepository[Booking]):
     model = Booking
+
+    @staticmethod
+    def _replay_window() -> timedelta:
+        """Read from settings on every call rather than captured at import.
+
+        `override_settings` is how the tests move it, and a module-level
+        constant would ignore them — which would leave the one rule that
+        decides whether somebody can buy the same tickets twice untested.
+        """
+        return timedelta(minutes=settings.BOOKING_IDEMPOTENCY_REPLAY_MINUTES)
 
     # --- writes / lifecycle ------------------------------------------------
 
@@ -96,10 +142,7 @@ class BookingRepository(BaseRepository[Booking]):
         """
         return (
             Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key)
-            .filter(
-                Q(status=BookingStatus.PAID)
-                | Q(status=BookingStatus.RESERVED, hold_expires_at__gt=timezone.now())
-            )
+            .filter(_replayable_q(timezone.now(), self._replay_window()))
             .first()
         )
 
@@ -121,10 +164,12 @@ class BookingRepository(BaseRepository[Booking]):
         """
         return (
             Booking.objects.filter(user_id=user_id, idempotency_key=idempotency_key)
-            .exclude(
-                Q(status=BookingStatus.PAID)
-                | Q(status=BookingStatus.RESERVED, hold_expires_at__gt=timezone.now())
-            )
+            # The EXACT complement of the lookup, from the same predicate. It was
+            # a second hand-written copy of the same `Q`, which is how the two
+            # drift: bound the lookup and forget this and the retry collides
+            # with the very row the lookup just declined to replay — the fix
+            # becomes unreachable and the failure looks identical to no fix.
+            .exclude(_replayable_q(timezone.now(), self._replay_window()))
             .update(idempotency_key=None)
         )
 
@@ -177,6 +222,57 @@ class BookingRepository(BaseRepository[Booking]):
             )
             .filter(pk=booking_id)
             .first()
+        )
+
+    def list_for_user(self, user_id: uuid.UUID | str) -> QuerySet[Booking]:
+        """Every booking this account has ever made, newest first — the
+        purchase history behind `GET /me/bookings`.
+
+        ── WHY THIS EXISTS AT ALL ─────────────────────────────────────────
+
+        `list_active_for_user` (below) returns ACTIVE TICKETS, which is a
+        strictly narrower thing: a booking that was refunded, checked in,
+        cancelled or never paid issues no active ticket and was therefore
+        invisible to the customer entirely. The account screen offered
+        "Used" and "Refunded" filters that could only ever count zero, and a
+        payment that failed left nothing behind on any screen the buyer could
+        reach — which is exactly the case somebody most needs to look at.
+
+        ── ONE QUERY, WITH THE COUNTS DONE IN POSTGRES ────────────────────
+
+        Ticket states are aggregated with conditional `Count`s rather than by
+        prefetching every ticket row and counting them in Python: a customer
+        with twenty bookings of five tickets is a hundred rows loaded to
+        produce three integers. `items` IS prefetched — the card names the
+        tier that was bought, and there are at most a handful per booking.
+
+        The event is joined because every row renders its title, date, venue
+        and poster; without it this is an N+1 on the one screen a person opens
+        while standing outside a venue.
+        """
+        return (
+            Booking.objects.select_related("event")
+            .filter(user_id=user_id)
+            .annotate(
+                ticket_count=Count("tickets", distinct=True),
+                active_ticket_count=Count(
+                    "tickets",
+                    filter=Q(tickets__status=TicketStatus.ACTIVE),
+                    distinct=True,
+                ),
+                used_ticket_count=Count(
+                    "tickets",
+                    filter=Q(tickets__status=TicketStatus.USED),
+                    distinct=True,
+                ),
+            )
+            .prefetch_related(
+                Prefetch("items", queryset=BookingItem.objects.select_related("ticket_type"))
+            )
+            # `id` breaks the tie so cursor pagination is stable across two
+            # bookings created in the same millisecond — the same rule every
+            # other cursor-paginated list in this codebase follows.
+            .order_by("-created_at", "id")
         )
 
     def get_with_event_owner(self, booking_id: uuid.UUID | str) -> Booking | None:

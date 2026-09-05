@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthSheet } from '@/components/auth/auth-sheet';
 import { Button } from '@/components/ui/button';
+import { cancelBooking } from '@/lib/api/bookings';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { SELECTION_PARAM, serialiseSelection } from '@/lib/booking/selection';
 import { cn } from '@/lib/utils/cn';
@@ -50,9 +51,61 @@ import { TierPicker } from './tier-picker';
  * exactly where it paused.
  */
 export function BookingStep() {
-  const { event, selection, totals, tiers } = useBooking();
+  const { event, selection, totals, tiers, booking, setBooking } = useBooking();
   const { status } = useAuth();
   const router = useRouter();
+
+  /**
+   * ── A HOLD MUST NOT SURVIVE A TRIP BACK TO THIS SCREEN ──────────────────
+   *
+   * This is the invariant that makes a whole class of bug impossible rather
+   * than merely fixed: **inventory is held only while the review screen is
+   * open.** Arriving here with a booking in context means the customer has gone
+   * back to edit their order, and the hold they left behind describes an order
+   * they are in the middle of changing.
+   *
+   * It is not a new rule — it is the one this funnel already states. Reserving
+   * on the review step rather than here is deliberate "because holding stock
+   * while someone is still browsing tiers would take tickets off sale for
+   * people who are ready to buy". A hold that lingers on this screen is that
+   * same harm, arrived at from the other direction.
+   *
+   * ── WHAT IT FIXES, MEASURED ─────────────────────────────────────────────
+   *
+   * Change the quantity, press Continue, and the review screen showed the new
+   * line items beside the OLD booking's fee and total — one step behind on
+   * every edit (5 -> fee of 3, 6 -> fee of 5, 3 -> fee of 6). The screen's own
+   * guard was supposed to catch it and could not. With the hold released here,
+   * review always arrives with nothing to reconcile: it reserves fresh, for the
+   * selection in the URL, every time.
+   *
+   * ── WHY THIS IS NOT AN UNMOUNT HOOK ─────────────────────────────────────
+   *
+   * Cancelling on unmount is forbidden in this funnel and for a good reason:
+   * the review screen has `router.replace` guards for an anonymous visitor and
+   * an empty selection, so an unmount cleanup would silently cancel bookings on
+   * paths that were never a customer leaving. This runs on MOUNT of the screen
+   * where a hold is wrong, which is a fact about the screen rather than a guess
+   * about why it was rendered.
+   *
+   * Fire-and-forget: a 409 means the sweeper or another tab already released
+   * it, which is the outcome the call wanted. `releasing` guards re-entry,
+   * including React's double-invoked effects in development.
+   */
+  const releasing = React.useRef(false);
+  React.useEffect(() => {
+    if (!booking || releasing.current) return;
+    releasing.current = true;
+    const dead = booking;
+    // Cleared FIRST, so the picker never renders against a hold it is
+    // discarding and the review step cannot be re-entered against it mid-flight.
+    setBooking(null);
+    void cancelBooking(dead.id)
+      .catch(() => undefined)
+      .finally(() => {
+        releasing.current = false;
+      });
+  }, [booking, setBooking]);
 
   const chosen = totals.ticketCount > 0;
   const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
