@@ -20,6 +20,7 @@ import { usePush } from '@/lib/push/use-push';
 import { useCookieConsent, type ConsentPreference } from '@/lib/consent/use-cookie-consent';
 import { GoogleCalendarCard } from '@/components/calendar/google-calendar-card';
 import { ProfileEditor } from '@/components/account/profile-editor';
+import { MobileSettings } from '@/components/account/settings-mobile';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
@@ -78,13 +79,22 @@ import {
  *
  * ── TWO LAYOUTS, ONE URL, NO JAVASCRIPT MEASURING THE VIEWPORT ────────────
  *
- * At `lg` a rail of five destinations sits beside one section. Below it — where
- * a second sidebar next to the account shell's own rail would be two nested
- * cramped columns — the bare URL shows an INDEX of section cards and choosing one
- * drills in, with a back link. That is why `resolveSection` distinguishes "no
- * section chosen" (`null`) from the default: the same URL is an index on a phone
- * and a rail-plus-default on a desktop, decided by CSS rather than by measuring,
- * so it is right on the first paint and there is nothing to hydrate.
+ * At `lg` a rail of five destinations sits beside one section. Below it the bare
+ * URL shows `MobileSettings` — a single scrolling stack (profile, what you are
+ * holding, three grouped lists) whose chevron rows drill into the SAME
+ * `?section=` URLs the rail writes, with a back link. That is why
+ * `resolveSection` distinguishes "no section chosen" (`null`) from the default:
+ * one URL is an index on a phone and a rail-plus-default on a desktop, decided
+ * by CSS rather than by measuring, so it is right on the first paint and there
+ * is nothing to hydrate.
+ *
+ * `components/account/settings-mobile.tsx` owns that half and NOTHING here
+ * changes with it. A phone is not a narrow desktop: the rail-and-section frame
+ * squeezed to 390px was a page title over five identical cards, which is a menu
+ * of menus rather than a settings screen. Keeping the two as two components is
+ * what lets the phone lead with the person and their next pass while the
+ * desktop keeps the console frame it shares with the organizer and admin
+ * surfaces.
  *
  * ── NO PRIMARY ACTION, BECAUSE THERE IS NOTHING TO SUBMIT ─────────────────
  *
@@ -109,7 +119,16 @@ export function AccountSettings() {
 
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
-      <header className="flex flex-col gap-stack">
+      {/* ── THE TITLE IS AUDIBLE ON A PHONE, NOT VISIBLE ──────────────────
+          The mobile screen opens on the person's own card, exactly as the
+          reference does, and a "Settings" headline above it would be a line of
+          chrome between the reader and the only thing on screen that is about
+          them. The `h1` cannot simply be dropped, though: it is the document's
+          outline and the first thing a screen-reader user hears, so it stays,
+          `sr-only`, first in the document — the same trade the front page makes
+          for its hero. `sr-only` is `position: absolute`, so it is not a flex
+          item and contributes no gap. */}
+      <header className="flex flex-col gap-stack max-lg:sr-only">
         <h1 className="text-h3 md:text-h2">Settings</h1>
         <p className="text-body text-muted-foreground">
           Signed in as{' '}
@@ -123,10 +142,8 @@ export function AccountSettings() {
       <div className="grid gap-block lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-start lg:gap-block-lg">
         <SectionRail active={active} />
 
-        {/* The index, and ONLY where there is no rail. A grid of two at `sm`
-            because five one-line cards in a single column on a tablet is a
-            column of stripes with the whole right half empty. */}
-        {chosen === null ? <SectionIndex /> : null}
+        {/* The index, and ONLY where there is no rail. */}
+        {chosen === null ? <MobileSettings /> : null}
 
         <div
           className={cn('min-w-0 flex-col gap-block', chosen === null ? 'hidden lg:flex' : 'flex')}
@@ -179,39 +196,6 @@ function SectionRail({ active }: { active: SettingsSectionId }) {
             </li>
           );
         })}
-      </ul>
-    </nav>
-  );
-}
-
-function SectionIndex() {
-  return (
-    <nav aria-label="Settings sections" className="min-w-0 lg:hidden">
-      <ul className="grid gap-stack sm:grid-cols-2">
-        {SETTINGS_SECTIONS.map((section) => (
-          <li key={section.id}>
-            <Link
-              href={sectionHref(section.id)}
-              className="flex h-full min-h-control items-center gap-3 rounded-xl border border-border bg-surface p-card shadow-sm transition-shadow duration-fast hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
-            >
-              <span
-                aria-hidden
-                className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground"
-              >
-                <section.icon className="size-4" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-body-sm font-semibold text-foreground">
-                  {section.label}
-                </span>
-                <span className="block text-caption text-muted-foreground">
-                  {section.description}
-                </span>
-              </span>
-              <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            </Link>
-          </li>
-        ))}
       </ul>
     </nav>
   );

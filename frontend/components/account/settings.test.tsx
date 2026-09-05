@@ -52,6 +52,21 @@ vi.mock('@/lib/consent/use-cookie-consent', () => ({
   useCookieConsent: () => ({ preference: 'essential', ready: true, accept: vi.fn() }),
 }));
 
+// The phone index reads three things this file has no business standing up: the
+// first page of `/me/tickets`, the caller's organisations, and the device-local
+// saved set. Stubbed at the hook, so the component under test is the real one.
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: () => ({ data: undefined, isPending: false }),
+}));
+
+vi.mock('@/lib/identity/scope', () => ({
+  useScope: () => ({ organizations: [], isOrganizer: false }),
+}));
+
+vi.mock('@/lib/discovery/use-favourites', () => ({
+  useSavedEventIds: () => [],
+}));
+
 // Mirrors the real card's `h3` — the whole point of the heading-order assertion.
 vi.mock('@/components/calendar/google-calendar-card', () => ({
   GoogleCalendarCard: () => (
@@ -85,19 +100,42 @@ beforeEach(() => {
 });
 
 describe('AccountSettings', () => {
-  it('shows an index of every section when the URL names none', () => {
+  it('shows the phone index when the URL names none, and the rail beside it', () => {
     render(<AccountSettings />);
-    // Two navs are in the DOM — the rail and the index — and CSS shows exactly
-    // one of them at any width, so neither is ever a duplicate landmark on
-    // screen. Both list all five sections.
+    // Two navs share the name — the desktop rail and the phone index's own
+    // grouped rows — and CSS shows exactly one of them at any width, so neither
+    // is ever a duplicate landmark on screen.
     const navs = screen.getAllByRole('navigation', { name: 'Settings sections' });
     expect(navs).toHaveLength(2);
     const [rail, index] = navs;
-    for (const label of ['Profile', 'Appearance', 'Notifications', 'Privacy & data', 'Account']) {
-      expect(within(index).getByRole('link', { name: new RegExp(label) })).toBeInTheDocument();
-    }
+
+    // The rows that DRILL IN. Appearance and Notifications are deliberately
+    // absent from this list: on a phone their controls are ON the index (the
+    // theme group and the reminders switch below), because a setting that
+    // applies instantly must be visible when it is changed.
+    expect(within(index).getByRole('link', { name: /Profile/ })).toHaveAttribute(
+      'href',
+      '/account/settings?section=profile',
+    );
+    expect(within(index).getByRole('link', { name: /Account/ })).toHaveAttribute(
+      'href',
+      '/account/settings?section=account',
+    );
+    // Scoped, because the desktop rail carries a link of the same name.
+    const privacy = screen.getByRole('navigation', { name: 'Privacy settings' });
+    expect(within(privacy).getByRole('link')).toHaveAttribute(
+      'href',
+      '/account/settings?section=privacy',
+    );
+
+    // The two controls the index carries itself.
+    expect(screen.getByRole('radiogroup', { name: 'Colour theme' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: 'Event reminders on this device' }),
+    ).toBeInTheDocument();
+
     // The INDEX marks nothing current, because on the viewport where it is the
-    // visible nav nothing has been chosen yet — an index whose first card
+    // visible nav nothing has been chosen yet — an index whose first row
     // claimed to be the current page would be telling the reader they are
     // somewhere they have not gone.
     expect(index.querySelectorAll('[aria-current="page"]')).toHaveLength(0);
@@ -107,6 +145,16 @@ describe('AccountSettings', () => {
       'href',
       '/account/settings?section=profile',
     );
+  });
+
+  it('never puts a fake control on the phone index either', () => {
+    render(<AccountSettings />);
+    // ONE switch, and it is the push subscription — which is real, and which
+    // `usePush` reports as `off` here. A second switch on this screen would be
+    // the notification-preference toggle that has nothing to store it, arriving
+    // by the back door now that the index has controls on it at all.
+    expect(screen.getAllByRole('switch')).toHaveLength(1);
+    expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
   it('marks the open section as the current page, and drops the index', () => {

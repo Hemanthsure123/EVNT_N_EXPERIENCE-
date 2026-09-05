@@ -1444,3 +1444,109 @@ a:focus-visible .illo-r-hop {
     display: none;
   }
 }
+
+/* ==========================================================================
+ * ACCOUNT SETTINGS — the phone screen's four ambient motions
+ * ==========================================================================
+ *
+ * `/account/settings` below `lg` is a single scrolling card stack (see
+ * `components/account/settings-mobile.tsx`). Four motions carry it, and each is
+ * here rather than inline for the reason the aurora is: CSS belongs in CSS, and
+ * the numbers are judgements that want one home.
+ *
+ *  1. `settings-aura`     — the halo behind the profile medallion.
+ *  2. `settings-sheen`    — one slow metallic pass across a dark card.
+ *  3. `settings-live-dot` — the ring a "ready to use" pass breathes out.
+ *  4. `settings-wave`     — the drifting stroke on the membership card's lines.
+ *
+ * All four animate `transform`, `opacity` or `stroke-dashoffset` only — never a
+ * blur radius, never a background position — so each stays a compositor job on
+ * the phone that is the entire audience for this layout.
+ *
+ * They STOP under `prefers-reduced-motion`, not slow down: three of the four
+ * are ambient loops in peripheral vision, which is exactly what that preference
+ * is about. `globals.css`'s global rule only collapses the DURATION, which
+ * would freeze a pulse on its final keyframe (a halo stuck at 12% larger reads
+ * as a rendering fault), so `animation: none` is needed to return each element
+ * to its authored state.
+ */
+
+.settings-aura {
+  animation: settings-aura-pulse 3.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes settings-aura-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* The sweep starts off the left edge and finishes off the right, then waits:
+   the 35%–100% hold is what makes it read as an occasional glint rather than a
+   loading shimmer, which is a different thing entirely and already spoken for
+   by `.skeleton`. */
+.settings-sheen {
+  animation: settings-sheen-pass 6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes settings-sheen-pass {
+  0% {
+    transform: translateX(-160%) skewX(-16deg);
+  }
+
+  35%,
+  100% {
+    transform: translateX(260%) skewX(-16deg);
+  }
+}
+
+/* A ring rather than a fade: an opacity blink on a 6px dot is close to
+   invisible, and the expanding shadow reads at a glance without moving
+   anything around it. */
+.settings-live-dot {
+  animation: settings-live-dot-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes settings-live-dot-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--success-500) / 0.7);
+  }
+
+  50% {
+    box-shadow: 0 0 0 0.3125rem rgb(var(--success-500) / 0);
+  }
+}
+
+/* `stroke-dasharray` is set on the class so the offset has something to travel
+   along; the path itself only declares its shape. */
+.settings-wave {
+  stroke-dasharray: 120 60;
+  animation: settings-wave-drift 12s linear infinite;
+}
+
+@keyframes settings-wave-drift {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 240;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-aura,
+  .settings-sheen,
+  .settings-live-dot,
+  .settings-wave {
+    animation: none;
+  }
+}

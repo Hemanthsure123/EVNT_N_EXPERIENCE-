@@ -103,6 +103,20 @@ function isActive(pathname: string, href: string): boolean {
   return href === '/account' ? pathname === '/account' : pathname.startsWith(href);
 }
 
+/**
+ * Settings is the one account screen whose PHONE layout carries this rail's job
+ * itself.
+ *
+ * `components/account/settings-mobile.tsx` opens on the person's own card and
+ * then lists rows to their tickets, their saved events, the organiser side and
+ * every settings section — so the chip strip above it would be a second,
+ * competing set of the same destinations pinned over a screen designed without
+ * one. It is hidden BELOW `lg` on that route only; the desktop rail is
+ * untouched, and every other account screen keeps the strip at every width
+ * because none of them offer another way out.
+ */
+const RAIL_HIDDEN_ON_PHONE = '/account/settings';
+
 export function AccountShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? '/account';
   const { status } = useAuth();
@@ -150,7 +164,10 @@ export function AccountShell({ children }: { children: React.ReactNode }) {
           default, and a full-height item has nothing to stick to. */}
       <nav
         aria-label="Account sections"
-        className="sticky top-sticky-top z-sticky -mx-4 min-w-0 self-start border-b border-border bg-background px-4 pt-2 lg:top-sticky-top-lg lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:pt-0"
+        className={cn(
+          'sticky top-sticky-top z-sticky -mx-4 min-w-0 self-start border-b border-border bg-background px-4 pt-2 lg:top-sticky-top-lg lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:pt-0',
+          pathname.startsWith(RAIL_HIDDEN_ON_PHONE) && 'max-lg:hidden',
+        )}
       >
         {/* Horizontal below lg, vertical above — the same responsive rail the
             wizard uses, so the pattern is learned once. `-mx-1 px-1` lets the
