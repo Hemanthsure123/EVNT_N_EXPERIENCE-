@@ -31,6 +31,8 @@ import { SeoStep } from './seo-step';
 import { TicketBuilder } from './ticket-builder';
 import { LivePreview } from './preview';
 import { ReviewStep } from './review';
+import { fetchEventDetail } from '@/lib/api/events';
+import { fetchOwnerEventTiers } from '@/lib/api/organizer';
 import { WizardActionBar, saveSummary } from './action-bar';
 
 /**
@@ -80,7 +82,7 @@ import { WizardActionBar, saveSummary } from './action-bar';
  * "Only the owning organization can manage this event." is not reachable from
  * here any more.
  */
-export function EventWizard() {
+export function EventWizard({ eventId }: { eventId?: string } = {}) {
   const router = useRouter();
   const invalidate = useInvalidateOrganizer();
   // Aliased: `status` below is the per-step rail state, which is a different
@@ -97,10 +99,58 @@ export function EventWizard() {
   );
   const organizationIds = React.useMemo(() => orgs.map((org) => org.id), [orgs]);
 
+  /**
+   * EDIT MODE: the event as the server has it, plus its tiers.
+   *
+   * The tiers come from the ORGANIZER endpoint, not the public
+   * `GET /events/{id}/ticket-types`. The public one is `public` with an
+   * `s-maxage`, which is right for the ticket panel and wrong here: every row
+   * carries the `version` this editor's conditional updates depend on, and a
+   * version out of a shared cache is one that may already be behind. The
+   * failure is not a stale number — it is a 409 the save engine answers by
+   * RELOADING rather than retrying, so edits are silently undone in a loop.
+   *
+   * Both are `staleTime: Infinity` for this mount. Refetching under an open
+   * editor would hand hydration a different event mid-session; the save engine
+   * already handles a genuine 409 by reloading, which is the moment to pick up
+   * somebody else's change.
+   */
+  const editing = Boolean(eventId);
+  const eventQuery = useQuery({
+    queryKey: ['organizer', 'edit-event', eventId],
+    queryFn: () => fetchEventDetail(eventId as string),
+    enabled: editing,
+    staleTime: Infinity,
+    retry: 1,
+  });
+  const editTiersQuery = useQuery({
+    queryKey: ['organizer', 'edit-tiers', eventId],
+    queryFn: () => fetchOwnerEventTiers(eventId as string),
+    enabled: editing,
+    staleTime: Infinity,
+    retry: 1,
+  });
+
+  const existing = React.useMemo(
+    () =>
+      editing && eventQuery.data && editTiersQuery.data
+        ? { event: eventQuery.data, tiers: editTiersQuery.data }
+        : null,
+    [editing, eventQuery.data, editTiersQuery.data],
+  );
+
   const wizard = useWizard({
     userId: user?.id ?? null,
     organizationIds,
-    ready: authStatus === 'authenticated' && organizationsQuery.isSuccess,
+    // In edit mode the event has to be IN HAND before hydration runs — the
+    // effect is synchronous and commits once. Gating here rather than letting
+    // it hydrate an empty draft first is what stops the editor flashing a
+    // blank form over a real event and, worse, autosaving it.
+    ready:
+      authStatus === 'authenticated' &&
+      organizationsQuery.isSuccess &&
+      (!editing || Boolean(existing)),
+    existing,
   });
   const { draft, update, setTiers } = wizard;
   // The save engine's health, handed to the steps that render a
@@ -291,6 +341,27 @@ export function EventWizard() {
           leftIcon={<RefreshCw className="size-4" aria-hidden />}
         >
           Try again
+        </Button>
+      </div>
+    );
+  }
+
+  // ── AN EVENT THAT CANNOT BE LOADED IS NOT AN EMPTY FORM ────────────────
+  //
+  // The organizer tier read answers 404 for an event that is not theirs AND
+  // for one that does not exist — the same answer on purpose, so it cannot be
+  // used to test whether an id is real. Falling through to the wizard here
+  // would render a blank create form at an edit URL and then autosave it as a
+  // NEW event, which is the worst available outcome.
+  if (editing && (eventQuery.isError || editTiersQuery.isError)) {
+    return (
+      <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
+        <h1 className="text-h3">That event is not available</h1>
+        <p className="text-body-sm text-muted-foreground">
+          It may have been removed, or it belongs to another organiser.
+        </p>
+        <Button asChild>
+          <Link href="/dashboard/events">Back to your events</Link>
         </Button>
       </div>
     );

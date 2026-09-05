@@ -23,9 +23,11 @@ import {
   toCreateInput,
   toPatchInput,
   toTierInput,
+  draftFromEvent,
   type Draft,
   type DraftTier,
 } from './model';
+import type { EventDetail, TicketTier } from '@/lib/api/types';
 
 /**
  * The wizard's engine: local-first draft, autosave, undo/redo.
@@ -97,9 +99,23 @@ export type WizardInput = {
    *  before it, because the key needs the account and the organisation needs
    *  the list. */
   ready: boolean;
+  /**
+   * EDIT MODE: the event being edited, already fetched, with its tiers.
+   *
+   * Fetched by the ROUTE rather than in here on purpose. Hydration below is
+   * synchronous — it reads localStorage and commits in one pass — and making
+   * it await a request would put a loading state, a failure state and a race
+   * with the autosave timer into the one effect the create path depends on.
+   * The route already has to handle "still loading" and "no such event" to
+   * decide whether to render a wizard at all, so it does the fetching and
+   * passes the answer in. `ready` stays the single gate.
+   *
+   * Absent or null means the create flow, which is unchanged.
+   */
+  existing?: { event: EventDetail; tiers: readonly TicketTier[] } | null;
 };
 
-export function useWizard({ userId, organizationIds, ready }: WizardInput) {
+export function useWizard({ userId, organizationIds, ready, existing }: WizardInput) {
   const [draft, setDraftState] = React.useState<Draft>(() => emptyDraft());
   const [state, setState] = React.useState<SaveState>('local');
   const [error, setError] = React.useState<string | null>(null);
@@ -143,7 +159,11 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
 
   /* ── restore ──────────────────────────────────────────────────────── */
 
-  const storageKey = userId ? draftStorageKey(userId) : null;
+  const storageKey = userId ? draftStorageKey(userId, existing?.event.id ?? null) : null;
+  /** Mirrors `existing` for the hydration effect, which must not re-run when
+   *  a refetch hands back an identical event. */
+  const existingRef = React.useRef(existing);
+  existingRef.current = existing;
   /** Set once this draft is done with (published, submitted, or reset), so the
    *  persist effect stops re-creating what `clearStored` just removed. */
   const finished = React.useRef(false);
@@ -170,12 +190,48 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
       // Corrupt or blocked storage — start clean rather than crash the wizard.
     }
 
-    const restored = restoreDraft(stored, organizationIds);
+    // ── EDIT MODE: THE SERVER IS THE SOURCE OF TRUTH ─────────────────────
+    //
+    // A stored draft is kept ONLY when its `version` still matches the one the
+    // server just handed back. That is the crash-recovery case — the tab died
+    // with unsaved edits and nothing else has touched the event since — and it
+    // is the only case where local state is newer rather than merely older.
+    //
+    // Any other version means somebody saved in between (another tab, a
+    // co-organizer, this person on their phone). Restoring over that would
+    // show fields that no longer exist on the server and then PATCH them back,
+    // silently reverting the newer edit. The server wins, and the local copy
+    // is dropped rather than merged: a half-and-half draft is the one outcome
+    // nobody could reason about afterwards.
+    const source = existingRef.current;
+    const server = source ? draftFromEvent(source.event, source.tiers, organizationIds) : null;
+    const usableStored =
+      server && stored ? (stored.version === server.version ? stored : null) : stored;
+
+    const restored = server
+      ? { ...server, ...(usableStored ?? {}), eventId: server.eventId, version: server.version }
+      : restoreDraft(stored, organizationIds);
     past.current = [];
     future.current = [];
+    // ── SEEDED FROM THE SERVER, NEVER FROM THE RESTORED DRAFT ────────────
+    //
+    // These two refs are "what the server last confirmed". Seeding them from
+    // `restored` would mark any recovered local edit as already-saved, and the
+    // save engine would skip the very PATCH that edit exists to trigger.
+    // Seeded from `server`, a recovered edit has a different fingerprint and
+    // is written on the next flush — which is exactly what recovery means.
     savedTiers.current = {};
+    if (server) {
+      server.tiers.forEach((tier, position) => {
+        if (tier.serverId) savedTiers.current[tier.serverId] = tierFingerprint(tier, position);
+      });
+    }
     posterFile.current = null;
-    savedEvent.current = restored.eventId ? patchFingerprint(restored) : '';
+    savedEvent.current = server
+      ? patchFingerprint(server)
+      : restored.eventId
+        ? patchFingerprint(restored)
+        : '';
     latest.current = restored;
     setDraftState(restored);
     setState(restored.eventId ? 'saved' : 'local');
@@ -187,7 +243,10 @@ export function useWizard({ userId, organizationIds, ready }: WizardInput) {
     // save it — edits schedule a flush, but re-opening and pressing Submit is
     // not an edit, and Submit itself is disabled BY the unsaved blocker. So
     // the save the draft was owed is scheduled here.
-    if (!restored.eventId && canCreate(restored)) schedule();
+    // Only ever the CREATE path: an edit already exists on the server, so
+    // there is no owed `POST` to schedule and a flush here would PATCH an
+    // event nobody has touched yet.
+    if (!server && !restored.eventId && canCreate(restored)) schedule();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, storageKey, organizationIds]);
 

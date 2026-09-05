@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Paginated } from './types';
+import type { Paginated, TicketTier } from './types';
 
 /**
  * The organizer dashboard's read surface (`/api/v1/organizer/*`).
@@ -486,3 +486,22 @@ export type OrganizerInsight = {
 
 export const fetchOrganizerInsights = () =>
   api.get<{ data: OrganizerInsight[] }>('/organizer/insights').then((response) => response.data);
+
+/**
+ * The tiers of one of the caller's OWN events, uncached.
+ *
+ * Deliberately not `fetchEventTiers`, which reads the public
+ * `GET /events/{id}/ticket-types`. That one is `public` with an `s-maxage` and
+ * a stale-while-revalidate window — correct for the ticket panel, and wrong
+ * for an editor. Every row carries `version`, the editor's writes are
+ * conditional on it, and a version served from a shared cache may already be a
+ * save behind. The result is not a stale figure on screen: it is a 409 that the
+ * wizard answers by RELOADING rather than retrying, so an organizer edits,
+ * saves, is reset, and never finds out why.
+ */
+export const fetchOwnerEventTiers = (eventId: string) =>
+  api
+    .get<{ data: TicketTier[] }>(
+      `/organizer/events/${encodeURIComponent(eventId)}/ticket-types`,
+    )
+    .then((response) => response.data);

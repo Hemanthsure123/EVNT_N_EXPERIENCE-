@@ -52,6 +52,7 @@ import type {
   SalePhaseInput,
   UpdateEventInput,
 } from '@/lib/api/organizer-writes';
+import type { EventDetail, TicketTier } from '@/lib/api/types';
 
 /**
  * One step of a tier's pricing schedule, as edited.
@@ -262,8 +263,12 @@ const STORAGE_PREFIX = 'ee-event-draft-v2';
  */
 const LEGACY_STORAGE_KEY = 'ee-event-draft-v1';
 
-export function draftStorageKey(userId: string): string {
-  return `${STORAGE_PREFIX}:${userId}`;
+export function draftStorageKey(userId: string, eventId?: string | null): string {
+  // ── AN EDIT GETS ITS OWN KEY ─────────────────────────────────────────────
+  // Without the suffix, opening an existing event would restore the unsaved
+  // NEW-event draft over it, and then saving would write somebody's half-typed
+  // new event on top of a live one. Two different pieces of work, two keys.
+  return eventId ? `${STORAGE_PREFIX}:${userId}:${eventId}` : `${STORAGE_PREFIX}:${userId}`;
 }
 
 export function discardLegacyDraft(): void {
@@ -896,6 +901,120 @@ export function toLocalInput(iso: string | null | undefined): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
     date.getHours(),
   )}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Minor units back to the MAJOR-unit string the price fields hold.
+ *
+ * The editors work in rupees because an organizer types 499 and means 499;
+ * `toTierInput` multiplies by 100 on the way out. This is the inverse, and it
+ * must round-trip exactly or reopening an event and saving it would re-price
+ * every tier. Trailing zeros are dropped (`249950` -> `"2499.5"`, not
+ * `"2499.50"`) because `Number("2499.5") * 100` is the same paise either way
+ * and a field pre-filled with a trailing zero invites somebody to delete it.
+ */
+function toMajorInput(minor: number | null | undefined): string {
+  if (minor === null || minor === undefined || Number.isNaN(minor)) return '';
+  return String(minor / 100);
+}
+
+/** Coordinates arrive as strings from a `DecimalField`; the draft holds numbers. */
+function toCoordinate(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * An existing event, as a draft the wizard can edit.
+ *
+ * ── THE INVERSE OF EVERY MAPPER ABOVE, AND IT HAS TO BE EXACT ────────────
+ *
+ * `toPatchInput` sends the whole editable surface on every save — it is not a
+ * diff. So any field this function fails to carry across is not merely missing
+ * from the form: it is BLANKED on the organizer's next keystroke, because the
+ * PATCH will faithfully send the empty value the draft was hydrated with. A
+ * dropped `place_id` silently unpins the map; a dropped `policies` silently
+ * deletes the refund terms.
+ *
+ * That is why this is a pure function with its own tests rather than something
+ * assembled inside a hook: the failure mode is data loss on a screen that
+ * looks like it is working.
+ *
+ * ── TIER ORDER IS LOAD-BEARING ───────────────────────────────────────────
+ *
+ * The server returns tiers in `position` order and the save writes the array
+ * index back as `position`. So the order here IS the organizer's arrangement,
+ * and re-sorting it — by price, by name, by anything — would renumber their
+ * merchandising the first time they saved.
+ */
+export function draftFromEvent(
+  event: EventDetail,
+  tiers: readonly TicketTier[],
+  owned: readonly string[],
+): Draft {
+  const fresh = emptyDraft(resolveOrganizationId(event.organization_id, owned));
+  return {
+    ...fresh,
+    eventId: event.id,
+    version: event.version,
+    // The event's OWN organization, not the resolver's guess. An event belongs
+    // to whoever created it, and `organization_id` is not in the PATCH body —
+    // so a mismatch here would only ever mislead the preview.
+    organizationId: event.organization_id,
+    title: event.title,
+    description: event.description ?? '',
+    venue: event.venue,
+    city: event.city,
+    category: event.category ?? '',
+    placeId: event.place_id ?? '',
+    latitude: toCoordinate(event.latitude),
+    longitude: toCoordinate(event.longitude),
+    startsAt: toLocalInput(event.starts_at),
+    endsAt: toLocalInput(event.ends_at),
+    posterUrl: event.poster_url ?? '',
+    shortDescription: event.short_description ?? '',
+    // `null` is "not stated" and must stay empty rather than becoming "0",
+    // which would be a duration the organizer never claimed.
+    durationMinutes: event.duration_minutes === null ? '' : String(event.duration_minutes),
+    language: event.language ?? '',
+    ageRestriction: event.age_restriction ?? '',
+    accessibilityNotes: event.accessibility_notes ?? '',
+    policies: (event.policies ?? []).map((policy, index) => ({
+      key: `policy-${index}-${policy.title.slice(0, 8)}`,
+      title: policy.title,
+      body: policy.body,
+    })),
+    seoTitle: event.seo_title ?? '',
+    seoDescription: event.seo_description ?? '',
+    tiers: tiers.map((tier) => ({
+      // The server id doubles as the React key: it is stable across renders and
+      // unique, which is the whole contract, and it means a hydrated row cannot
+      // collide with a locally-added one (`tier-N-random`).
+      key: tier.id,
+      serverId: tier.id,
+      version: tier.version,
+      name: tier.name,
+      description: tier.description ?? '',
+      perks: tier.perks ?? [],
+      slotId: tier.slot_id ?? '',
+      // The FACE price, never `effective_price`. A tier inside a live early-bird
+      // phase is discounted TODAY; loading the discount into the price field and
+      // saving would make the discount permanent and lose the real price.
+      price: toMajorInput(tier.price),
+      quantity: String(tier.quantity),
+      maxPerOrder: String(tier.max_per_order),
+      saleStart: toLocalInput(tier.sale_start),
+      saleEnd: toLocalInput(tier.sale_end),
+      phases: (tier.phases ?? []).map((phase) => ({
+        key: phase.id,
+        name: phase.name,
+        price: toMajorInput(phase.price),
+        endsAt: toLocalInput(phase.ends_at),
+        quantity: phase.quantity === null ? '' : String(phase.quantity),
+      })),
+    })),
+  };
 }
 
 /** True once `POST /events` has everything its serializer requires. */

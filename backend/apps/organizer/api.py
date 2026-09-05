@@ -23,6 +23,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
+from apps.ticketing.schemas import TicketTypeSerializer
 from core.errors import NotFoundError
 from core.query_params import datetime_param, int_param, uuid_param
 
@@ -399,6 +400,25 @@ class FunnelListView(OrganizerView):
         rows = selectors.decorate_funnel_rows(list(page or []), self.owner_id)
         data = cast(list, OrganizerFunnelRowSerializer(rows, many=True).data)
         return _no_store(paginator.get_paginated_response(data))
+
+
+class OwnerEventTicketTypesView(OrganizerView):
+    """The event editor's tier read — uncached, and owner-scoped.
+
+    Deliberately NOT the public `GET /events/{id}/ticket-types`: that one is
+    CDN-cacheable, and an editor whose optimistic-lock versions come out of a
+    shared cache saves once and then 409s forever. See
+    `selectors.get_owner_event_tiers`.
+
+    It returns the SAME serializer as the public list, so the client needs no
+    second type — what differs is who may read it and whether anything is
+    allowed to hold on to it.
+    """
+
+    @extend_schema(responses={200: TicketTypeSerializer(many=True)})
+    def get(self, request: Request, event_id: str) -> Response:
+        rows = selectors.get_owner_event_tiers(self.owner_id, UUID(str(event_id)))
+        return _no_store(Response({"data": TicketTypeSerializer(rows, many=True).data}))
 
 
 class InsightsView(OrganizerView):

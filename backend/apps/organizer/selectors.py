@@ -34,6 +34,8 @@ from uuid import UUID
 from django.utils import timezone
 
 from apps.events.models import EventCategory
+from apps.ticketing.repositories import TicketTypeRepository
+from core.errors import NotFoundError
 from core.ports.cache_port import CachePort
 
 from .repositories import OrganizerRepository
@@ -562,6 +564,42 @@ def get_event_analytics(
     }
     cache.set(key, payload, timeout_seconds=EVENT_ANALYTICS_TTL_SECONDS)
     return payload
+
+
+def get_owner_event_tiers(owner_id: UUID, event_id: UUID) -> list:
+    """Every tier on one of THIS organizer's events, for the event editor.
+
+    ── WHY THIS EXISTS WHEN A PUBLIC TIER LIST ALREADY DOES ─────────────────
+
+    `GET /events/{id}/ticket-types` serves the same rows and is the right thing
+    for the ticket panel: identical for everyone, so it is `public` with an
+    `s-maxage` and a stale-while-revalidate window, and a CDN may hold it.
+
+    An EDITOR must not read that. Every tier row carries `version`, and the
+    editor's writes are conditional `UPDATE ... WHERE version = :expected`. A
+    version served from a shared cache is a version that may already be one
+    behind — the window is small, but it is exactly wide enough to cover
+    "somebody saved, then reopened the editor", and the failure is not a stale
+    number on a screen: it is a 409 the wizard correctly answers by reloading
+    rather than retrying, so the organizer edits, saves, gets reloaded, and
+    never learns why nothing sticks.
+
+    The second reason is coupling. The public payload is shaped for
+    AVAILABILITY DISPLAY and is free to change — filtered by slot, trimmed,
+    reshaped — and an editor hanging off it would break silently the next time
+    it did.
+
+    Not cached at all, server-side or otherwise. It is read once when an editor
+    opens; there is nothing to amortise and everything to get wrong.
+    """
+    repository = OrganizerRepository()
+    if not repository.owns_event(owner_id, event_id):
+        # NOT FoundError vs PermissionDenied deliberately: an organizer asking
+        # about an event that is not theirs gets the same answer as one asking
+        # about an event that does not exist. Distinguishing them would turn
+        # this into a way to test whether an id is real.
+        raise NotFoundError(f"Event '{event_id}' not found.")
+    return list(TicketTypeRepository().list_for_event(event_id))
 
 
 def get_activity(

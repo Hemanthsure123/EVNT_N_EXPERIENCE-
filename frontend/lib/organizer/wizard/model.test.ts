@@ -17,6 +17,7 @@ import {
   publishBlockers,
   resolveOrganizationId,
   restoreDraft,
+  draftFromEvent,
   tierFingerprint,
   toCreateInput,
   toPatchInput,
@@ -767,5 +768,152 @@ describe('the three fields that used to be written nowhere', () => {
     expect(tierFingerprint(base, 0)).not.toBe(
       tierFingerprint(tierWith({ description: 'Front rows', perks: ['Poster', 'Drink'] }), 0),
     );
+  });
+});
+
+describe('draftFromEvent', () => {
+  /**
+   * `toPatchInput` sends the WHOLE editable surface on every save — it is not a
+   * diff. So a field this mapper drops is not just missing from the form: it is
+   * blanked on the organizer's next keystroke, because the PATCH faithfully
+   * sends the empty value the draft was hydrated with.
+   *
+   * These tests are that failure mode, field by field. The round-trip one is
+   * the important one: it asserts that loading an event and saving it back
+   * changes nothing.
+   */
+  const event = {
+    id: 'evt-1',
+    slug: 'sunday-jazz',
+    title: 'Sunday Jazz',
+    description: 'A quiet room and a trio.',
+    venue: 'Blue Door',
+    city: 'Mumbai',
+    category: 'music',
+    place_id: 'ChIJ_place',
+    latitude: '19.0760000',
+    longitude: '72.8777000',
+    starts_at: '2026-11-01T13:30:00.000Z',
+    ends_at: '2026-11-01T16:30:00.000Z',
+    poster_url: 'https://cdn.example/p.jpg',
+    from_price: 49900,
+    tickets_available: 40,
+    organization_id: 'org-1',
+    organization_name: 'Blue Door Presents',
+    status: 'live',
+    version: 7,
+    created_at: '2026-01-01T00:00:00.000Z',
+    short_description: 'Live jazz on a Sunday.',
+    duration_minutes: 180,
+    language: 'English',
+    age_restriction: '18+',
+    accessibility_notes: 'Step-free entry.',
+    policies: [{ title: 'Entry', body: 'Doors close at 8.' }],
+    seo_title: 'Sunday Jazz in Mumbai',
+    seo_description: 'A trio, a quiet room, and a Sunday.',
+  } as unknown as Parameters<typeof draftFromEvent>[0];
+
+  const tier = {
+    id: 'tier-1',
+    event_id: 'evt-1',
+    slot_id: null,
+    name: 'General',
+    description: 'Unreserved seating',
+    perks: ['Welcome drink'],
+    position: 0,
+    price: 249_950,
+    effective_price: 199_900,
+    current_phase: null,
+    next_price: null,
+    phases: [
+      { id: 'ph-1', name: 'Early bird', price: 199_900, ends_at: null, quantity: 50, position: 0 },
+    ],
+    quantity: 120,
+    sold: 4,
+    available: 116,
+    sale_start: null,
+    sale_end: null,
+    max_per_order: 6,
+    is_on_sale: true,
+    version: 3,
+    created_at: '2026-01-01T00:00:00.000Z',
+  } as unknown as Parameters<typeof draftFromEvent>[1][number];
+
+  it('carries the identity and the optimistic-lock version', () => {
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    expect(draft.eventId).toBe('evt-1');
+    expect(draft.version).toBe(7);
+    expect(draft.organizationId).toBe('org-1');
+  });
+
+  it('carries the pin, which a dropped field would silently erase', () => {
+    // `toPatchInput` always sends `place_id` and the coordinate pair. Hydrating
+    // them as blank would unpin the map on the next autosave.
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    expect(draft.placeId).toBe('ChIJ_place');
+    expect(draft.latitude).toBeCloseTo(19.076, 6);
+    expect(draft.longitude).toBeCloseTo(72.8777, 6);
+  });
+
+  it('carries the policies, which a dropped field would silently delete', () => {
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    expect(draft.policies).toHaveLength(1);
+    expect(draft.policies[0].title).toBe('Entry');
+    expect(draft.policies[0].body).toBe('Doors close at 8.');
+  });
+
+  it('keeps an unstated duration empty rather than turning null into 0', () => {
+    const draft = draftFromEvent({ ...event, duration_minutes: null }, [], ['org-1']);
+    expect(draft.durationMinutes).toBe('');
+  });
+
+  it('loads the FACE price, not the discounted one', () => {
+    // The tier is inside a live early-bird phase. Loading `effective_price`
+    // into the price field and saving would make the discount permanent and
+    // lose the real price entirely.
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    expect(draft.tiers[0].price).toBe('2499.5');
+    expect(draft.tiers[0].phases[0].price).toBe('1999');
+  });
+
+  it('keeps the server ids so a save updates rather than duplicates', () => {
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    expect(draft.tiers[0].serverId).toBe('tier-1');
+    expect(draft.tiers[0].version).toBe(3);
+  });
+
+  it('preserves the tier order the server sent', () => {
+    // The order IS the organizer's merchandising, and the save writes the array
+    // index back as `position`. Re-sorting here would renumber it on load.
+    const second = { ...tier, id: 'tier-2', name: 'VIP', price: 100_000, position: 1 };
+    const draft = draftFromEvent(event, [tier, second], ['org-1']);
+    expect(draft.tiers.map((row) => row.name)).toEqual(['General', 'VIP']);
+  });
+
+  it('round-trips: loading an event and saving it back changes nothing', () => {
+    // THE test. Everything above is a specific instance of it.
+    const draft = draftFromEvent(event, [tier], ['org-1']);
+    const patch = toPatchInput(draft);
+
+    expect(patch.title).toBe(event.title);
+    expect(patch.venue).toBe(event.venue);
+    expect(patch.city).toBe(event.city);
+    expect(patch.category).toBe('music');
+    expect(patch.place_id).toBe('ChIJ_place');
+    expect(patch.short_description).toBe(event.short_description);
+    expect(patch.duration_minutes).toBe(180);
+    expect(patch.language).toBe('English');
+    expect(patch.age_restriction).toBe('18+');
+    expect(patch.accessibility_notes).toBe('Step-free entry.');
+    expect(patch.seo_title).toBe(event.seo_title);
+    expect(patch.seo_description).toBe(event.seo_description);
+    expect(patch.policies).toEqual([{ title: 'Entry', body: 'Doors close at 8.' }]);
+    expect(patch.version).toBe(7);
+
+    // And the money survives the rupees round-trip exactly.
+    expect(toTierInput(draft.tiers[0], 0).price).toBe(249_950);
+    expect(toTierInput(draft.tiers[0], 0).quantity).toBe(120);
+    expect(toTierInput(draft.tiers[0], 0).max_per_order).toBe(6);
+    expect(toTierInput(draft.tiers[0], 0).phases?.[0].price).toBe(199_900);
   });
 });

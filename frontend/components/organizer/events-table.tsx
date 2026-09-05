@@ -10,6 +10,7 @@ import {
   CopyPlus,
   ExternalLink,
   LayoutGrid,
+  Pencil,
   Receipt,
   Rows3,
   Send,
@@ -647,6 +648,15 @@ function EventCards({
                 )}
 
                 <div className="mt-auto flex items-center gap-1 pt-1">
+                  {/* FIRST, because it is the only one of these that changes
+                      the event rather than reporting on it — and because until
+                      this route existed every field was reachable exactly once,
+                      while the event was being created, and never again. */}
+                  <CardAction
+                    icon={Pencil}
+                    label="Edit"
+                    href={`/dashboard/events/${row.id}/edit`}
+                  />
                   <CardAction
                     icon={BarChart3}
                     label="Analytics"
@@ -828,18 +838,29 @@ const COLUMNS: ColumnDef<EventRow>[] = [
     hideable: false,
     exportValue: () => '',
     render: (row) => (
-      <Link
-        href={`/dashboard/events/${row.id}/analytics`}
-        // The row itself opens the side panel, so this must not also trigger
-        // it — otherwise pressing the link opens a panel behind the page you
-        // just navigated to.
-        onClick={(event) => event.stopPropagation()}
-        aria-label={`Analytics for ${row.title}`}
-        title="Analytics"
-        className="inline-flex size-control-sm items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <BarChart3 className="size-4" aria-hidden />
-      </Link>
+      // Two doors, not one. `stopPropagation` on both: the row itself opens
+      // the side panel, and without it pressing a link opens a panel behind
+      // the page you just navigated to.
+      <div className="flex items-center gap-1">
+        <Link
+          href={`/dashboard/events/${row.id}/edit`}
+          onClick={(event) => event.stopPropagation()}
+          aria-label={`Edit ${row.title}`}
+          title="Edit"
+          className="inline-flex size-control-sm items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Pencil className="size-4" aria-hidden />
+        </Link>
+        <Link
+          href={`/dashboard/events/${row.id}/analytics`}
+          onClick={(event) => event.stopPropagation()}
+          aria-label={`Analytics for ${row.title}`}
+          title="Analytics"
+          className="inline-flex size-control-sm items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <BarChart3 className="size-4" aria-hidden />
+        </Link>
+      </div>
     ),
   },
 ];

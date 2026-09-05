@@ -26,6 +26,11 @@ urlpatterns = [
     path("organizer/earnings", api.EarningsView.as_view(), name="organizer-earnings"),
     path("organizer/funnel", api.FunnelListView.as_view(), name="organizer-funnel"),
     path("organizer/insights", api.InsightsView.as_view(), name="organizer-insights"),
+    path(
+        "organizer/events/<uuid:event_id>/ticket-types",
+        api.OwnerEventTicketTypesView.as_view(),
+        name="organizer-event-ticket-types",
+    ),
     path("organizer/event-rows", api.EventRowListView.as_view(), name="organizer-event-rows"),
     path("organizer/bookings", api.BookingListView.as_view(), name="organizer-bookings"),
     path("organizer/customers", api.CustomerListView.as_view(), name="organizer-customers"),
