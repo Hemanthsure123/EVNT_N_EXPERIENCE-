@@ -374,19 +374,28 @@ ticket is issued TO a user, and `Booking.user` is not nullable.
 
 ---
 
-### 20. Coupons and taxes
+### 20. Taxes (coupons are BUILT)
 
-**Not built:** there is no coupon endpoint and no tax field, so the funnel shows
-neither — no promo input that could only ever answer "invalid code", and no tax
-line nobody computed. `total_amount` is what the customer pays and
-`platform_fee` is the platform's cut taken out of it; that is the whole money
-model today.
+**Coupons shipped.** `apps/coupons` owns them: an organizer-funded discount
+decided under the coupon's row lock, `POST /bookings/{id}/coupon` beside the
+donation endpoint, an offers list on the checkout, and a Promotions section in
+the dashboard. `discount` and `coupon_code` are on every booking payload.
 
-**Shape:** `discount`, `tax` and `total` on the booking payload, plus a
-`POST /bookings/preview` so a code can be validated BEFORE inventory is
-reserved.
+Two things this entry asked for were deliberately NOT built, and both for the
+same reason. There is no `POST /bookings/preview`: applying a code is itself
+reversible in one press, so a preview would be a second source of truth for a
+number the booking already carries — and a quote that disagreed with the charge
+is the exact failure the money path exists to prevent. And there is no
+platform-funded coupon: it needs a funding column, a different Route transfer
+and a settlement line, which is a different product rather than a flag.
 
-**Seam:** `SummaryCard`, and `totalsFor()` in `lib/booking/selection.ts`.
+**Still not built: tax.** There is no tax field anywhere, so no tax line is
+shown — a rate nobody computed on a screen somebody is paying on. It would need
+a column on the booking, a rule per state (GST is destination-based), and a
+decision about whether the platform fee is taxed separately from the ticket.
+
+**Seam:** `bookingBill()` in `components/ticketing/bill-lines.tsx` — one
+implementation of the column, so a fifth surface cannot re-derive it.
 
 ---
 
@@ -469,8 +478,8 @@ The typed clients for all five are already written
 (`lib/api/organizer.ts`, `lib/api/organizer-writes.ts`) and the query hooks
 exist in `lib/organizer/queries.ts` — what is missing is the pages.
 
-**Have no backend at all**: Coupons, Promotions, Team Members, Messages,
-Reviews, Notifications, Support. Each needs a Django module built to the same
+**Promotions is BUILT** (`apps/coupons` + `/dashboard/promotions`). **Have no
+backend at all**: Team Members, Messages, Notifications, Support. Each needs a Django module built to the same
 standard as the other eleven. `teams` and `marketing` are listed as
 deliberately deferred in the repo's own CLAUDE.md.
 
@@ -669,9 +678,9 @@ endpoint — porting them to `/organizer/event-rows` gives "Today" immediately. 
 page is built for them yet; branding beyond a logo, GST, bank details, API keys
 and a danger zone have no columns.
 
-**No backend at all:** Coupons, Promotions, Team members, Messages, Reviews,
-Notifications, Support. Each needs a Django module built to the standard of the
-other eleven. `teams` and `marketing` are listed as deliberately deferred in the
+**No backend at all:** Team members, Messages, Notifications, Support.
+(Coupons/Promotions shipped as `apps/coupons`.) Each needs a Django module
+built to the standard of the other twelve. `teams` and `marketing` are listed as deliberately deferred in the
 repo's own CLAUDE.md.
 
 **Bulk operations** on the events table are partly possible: publish is real

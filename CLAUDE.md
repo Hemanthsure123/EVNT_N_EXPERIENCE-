@@ -865,6 +865,104 @@ class, documented as unused for this reason, kept ready for a future
 endpoint built around DRF's own `get_object()` flow where that redundancy
 wouldn't apply.
 
+## Coupons: the organizer funds the discount, and the ledger IS the count
+
+`apps/coupons` is a promotional code an organizer creates for their own events.
+One decision settles almost everything else about it: **the ORGANIZER funds the
+discount.** Three consequences, and none of them is a free choice afterwards:
+
+- the platform fee is charged on the **discounted** subtotal, because a fee on
+  face value bills a percentage of money nobody paid;
+- the Route transfer shrinks with the discount automatically, since it is
+  already `total - fee - donation`;
+- `settlements` needs no new column — it recomputes `net` from the payment
+  records, and the payment is simply smaller.
+
+A PLATFORM-funded coupon (a growth campaign the platform pays for) is a
+different product — it needs a funding column, a different transfer and a line
+in the settlement — and is deliberately NOT built. There is no `funded_by`
+field, because a column with one possible value is a guess about the future.
+
+**THE LEDGER IS THE COUNT, and its absence is load-bearing.** There is no
+`redeemed_count` denormal. A counter would have to be DECREMENTED when a hold
+lapses, and that decrement is a write to the coupon row on the cancel path —
+which already holds the booking row lock and is about to take tier locks.
+Counting `CouponRedemption` rows under the coupon's lock removes the write
+entirely, so releasing a redemption is a plain row DELETE that needs no coupon
+lock at all. Hence exactly one lock ordering in the system, and no path that can
+invert it:
+
+    booking -> coupon        (tier locks never meet a coupon lock)
+
+**A code applies to an EXISTING booking, not to a create.** `POST
+/bookings/{id}/coupon` sits beside the donation endpoint for the same reason
+that one exists: the hold is taken when the review screen opens and the code is
+typed while READING that screen. Folding it into `create_booking` would mean
+either re-reserving for every code somebody tries — where the tier could be gone
+by the second reserve, so **trying a code could cost somebody their seats** — or
+making the idempotency key depend on the code, which mints a new key per attempt
+on the money path and defeats the double-tap protection the derived key exists
+for. Because it acts on an existing booking, the subtotal it prices against is
+already LOCKED: the sum of the booking's own line items, decided under the tier
+locks when the hold was taken.
+
+`BookingService._reprice` is the ONE place the total is computed, so the fee can
+never be taken on a different subtotal from the one the discount came off:
+
+    total = subtotal - discount + platform_fee(subtotal - discount) + donation
+
+**Concurrency is proven, not asserted.** `test_concurrency.py` fires forty real
+concurrent redemptions at a code offering ten and asserts exactly ten win, and
+eight from ONE account at a one-per-person code and asserts exactly one does.
+Both were confirmed to FAIL with the `select_for_update` removed — the module's
+most important test, and the coupon analogue of ticketing's oversell proof.
+
+The rules that carry weight:
+
+- **Cancel and the sweeper release the redemption**, beside the inventory.
+  Without it a code with fifty uses is exhausted by fifty people who abandoned
+  their checkout — the coupon-shaped version of leaking held inventory. A
+  REFUND deliberately does not: that booking was paid, the code was genuinely
+  used, and returning it would let a buy-then-refund loop spend one code without
+  limit.
+- **A discount never exceeds the subtotal.** Uncapped, a fixed-amount code
+  larger than the order produces a NEGATIVE total — an amount that would be
+  handed to a payment provider as a charge. Rounding goes DOWN, always, so a
+  coupon is never worth more than it says.
+- **A code that would leave nothing chargeable is refused** at the moment it is
+  typed (`MIN_PAYABLE_TOTAL_MINOR`, Razorpay's ₹1 floor), rather than producing
+  a booking whose Pay button can only fail. Comped tickets are a different
+  feature: they need issuance with no payment at all.
+- **A code worth ZERO is refused too**, and that is what keeps
+  `discount_amount_minor > 0` and "a redemption exists" the SAME question —
+  which is what lets `BookingSummarySerializer` answer `coupon_code` with no
+  query for every booking that has neither.
+- **The terms stay editable after redemptions; the CODE does not.** Each
+  redemption records what it actually took off, so changing 20% to 10% tomorrow
+  cannot rewrite what somebody paid today — but renaming a code breaks every
+  printed copy while the history keeps pointing at something nobody can type.
+- **`validate_terms` runs against the MERGED row**, the same class of bug
+  ticketing's group bands document: a PATCH carrying only `kind: fixed` would
+  otherwise leave a fixed-amount coupon holding a percentage cap.
+- **A switched-off code answers identically to one that never existed.** Every
+  other refusal names its real reason — expired, fully claimed, already used,
+  wrong event, covers more than this order — because the customer already holds
+  the code and a specific sentence is worth far more than the nothing it hides.
+- **`GET /events/{id}/offers` excludes EXHAUSTED codes.** Advertising a discount
+  the checkout will then refuse is worse than showing nothing. It carries the
+  terms and never the limits: publishing "3 left" turns a promotion into a race.
+  It is not filtered by the viewer, which is what keeps it edge-cacheable.
+- **The frontend field exists BECAUSE something is behind it.**
+  `summary-card.tsx` carried the reason it was absent for a year — "an input
+  that always answers 'invalid code' is worse than no input" — and that rule is
+  unchanged; what changed is the endpoint. Applying IS the preview: it is
+  reversible in one press, so a separate quote would be a second source of truth
+  for a number the booking already carries.
+- **The bill's fallback had to change with it.** `total - fee - donation` is the
+  DISCOUNTED subtotal, so both places that recover a ticket subtotal that way
+  add the discount back. Without that term each understates the tickets by
+  exactly the discount and stops summing to the total printed under it.
+
 ## What's deliberately NOT built yet (don't add it speculatively)
 
 - **`TaskQueuePort` has a registry now** (`core/tasks.py`, added alongside
@@ -1004,8 +1102,11 @@ wouldn't apply.
   something the backend maintains, and counts from a cursor-paginated list are
   rendered as floors ("24+ events") rather than as totals nobody computed.
   BACKLOG.md item 12 lists each omission against the field it would need. The
-  funnel holds the same line: no guest checkout (a ticket needs a user), no promo
-  field (no coupon endpoint) and no tax line (no tax field). The platform fee IS
+  funnel holds the same line: no guest checkout (a ticket needs a user) and no
+  tax line (no tax field). It DOES have a promo field now — this used to read
+  "no promo field (no coupon endpoint)", and the endpoint exists; the rule it
+  came from is intact, because the field is there BECAUSE something is behind
+  it (see "Coupons" above). The platform fee IS
   added now (1% of the ticket subtotal, on its own line before the total) — see
   "The checkout is its own product surface" below; this used to read "shown but
   never added", which was true of the flat per-ticket fee it replaced.
@@ -2372,8 +2473,9 @@ anticipated. `PAYMENT_REFUNDED` now carries `amount_minor`, because a consumer
 re-deriving it from `payment.amount_minor` (settlements did) would subtract a
 donation from the organizer's net that the customer never got back.
 
-**5. What the reference has and we do not, with the reason.** No offers block (no
-coupon endpoint). No "Feeding India" branding or meals-served counter — the money
+**5. What the reference has and we do not, with the reason.** There IS an offers
+block now (see "Coupons" above); this line used to say there was none, because
+there was no coupon endpoint. No "Feeding India" branding or meals-served counter — the money
 goes to the platform's own Razorpay account and the copy says exactly that, with
 no registered charity and no tax claim. No payment-method chooser: Razorpay
 Checkout is a hosted modal and the instrument is picked inside it, so the bar
@@ -2839,7 +2941,9 @@ roster and event lineup — see "Crew" above) →
 `checkin` (done) → `notifications` (done) → `settlements` (done) →
 `console` (done — the operator console's read side) → `organizer` (done) →
 `cms` + `announcements` (done) → `performers` (done — the Hire a Band
-marketplace, the platform's SECOND product surface).
+marketplace, the platform's SECOND product surface) → `coupons` (done — see
+"Coupons" above: organizer-funded discount codes, decided under the coupon's row
+lock).
 
 ## `performers` — the Hire a Band marketplace
 

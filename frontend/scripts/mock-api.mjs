@@ -770,6 +770,93 @@ const MOCK_COUPONS = new Map(
   ]),
 );
 
+/** The wire shape of a coupon, as `CouponSerializer` renders it. */
+const couponPayload = (coupon) => ({
+  id: coupon.id,
+  event_id: coupon.event_id ?? null,
+  code: coupon.code,
+  kind: coupon.kind,
+  value: coupon.value,
+  max_discount_minor: coupon.max_discount_minor,
+  starts_at: coupon.starts_at ?? null,
+  ends_at: coupon.expires_at ?? null,
+  max_redemptions: coupon.max_redemptions,
+  max_per_user: coupon.max_per_user,
+  visible_at_checkout: coupon.advertised,
+  is_active: coupon.is_active !== false,
+  redeemed_count: coupon.redeemed,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+});
+
+/** The stored row, in the shape a PATCH body speaks — so the two can be
+ *  MERGED before validating, exactly as the real service does. Validating the
+ *  submitted fields alone is how "switch it to fixed" slips a percentage cap
+ *  past the gate. */
+const couponFormShape = (coupon) => ({
+  code: coupon.code,
+  kind: coupon.kind,
+  value: coupon.value,
+  max_discount_minor: coupon.max_discount_minor,
+  starts_at: coupon.starts_at ?? null,
+  ends_at: coupon.expires_at ?? null,
+  max_redemptions: coupon.max_redemptions,
+  max_per_user: coupon.max_per_user,
+  visible_at_checkout: coupon.advertised,
+  event_id: coupon.event_id ?? null,
+});
+
+const COUPON_CODE_PATTERN = /^[A-Z0-9_-]{3,32}$/;
+
+/** `apps/coupons.services.validate_terms`, on the MERGED row. */
+function couponIssue(merged, existing) {
+  const code = String(merged.code ?? '').trim().toUpperCase();
+  const refuse = (message) => ({ status: 422, code: 'invalid_coupon', message });
+
+  if (!COUPON_CODE_PATTERN.test(code)) {
+    return refuse('A code is between 3 and 32 characters, using letters, numbers, dashes and underscores.');
+  }
+  const clash = MOCK_COUPONS.get(code);
+  if (clash && clash !== existing) {
+    return { status: 409, code: 'coupon_code_taken', message: `You already have a coupon called “${code}”.` };
+  }
+  if (merged.kind !== 'percent' && merged.kind !== 'fixed') {
+    return refuse('A coupon is either a percentage or a fixed amount.');
+  }
+  const value = Number(merged.value);
+  if (!Number.isInteger(value) || value < 1) {
+    return refuse('A discount of nothing is not a discount.');
+  }
+  if (merged.kind === 'percent' && value > 100) {
+    return refuse('A percentage discount is at most 100%.');
+  }
+  if (merged.kind === 'fixed' && merged.max_discount_minor != null) {
+    return refuse('A maximum discount only applies to a percentage coupon.');
+  }
+  if (merged.max_discount_minor != null && Number(merged.max_discount_minor) < 1) {
+    return refuse('A maximum discount of nothing would disable the coupon.');
+  }
+  if (
+    merged.starts_at &&
+    merged.ends_at &&
+    Date.parse(merged.ends_at) <= Date.parse(merged.starts_at)
+  ) {
+    return refuse('The coupon would end before it started.');
+  }
+  if (merged.max_redemptions != null && Number(merged.max_redemptions) < 1) {
+    return refuse('A coupon with no redemptions could never be used.');
+  }
+  if (Number(merged.max_per_user ?? 1) < 1) {
+    return refuse('A coupon nobody may use once could never be used.');
+  }
+  // Only on CREATE, like the real service: an end date in the past is how an
+  // organizer deliberately stops a running coupon.
+  if (!existing && merged.ends_at && Date.parse(merged.ends_at) <= Date.now()) {
+    return refuse('That coupon would already have expired.');
+  }
+  return null;
+}
+
 /** Matches backend `MIN_PAYABLE_TOTAL_MINOR` — Razorpay's ₹1 floor. */
 const MIN_PAYABLE_TOTAL_MINOR = 100;
 
@@ -1981,6 +2068,135 @@ const server = createServer((req, res) => {
     }
     sendJson(req, res, 200, buildContent(all[index], index, all), DETAIL_CACHE_CONTROL);
     return;
+  }
+
+  // ── The organizer's promotions list ─────────────────────────────────
+  //
+  // The management half of the same table the checkout reads. Every rule the
+  // real service enforces that a form can hit is here — the code alphabet, a
+  // cap on a fixed amount, a percentage over 100, a duplicate code — because a
+  // fixture that accepts what the backend refuses teaches a screen to send
+  // requests that will fail in production and nowhere else.
+  //
+  // OWNERSHIP is not modelled: this fixture has one organizer and no tenants
+  // to cross. The real service scopes every query by organization, and that is
+  // the one thing this cannot stand in for.
+  const couponListMatch = path.match(/^\/api\/v1\/organizations\/([^/]+)\/coupons\/?$/);
+  if (couponListMatch) {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+
+    if (req.method === 'GET') {
+      sendJson(
+        req,
+        res,
+        200,
+        { data: [...MOCK_COUPONS.values()].map(couponPayload) },
+        'private, no-store',
+      );
+      return;
+    }
+    if (req.method === 'POST') {
+      void readBody(req).then((body) => {
+        const invalid = couponIssue(body, null);
+        if (invalid) return authError(res, req, invalid.status, invalid.code, invalid.message);
+        const created = {
+          id: fixtureId(90_000 + MOCK_COUPONS.size),
+          code: String(body.code).trim().toUpperCase(),
+          kind: body.kind,
+          value: Number(body.value),
+          max_discount_minor: body.max_discount_minor ?? null,
+          starts_at: body.starts_at ?? null,
+          expires_at: body.ends_at ?? null,
+          max_redemptions: body.max_redemptions ?? null,
+          max_per_user: Number(body.max_per_user ?? 1),
+          advertised: Boolean(body.visible_at_checkout),
+          event_id: body.event_id ?? null,
+          is_active: true,
+          redeemed: 0,
+        };
+        MOCK_COUPONS.set(created.code, created);
+        sendJson(req, res, 201, couponPayload(created), 'private, no-store');
+      });
+      return;
+    }
+  }
+
+  const couponDetailMatch = path.match(
+    /^\/api\/v1\/organizations\/([^/]+)\/coupons\/([^/]+)\/?$/,
+  );
+  if (couponDetailMatch) {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const existing = [...MOCK_COUPONS.values()].find((row) => row.id === couponDetailMatch[2]);
+    if (!existing) {
+      return authError(res, req, 404, 'coupon_not_found', 'Coupon not found.');
+    }
+
+    if (req.method === 'GET') {
+      sendJson(req, res, 200, couponPayload(existing), 'private, no-store');
+      return;
+    }
+    if (req.method === 'DELETE') {
+      // Refused once redeemed, and the message NAMES the alternative — the real
+      // service does the same rather than surfacing an integrity error.
+      if (existing.redeemed > 0) {
+        return authError(
+          res,
+          req,
+          422,
+          'invalid_coupon',
+          'This code has been used, so it can’t be deleted. Switch it off instead — it will stop working and the bookings that used it keep their record.',
+        );
+      }
+      MOCK_COUPONS.delete(existing.code);
+      // `sendJson` carries the CORS headers the browser needs on a preflighted
+      // DELETE; a bare `writeHead` here would be a request that never leaves
+      // the origin, which looks like a network failure rather than a CORS one.
+      sendJson(req, res, 204, {});
+      return;
+    }
+    if (req.method === 'PATCH') {
+      void readBody(req).then((body) => {
+        const merged = { ...couponFormShape(existing), ...body };
+        const invalid = couponIssue(merged, existing);
+        if (invalid) return authError(res, req, invalid.status, invalid.code, invalid.message);
+
+        const renamed =
+          body.code !== undefined && String(body.code).trim().toUpperCase() !== existing.code;
+        if (renamed && existing.redeemed > 0) {
+          return authError(
+            res,
+            req,
+            422,
+            'invalid_coupon',
+            'This code has already been used, so it can’t be renamed. Switch it off and make a new one.',
+          );
+        }
+
+        if (body.kind !== undefined) existing.kind = body.kind;
+        if (body.value !== undefined) existing.value = Number(body.value);
+        if (body.max_discount_minor !== undefined) {
+          existing.max_discount_minor = body.max_discount_minor;
+        }
+        if (body.starts_at !== undefined) existing.starts_at = body.starts_at;
+        if (body.ends_at !== undefined) existing.expires_at = body.ends_at;
+        if (body.max_redemptions !== undefined) existing.max_redemptions = body.max_redemptions;
+        if (body.max_per_user !== undefined) existing.max_per_user = Number(body.max_per_user);
+        if (body.visible_at_checkout !== undefined) {
+          existing.advertised = Boolean(body.visible_at_checkout);
+        }
+        if (body.event_id !== undefined) existing.event_id = body.event_id;
+        if (body.is_active !== undefined) existing.is_active = Boolean(body.is_active);
+        if (renamed) {
+          MOCK_COUPONS.delete(existing.code);
+          existing.code = String(body.code).trim().toUpperCase();
+          MOCK_COUPONS.set(existing.code, existing);
+        }
+        sendJson(req, res, 200, couponPayload(existing), 'private, no-store');
+      });
+      return;
+    }
   }
 
   // ── The codes an organizer chose to ADVERTISE ───────────────────────

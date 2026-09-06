@@ -1,5 +1,6 @@
 import {
   Activity,
+  BadgePercent,
   BarChart3,
   CalendarPlus,
   LayoutDashboard,
@@ -23,8 +24,10 @@ import {
  *
  * **Every destination here is built and backed by a real endpoint.** The brief
  * asked for several more sections — Settings, Coupons, Promotions, Team,
- * Messages, Reviews and Support. Settings is partly backed (the organization
- * profile, verification and payout account); the rest have no backend at all.
+ * Messages, Reviews and Support. Promotions is here NOW, because `apps/coupons`
+ * shipped and there is a real list behind it; Settings is partly backed (the
+ * organization profile, verification and payout account); the rest have no
+ * backend at all.
  * None is listed here until its page exists, because a nav item that 404s — or
  * that leads to a permanently empty screen — teaches an organizer to distrust
  * the whole dashboard, which is the same rule the operator console follows.
@@ -89,6 +92,12 @@ export const ORGANIZER_SECTIONS: OrganizerSection[] = [
     label: 'Customers',
     icon: Users,
     hint: 'Who buys from you, what they are worth, and their history',
+  },
+  {
+    href: '/dashboard/promotions',
+    label: 'Promotions',
+    icon: BadgePercent,
+    hint: 'Discount codes for your events, and how much of each is gone',
   },
   {
     href: '/dashboard/analytics',
