@@ -20,6 +20,7 @@ from apps.organizations.models import VerifiedLevel
 
 from .models import Event, EventCategory, EventSlot, EventStatus, MediaKind, TimelineKind
 from .repositories import MEDIA_LIMITS
+from .taxonomy import MAX_TAGS, EventType, unknown_tags
 
 
 def _validate_coordinate_pair(attrs: dict) -> None:
@@ -40,6 +41,14 @@ def _validate_coordinate_pair(attrs: dict) -> None:
 #: all, un-paginated, because a policy behind a "show more" is a policy an
 #: attendee will say they were never told.
 MAX_POLICIES = 12
+
+#: A bullet point is one scannable line, not a paragraph. The cap is generous
+#: enough for a real list and short enough that an organiser who pastes three
+#: sentences is told so before it reaches a card.
+HIGHLIGHT_MAX_LENGTH = 120
+#: Per list, not across the three. Eight points is already more than anybody
+#: reads; past that the list stops being highlights.
+MAX_HIGHLIGHTS = 8
 
 
 class CancelEventRequestSerializer(serializers.Serializer):
@@ -70,6 +79,72 @@ class CancelEventResultSerializer(serializers.Serializer):
     refunds_enqueued = serializers.IntegerField()
     holds_released = serializers.IntegerField()
     attendees_notified = serializers.IntegerField()
+
+
+class HighlightListField(serializers.ListField):
+    """One of the three bullet lists: included, not included, guidelines.
+
+    Written whole and replaced whole — an empty list CLEARS it, the same
+    contract `policies` has and for the same reason: these entries have no
+    server identity, so there is nothing to diff and no per-row patch to get
+    wrong.
+
+    Blank entries are DROPPED rather than refused, and duplicates with them.
+    This is `ticketing.PerkListField`'s rule, restated because the failure it
+    avoids is the same one: an organiser who tabbed through an empty row should
+    not have the whole event save fail, and an empty bullet on a public page is
+    a rendering fault rather than a promise.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        kwargs.setdefault(
+            "child", serializers.CharField(max_length=HIGHLIGHT_MAX_LENGTH, allow_blank=True)
+        )
+        kwargs.setdefault("max_length", MAX_HIGHLIGHTS)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        cleaned: list[str] = []
+        for point in super().to_internal_value(data):
+            text = point.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned
+
+
+class TagListField(serializers.ListField):
+    """The tag matrix, validated against the closed vocabulary.
+
+    An UNKNOWN tag is REFUSED here, unlike an unknown category on the browse
+    query, and the asymmetry is deliberate: a browse filter comes from a link
+    somebody may have edited and the worst an unknown value can do is widen the
+    results, while this is a WRITE that decides how an event is found for the
+    rest of its life. A tag the vocabulary does not contain matches no filter
+    and appears on no chip — it would be a silent no-op stored forever.
+
+    Every unknown value is named at once. A boundary that reports one at a time
+    makes a client fix a list by trial and error.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        kwargs.setdefault("child", serializers.CharField(max_length=40))
+        kwargs.setdefault("max_length", MAX_TAGS)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        # De-duplicate while PRESERVING ORDER: the order is the organiser's,
+        # and a set would reorder the chips on every save.
+        cleaned: list[str] = []
+        for tag in super().to_internal_value(data):
+            text = tag.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        unknown = unknown_tags(cleaned)
+        if unknown:
+            raise serializers.ValidationError(
+                f"Not tags we know: {', '.join(unknown)}. Choose from the list."
+            )
+        return cleaned
 
 
 class EventPolicySerializer(serializers.Serializer):
@@ -208,6 +283,17 @@ class UpdateEventRequestSerializer(serializers.Serializer):
     #: nothing to diff and no per-row patch to get wrong. The editor holds the
     #: list, the save writes the list.
     policies = EventPolicySerializer(many=True, required=False)
+    #: The three bullet lists, same wholesale contract as `policies`.
+    highlights_included = HighlightListField(required=False)
+    highlights_excluded = HighlightListField(required=False)
+    guidelines = HighlightListField(required=False)
+    #: A ChoiceField, so an unknown sub-classification is refused at the
+    #: boundary rather than stored. `allow_blank` because clearing it back to
+    #: "not said" is a legitimate edit.
+    event_type = serializers.ChoiceField(
+        choices=EventType.choices, required=False, allow_blank=True
+    )
+    tags = TagListField(required=False)
 
     _EDITABLE = {
         "title",
@@ -229,6 +315,11 @@ class UpdateEventRequestSerializer(serializers.Serializer):
         "seo_title",
         "seo_description",
         "policies",
+        "highlights_included",
+        "highlights_excluded",
+        "guidelines",
+        "event_type",
+        "tags",
     }
 
     def validate_starts_at(self, value):
@@ -271,6 +362,18 @@ class EventSearchQuerySerializer(serializers.Serializer):
     #: silently widening the list to EVERY event under a heading naming one
     #: organiser would attribute other people's events to them.
     organization_id = serializers.UUIDField(required=False)
+    #: The sub-classification, and one tag. Both `CharField`, both treated as
+    #: ABSENT when unrecognised — the same rule `category` above states, for
+    #: the same reason: these arrive in shared and hand-edited links.
+    #:
+    #: ONE tag rather than a list, deliberately. Several tags is either AND
+    #: (which narrows to nothing fast across seven dimensions — "rooftop" and
+    #: "beginner-friendly" and "food-included" is a handful of events in the
+    #: country) or OR (which is not what a chip row looks like it does). One
+    #: tag is honest, indexable and matches how the chips actually read; a
+    #: multi-tag mode can be added when there is a UI that means it.
+    event_type = serializers.CharField(required=False, allow_blank=True)
+    tag = serializers.CharField(required=False, allow_blank=True)
     starts_after = serializers.DateTimeField(required=False)
     starts_before = serializers.DateTimeField(required=False)
 
@@ -305,6 +408,13 @@ class EventCardSerializer(serializers.ModelSerializer):
             "venue",
             "city",
             "category",
+            # The sub-classification, so a card can say "Open mic" where the
+            # category could only say "Music & dance". Cheap — one varchar on
+            # a payload already carrying a poster URL. `tags` is deliberately
+            # NOT here: it is a filter, read on the event page, and putting a
+            # JSON array on every one of twenty cards buys nothing a chip row
+            # would show.
+            "event_type",
             "starts_at",
             "poster_url",
             "from_price",
@@ -412,6 +522,14 @@ class EventDetailSerializer(serializers.ModelSerializer):
             # event that set none, which the page renders as nothing rather
             # than as a heading with no content under it.
             "policies",
+            # The three bullet lists and the taxonomy. Each is empty/blank for
+            # an event that set none, and the page omits the section rather
+            # than drawing an empty heading.
+            "highlights_included",
+            "highlights_excluded",
+            "guidelines",
+            "event_type",
+            "tags",
             "seo_title",
             "seo_description",
         ]

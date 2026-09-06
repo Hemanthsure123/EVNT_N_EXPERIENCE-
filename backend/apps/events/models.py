@@ -28,6 +28,8 @@ from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 from django.db.models import Q
 
+from .taxonomy import EVENT_TYPE_MAX_LENGTH, EventType
+
 
 class EventCategory(models.TextChoices):
     """The browse taxonomy, as a COLUMN rather than a guess.
@@ -163,6 +165,50 @@ class Event(models.Model):
     #: Those are true of every event and are not an organiser's to edit.
     policies = models.JSONField(default=list, blank=True)
 
+    #: The three bullet lists an organiser writes for a reader: what the ticket
+    #: covers, what it does not, and how to turn up.
+    #:
+    #: Lists of SHORT STRINGS, unlike `policies` above, which is a list of
+    #: `{title, body}`. The shape follows the content: a policy is a named rule
+    #: with a paragraph under it ("Refunds — up to 48 hours before…"), where
+    #: these are single points somebody scans ("Two rounds of chai"). Giving
+    #: them a title each would force an organiser to invent headings for
+    #: one-line facts.
+    #:
+    #: `highlights_excluded` earns its place separately from `guidelines`
+    #: because "not included" and "the rules" are answers to different
+    #: questions and a reader looks for them at different moments — one before
+    #: buying, one before arriving. Folding them together is how a refund
+    #: dispute starts with "it was in the guidelines".
+    #:
+    #: DEFAULT IS THE CALLABLE `list`, for the reason stated above `policies`.
+    highlights_included = models.JSONField(default=list, blank=True)
+    highlights_excluded = models.JSONField(default=list, blank=True)
+    guidelines = models.JSONField(default=list, blank=True)
+
+    #: The sub-classification beneath `category` — see `taxonomy.EventType`.
+    #:
+    #: BLANK is a legal, distinct state meaning "not said", exactly as it is
+    #: for `category`. Nothing refuses a draft for it, and the public browse
+    #: treats an unknown value as no filter rather than a 400.
+    event_type = models.CharField(
+        max_length=EVENT_TYPE_MAX_LENGTH,
+        choices=EventType.choices,
+        blank=True,
+        default="",
+    )
+
+    #: What the event is LIKE — a closed vocabulary across seven dimensions
+    #: (`taxonomy.TAG_DIMENSIONS`), capped at `MAX_TAGS` and validated at the
+    #: API boundary so an unfilterable string can never reach the column.
+    #:
+    #: NO INDEX, deliberately, and this is the checklist's rule rather than an
+    #: omission: a B-tree index on a JSONField is useless for containment, and
+    #: the index containment WOULD need is a GIN one — which would be the first
+    #: on a JSONB column in this codebase. It ships in the same migration as
+    #: the query that needs it (see 0015), not before.
+    tags = models.JSONField(default=list, blank=True)
+
     #: SEO. Blank means "derive from the title/description", which is what the
     #: frontend already does — these only exist to OVERRIDE that.
     seo_title = models.CharField(max_length=70, blank=True, default="")
@@ -284,6 +330,25 @@ class Event(models.Model):
                 name="event_status_category_idx",
                 condition=models.Q(deleted_at__isnull=True),
             ),
+            # Public browse filtered by EVENT TYPE — the sub-classification
+            # beneath category. Same shape again, and shipped with the filter
+            # in `list_published` rather than ahead of it.
+            models.Index(
+                fields=["status", "event_type", "starts_at"],
+                name="event_status_type_idx",
+                condition=models.Q(deleted_at__isnull=True),
+            ),
+            # Public browse filtered by TAG, which is a CONTAINMENT query
+            # (`tags @> '["outdoor"]'`) and therefore needs a GIN index — a
+            # B-tree on a JSONField would be accepted and useless.
+            #
+            # This is the FIRST GIN index on a JSONB column here; the two
+            # existing ones are on tsvectors. `jsonb_path_ops` is deliberately
+            # not used: it is smaller and faster for `@>` alone, but it cannot
+            # answer key-existence queries, and a faceted "which tags do these
+            # results have" count is the obvious next thing this column is
+            # asked for. The default operator class keeps that open.
+            GinIndex(fields=["tags"], name="event_tags_gin"),
             # Public browse filtered by ORGANISER — "More from {organiser}" in
             # the event widget. Same shape as the city and category indexes,
             # with the organization pinned between the status and the date

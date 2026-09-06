@@ -5,17 +5,30 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
+from apps.events.models import Event
 from apps.events.repositories import EventRepository
+from apps.events.tests.conftest import PUBLISHABLE_TAGS
 
 
 def _draft_event(organization):
-    return EventRepository().create(
+    """A draft that is complete APART FROM its tickets.
+
+    `tags` is filled because `events.publish_checks._require_tags` demands
+    `MIN_TAGS_TO_PUBLISH` of them. Without it the two tests below would both
+    pass and prove nothing: the "cannot submit without a tier" case would be
+    refused for the wrong reason, and the "can submit once it has one" case
+    would fail while the ticketing gate it exists to test was satisfied.
+    """
+    event = EventRepository().create(
         organization_id=organization.id,
         title="Draft Concert",
         venue="Hall",
         city="Pune",
         starts_at=timezone.now() + timedelta(days=20),
     )
+    Event.objects.filter(pk=event.id).update(tags=PUBLISHABLE_TAGS)
+    event.refresh_from_db()
+    return event
 
 
 # --- create tier -----------------------------------------------------------

@@ -56,6 +56,9 @@ _CARD_FIELDS = (
     # be a DEFERRED field, so every row would re-fetch it — one extra query
     # per card, which is precisely the N+1 the query budgets guard.
     "category",
+    # The sub-classification, read by the card serializer for the same reason
+    # and with the same cost as `category` above.
+    "event_type",
     # The rating denormals, in BOTH field sets for the reason stated above:
     # absent, they are deferred and every card re-fetches them, which is one
     # extra query per card. Two small integers on a row already being read.
@@ -110,6 +113,14 @@ _DETAIL_FIELDS = (
     # serializer touches but `.only()` omits is a DEFERRED load, one extra
     # query per row.
     "policies",
+    # Same rule as `policies` directly above: read by `EventDetailSerializer`,
+    # so omitting them here makes each a deferred load and turns the platform's
+    # hottest read from one query into six.
+    "highlights_included",
+    "highlights_excluded",
+    "guidelines",
+    "event_type",
+    "tags",
     "seo_title",
     "seo_description",
     # Read by the card and detail serializers. Absent from this set it would
@@ -209,6 +220,8 @@ class EventRepository(BaseRepository[Event]):
         search: str | None = None,
         city: str | None = None,
         category: str | None = None,
+        event_type: str | None = None,
+        tag: str | None = None,
         organization_id: str | None = None,
         starts_after=None,
         starts_before=None,
@@ -239,6 +252,22 @@ class EventRepository(BaseRepository[Event]):
             # free to mean what the user typed, instead of the two competing
             # for the same tsquery.
             qs = qs.filter(category=category)
+        if event_type:
+            # The sub-classification, an exact column match like `category`
+            # above. Index-backed by `event_status_type_idx`.
+            #
+            # An unrecognised value is NOT rejected here — it simply matches
+            # nothing, which is the correct outcome for a link carrying a
+            # retired slug. The query serializer's `CharField` (not
+            # `ChoiceField`) is what makes that reachable; see its docstring.
+            qs = qs.filter(event_type=event_type)
+        if tag:
+            # A JSONB CONTAINMENT query — `tags @> '["outdoor"]'` — served by
+            # `event_tags_gin`. `__contains` on a JSONField takes a LIST, not a
+            # bare string: `tags__contains="outdoor"` is a different query that
+            # asks whether the column contains that JSON *value* and quietly
+            # matches nothing here.
+            qs = qs.filter(tags__contains=[tag])
         if organization_id:
             # ── "MORE FROM THIS ORGANISER" ─────────────────────────────────
             #

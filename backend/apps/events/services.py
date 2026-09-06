@@ -108,6 +108,15 @@ _EDITABLE_FIELDS = (
     # beyond being reachable: a column the event page renders must be
     # reachable by a PATCH, or the field is decoration.
     "policies",
+    # The three bullet lists, written wholesale exactly like `policies`.
+    "highlights_included",
+    "highlights_excluded",
+    "guidelines",
+    # The taxonomy. `event_type` and `tags` are BROWSE FILTERS, so the rule
+    # bites harder than usual here: a filterable column an organiser cannot
+    # set is a chip row that matches nothing for ever.
+    "event_type",
+    "tags",
 )
 
 
@@ -617,7 +626,24 @@ class EventService:
         "seo_title",
         "seo_description",
         "policies",
+        "highlights_included",
+        "highlights_excluded",
+        "guidelines",
+        "event_type",
+        "tags",
         "poster_url",
+    )
+
+    #: The subset of `_CLONED_FIELDS` that are JSON list columns and therefore
+    #: must be copied by value. Kept beside the tuple it filters so the two
+    #: cannot drift; `test_policies_are_copied_by_value` covers the first of
+    #: them and would keep passing if a later column aliased.
+    _LIST_FIELDS = (
+        "policies",
+        "highlights_included",
+        "highlights_excluded",
+        "guidelines",
+        "tags",
     )
 
     def duplicate_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
@@ -665,9 +691,14 @@ class EventService:
         source = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
 
         fields = {name: getattr(source, name) for name in self._CLONED_FIELDS}
-        # A list column: copy the VALUE, not the reference, or editing the
-        # clone's policies would edit the original's in the same process.
-        fields["policies"] = list(fields.get("policies") or [])
+        # EVERY list column is copied BY VALUE. `getattr` hands back the same
+        # python list object the source instance holds, so without this the
+        # clone and the original share it and editing one edits the other for
+        # the life of the process. One line per column, and a new list column
+        # added to `_CLONED_FIELDS` needs one here too — `_LIST_FIELDS` makes
+        # that a single place to update rather than five lines to remember.
+        for name in self._LIST_FIELDS:
+            fields[name] = list(fields.get(name) or [])
         title = f"Copy of {source.title}"[: Event._meta.get_field("title").max_length]
 
         with UnitOfWork() as uow:

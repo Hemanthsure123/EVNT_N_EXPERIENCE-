@@ -130,6 +130,13 @@ class EventListCreateView(APIView):
             "search": validated.get("q") or None,
             "city": validated.get("city") or None,
             "category": validated.get("category") or None,
+            # BOTH must be in this dict, not merely passed to the queryset.
+            # It is what `compute_filter_hash` sees, so a filter omitted here
+            # shares a cache key with every other value of itself — two
+            # different tags would serve each other's first page for the life
+            # of the generation.
+            "event_type": validated.get("event_type") or None,
+            "tag": validated.get("tag") or None,
             # `str()` so the cache key hashes to the same value a query string
             # would produce — a UUID object and its text form are different
             # dict values and would split the cache in two.

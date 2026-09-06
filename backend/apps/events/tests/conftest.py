@@ -13,8 +13,18 @@ from apps.accounts.repositories import UserRepository
 from apps.events.models import Event, EventStatus
 from apps.events.repositories import EventRepository
 from apps.events.slugs import event_slug
+from apps.events.taxonomy import MIN_TAGS_TO_PUBLISH, TAG_DIMENSIONS
 from apps.organizations.models import VerifiedLevel
 from apps.organizations.repositories import OrganizationRepository
+
+#: A real, publishable tag selection: one from each of the seven dimensions.
+#:
+#: Derived from the vocabulary rather than hard-coded, so renaming a tag does
+#: not leave every fixture in the suite carrying a slug the API refuses — the
+#: failure would present as "publishing is broken" rather than "that tag moved".
+PUBLISHABLE_TAGS = [next(iter(dimension.tags)) for dimension in TAG_DIMENSIONS][
+    :MIN_TAGS_TO_PUBLISH
+]
 
 
 def _access_token_for(user: User) -> str:
@@ -88,7 +98,21 @@ def authed_client(api_client, owner) -> APIClient:
 def make_event(organization):
     """Create an event directly (bypassing the API's future-start validation,
     so tests can also make past/live events). Defaults to a live, upcoming
-    event."""
+    event.
+
+    ── IT IS PUBLISHABLE BY DEFAULT ──────────────────────────────────────
+
+    `tags` defaults to a real selection because `publish_checks._require_tags`
+    now demands `MIN_TAGS_TO_PUBLISH` of them, and a fixture that produced an
+    event the platform would refuse to publish would make every test about
+    something else fail for a reason that has nothing to do with what it is
+    testing. The default is what a completed event looks like.
+
+    A test that wants to prove the gate BITES passes `tags=[]` explicitly,
+    which reads as the point being made — the same split
+    `organization` / `unverified_organization` already uses for the
+    verification gate.
+    """
 
     def _make(
         *,
@@ -98,6 +122,7 @@ def make_event(organization):
         description: str = "",
         status: str = EventStatus.LIVE,
         starts_at=None,
+        tags: list[str] | None = None,
         org=None,
     ) -> Event:
         starts_at = starts_at or (timezone.now() + timedelta(days=10))
@@ -114,6 +139,8 @@ def make_event(organization):
             # reaches and quietly exercise the bare-uuid URL fallback.
             slug=event_slug(title),
         )
+        Event.objects.filter(pk=event.id).update(tags=PUBLISHABLE_TAGS if tags is None else tags)
+        event.refresh_from_db()
         if status != EventStatus.DRAFT:
             Event.objects.filter(pk=event.id).update(status=status)
             event.refresh_from_db()
