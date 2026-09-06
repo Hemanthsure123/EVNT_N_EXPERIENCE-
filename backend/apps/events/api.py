@@ -28,16 +28,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
-from config.di import build_event_service, cache_port
+from config.di import build_event_service, build_waitlist_service, cache_port
 from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
-from core.throttling import UploadThrottle
+from core.throttling import UploadThrottle, WriteThrottle
 from core.uploads import CREW_PORTRAIT_SPEC, validate_image
 
 from .exceptions import EventNotFoundError
 from .models import MediaKind
 from .pagination import EventCursorPagination, OrganizerEventCursorPagination
-from .repositories import SavedEventRepository
+from .repositories import EventWaitlistRepository, SavedEventRepository
 from .schemas import (
     CancelEventRequestSerializer,
     CancelEventResultSerializer,
@@ -72,6 +72,8 @@ from .schemas import (
     UpdateEventRequestSerializer,
     UpdateEventSlotSerializer,
     UpdateEventTimelineSerializer,
+    WaitlistEntrySerializer,
+    WaitlistStateSerializer,
     WriteEventFaqSerializer,
     WriteEventMediaSerializer,
     WriteEventQuestionSerializer,
@@ -912,3 +914,82 @@ class EventCrewView(_OwnerWriteView):
             member_ids=[str(value) for value in payload.validated_data["member_ids"]],
         )
         return _no_store(Response({"data": EventCrewEntrySerializer(rows, many=True).data}))
+
+
+class EventWaitlistView(APIView):
+    """Join or leave the waiting list for one sold-out event.
+
+    ── IT REQUIRES AN ACCOUNT, AND THAT IS NOT THE SAVED-EVENTS PATTERN ──
+
+    Saving works while anonymous — the browser keeps a local set and merges it
+    on sign-in — because a bookmark's only consumer is the same browser. A
+    waitlist join is a promise to CONTACT somebody, and an anonymous visitor
+    has no address. Taking a bare email from an unauthenticated form would be
+    a way to sign a stranger up for mail they never asked for.
+
+    So the frontend keeps the affordance ungated — the button is drawn for
+    everybody — and opens the sign-in sheet on the press, which is the shape
+    the checkout already uses. The API is simply authenticated.
+
+    ── THE STATE IS ITS OWN AUTHENTICATED READ, NOT A FIELD ON THE EVENT ──
+
+    "Have I joined" depends on who is asking, and `GET /events/{id}` is
+    deliberately `public` and edge-cached with a warm path of zero queries. A
+    per-viewer field on that payload would be cached across users — which is
+    the one cache bug this platform's own rules single out.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [WriteThrottle]
+
+    @extend_schema(request=None, responses={200: WaitlistStateSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        """Join. Idempotent — pressing twice is one row and one place in the
+        queue, never a second of either."""
+        service = build_waitlist_service()
+        user_id = cast(User, request.user).id
+        service.join(user_id=user_id, event_id=event_id)
+        return _no_store(Response(self._state(user_id, event_id)))
+
+    @extend_schema(responses={200: WaitlistStateSerializer})
+    def delete(self, request: Request, event_id: str) -> Response:
+        """Leave. A 200 whether or not they were on it — the caller's intent is
+        "I should not be on this list", and that is true either way.
+
+        200 with the state rather than 204 because the client replaces its
+        whole set from the response, so a leave and a join settle identically.
+        """
+        service = build_waitlist_service()
+        user_id = cast(User, request.user).id
+        service.leave(user_id=user_id, event_id=event_id)
+        return _no_store(Response(self._state(user_id, event_id)))
+
+    @staticmethod
+    def _state(user_id, event_id) -> dict:
+        ids = EventWaitlistRepository().waiting_event_ids(user_id=user_id)
+        return {"joined": str(event_id) in ids, "event_ids": ids}
+
+
+class MyWaitlistView(APIView):
+    """Every event this account is waiting on.
+
+    `private, no-store` — per-user data, and a shared cache must never hand one
+    person's list to another.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: WaitlistEntrySerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        rows = EventWaitlistRepository().list_for_user(user_id=cast(User, request.user).id)
+        return _no_store(
+            Response(
+                {
+                    "data": WaitlistEntrySerializer(rows, many=True).data,
+                    # The bare id set, for a client that only needs to know
+                    # which buttons to fill in — the same shape the join and
+                    # leave responses carry, so one reducer handles all three.
+                    "event_ids": [str(row.event_id) for row in rows],
+                }
+            )
+        )

@@ -1009,3 +1009,48 @@ class SavedEventSerializer(serializers.Serializer):
     def get_is_available(self, row) -> bool:
         event = row.event
         return event.status == EventStatus.LIVE and event.deleted_at is None
+
+
+class WaitlistEntrySerializer(serializers.Serializer):
+    """One row of the account's own waiting list, flattened to a card.
+
+    Deliberately NOT the same shape as `SavedEventSerializer`, though it is the
+    sibling: a save is a bookmark, so its card is the browse card. A waitlist
+    row carries two facts a bookmark does not — WHEN you joined, and whether we
+    have already written to you — and those are the whole state of the thing.
+    """
+
+    joined_at = serializers.DateTimeField(source="created_at")
+    #: Null while waiting. Set once, when we told them tickets came back — a
+    #: person is written to about an event exactly once, which is what the
+    #: message itself promises.
+    notified_at = serializers.DateTimeField(allow_null=True)
+    id = serializers.CharField(source="event.id")
+    title = serializers.CharField(source="event.title")
+    slug = serializers.CharField(source="event.slug")
+    venue = serializers.CharField(source="event.venue")
+    city = serializers.CharField(source="event.city")
+    starts_at = serializers.DateTimeField(source="event.starts_at")
+    poster_url = serializers.CharField(source="event.poster_url")
+    tickets_available = serializers.IntegerField(source="event.tickets_available", allow_null=True)
+    #: Whether the event is still on sale at all. A waiting list for a show
+    #: that was CALLED OFF still shows, carrying `false` — hiding it would look
+    #: like the join was lost, and a cancelled show is precisely the thing
+    #: somebody waiting needs to be told about.
+    is_available = serializers.SerializerMethodField()
+
+    def get_is_available(self, row) -> bool:
+        event = row.event
+        return event.status == EventStatus.LIVE and event.deleted_at is None
+
+
+class WaitlistStateSerializer(serializers.Serializer):
+    """The answer to "am I on it", and the whole set for the client to hold.
+
+    `event_ids` mirrors `SavedIdsSerializer`: the client REPLACES its local set
+    from this rather than reconciling, so a join, a leave and a sign-in all
+    settle to the same shape.
+    """
+
+    joined = serializers.BooleanField()
+    event_ids = serializers.ListField(child=serializers.CharField())

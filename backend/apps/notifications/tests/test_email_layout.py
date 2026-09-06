@@ -43,6 +43,18 @@ CONTEXTS: dict[str, dict[str, Any]] = {
         # rather than skipped — that branch is the whole point of this type.
         "receipt_pdf_b64": "JVBERi0xLjQK",
     },
+    # A seat came back on a sold-out event. Every field the template reads is
+    # present, INCLUDING the count — the "what if it is missing" branch has its
+    # own test in `apps/events/tests/test_waitlist.py`, and this file's job is
+    # that the rendered document is bulletproof, not that the copy degrades.
+    NotificationType.WAITLIST_AVAILABLE: {
+        "name": "Asha Rao",
+        "event_title": "Sunburn Jazz Night",
+        "event_when": "Sat 23 Aug 2026, 20:10 IST",
+        "event_where": "Phoenix Arena, Mumbai",
+        "url": f"{SITE}/events/3f1d9c22-0000-4000-8000-000000000001",
+        "tickets_available": 2,
+    },
     NotificationType.TICKET_DELIVERY: {
         "name": "Asha Rao",
         "event_title": "Sunburn Jazz Night",

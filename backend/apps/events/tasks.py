@@ -22,6 +22,7 @@ from core.tasks import register_task
 from .models import EventStatus
 from .repositories import EventRepository
 from .selectors import invalidate_event_caches
+from .services import WAITLIST_MAX_EVENTS_PER_SWEEP, WAITLIST_NOTIFY_TASK
 
 logger = logging.getLogger(__name__)
 
@@ -54,3 +55,22 @@ def process_poster(payload: dict) -> None:
         transaction.on_commit(lambda: invalidate_event_caches(event_id))
 
     logger.info("events.process_poster.done", extra={"event_id": event_id})
+
+
+@register_task(WAITLIST_NOTIFY_TASK)
+def waitlist_notify(payload: dict) -> None:
+    """Tell the next batch of waiting people that an event has seats again.
+
+    Scheduler-fired; see `core/scheduling.py`. Idempotent under redelivery: the
+    notification ledger dedupes on a per-(event, person) key, and each entry is
+    marked only after its message is claimed — so a task delivered twice sends
+    once and marks once.
+
+    Built from `config.di` inside the function body, like every other task
+    shim here: registration must not drag a service graph in at import time.
+    """
+    from config.di import build_waitlist_service
+
+    build_waitlist_service().notify_available(
+        event_limit=int(payload.get("event_limit", WAITLIST_MAX_EVENTS_PER_SWEEP))
+    )

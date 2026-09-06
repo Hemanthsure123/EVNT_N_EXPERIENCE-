@@ -7,6 +7,7 @@ import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
+import { WaitlistButton } from './waitlist-button';
 
 /**
  * The mobile booking bar — price, availability, and one way to the tiers.
@@ -114,18 +115,34 @@ export function BookingBar({
           ) : null}
         </div>
 
-        <a
-          href={`/booking/${eventId}`}
-          className={cn(
-            'ml-auto inline-flex h-control shrink-0 items-center justify-center rounded-full px-pill text-label',
-            soldOut
-              ? 'border border-input text-muted-foreground'
-              : 'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          )}
-        >
-          {soldOut ? 'See tiers' : 'Book tickets'}
-        </a>
+        {/* THE SAME CONTROL THE RAIL RENDERS, not a second one shaped like
+            it. One component with three mounts is one question asked in the
+            three places somebody meets it; three controls would be three
+            states to keep in step, and this one changes after a write.
+
+            `inline` because it sits in a bar rather than filling a card —
+            the explanatory line the rail carries would not fit here, and the
+            promise is stated in full on the page above and in the email. */}
+        {soldOut ? (
+          <span className="ml-auto">
+            <WaitlistButton
+              eventId={eventId}
+              returnTo={`/events/${eventId}`}
+              variant="inline"
+            />
+          </span>
+        ) : (
+          <a
+            href={`/booking/${eventId}`}
+            className={cn(
+              'ml-auto inline-flex h-control shrink-0 items-center justify-center rounded-full px-pill text-label',
+              'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            )}
+          >
+            Book tickets
+          </a>
+        )}
       </div>
     </div>
   );

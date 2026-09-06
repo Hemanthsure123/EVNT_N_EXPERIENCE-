@@ -100,6 +100,12 @@ class NotificationType(models.TextChoices):
     ADMIN_PERFORMER_REVIEW = "admin_performer_review", "Admin: performer awaiting review"
     ADMIN_HIRE_ENQUIRY = "admin_hire_enquiry", "Admin: hire enquiry received"
     HIRE_ENQUIRY_RECEIVED = "hire_enquiry_received", "Hire enquiry received"
+    # A seat came back on a sold-out event and somebody was waiting. Its own
+    # type rather than a reuse of EVENT_REMINDER: that goes to people who
+    # ALREADY HOLD a ticket and says "this is soon"; this goes to people who
+    # have none and says "there is one now, and it is first come". Different
+    # audience, different claim, different urgency.
+    WAITLIST_AVAILABLE = "waitlist_available", "Waitlist: tickets available"
 
 
 class NotificationLog(models.Model):

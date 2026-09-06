@@ -128,6 +128,12 @@ CHANNEL_BY_TYPE: dict[str, str] = {
     NotificationType.ADMIN_PERFORMER_REVIEW: NotificationChannel.EMAIL,
     NotificationType.ADMIN_HIRE_ENQUIRY: NotificationChannel.EMAIL,
     NotificationType.HIRE_ENQUIRY_RECEIVED: NotificationChannel.EMAIL,
+    # EMAIL, deliberately not SMS. A waitlist alert is a link somebody has to
+    # follow within minutes, and a DLT-approved 160-character SMS cannot carry
+    # one that survives a copy-paste off a lock screen. Push would be the right
+    # second channel and is a separate change: it needs its own type, its own
+    # template and a decision about people who never subscribed a device.
+    NotificationType.WAITLIST_AVAILABLE: NotificationChannel.EMAIL,
 }
 
 
@@ -1376,6 +1382,84 @@ def _event_deleted_organizer(ctx: dict) -> RenderedMessage:
     )
 
 
+def _waitlist_available(ctx: dict) -> RenderedMessage:
+    """A seat came back on a sold-out event and this person was waiting.
+
+    ── IT SAYS "FIRST COME", AND THAT IS THE MOST IMPORTANT LINE ─────────
+
+    Nothing is reserved for the reader. Several people are told per available
+    ticket, because a notified person is a candidate and most candidates do not
+    buy — so a message that implied a held seat would be a promise the platform
+    cannot keep, made to somebody who is about to drive to a venue.
+
+    The COUNT is printed for the same reason. "Tickets are available" reads the
+    same whether there is one or forty; "2 tickets are available" tells
+    somebody whether to open it now or finish their coffee, and it is a real
+    figure off the event row rather than an urgency device.
+
+    ── AND IT SAYS HOW TO STOP ──────────────────────────────────────────
+
+    This is the only unsolicited mail this platform sends to somebody who has
+    not bought anything, so the way off the list is in the message rather than
+    two screens into an account.
+    """
+    name = ctx.get("name") or "there"
+    title = str(ctx["event_title"])
+    available = ctx.get("tickets_available")
+    count_line = (
+        f"{available} ticket{'' if available == 1 else 's'} just became available"
+        if isinstance(available, int) and available > 0
+        else "Tickets just became available"
+    )
+    url = str(ctx.get("url") or "")
+    blocks = [
+        ui.heading(f"Tickets are available for {title}"),
+        ui.paragraph(
+            f"Hi {name}, you asked to be told when tickets came back for this. "
+            f"{count_line} — they are first come, first served, so nothing is "
+            f"being held for you."
+        ),
+        ui.facts(
+            [
+                ("Event", title),
+                ("When", str(ctx["event_when"])),
+                ("Where", str(ctx["event_where"])),
+            ]
+        ),
+    ]
+    if url:
+        blocks.append(ui.button("Get tickets", url))
+    blocks.append(
+        ui.paragraph(
+            "You are on this waiting list because you joined it. You can leave it "
+            "from the event page at any time, and we will only write to you once "
+            "about it."
+        )
+    )
+    return RenderedMessage(
+        subject=f"Tickets available: {title}",
+        body=(
+            f"Hi {name},\n\n"
+            f"{count_line} for {title}.\n\n"
+            f"They are first come, first served — nothing is being held for you.\n\n"
+            f"When:  {ctx['event_when']}\n"
+            f"Where: {ctx['event_where']}\n"
+            + (f"\n{url}\n" if url else "")
+            + "\nYou are on this waiting list because you joined it, and you can "
+            "leave it from the event page at any time."
+        ),
+        html=ui.render_email(
+            title=f"Tickets available: {title}",
+            # The inbox's grey line. It carries the ONE fact that decides
+            # whether this is opened now or later, rather than the greeting an
+            # unset preheader would scrape.
+            preheader=f"{count_line} — first come, first served.",
+            masthead_label="Waiting list",
+            blocks=blocks,
+        ),
+    )
+
+
 _TEMPLATES: dict[str, Callable[[dict], RenderedMessage]] = {
     NotificationType.WELCOME: _welcome,
     NotificationType.TICKET_DELIVERY: _ticket_delivery,
@@ -1400,6 +1484,7 @@ _TEMPLATES: dict[str, Callable[[dict], RenderedMessage]] = {
     NotificationType.ADMIN_PERFORMER_REVIEW: _admin_performer_review,
     NotificationType.ADMIN_HIRE_ENQUIRY: _admin_hire_enquiry,
     NotificationType.HIRE_ENQUIRY_RECEIVED: _hire_enquiry_received,
+    NotificationType.WAITLIST_AVAILABLE: _waitlist_available,
 }
 
 

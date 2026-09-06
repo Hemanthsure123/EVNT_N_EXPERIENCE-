@@ -15,3 +15,7 @@ class EventsConfig(AppConfig):
         bus = event_bus_port()
         bus.subscribe(events.EVENT_CREATED, handlers.handle_event_created)
         bus.subscribe(events.EVENT_PUBLISHED, handlers.handle_event_published)
+        # A sale takes the buyer off this event's waiting list. Subscribed
+        # rather than called from `booking`, because the dependency runs
+        # ticketing/booking -> events and never back.
+        bus.subscribe(events.BOOKING_CONFIRMED, handlers.handle_booking_confirmed)

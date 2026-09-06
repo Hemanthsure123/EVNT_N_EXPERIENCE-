@@ -857,6 +857,30 @@ function couponIssue(merged, existing) {
   return null;
 }
 
+/**
+ * ── THE WAITING LIST ─────────────────────────────────────────────────────
+ *
+ * `email -> Set(event id)`. Keyed on the account rather than kept per event,
+ * because that is the shape every response has: join, leave and the account
+ * read all return the WHOLE set so the client replaces its local state instead
+ * of reconciling.
+ *
+ * It is deliberately NOT anonymous-capable. A save is a bookmark whose only
+ * consumer is the same browser; a waitlist join is a promise to write to
+ * somebody, and an anonymous visitor has no address — so the real endpoint is
+ * authenticated and this one answers 401 the same way.
+ */
+const waitlists = new Map();
+
+const waitlistFor = (email) => {
+  let set = waitlists.get(email);
+  if (!set) {
+    set = new Set();
+    waitlists.set(email, set);
+  }
+  return set;
+};
+
 /** Matches backend `MIN_PAYABLE_TOTAL_MINOR` — Razorpay's ₹1 floor. */
 const MIN_PAYABLE_TOTAL_MINOR = 100;
 
@@ -1810,6 +1834,75 @@ const server = createServer((req, res) => {
 
   // ── The account's purchase history ────────────────────────────────────
   //
+  // ── Join / leave the waiting list for one sold-out event ────────────
+  //
+  // A fixture must be exactly as generous as the contract and no more. The
+  // CANCEL endpoint was once missing entirely, so four call sites silently
+  // 404'd in local dev and the behaviour they existed for had never been
+  // observed. Without these, the waitlist control cannot be pressed once in
+  // development.
+  const waitlistMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/waitlist\/?$/);
+  if (waitlistMatch && (req.method === 'POST' || req.method === 'DELETE')) {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+
+    const eventId = waitlistMatch[1];
+    const event = buildEvents().find((e) => e.id === eventId);
+    // A draft, cancelled or finished event is refused: collecting an intention
+    // to attend something nobody can attend is a promise with nothing behind
+    // it. The fixture only holds live events, so an unknown id is the same 404
+    // the real service answers.
+    if (!event) {
+      return authError(res, req, 404, 'event_not_found', 'Event not found.');
+    }
+
+    const set = waitlistFor(user.email);
+    if (req.method === 'POST') set.add(eventId);
+    else set.delete(eventId);
+
+    sendJson(
+      req,
+      res,
+      200,
+      { joined: set.has(eventId), event_ids: [...set] },
+      'private, no-store',
+    );
+    return;
+  }
+
+  if (path === '/api/v1/me/waitlist' && req.method === 'GET') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+
+    const set = waitlistFor(user.email);
+    const all = buildEvents();
+    const data = [...set]
+      .map((id) => all.find((e) => e.id === id))
+      .filter(Boolean)
+      .map((event) => ({
+        joined_at: new Date().toISOString(),
+        // Always null here: the fixture has no scheduled sweep, so nobody is
+        // ever notified. Stating that plainly beats inventing a timestamp for
+        // a message that was never sent.
+        notified_at: null,
+        id: event.id,
+        title: event.title,
+        slug: event.slug,
+        venue: event.venue,
+        city: event.city,
+        starts_at: event.starts_at,
+        poster_url: event.poster_url,
+        tickets_available: event.tickets_available ?? null,
+        // `buildEvents()` returns CARDS, which carry no `status` — every event
+        // the fixture holds is live by construction. Reading a field that is
+        // not there gave `false` for all of them, which drew "This event was
+        // cancelled" over a perfectly healthy list.
+        is_available: true,
+      }));
+    sendJson(req, res, 200, { data, event_ids: [...set] }, 'private, no-store');
+    return;
+  }
+
   // Mirrors `GET /me/bookings`: every booking in every state, with the event
   // joined and the ticket states aggregated. The fixture had no equivalent at
   // all, so the Bookings & Purchases screen — the one that exists BECAUSE a

@@ -102,6 +102,12 @@ urlpatterns += [
         name="crew-member-photo",
     ),
     path("events/<uuid:event_id>/crew", api.EventCrewView.as_view(), name="event-crew"),
+    path(
+        "events/<uuid:event_id>/waitlist",
+        api.EventWaitlistView.as_view(),
+        name="event-waitlist",
+    ),
+    path("me/waitlist", api.MyWaitlistView.as_view(), name="my-waitlist"),
     path("me/saved-events", api.SavedEventsView.as_view(), name="saved-events"),
     path(
         "me/saved-events/<uuid:event_id>",

@@ -338,7 +338,7 @@ def get_breakdown(
 def decorate_event_rows(rows: list, *, repository: OrganizerRepository | None = None) -> list[dict]:
     """Merge per-event aggregates onto ONE page of events.
 
-    Three grouped queries against just this page's ids, merged by key — a fixed
+    FOUR grouped queries against just this page's ids, merged by key — a fixed
     cost for a page of any size. See the note at the top of `repositories.py`
     for why these are not annotations on the base queryset.
     """
@@ -350,6 +350,7 @@ def decorate_event_rows(rows: list, *, repository: OrganizerRepository | None = 
     capacity = repository.capacity_by_event(event_ids)
     revenue = repository.revenue_by_event(event_ids)
     checkins = repository.checkins_by_event(event_ids)
+    waitlist = repository.waitlist_by_event(event_ids)
 
     decorated = []
     for row in rows:
@@ -378,6 +379,13 @@ def decorate_event_rows(rows: list, *, repository: OrganizerRepository | None = 
                 "sold": sold,
                 "revenue_minor": revenue.get(row.id, 0),
                 "checkins": checkins.get(row.id, 0),
+                # DEMAND, and the reason it is on this table rather than
+                # only on the side panel: this is the screen where an
+                # organizer compares events, and "sold out with 47 people
+                # waiting" is what makes them add capacity. A real count of
+                # real rows — never inferred from saves or views, which is
+                # the line `decorate_funnel_rows` holds for impressions.
+                "waitlist": waitlist.get(row.id, 0),
                 "from_price_minor": row.from_price_minor,
                 "tickets_available": row.tickets_available,
                 "version": row.version,

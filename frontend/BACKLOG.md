@@ -1675,3 +1675,93 @@ whenever it is wanted — a segment that is not a uuid at all (`/hire/nonsense`)
 is decidable from the URL — but the uuid-shaped-yet-unknown case, which is the
 one a crawler actually reaches, is not. Worth doing together with a Next
 upgrade, since this may simply be fixed upstream.
+
+
+---
+
+## A refunded seat never goes back on sale — and two money defects behind it
+
+**Found while building the waiting list, confirmed by running it, and NOT
+fixed** — deliberately. All three are pre-existing, all three are on the money
+path, and the first cannot be fixed without the other two. A design panel and
+six adversarial reviews were run against a proposed fix; five of the six
+returned FATAL, and each fatal finding is one of the three defects below or a
+consequence of fixing one without the others.
+
+### 1. The seat. (Confirmed by execution.)
+
+`PaymentService.execute_refund` calls the vendor, marks the `Payment`
+refunded, writes the `Refund` row, calls `booking.void_tickets_for_booking` —
+which only flips `Ticket.status` to void — and publishes `PAYMENT_REFUNDED`.
+**Nothing decrements `TicketType.sold`**, and availability is
+`quantity - sold - reserved`. Measured against the real test database on a
+100-seat tier with a 2-ticket booking:
+
+    BEFORE  sold=0 reserved=2 available=98
+    PAID    sold=2 reserved=0 available=98
+    REFUND  sold=2 reserved=0 available=98      <-- still 98
+
+A 500-seat event with 20 refunds can only ever sell 480. The organizer loses
+the revenue AND cannot give the seat to anybody on the waiting list.
+
+### 2. The organizer pays the platform fee on a sale that was fully refunded.
+
+`PaymentRepository.aggregate_event_settlement` includes `REFUNDED` payments in
+both `gross` and `platform_fee`, while `refunds` subtracts the whole refunded
+amount — and `refundable_amount_minor` returns `total - donation`, i.e. the fee
+is refunded TO THE CUSTOMER. So for one refunded booking of subtotal 1000 and
+fee 10:
+
+    gross 1010 - fee 10 - donations 0 - refunds 1010 = net -10
+
+Across 100 good sales plus one refund the organizer is paid exactly the
+refunded sale's fee short, and the platform keeps a fee it also gave back to
+the buyer. Nothing documents this as a policy. Whatever the intended policy is,
+the current arithmetic is not stated anywhere and is not what either party
+would predict.
+
+### 3. A refunded booking still answers its idempotency key for 15 minutes.
+
+`_replayable_q` replays `status=PAID AND created_at > now - 15min`. A refund
+leaves `Booking.status` at `paid` (only the `Payment` becomes `REFUNDED` and
+the tickets are voided), so buying, being refunded, and choosing the same
+tickets again inside the window replays the dead booking — the customer is
+handed a paid-looking booking whose tickets are void.
+
+Today that is merely wrong. Once (1) is fixed it is worse: the seat is back on
+sale for everybody else while the person who was refunded cannot buy it.
+
+### Why fixing (1) alone is not safe
+
+- **The vendor refund has already fired.** `PaymentPort.refund` runs OUTSIDE
+  the transaction; the transaction after it currently touches only rows it
+  owns. Taking tier row locks — the most contended in the system — inside it
+  means a lock wait or a deadlock rolls back `mark_refunded` and the `Refund`
+  row while the money has already left Razorpay. There is no compensating
+  path, and settlements would then pay the organizer for it.
+- **Sale phases would reopen.** `Phase.quantity` is cumulative over
+  `sold + reserved`, so decrementing `sold` returns a seat to its early-bird
+  threshold. Its own docstring says that is intended for a lapsed hold — but
+  applied to refunds it is an organizer-funded discount the organizer never
+  authorised, and `apps/coupons` already ruled the opposite way on the
+  identical mechanic ("a buy-then-refund loop would spend one code without
+  limit").
+- **A refund after the payout window** would put a seat back on sale for an
+  event whose settlement is closed: the buyer is charged and the organizer is
+  never paid.
+
+### The shape a real fix takes
+
+A fourth ticketing primitive (`return_to_stock`, clamped and row-locked, the
+mirror of `release`), driven by the per-tier count of tickets the void
+ACTUALLY flipped — so a used-then-refunded ticket returns no seat and
+`USED <= sold` still holds. Applied through the OUTBOX rather than inside the
+post-vendor-call transaction, so a tier-lock wait can never roll back a
+recorded refund. Plus (2) and (3) fixed first, plus a decision on the phase
+question stated in `pricing.py`. That is a release of its own with its own
+test run, and it is the honest reason it is here rather than in a commit.
+
+**Until then the waiting list cannot fire for a refund**, which is the case
+somebody would most expect it to cover. It fires for a lapsed hold, an
+organizer raising a tier's quantity, and a tier edit — every path that
+actually returns inventory today.

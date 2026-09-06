@@ -434,6 +434,22 @@ BOOKING_HOLD_MINUTES = env.int("BOOKING_HOLD_MINUTES", default=10)
 # rather than the only guard — see `lib/booking/selection.ts`.
 BOOKING_IDEMPOTENCY_REPLAY_MINUTES = env.int("BOOKING_IDEMPOTENCY_REPLAY_MINUTES", default=15)
 
+# --- Waitlist (events.waitlist_notify) ------------------------------------
+# How long a batch told "tickets are available" gets before the NEXT batch on
+# the same event is told.
+#
+# It is the whole difference between a waiting list and a mailshot. One freed
+# seat notifies WAITLIST_NOTIFY_PER_SEAT people; without a cooldown the sweep
+# two minutes later notifies the next three, and an hour-long queue is burned
+# through in half an hour — everybody told about a seat that was taken before
+# they finished reading, and none of them ever told again because a person is
+# only notified once.
+#
+# Thirty minutes is long enough that somebody who opened the email has really
+# had their turn, and short enough that a seat freed in the morning does not
+# sit unsold all day.
+WAITLIST_NOTIFY_COOLDOWN_MINUTES = env.int("WAITLIST_NOTIFY_COOLDOWN_MINUTES", default=30)
+
 # --- Payment reconciliation (payments.reconcile_pending) ------------------
 # The job that asks the provider "was this booking's order actually paid?",
 # so fulfilment never depends on the customer's browser completing a call.

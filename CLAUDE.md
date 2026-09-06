@@ -963,6 +963,118 @@ The rules that carry weight:
   add the discount back. Without that term each understates the tickets by
   exactly the discount and stops summing to the total printed under it.
 
+## The waiting list: a sweeper decides, and nobody is told twice
+
+`events.EventWaitlist` is the sibling of `SavedEvent` — a user's relationship
+to an event — and it exists because a sold-out event was a dead end. Its CTA
+offered "See ticket types", which opens a picker of disabled rows and a
+disabled Checkout: honest, and still a screen with nothing to press.
+
+**It is per EVENT, not per tier.** The question is "can I go to this", not "may
+I have a Gold ticket", and a tier-scoped list would notify somebody about a
+seat they did not ask for. It would also have to live in `ticketing`, since
+`events` must not import tier models.
+
+**THE TRIGGER IS A SCHEDULED SWEEP, NOT `ticketing.release`.** Three reasons,
+in order of weight, and the first is the one that decides it:
+
+1. **Seats come back on paths that are not `release` at all** — an organizer
+   raising a tier's quantity, an operator editing a row. A trigger hung off the
+   reserve/release transaction would silently miss every one of them, which is
+   exactly the "it only works when something arrives" failure
+   `payments.reconcile_pending` exists to answer.
+2. **The question is EVENT-level and `release` only knows a TIER.** A tier
+   going from nought to some is not the same fact as an event having seats, so
+   a tier-level signal would be an approximate trigger for a question the job
+   has to re-ask anyway.
+3. **It would put a fan-out on the platform's most carefully bounded
+   transaction** to buy about a minute of latency on an email.
+
+`events.waitlist_notify` runs every 120s and is cheap on an empty result set.
+
+**AVAILABILITY IS NOT THE SAME QUESTION AS BUYABILITY**, and getting that wrong
+would have emailed real people about seats nobody can buy.
+`Event.tickets_available` is `Sum(quantity - sold - reserved)` across every
+tier and knows nothing about a sale window, so an event whose only remaining
+tier opens next month reports a positive number and sells nothing — `reserve`
+refuses it under the lock, correctly and one screen too late. The sweeper
+therefore filters its candidates through
+`TicketTypeRepository.event_ids_with_buyable_inventory`, read through the same
+one-way seam `duplicate_event` uses for `copy_ticket_types_to`, so `events`
+still knows nothing about tiers.
+
+**THE BATCH AND THE COOLDOWN ARE THE WHOLE DESIGN.** One person per seat leaves
+the seat unsold while its single candidate is asleep; everybody per seat is a
+mailshot. `WAITLIST_NOTIFY_PER_SEAT` (3) is told, and then
+`WAITLIST_NOTIFY_COOLDOWN_MINUTES` (30) holds the next batch back — without it
+one freed seat notifies three people every two minutes and an hour-long queue
+is gone in half an hour, everybody told about a ticket that was taken before
+they read the message and none of them ever told again, because a person is
+written to ONCE. The cooldown is a `NOT EXISTS` in the candidate query rather
+than an aggregate per event.
+
+A HELD allocation per person — a real claim window — is the other design and is
+deliberately not this one: it would reserve inventory against somebody who has
+not opened their email, which is the harm the funnel reserves LATE to avoid, at
+a scale of hours instead of minutes. The email says "first come, first served,
+nothing is being held for you", and that sentence is the product.
+
+**IT MARKS AFTER IT SENDS, NEVER BEFORE.** A crash between the two costs a
+repeated ATTEMPT, which the notification ledger dedupes into nothing. Marking
+first would cost a message nobody receives, with no trace that it had not gone.
+
+**The dedupe key is `waitlist:{event}:{user}`, not the email.**
+`NotificationLog.dedupe_key` is UNIQUE and 255 characters; an address may be
+254 on its own, so a key built from one overflows for the one person whose
+address is long, after the batch is half sent.
+
+**One bad row cannot strand the batch.** Every other fan-out in this codebase
+loops without isolation, so a template raising on one row silently costs every
+recipient after it. This one catches per row, leaves the entry PENDING and
+retries it next sweep — marked-but-unsent is a message nobody receives and no
+trace that it did not go.
+
+**The queue is `(created_at, id)`.** `created_at` is not unique — an on-sale
+puts several joins inside one clock tick — and Postgres may return tied rows in
+a different arbitrary order on every query. A queue whose order changes between
+reads is not a queue. This was caught by a test that asserted the first six
+people told were the first six who joined and got 0, 2, 1.
+
+**Buying takes you off the list**, via an observer on `BOOKING_CONFIRMED` in
+`events/handlers.py` — so `events` still does not import `booking`. Without it,
+somebody who joined and then bought is emailed days later about an event they
+already hold a ticket to. The row is DELETED rather than marked notified: they
+are no longer waiting, and a "told" row would misreport the organizer's demand
+figure as interest served by a message never sent.
+
+**It requires an account, and that is not the saved-events pattern.** Saving
+works while anonymous because a bookmark's only consumer is the same browser; a
+waitlist join is a promise to CONTACT somebody. The affordance stays ungated —
+the button is drawn for everybody — and the press opens the sign-in sheet, with
+the join completing on the far side, exactly as the funnel's Checkout does.
+
+**One control, three mounts** (`components/event/waitlist-button.tsx`): the
+desktop rail, the mobile sticky bar and — through them — the same question in
+the places somebody meets it. `booking-cta.tsx` stays a SERVER component and
+imports it as a client leaf; marking that file `'use client'` would pull the
+whole sticky rail, and `EventDisclosures` with it, into the client bundle on
+the platform's hottest public route. The trigger is
+`summariseTiers(tiers).state.kind === 'sold_out'` and nothing else: `unknown`
+(no tiers) and `not_on_sale` (a window that has not opened) look identical to a
+careless renderer and would publish a SOLD OUT claim about an event that is
+simply not selling yet.
+
+**The organizer sees DEMAND as a raw count** on the events table — one grouped
+read for the page, never an annotation on the base queryset (which would fan
+the row set out and silently multiply `capacity` and `sold` as well). A count
+rather than a rate, because a rate over an event with no tiers has no
+denominator and this module's rule is that such a rate is null, not zero.
+
+**What it cannot do yet**: fire for a REFUND. A refunded seat is never returned
+to inventory — see `frontend/BACKLOG.md`, "A refunded seat never goes back on
+sale", which records that defect, the two money defects behind it, and why it
+is not a small fix.
+
 ## What's deliberately NOT built yet (don't add it speculatively)
 
 - **`TaskQueuePort` has a registry now** (`core/tasks.py`, added alongside
@@ -2943,7 +3055,8 @@ roster and event lineup — see "Crew" above) →
 `cms` + `announcements` (done) → `performers` (done — the Hire a Band
 marketplace, the platform's SECOND product surface) → `coupons` (done — see
 "Coupons" above: organizer-funded discount codes, decided under the coupon's row
-lock).
+lock). `events` also owns the WAITING LIST for a sold-out event — see "The
+waiting list" above.
 
 ## `performers` — the Hire a Band marketplace
 

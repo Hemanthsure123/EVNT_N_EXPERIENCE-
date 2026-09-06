@@ -608,6 +608,25 @@ def build_coupon_redemption_service():
     )
 
 
+def build_waitlist_service():
+    """The waiting list for a sold-out event.
+
+    The notifier is passed as the `NotificationService` itself, which satisfies
+    `events.WaitlistNotifier` structurally — the dependency is one-way and
+    explicit (events asks notifications to send; nothing in notifications knows
+    this list exists), exactly as `build_announcement_broadcast_service` wires
+    the same protocol.
+    """
+    from apps.events.repositories import EventRepository, EventWaitlistRepository
+    from apps.events.services import WaitlistService
+
+    return WaitlistService(
+        waitlist=EventWaitlistRepository(),
+        events=EventRepository(),
+        notifier=build_notification_service(),
+    )
+
+
 def build_event_moderation_service() -> EventModerationService:
     """A platform operator's decisions on submitted events. Staff-only —
     the view enforces that; this service asks no ownership question."""

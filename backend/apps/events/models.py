@@ -882,3 +882,96 @@ class EventSlot(models.Model):
 
     def __str__(self) -> str:
         return f"{self.label or 'Slot'} @ {self.starts_at:%Y-%m-%d %H:%M}"
+
+
+class EventWaitlist(models.Model):
+    """ "Tell me when tickets are available again" — the sibling of `SavedEvent`.
+
+    ── WHY IT LIVES HERE, AND NOT IN `ticketing` ────────────────────────
+
+    It is a relationship between a USER and an EVENT, which is the aggregate
+    this module owns — exactly the reasoning `SavedEvent` carries. And the
+    question it answers is event-level: "can I go to this", not "may I have a
+    Gold ticket". `ticketing` owns tiers and counters; a waitlist against one
+    tier would notify somebody about a seat they did not ask for, and would
+    need a tier picker on a sold-out screen — which the funnel's ASK ONCE rule
+    puts on exactly one screen, and it is not this one.
+
+    ── IT REQUIRES AN ACCOUNT, UNLIKE A SAVE ────────────────────────────
+
+    Saving is deliberately available before sign-in (the browser keeps a local
+    set and merges it on sign-in) because a heart that demands an account
+    removes the affordance from the people still deciding whether to make one.
+    A waitlist cannot do that: the whole feature is an EMAIL sent later, so
+    there has to be an address, and taking a bare address from an unauthenticated
+    form is a way to sign a stranger up for mail they never asked for. The
+    control opens the sign-in sheet instead, which is the same sheet the
+    checkout uses.
+
+    ── `notified_at` IS THE STATE, AND THE POSITION IS `created_at` ─────
+
+    Two states — waiting, and told — so a timestamp rather than a status
+    column: it answers "whether" and "when" in one field, and a status enum
+    would have needed the timestamp beside it anyway.
+
+    `created_at` is the queue position. It is not a stored integer, because a
+    position is a fact about the set at a moment: storing one would need
+    renumbering every row below anybody who leaves, and would be wrong the
+    moment two people join in the same millisecond on different connections.
+
+    ── THERE IS NO `waitlist_count` DENORMAL ────────────────────────────
+
+    The same decision `SavedEvent` documents, and the one `apps/coupons`
+    documents at greater length: the rows ARE the count. A counter here would
+    need decrementing when somebody leaves, when their booking is confirmed,
+    and when the event is deleted — three write paths for a number the
+    organizer's dashboard reads once a day.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # CASCADE on both, like `SavedEvent`: an interest row means nothing without
+    # its event or its person, and — unlike a booking — it is not a financial
+    # record anyone must keep.
+    event = models.ForeignKey("events.Event", on_delete=models.CASCADE, related_name="waitlist")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="waitlisted_events"
+    )
+    #: When they joined. THE QUEUE POSITION — see the class docstring.
+    created_at = models.DateTimeField(auto_now_add=True)
+    #: When we told them tickets were available, or null while they wait.
+    #:
+    #: Set AFTER the notification is claimed, never before: the notification
+    #: ledger dedupes on its own key, so a crash between the two costs a
+    #: repeated attempt that is swallowed, where marking first would cost a
+    #: message nobody ever receives.
+    notified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "events_event_waitlist"
+        constraints = [
+            # Joining twice is the same fact, and the control double-fires on a
+            # slow connection. The constraint makes the second press a no-op
+            # rather than a second row — and, more importantly, a second email.
+            models.UniqueConstraint(fields=["event", "user"], name="event_waitlist_unique_member"),
+        ]
+        indexes = [
+            # THE SWEEPER'S QUERY: this event's waiting members, oldest first.
+            # Partial on `notified_at IS NULL`, because that is the only half
+            # the batch ever reads and it shrinks as an event's list is worked
+            # through — a full index would keep every person already told.
+            models.Index(
+                # `id` is in the index because it is in the ORDER BY: the queue
+                # is `(created_at, id)`, since `created_at` is not unique and a
+                # queue whose order changes between reads is not a queue. An
+                # index that stops at `created_at` leaves the tiebreak to a
+                # sort step on every sweep.
+                fields=["event", "created_at", "id"],
+                condition=models.Q(notified_at__isnull=True),
+                name="event_waitlist_pending",
+            ),
+            # "Am I on this list", and the account's own waitlist page.
+            models.Index(fields=["user", "-created_at"], name="event_waitlist_user_recent"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} waiting for {self.event_id}"

@@ -203,15 +203,21 @@ class TestEventRows:
     ) -> None:
         """The whole point of merging aggregates by page rather than per row.
 
-        The event page plus three GROUP BY queries — capacity, revenue,
-        check-ins. Adding a fourth event must NOT add a query; if this number
-        ever moves with row count, the merge has become an N+1.
+        The event page plus FOUR GROUP BY queries — capacity, revenue,
+        check-ins and waitlist demand. Adding a fourth event must NOT add a
+        query; if this number ever moves with row count, the merge has become
+        an N+1.
+
+        It was 4 and is 5 because the waiting-list count joined the row. That
+        is the whole cost of it: ONE grouped read for the page, not one per
+        event, which is the property this test exists to hold rather than the
+        number itself.
 
         (No auth query: `force_authenticate` attaches the user directly, so
         unlike a real JWT request there is no user lookup to pay for.)
         """
         client = auth(world.owner)
-        with django_assert_num_queries(4):
+        with django_assert_num_queries(5):
             client.get("/api/v1/organizer/event-rows")
 
 
@@ -400,3 +406,38 @@ class TestCaching:
         # eleven aggregates, which is exactly why it is the one thing cached.
         with django_assert_num_queries(0):
             client.get("/api/v1/organizer/overview")
+
+
+@pytest.mark.django_db
+class TestWaitlistDemand:
+    """The one number on this table that is DEMAND rather than sales.
+
+    It is a raw count of real rows. `decorate_funnel_rows` refuses impressions,
+    detail views and CTR because nothing records them; this is allowed on
+    screen for exactly the opposite reason.
+    """
+
+    def test_it_is_zero_when_nobody_is_waiting(self, world: World) -> None:
+        rows = auth(world.owner).get("/api/v1/organizer/event-rows").json()["data"]
+        assert all(row["waitlist"] == 0 for row in rows)
+
+    def test_it_counts_the_people_actually_waiting(self, world: World) -> None:
+        from apps.events.repositories import EventWaitlistRepository
+
+        EventWaitlistRepository().join(user_id=world.customer.id, event_id=world.event.id)
+
+        rows = auth(world.owner).get("/api/v1/organizer/event-rows").json()["data"]
+        row = next(r for r in rows if r["id"] == str(world.event.id))
+        assert row["waitlist"] == 1
+
+    def test_it_is_scoped_to_the_right_event(self, world: World) -> None:
+        """A grouped read merged by key. Getting the merge wrong would put one
+        event's demand on another's row, which is the failure mode a single
+        annotated queryset produces silently."""
+        from apps.events.repositories import EventWaitlistRepository
+
+        EventWaitlistRepository().join(user_id=world.customer.id, event_id=world.event.id)
+
+        rows = auth(world.owner).get("/api/v1/organizer/event-rows").json()["data"]
+        others = [r for r in rows if r["id"] != str(world.event.id)]
+        assert all(r["waitlist"] == 0 for r in others)

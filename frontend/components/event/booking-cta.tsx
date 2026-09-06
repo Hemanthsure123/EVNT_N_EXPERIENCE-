@@ -5,6 +5,7 @@ import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
+import { WaitlistButton } from './waitlist-button';
 
 /**
  * The event page's price and its one action.
@@ -31,9 +32,29 @@ import { cn } from '@/lib/utils/cn';
  *
  * Sold out, few left and not-on-sale all reach the button, because sending
  * somebody to a picker to discover there is nothing to pick is worse than
- * saying so here. The label changes; the destination does not — a sold-out
- * event still has tiers worth looking at, and its page is where a returning
- * ticket would appear.
+ * saying so here.
+ *
+ * ── AND SOLD OUT IS NO LONGER A DEAD END ──────────────────────────────────
+ *
+ * It used to offer "See ticket types", which opens a picker of disabled rows
+ * and a disabled Checkout — honest, and still a dead end: somebody came to go
+ * to a thing and the last word was a screen with nothing to press. The
+ * waiting-list control REPLACES that link rather than joining it, because this
+ * component has one action by design and looking at tiers nobody can buy is
+ * not the one worth having. The price and the "Sold out" label are already
+ * above it, so nothing is lost by dropping the trip.
+ *
+ * `WaitlistButton` is a client leaf. This component is a SERVER component and
+ * must stay one: marking it `'use client'` would pull the whole sticky rail —
+ * and `EventDisclosures` with it — into the client bundle on the platform's
+ * hottest public route.
+ *
+ * The three states must never be confused. `summariseTiers` returns `unknown`
+ * for an event with no tiers (not set up, or the fetch failed) and
+ * `not_on_sale` for a window that has not opened. Offering a waiting list on
+ * either would be publishing a SOLD OUT claim about an event that is simply
+ * not selling yet — the same mistake the page's own JSON-LD refuses to make.
+ * Only `sold_out` reaches it.
  */
 export function BookingCta({
   eventId,
@@ -94,19 +115,19 @@ export function BookingCta({
         <span className="inline-flex h-control items-center justify-center rounded-full border border-input px-pill text-label text-muted-foreground">
           Book tickets
         </span>
+      ) : soldOut ? (
+        <WaitlistButton eventId={eventId} returnTo={`/events/${eventId}`} />
       ) : (
         <Link
           href={`/booking/${eventId}`}
           className={cn(
             'inline-flex h-control items-center justify-center gap-2 rounded-full px-pill text-label',
-            soldOut
-              ? 'border border-input text-foreground hover:bg-muted'
-              : 'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
+            'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           )}
         >
           <Ticket className="size-4" aria-hidden />
-          {soldOut ? 'See ticket types' : 'Book tickets'}
+          Book tickets
         </Link>
       )}
     </section>

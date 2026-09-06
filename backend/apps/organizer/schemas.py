@@ -81,6 +81,10 @@ class EventRowSerializer(serializers.Serializer):
     sold = serializers.IntegerField()
     revenue_minor = serializers.IntegerField()
     checkins = serializers.IntegerField()
+    #: People waiting for this event to have tickets again. A COUNT, never a
+    #: rate — a rate would need a denominator that is zero for an event with no
+    #: tiers, and this module's rule is that such a rate is null rather than 0.
+    waitlist = serializers.IntegerField()
     from_price_minor = serializers.IntegerField(allow_null=True)
     tickets_available = serializers.IntegerField(allow_null=True)
     version = serializers.IntegerField()

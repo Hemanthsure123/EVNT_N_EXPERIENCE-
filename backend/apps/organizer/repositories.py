@@ -40,7 +40,7 @@ from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDate
 
 from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
 from apps.checkin.models import ScanLog, ScanResult
-from apps.events.models import Event, EventStatus
+from apps.events.models import Event, EventStatus, EventWaitlist
 from apps.organizations.models import Organization
 from apps.payments.models import Payment, PaymentStatus, Refund
 from apps.reviews.models import EventReview, ReviewStatus
@@ -331,6 +331,26 @@ class OrganizerRepository:
             total=Count("id"),
         )
         return {row["booking__event_id"]: int(row["total"]) for row in rows}
+
+    def waitlist_by_event(self, event_ids: Sequence[UUID]) -> dict[UUID, int]:
+        """How many people are waiting on each event of this page.
+
+        A separate GROUPED read against the page's ids, like every other figure
+        on this row — never `.annotate(Count("waitlist"))` on the base
+        queryset. The note at the top of this module explains why: annotating a
+        second collection joins another table and fans the row set out, which
+        silently MULTIPLIES `capacity`, `sold` and `revenue_minor` as well as
+        corrupting the new number.
+
+        A raw COUNT, never a rate. `waitlist / capacity` would be a rate whose
+        denominator is zero for an event with no tiers, and this module's rule
+        is that a rate with no denominator is null rather than 0 — a count has
+        no such problem and is what the organizer actually acts on.
+        """
+        rows = _grouped(
+            EventWaitlist.objects.filter(event_id__in=event_ids), "event_id", total=Count("id")
+        )
+        return {row["event_id"]: int(row["total"]) for row in rows}
 
     # ------------------------------------------------------------ bookings
 

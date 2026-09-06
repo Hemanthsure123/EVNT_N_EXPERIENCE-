@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 
 from django.contrib.postgres.search import SearchQuery
-from django.db.models import F, Q, QuerySet, Value
+from django.db.models import Count, Exists, F, OuterRef, Q, QuerySet, Value
 from django.db.models.functions import Greatest
 from django.utils import timezone
 
@@ -32,6 +32,7 @@ from .models import (
     EventSlot,
     EventStatus,
     EventTimelineEntry,
+    EventWaitlist,
     MediaKind,
     SavedEvent,
 )
@@ -1587,4 +1588,183 @@ class EventCrewRepository:
                 )
                 for entry in entries
             ]
+        )
+
+
+class EventWaitlistRepository:
+    """The waiting list for a sold-out event.
+
+    Two access patterns, and they want different things:
+
+    - The CUSTOMER's side is one row at a time (am I on it, join, leave) plus
+      one list of their own — small, indexed, and not on any hot path.
+    - The SWEEPER reads a bounded batch per event, oldest first, and marks each
+      one as it goes. That is the query `event_waitlist_pending` exists for: a
+      PARTIAL index on the un-notified half, which shrinks as a list is worked
+      through rather than carrying everybody already told.
+    """
+
+    # ── the customer's side ─────────────────────────────────────────────────
+
+    def join(self, *, user_id: uuid.UUID | str, event_id: uuid.UUID | str) -> bool:
+        """Idempotent. True when a row was created, False when already waiting.
+
+        `get_or_create` rather than a check-then-insert: the control double-fires
+        on a slow connection, and the unique constraint is what makes the second
+        press a no-op instead of an `IntegrityError` on somebody's screen.
+
+        A REJOIN after being notified deliberately does NOT clear `notified_at`
+        — that row is not re-created, it is found. Somebody who was told and did
+        not buy has been served; putting them back at the head of the queue by
+        pressing the button again would let anybody skip it.
+        """
+        _, created = EventWaitlist.objects.get_or_create(user_id=user_id, event_id=event_id)
+        return created
+
+    def leave(self, *, user_id: uuid.UUID | str, event_id: uuid.UUID | str) -> bool:
+        deleted, _ = EventWaitlist.objects.filter(user_id=user_id, event_id=event_id).delete()
+        return bool(deleted)
+
+    def waiting_event_ids(self, *, user_id: uuid.UUID | str) -> list[str]:
+        """Just the ids — what an event page needs to draw "You're on the list"
+        without loading a row it already has."""
+        return [
+            str(row)
+            for row in EventWaitlist.objects.filter(user_id=user_id).values_list(
+                "event_id", flat=True
+            )
+        ]
+
+    def list_for_user(self, *, user_id: uuid.UUID | str) -> QuerySet[EventWaitlist]:
+        """The account's own waiting list.
+
+        Filtered to what the catalogue still resolves, for the same reason
+        `SavedEventRepository.list_cards` is: a card linking to a page that
+        404s is worse than no card. Cancelled and past events stay — somebody
+        waiting for a show that was called off needs to see THAT rather than an
+        empty list implying they never joined.
+        """
+        return (
+            EventWaitlist.objects.filter(
+                user_id=user_id,
+                event__status__in=EventRepository.PUBLICLY_RESOLVABLE_STATUSES,
+                event__deleted_at__isnull=True,
+            )
+            .select_related("event")
+            .only(
+                "id",
+                "created_at",
+                "notified_at",
+                "event__id",
+                "event__title",
+                "event__slug",
+                "event__venue",
+                "event__city",
+                "event__starts_at",
+                "event__poster_url",
+                "event__status",
+                "event__tickets_available",
+            )
+            # `id` breaks the tie for the same reason `pending_for_event` needs
+            # it: two joins in one tick would otherwise render in a different
+            # order on every load of the account screen.
+            .order_by("-created_at", "id")
+        )
+
+    # ── the organizer's side ────────────────────────────────────────────────
+
+    def count_for_event(self, event_id: uuid.UUID | str) -> int:
+        return EventWaitlist.objects.filter(event_id=event_id).count()
+
+    def counts_for_events(self, event_ids: list[uuid.UUID | str]) -> dict[str, int]:
+        """Demand for a whole page of events, in ONE query.
+
+        Asking per row is the N+1 the performance checklist exists to stop, and
+        an events table is exactly where one would go unnoticed.
+        """
+        if not event_ids:
+            return {}
+        return {
+            str(row["event_id"]): row["n"]
+            for row in EventWaitlist.objects.filter(event_id__in=event_ids)
+            .values("event_id")
+            .annotate(n=Count("id"))
+        }
+
+    # ── the sweeper's side ──────────────────────────────────────────────────
+
+    def events_awaiting_notification(self, *, now, cooldown_before, limit: int) -> list[uuid.UUID]:
+        """Events that have seats AND somebody waiting who has not been told.
+
+        Four conditions, and each one is load-bearing:
+
+        - **LIVE, not deleted, and upcoming.** Telling somebody tickets are
+          available for an event that has finished, been withdrawn or been
+          cancelled is worse than telling them nothing.
+        - **`tickets_available > 0`.** The denormal `ticketing` keeps current.
+          It is a DISPLAY figure and this is a display decision — the actual
+          purchase is still decided under the tier's row lock, so a stale
+          positive here costs a hopeful click, never a bad sale.
+        - **Somebody pending**, or there is nothing to do.
+        - **Nobody notified recently.** THE COOLDOWN, and the reason this is a
+          `NOT EXISTS` rather than an aggregate per candidate: without it a
+          single freed seat notifies a fresh batch on every tick, and an
+          hour-long queue is burned through in minutes — everybody told
+          "tickets are available" about a seat that was taken before they
+          finished reading. The batch that was told gets a real chance first.
+
+        Soonest event first: waiting costs most where there is least time left.
+        """
+        pending = EventWaitlist.objects.filter(event_id=OuterRef("pk"), notified_at__isnull=True)
+        recent = EventWaitlist.objects.filter(
+            event_id=OuterRef("pk"), notified_at__gt=cooldown_before
+        )
+        return list(
+            Event.objects.filter(
+                status=EventStatus.LIVE,
+                deleted_at__isnull=True,
+                starts_at__gt=now,
+                tickets_available__gt=0,
+            )
+            .filter(Exists(pending))
+            .exclude(Exists(recent))
+            .order_by("starts_at")
+            .values_list("id", flat=True)[:limit]
+        )
+
+    def pending_for_event(self, *, event_id: uuid.UUID | str, limit: int) -> list[EventWaitlist]:
+        """The next `limit` people waiting, oldest first — the queue order.
+
+        `select_related("user")` because the very next thing the caller does is
+        read `user.email` for every row; without it a batch of thirty is
+        thirty-one queries on a scheduled job.
+        """
+        return list(
+            EventWaitlist.objects.filter(event_id=event_id, notified_at__isnull=True)
+            .select_related("user")
+            .only("id", "event_id", "created_at", "user__id", "user__email", "user__full_name")
+            # ── `id` IS NOT DECORATION, IT IS THE TIEBREAK ──────────────
+            #
+            # `created_at` is not unique. Several people joining inside the
+            # same clock tick — which is what an on-sale looks like — sort
+            # arbitrarily under `created_at` alone, and Postgres is free to
+            # return them in a DIFFERENT arbitrary order on the next query.
+            # A queue whose order changes between reads is not a queue, and
+            # this codebase has the same rule written on every cursor-paginated
+            # list for the same reason (see `OrganizerReviewPagination`).
+            #
+            # It was caught by a test that asserted the first six people told
+            # were the first six who joined, and got 0, 2, 1 instead.
+            .order_by("created_at", "id")[:limit]
+        )
+
+    def mark_notified(self, entry_id: uuid.UUID | str, *, when) -> bool:
+        """Conditional on it still being un-notified, so two sweeps racing the
+        same row cannot overwrite the first one's timestamp — and the count of
+        rows this run actually claimed stays honest."""
+        return (
+            EventWaitlist.objects.filter(pk=entry_id, notified_at__isnull=True).update(
+                notified_at=when
+            )
+            == 1
         )

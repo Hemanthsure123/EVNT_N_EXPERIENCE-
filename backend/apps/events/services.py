@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any, Protocol
 
+from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.accounts.repositories import UserRepository
 from apps.organizations.exceptions import OrganizationNotFoundError
@@ -65,6 +68,7 @@ from .repositories import (
     EventCrewRepository,
     EventRepository,
     EventSlotRepository,
+    EventWaitlistRepository,
 )
 from .selectors import invalidate_event_caches
 from .slugs import event_slug
@@ -2153,3 +2157,285 @@ class CrewService:
             photo_url="",
             photo_alt_text="",
         )
+
+
+# ── The waiting list for a sold-out event ───────────────────────────────────
+
+#: The `notifications.NotificationType` value a waitlist alert renders as.
+#:
+#: Declared HERE because this module is what asks for it; `notifications` holds
+#: the matching enum member and the template. The literals must agree, and
+#: `test_waitlist.py` asserts this value so a change on either side has
+#: somewhere to fail — the same wiring `announcements` uses.
+WAITLIST_NOTIFICATION_TYPE = "waitlist_available"
+
+WAITLIST_NOTIFY_TASK = "events.waitlist_notify"
+
+#: How many people are told per available ticket.
+#:
+#: NOT one. A notified person is a candidate, not a holder: nothing is reserved
+#: for them, and most people who are emailed do not buy. Telling exactly one
+#: person per seat means a seat sits unsold while its single candidate is
+#: asleep. Three is enough that a freed seat usually finds a buyer and small
+#: enough that the disappointed are few.
+#:
+#: A HELD allocation per person — a real claim window — is the other design,
+#: and it is deliberately not this one: it would reserve inventory against
+#: somebody who has not opened their email, which is the same harm the funnel
+#: reserves LATE to avoid, at a scale of hours instead of minutes.
+WAITLIST_NOTIFY_PER_SEAT = 3
+
+#: A hard ceiling per event per sweep, whatever the arithmetic above says.
+#:
+#: An organizer releasing 500 extra tickets should not turn one tick into 1,500
+#: renders and claims. The rest are told on the next sweep, which is two
+#: minutes away.
+WAITLIST_MAX_BATCH = 100
+
+#: Events looked at per sweep, soonest first.
+WAITLIST_MAX_EVENTS_PER_SWEEP = 50
+
+
+class WaitlistNotifier(Protocol):
+    """The one method this module uses from `NotificationService`.
+
+    Structural and injected, for the two reasons `announcements.Notifier`
+    gives: it keeps the dependency one-way and explicit — events asks
+    notifications to send, and nothing in notifications knows this list exists
+    — and it lets the fan-out be tested against a recording double rather than
+    against another module's template registry.
+    """
+
+    def notify(
+        self,
+        *,
+        notification_type: str,
+        recipient: str,
+        context: dict,
+        dedupe_key: str,
+        delay_seconds: int = 0,
+    ) -> Any: ...
+
+
+class WaitlistService:
+    """Join, leave, and tell people when tickets come back.
+
+    ── THE TRIGGER IS A SWEEPER, NOT THE MONEY PATH ────────────────────────
+
+    Nothing in `ticketing.release` calls this, and that is a decision rather
+    than an omission. Three reasons, in order of weight:
+
+    1. **Seats come back on paths that are not `release` at all.** An organizer
+       raising a tier's quantity, a refund voiding tickets, an operator editing
+       a row — a trigger hung off the reserve/release transaction would silently
+       miss every one of them. That is precisely the "it only works when
+       something arrives" failure `payments.reconcile_pending` exists to answer.
+    2. **The question is EVENT-level and `release` only knows a TIER.** A tier
+       going from nought to some is not the same fact as an event having seats,
+       so a tier-level signal would be an approximate trigger for a question
+       this job has to re-ask anyway.
+    3. **It would put a fan-out concern on the platform's most carefully bounded
+       transaction** — the one whose lock window is documented down to the
+       statement — to buy about a minute of latency on an email.
+
+    ── AND IT MARKS AFTER IT SENDS, NEVER BEFORE ───────────────────────────
+
+    A crash between the two costs a repeated ATTEMPT, which the notification
+    ledger dedupes into nothing. Marking first would cost a message nobody ever
+    receives, and there would be no trace that it had not been sent.
+    """
+
+    def __init__(
+        self,
+        *,
+        waitlist: EventWaitlistRepository,
+        events: EventRepository,
+        notifier: WaitlistNotifier,
+    ) -> None:
+        self._waitlist = waitlist
+        self._events = events
+        self._notifier = notifier
+
+    # ── the customer's side ─────────────────────────────────────────────────
+
+    def join(self, *, user_id, event_id) -> bool:
+        """Put somebody on the list. Idempotent; True when newly added.
+
+        ── IT DOES NOT REFUSE WHEN TICKETS ARE AVAILABLE ───────────────────
+
+        Tempting, and wrong twice. `tickets_available` is a cached DISPLAY
+        denormal, so refusing on it would be deciding from a cache — the thing
+        every money-adjacent path in this codebase is built not to do. And
+        availability is a moving target: the last seat routinely goes between
+        the page rendering and the press, so a refusal would fail for exactly
+        the people this list is for. Joining while seats exist is harmless —
+        the sweeper tells them, which is redundant rather than wrong.
+
+        It DOES refuse for an event nobody can book: a draft, a cancelled show,
+        one that has finished. Collecting an intention to attend something that
+        cannot be attended is a promise with nothing behind it.
+        """
+        event = self._events.get_published_by_id(event_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+        return self._waitlist.join(user_id=user_id, event_id=event.id)
+
+    def leave(self, *, user_id, event_id) -> bool:
+        """Take somebody off. A no-op if they were not on it — the caller's
+        intent is "I should not be on this list", which is true either way."""
+        return self._waitlist.leave(user_id=user_id, event_id=event_id)
+
+    def forget_for_booking(self, *, user_id, event_id) -> bool:
+        """They bought. Take them off the list.
+
+        Called from this module's `BOOKING_CONFIRMED` observer, which is why
+        `events` still does not import `booking`: it reacts to a domain event
+        rather than reaching across.
+
+        Without it, somebody who bought while the page said sold out — a hold
+        lapsed under them and they refreshed — stays on the list un-notified,
+        and is later emailed "tickets are available" for an event they already
+        have a ticket to. Which reads as the platform not knowing what it sold.
+        """
+        return self._waitlist.leave(user_id=user_id, event_id=event_id)
+
+    # ── the sweeper ─────────────────────────────────────────────────────────
+
+    def notify_available(
+        self,
+        *,
+        event_limit: int = WAITLIST_MAX_EVENTS_PER_SWEEP,
+        cooldown_minutes: int | None = None,
+    ) -> int:
+        """Tell the next batch on every event that has seats again.
+
+        Returns how many people were told. Cheap on an empty result set — one
+        indexed query that finds nothing — which is what lets the schedule run
+        it every two minutes.
+        """
+        now = timezone.now()
+        cooldown = (
+            settings.WAITLIST_NOTIFY_COOLDOWN_MINUTES
+            if cooldown_minutes is None
+            else cooldown_minutes
+        )
+        cooldown_before = now - timedelta(minutes=cooldown)
+
+        event_ids = self._waitlist.events_awaiting_notification(
+            now=now, cooldown_before=cooldown_before, limit=event_limit
+        )
+
+        # ── AND ONLY THE ONES SOMEBODY CAN ACTUALLY BUY FROM ────────────
+        #
+        # `Event.tickets_available` is `Sum(quantity - sold - reserved)` across
+        # every tier and knows nothing about a sale window, so an event whose
+        # only remaining tier opens next month reports a positive number and
+        # sells nothing. This message is nothing but a call to action; sending
+        # it about seats nobody can buy is worse than sending nothing.
+        #
+        # Read through `ticketing`'s repository rather than by importing
+        # `TicketType` — the same one-way seam `duplicate_event` uses, so
+        # `events` still knows nothing about tiers. One query for the whole
+        # candidate page.
+        if event_ids:
+            from apps.ticketing.repositories import TicketTypeRepository
+
+            buyable = TicketTypeRepository().event_ids_with_buyable_inventory(event_ids, now=now)
+            event_ids = [event_id for event_id in event_ids if event_id in buyable]
+
+        told = 0
+        for event_id in event_ids:
+            told += self._notify_one_event(event_id, now=now)
+        if told:
+            logger.info("waitlist.notified", extra={"count": told, "events": len(event_ids)})
+        return told
+
+    def _notify_one_event(self, event_id, *, now) -> int:
+        event = self._events.get_published_by_id(event_id)
+        if event is None:
+            # It stopped being bookable between the candidate query and here.
+            # Nothing to say, and saying it would be worse than silence.
+            return 0
+
+        available = event.tickets_available or 0
+        allowance = min(available * WAITLIST_NOTIFY_PER_SEAT, WAITLIST_MAX_BATCH)
+        if allowance < 1:
+            return 0
+
+        batch = self._waitlist.pending_for_event(event_id=event.id, limit=allowance)
+        if not batch:
+            return 0
+
+        # `notifications` owns the ONE way an event's start time is written for
+        # a human — it is documented there as exactly that, because the ticket
+        # email and the ticket PDF once disagreed with the event page by five
+        # and a half hours. Formatting it a second way here is how that comes
+        # back. Imported lazily so this module still has no notifications
+        # import at module scope; the SENDING dependency is the injected
+        # `WaitlistNotifier` protocol and stays that way.
+        from apps.notifications.templates import format_when
+
+        site = str(getattr(settings, "PUBLIC_SITE_URL", "") or "").rstrip("/")
+        context = {
+            "event_title": event.title,
+            "event_when": format_when(event.starts_at),
+            "event_where": f"{event.venue}, {event.city}",
+            # Blank rather than a guess when the origin is unset: a call to
+            # action pointing at the wrong host is worse than none, and this
+            # message is nothing BUT a call to action.
+            "url": f"{site}/events/{event.id}" if site else "",
+            # What the reader most needs to know, and the one number that keeps
+            # this message honest: it is a heads-up, not a reservation.
+            "tickets_available": available,
+        }
+
+        told = 0
+        for entry in batch:
+            user = entry.user
+            if not user.email:
+                continue
+            try:
+                log = self._notifier.notify(
+                    notification_type=WAITLIST_NOTIFICATION_TYPE,
+                    recipient=user.email,
+                    context={"name": user.full_name, **context},
+                    # ── KEYED ON THE USER ID, NOT THE EMAIL ─────────────
+                    #
+                    # `NotificationLog.dedupe_key` is `CharField(max_length=255)`
+                    # and UNIQUE. An address may be 254 characters on its own,
+                    # so a key built from one can overflow the column and raise
+                    # on insert — for the one person whose address is long,
+                    # after the batch is already half sent. A uuid pair is 82
+                    # characters whoever it belongs to.
+                    #
+                    # Per (event, person), so a redelivered task, an overlapping
+                    # sweep and a retry after a crash all resolve to ONE
+                    # message. Somebody is told about an event exactly once,
+                    # which is what the email itself promises.
+                    dedupe_key=f"waitlist:{event.id}:{user.id}",
+                )
+            except Exception:
+                # ── ONE BAD ROW MUST NOT STRAND THE REST OF THE BATCH ───
+                #
+                # `notify` renders before it claims, so a context key a
+                # template did not expect raises here — and every fan-out in
+                # this codebase loops without isolation, which means one such
+                # row silently costs every recipient after it. The entry is
+                # left pending on purpose: it is retried on the next sweep, and
+                # until it succeeds it is visibly un-notified rather than
+                # marked done.
+                logger.exception(
+                    "waitlist.notify_failed",
+                    extra={"event_id": str(event.id), "waitlist_id": str(entry.id)},
+                )
+                continue
+            if log is None:
+                # A blank recipient, or a channel this deployment has switched
+                # off. Nothing was sent, so nothing is marked — the row stays
+                # pending and is skipped again, which is both the right outcome
+                # and a visible one.
+                continue
+            # AFTER the claim, never before. See the class docstring.
+            self._waitlist.mark_notified(entry.id, when=now)
+            told += 1
+        return told

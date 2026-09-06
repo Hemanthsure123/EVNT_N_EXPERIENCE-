@@ -99,6 +99,24 @@ SCHEDULE: tuple[ScheduledJob, ...] = (
         ),
     ),
     ScheduledJob(
+        task_name="events.waitlist_notify",
+        # Two minutes. This is the ONLY thing that tells somebody a sold-out
+        # event has seats again, and it is deliberately not hung off
+        # `ticketing.release`: seats also come back when an organizer raises a
+        # quantity or edits a tier, and a trigger on the release path would
+        # silently miss every one of those — the "it only works when something
+        # arrives" failure `payments.reconcile_pending` exists to answer.
+        #
+        # Two minutes rather than one because the message is an EMAIL, not a
+        # lock: a minute of latency costs nothing, and the batch a sweep sends
+        # is then given WAITLIST_NOTIFY_COOLDOWN_MINUTES before the next people
+        # on the same event are told. Cheap on an empty result set — one
+        # indexed query that finds nothing.
+        interval_seconds=120,
+        payload={},
+        why="Tells people waiting on a sold-out event that tickets came back.",
+    ),
+    ScheduledJob(
         task_name="notifications.sweep_stuck",
         # Five minutes. A notification stuck between claim and dispatch is a
         # ticket email that never arrived; the customer is at a gate with no QR.

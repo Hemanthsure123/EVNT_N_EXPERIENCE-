@@ -10,8 +10,10 @@ else runs while the lock is held (see CLAUDE.md's reservation contract).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from datetime import datetime
 
-from django.db.models import F, Min, QuerySet, Sum
+from django.db.models import F, Min, Q, QuerySet, Sum
 from django.utils import timezone
 
 from core.base_repository import BaseRepository
@@ -224,6 +226,44 @@ class TicketTypeRepository(BaseRepository[TicketType]):
                 for position, phase in enumerate(phases)
             ]
         )
+
+    def event_ids_with_buyable_inventory(
+        self, event_ids: Sequence[uuid.UUID | str], *, now: datetime
+    ) -> set[uuid.UUID]:
+        """Which of these events have a tier somebody can buy from RIGHT NOW.
+
+        ── WHY `Event.tickets_available` IS NOT THE SAME QUESTION ──────────
+
+        That denormal is `Sum(quantity - sold - reserved)` across every tier,
+        and it does not know about a sale window. An event whose only remaining
+        tier opens next month reports a positive number and sells nothing —
+        `reserve` refuses it with `SaleNotStarted` under the lock, which is
+        correct and is discovered one screen too late.
+
+        The caller is the waiting list (`apps/events`), and for it the
+        difference is the whole point: it exists to send an email saying
+        tickets came back, and an email about seats nobody can buy is worse
+        than no email at all. It reads through this seam rather than importing
+        `TicketType` — the same one-way arrangement `duplicate_event` uses for
+        `copy_ticket_types_to`, so `events` still knows nothing about tiers.
+
+        Soft-deleted tiers are excluded, and the window is compared to the
+        SAME `now` the caller decides everything else with.
+        """
+        if not event_ids:
+            return set()
+        rows = (
+            TicketType.objects.filter(
+                event_id__in=event_ids,
+                deleted_at__isnull=True,
+                quantity__gt=F("sold") + F("reserved"),
+            )
+            .filter(Q(sale_start__isnull=True) | Q(sale_start__lte=now))
+            .filter(Q(sale_end__isnull=True) | Q(sale_end__gte=now))
+            .values_list("event_id", flat=True)
+            .distinct()
+        )
+        return set(rows)
 
     def copy_ticket_types_to(
         self,
