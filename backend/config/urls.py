@@ -42,6 +42,10 @@ urlpatterns = [
     path("api/v1/", include("apps.announcements.urls")),
     path("api/v1/", include("apps.support.urls")),
     path("api/v1/", include("apps.reviews.urls")),
+    # Promotional codes: the organizer's list, and the offers a checkout may
+    # advertise. The code a customer TYPES applies to a booking, so it lives
+    # on apps/booking's routes beside the donation endpoint.
+    path("api/v1/", include("apps.coupons.urls")),
     # notifications is otherwise internal; these are only the push-subscription
     # routes, which exist because a subscription can only be minted by the
     # browser that owns it. See apps/notifications/api.py.

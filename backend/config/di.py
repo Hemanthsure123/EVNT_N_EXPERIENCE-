@@ -567,6 +567,47 @@ def build_crew_service():
     )
 
 
+def build_coupon_service():
+    """An organization's promotional codes — the ORGANIZER's half.
+
+    Its own factory, and separate from `build_coupon_redemption_service` below,
+    because the two services answer to two different people: this one is
+    authorised by the organization's owner, that one acts for a customer at a
+    checkout. Same reason `build_crew_service` is not a method on the content
+    service.
+    """
+    from apps.coupons.repositories import CouponRedemptionRepository, CouponRepository
+    from apps.coupons.services import CouponService
+    from apps.events.repositories import EventRepository
+    from apps.organizations.repositories import OrganizationRepository
+
+    return CouponService(
+        organizations=OrganizationRepository(),
+        coupons=CouponRepository(),
+        redemptions=CouponRedemptionRepository(),
+        events=EventRepository(),
+    )
+
+
+def build_coupon_redemption_service():
+    """The CHECKOUT's half: redeem a code onto a booking, and give it back.
+
+    Constructed by `build_booking_service` and called from inside the booking's
+    own transaction, which is why it takes no ports — every decision it makes
+    is a database one, under a lock the caller already opened a transaction
+    for.
+    """
+    from apps.coupons.repositories import CouponRedemptionRepository, CouponRepository
+    from apps.coupons.services import CouponRedemptionService
+    from apps.events.repositories import EventRepository
+
+    return CouponRedemptionService(
+        coupons=CouponRepository(),
+        redemptions=CouponRedemptionRepository(),
+        events=EventRepository(),
+    )
+
+
 def build_event_moderation_service() -> EventModerationService:
     """A platform operator's decisions on submitted events. Staff-only —
     the view enforces that; this service asks no ownership question."""

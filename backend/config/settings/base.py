@@ -59,6 +59,9 @@ INSTALLED_APPS = [
     "apps.announcements",
     "apps.support",
     "apps.reviews",
+    # Organizer-funded promotional codes. Downstream of events, booking and
+    # ticketing; nothing depends on it.
+    "apps.coupons",
     # The Hire a Band marketplace. Owned by organizations, moderated by the
     # same gate as events - see the module docstring.
     "apps.performers",
