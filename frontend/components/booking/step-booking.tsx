@@ -14,6 +14,7 @@ import { EventSubtitle, FunnelScreen } from './funnel-shell';
 import { Rise, StepTransition } from './motion';
 import { StickyActionBar } from './sticky-action-bar';
 import { TierPicker } from './tier-picker';
+import { SessionPicker } from '@/components/event/session-picker';
 
 /**
  * Screen 1 — choose tickets.
@@ -51,7 +52,8 @@ import { TierPicker } from './tier-picker';
  * exactly where it paused.
  */
 export function BookingStep() {
-  const { event, selection, totals, tiers, booking, setBooking } = useBooking();
+  const { event, selection, totals, tiers, booking, setBooking, query, sessionDays, session, setSession } =
+    useBooking();
   const { status } = useAuth();
   const router = useRouter();
 
@@ -108,8 +110,19 @@ export function BookingStep() {
   }, [booking, setBooking]);
 
   const chosen = totals.ticketCount > 0;
-  const query = selection.length ? `?${SELECTION_PARAM}=${serialiseSelection(selection)}` : '';
-  const reviewHref = `/booking/${event.id}/review${query}`;
+  // ── THE HREF IS BUILT FROM THE WHOLE QUERY, NOT FROM THE SELECTION ──────
+  //
+  // It used to be `?tickets=${serialiseSelection(selection)}`, which discards
+  // every other param. `writeSelection` preserves foreign params, so `session=`
+  // survived a quantity tap and then vanished on Checkout — an intermittent
+  // loss that reads as the picker resetting itself rather than as a routing
+  // bug. Anything else the funnel ever puts in the URL is now carried too.
+  const params = new URLSearchParams(query);
+  const encoded = serialiseSelection(selection);
+  if (encoded) params.set(SELECTION_PARAM, encoded);
+  else params.delete(SELECTION_PARAM);
+  const search = params.toString();
+  const reviewHref = `/booking/${event.id}/review${search ? `?${search}` : ''}`;
 
   const [authOpen, setAuthOpen] = React.useState(false);
   const advance = () => {
@@ -126,7 +139,22 @@ export function BookingStep() {
           <h2 className="text-h3 font-semibold">Choose tickets</h2>
         </Rise>
 
-        <Rise index={1}>
+        {/* ── THE SHOWTIME, ABOVE THE TIERS IT FILTERS ──────────────────
+            Absent for the single-show events that are most of them, and the
+            component returns null on an empty list rather than drawing a
+            control with one option in it.
+
+            It is HERE and not on the event page: `BookingCta` is forbidden
+            from growing a tier list or a quantity control (the ASK ONCE
+            invariant), and a session picker without the tiers it filters
+            would be asking half a question in one place and half in another. */}
+        {sessionDays.length > 0 && session ? (
+          <Rise index={1}>
+            <SessionPicker days={sessionDays} selected={session} onSelect={setSession} />
+          </Rise>
+        ) : null}
+
+        <Rise index={sessionDays.length > 0 ? 2 : 1}>
           <TierPicker />
         </Rise>
 
@@ -137,6 +165,23 @@ export function BookingStep() {
               className="rounded-xl border border-destructive-subtle bg-destructive-subtle p-card text-body-sm text-destructive-subtle-foreground"
             >
               Some tiers no longer have that many left — adjust the quantities to continue.
+            </p>
+          </Rise>
+        ) : null}
+
+        {/* One booking cannot admit somebody to two evenings, and the server
+            cannot refuse it — `POST /bookings` receives tier ids and nothing
+            about sessions. So the guard has to be here, and it has to BLOCK
+            rather than warn: a basket spanning two showtimes that reaches
+            payment issues tickets to a show the buyer did not choose. */}
+        {totals.crossSession ? (
+          <Rise index={2}>
+            <p
+              role="alert"
+              className="rounded-xl border border-destructive-subtle bg-destructive-subtle p-card text-body-sm text-destructive-subtle-foreground"
+            >
+              Those tickets are for different showtimes. Pick one session — a single booking
+              admits you to one show.
             </p>
           </Rise>
         ) : null}
@@ -168,7 +213,7 @@ export function BookingStep() {
         <Button
           size="lg"
           onClick={advance}
-          disabled={!chosen || totals.overAvailable}
+          disabled={!chosen || totals.overAvailable || totals.crossSession}
           className={cn(CTA_PILL_LG, 'shrink-0')}
         >
           Checkout

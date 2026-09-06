@@ -21,6 +21,7 @@ import {
   QuickFacts,
   RunningOrder,
   SectionHeading,
+  Showtimes,
   VenueCard,
 } from '@/components/event/sections';
 import { BookingCta } from '@/components/event/booking-cta';
@@ -29,6 +30,7 @@ import { EventReviews } from '@/components/reviews/event-reviews';
 import { Building2, CalendarClock, HelpCircle, Info, MapPin, ScrollText } from 'lucide-react';
 import type { EventContent } from '@/lib/api/event-content';
 import { LineupRail } from './lineup-rail';
+import { groupSessions } from '@/lib/event/sessions';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import { ClayIcon } from '@/components/illustrations/clay';
 import { inferCategory } from '@/lib/discovery/categories';
@@ -138,7 +140,7 @@ export function EventPageBody({
   // stated, so a new disclosure lands in the body unless it is named here —
   // which is the safe default: the rail is beside the money and has room for
   // two rows, not six.
-  const allDisclosures = buildDisclosures(event, content);
+  const allDisclosures = buildDisclosures(event, content, tiers);
   const bodyItems = allDisclosures.filter((item) => !RAIL_KEYS.includes(item.key));
   const railItems = RAIL_KEYS.map((key) => allDisclosures.find((item) => item.key === key))
     .filter((item): item is Disclosure => Boolean(item))
@@ -431,7 +433,14 @@ function briefDuration(event: EventDetail): string | null {
  * accessibility specifically a "no information" panel reads as a claim that
  * the venue has no provision, which is not what an empty column means.
  */
-function buildDisclosures(event: EventDetail, content: EventContent): Disclosure[] {
+function buildDisclosures(
+  event: EventDetail,
+  content: EventContent,
+  // Needed for the showtimes row: a session's availability is the sum across
+  // the tiers that sell it, so grouping without them would report every show
+  // sold out.
+  tiers: TicketTier[],
+): Disclosure[] {
   const items: Disclosure[] = [];
 
   const facts = [briefDuration(event), event.language?.trim(), event.age_restriction?.trim()]
@@ -469,6 +478,37 @@ function buildDisclosures(event: EventDetail, content: EventContent): Disclosure
       </div>
     ),
   });
+
+  // ── SHOWTIMES ────────────────────────────────────────────────────────
+  //
+  // `content.slots` was fetched on every request of this page and read by
+  // NOTHING. So an event running four nights showed exactly one date, and the
+  // only place the other three existed was the checkout — which somebody
+  // reaches by pressing Book on a date they may not want.
+  //
+  // A READ-ONLY row, deliberately: choosing a showtime belongs to the funnel's
+  // picker, because `BookingCta` must never grow a tier list or a quantity
+  // control (the ASK ONCE invariant) and a session chosen here would have to
+  // travel to a screen that asks again. This says the event runs more than
+  // once and when; the funnel is where it is chosen.
+  //
+  // Absent, not empty: a single-show event has one slot or none, and a
+  // "Showtimes" row listing one time is a control that answers nothing.
+  if (content.slots.length > 1) {
+    const days = groupSessions(content.slots, tiers);
+    const total = days.reduce((sum, day) => sum + day.sessions.length, 0);
+    items.push({
+      key: 'showtimes',
+      icon: <CalendarClock />,
+      label: 'Showtimes',
+      value:
+        days.length > 1
+          ? `${total} shows across ${days.length} dates`
+          : `${total} shows on ${days[0]?.dayLabel ?? formatEventDateLong(event.starts_at)}`,
+      size: 'lg',
+      content: <Showtimes days={days} />,
+    });
+  }
 
   if (content.timeline.length) {
     const first = content.timeline[0];

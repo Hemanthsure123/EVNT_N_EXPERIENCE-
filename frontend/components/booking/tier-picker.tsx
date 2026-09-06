@@ -8,6 +8,7 @@ import { formatFromPrice } from '@/lib/discovery/format';
 import { unitPriceFor } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { useBooking } from './booking-context';
+import { FEW_LEFT } from '@/lib/event/sessions';
 
 /**
  * Choosing tickets.
@@ -48,11 +49,23 @@ import { useBooking } from './booking-context';
  * step, at the same height, so the touch target does not move under the thumb.
  */
 
-/** At or below this many left, a tier is genuinely close to gone. */
-const SELLING_FAST_AT = 10;
+/**
+ * At or below this many left, a tier is genuinely close to gone.
+ *
+ * IMPORTED from `lib/event/sessions`, not declared here. The two used to be
+ * independent constants with the same value, and that module's header requires
+ * them to agree — otherwise a session chip reads "8 left" above tier rows
+ * carrying no "Selling fast" badge, or the reverse, and the page contradicts
+ * itself about urgency on the screen where somebody is deciding.
+ */
+const SELLING_FAST_AT = FEW_LEFT;
 
 export function TierPicker({ className }: { className?: string }) {
-  const { tiers, selection, setQuantity } = useBooking();
+  // `sessionTiers`, NOT `tiers`. For a single-show event they are the same
+  // list; for a multi-session one, `tiers` holds every showtime's rows at once,
+  // so "Gold" at 18:00 and "Gold" at 21:00 would render as two identical lines
+  // distinguished only by whatever the organiser typed into `name`.
+  const { sessionTiers: tiers, sessionDays, selection, setQuantity } = useBooking();
 
   const buyable = tiers.filter((tier) => tier.is_on_sale && tier.available > 0);
   // Compared on what a buyer would actually PAY, not on the face price — with a
@@ -65,9 +78,15 @@ export function TierPicker({ className }: { className?: string }) {
       : undefined;
 
   if (!tiers.length) {
+    // TWO EMPTY STATES, because they mean different things and send somebody
+    // in opposite directions. With sessions on screen, "this event has no
+    // tickets" is false and would send a reader away from an event whose other
+    // showtimes are on sale.
     return (
       <p className="rounded-2xl border border-dashed border-border p-card-lg text-body-sm text-muted-foreground">
-        Ticket tiers for this event haven&apos;t been published yet.
+        {sessionDays.length > 0
+          ? 'No tickets are listed for this session yet. Try another showtime.'
+          : "Ticket tiers for this event haven't been published yet."}
       </p>
     );
   }

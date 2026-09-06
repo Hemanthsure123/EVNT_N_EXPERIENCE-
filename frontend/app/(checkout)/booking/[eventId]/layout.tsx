@@ -2,7 +2,7 @@ import * as React from 'react';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { FunnelShell } from '@/components/booking/funnel-shell';
-import { fetchEventDetail, fetchEventTiers } from '@/lib/api/events';
+import { fetchEventContentSafe, fetchEventDetail, fetchEventTiers } from '@/lib/api/events';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 
 /**
@@ -52,11 +52,25 @@ export default async function BookingLayout({
   params: { eventId: string };
   children: React.ReactNode;
 }) {
-  const [event, tiers] = await Promise.all([getEvent(params.eventId), getTiers(params.eventId)]);
+  // ── SESSIONS ARE FETCHED HERE, ONCE, WITH EVERYTHING ELSE ──────────────
+  //
+  // An event that runs more than once has SLOT-SCOPED TIERS: "Gold" at 18:00
+  // and "Gold" at 21:00 are two rows. Without the slots the picker renders
+  // them as two identical lines distinguished only by whatever the organiser
+  // typed into `name`, and somebody buys the wrong evening.
+  //
+  // `fetchEventContentSafe` never throws — a blip on the content endpoint
+  // degrades a multi-session event to a flat tier list, which is what the
+  // funnel did until now, rather than taking the checkout down.
+  const [event, tiers, content] = await Promise.all([
+    getEvent(params.eventId),
+    getTiers(params.eventId),
+    fetchEventContentSafe(params.eventId, { revalidate: 0 }),
+  ]);
   if (!event) notFound();
 
   return (
-    <FunnelShell event={event} initialTiers={tiers}>
+    <FunnelShell event={event} initialTiers={tiers} slots={content.slots}>
       {children}
     </FunnelShell>
   );

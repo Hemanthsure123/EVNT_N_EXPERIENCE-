@@ -76,7 +76,7 @@ export type SessionDay = {
 
 /** How few is "few" — the same threshold the tier rows use, so one session and
  *  its tiers never disagree about urgency. */
-const FEW_LEFT = 10;
+export const FEW_LEFT = 10;
 
 /**
  * The tiers a given session sells.

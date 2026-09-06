@@ -22,6 +22,26 @@ export type Selection = { tierId: string; quantity: number }[];
 
 export const SELECTION_PARAM = 'tickets';
 
+/**
+ * Which showtime, for an event that runs more than once.
+ *
+ * A SEPARATE param from the selection, and deliberately not a field on
+ * `Selection`. Two reasons, and the second is the money path:
+ *
+ * 1. `slot_id` belongs to the TIER, not to a line. `toBookingItems` sends
+ *    `{ticket_type_id, quantity}` and `CreateBookingRequestSerializer` accepts
+ *    nothing else, so a session inside a line would be refused by the API.
+ * 2. `selectionSignature` feeds `idempotencyKeyFor` and is compared against
+ *    `bookingItemsSignature`, which is built from SERVER items that can never
+ *    carry a slot. Adding it to one side of that comparison makes every live
+ *    reservation read as stale — and the review screen answers a stale hold by
+ *    cancelling and re-reserving it.
+ *
+ * Same split the browse filters make between a named window (`when`) and a
+ * chosen range (`dateFrom`/`dateTo`): related, separately addressed.
+ */
+export const SESSION_PARAM = 'session';
+
 export function parseSelection(value: string | null | undefined): Selection {
   if (!value) return [];
   const seen = new Set<string>();
@@ -97,6 +117,14 @@ export type SelectionTotals = {
   grandTotal: number;
   /** True when a line asks for more than that tier still has. */
   overAvailable: boolean;
+  /**
+   * The basket holds tiers from two different showtimes.
+   *
+   * Blocks Checkout, like `overAvailable` beside it. One booking cannot admit
+   * somebody to two evenings, and the server has no way to refuse it — it only
+   * ever sees tier ids.
+   */
+  crossSession: boolean;
 };
 
 /**
@@ -167,7 +195,35 @@ export function totalsFor(selection: Selection, tiers: TicketTier[]): SelectionT
     // all of it the moment one exists.
     grandTotal: total + platformFee,
     overAvailable: lines.some((line) => line.quantity > line.tier.available),
+    crossSession: spansTwoSessions(lines),
   };
+}
+
+/**
+ * Does this basket span two showtimes?
+ *
+ * ── THE BUG THIS CATCHES ─────────────────────────────────────────────────
+ *
+ * `parseSelection` dedupes on `tierId` alone, so two tiers belonging to two
+ * different sessions both survive and become ONE booking spanning two
+ * evenings. Nothing else notices: `totalsFor` sums them without complaint,
+ * `overAvailable` is per-line, and the backend cannot see it either — it
+ * receives tier ids and nothing about slots.
+ *
+ * It was unreachable while no UI knew sessions existed. It became reachable
+ * the moment the funnel grew a session picker, because switching showtime with
+ * a stale `tickets=` param in the URL is exactly how you build one.
+ *
+ * Tiers with `slot_id === null` are event-wide — they admit to every show — so
+ * they never conflict with anything. Only two DISTINCT non-null slots do.
+ */
+function spansTwoSessions(lines: SelectionLine[]): boolean {
+  const slots = new Set<string>();
+  for (const line of lines) {
+    const slotId = line.tier.slot_id;
+    if (slotId) slots.add(slotId);
+  }
+  return slots.size > 1;
 }
 
 /** The API shape `POST /bookings` expects. */

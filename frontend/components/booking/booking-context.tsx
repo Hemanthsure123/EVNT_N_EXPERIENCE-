@@ -5,8 +5,17 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEventTiers } from '@/lib/api/events';
 import type { Booking, EventDetail, TicketTier } from '@/lib/api/types';
+import type { EventSlot } from '@/lib/api/event-content';
+import {
+  defaultSession,
+  groupSessions,
+  tiersForSession,
+  type Session,
+  type SessionDay,
+} from '@/lib/event/sessions';
 import {
   SELECTION_PARAM,
+  SESSION_PARAM,
   type Selection,
   type SelectionTotals,
   parseSelection,
@@ -101,6 +110,21 @@ type BookingContextValue = {
   hasNavigated: boolean;
   /** The current query string, so links between steps keep the basket. */
   query: string;
+
+  // ── SESSIONS ────────────────────────────────────────────────────────────
+  /** Grouped by day, empty for the single-show events that are most of them. */
+  sessionDays: SessionDay[];
+  /** The chosen showtime, or `null` when the event runs once. */
+  session: Session | null;
+  /**
+   * Choose a showtime. CLEARS THE SELECTION, because the previous session's
+   * tier ids do not exist in the new one — and `totalsFor` silently drops a
+   * tier id it cannot resolve, so a stale basket would quietly empty rather
+   * than error.
+   */
+  setSession: (session: Session) => void;
+  /** The tiers belonging to the chosen session — what the picker renders. */
+  sessionTiers: TicketTier[];
 };
 
 const BookingContext = React.createContext<BookingContextValue | null>(null);
@@ -110,10 +134,12 @@ const TIERS_REFRESH_MS = 60_000;
 export function BookingProvider({
   event,
   initialTiers,
+  slots = [],
   children,
 }: {
   event: EventDetail;
   initialTiers: TicketTier[];
+  slots?: EventSlot[];
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -206,6 +232,50 @@ export function BookingProvider({
 
   const clearSelection = React.useCallback(() => writeSelection([]), [writeSelection]);
 
+  // ── THE CHOSEN SHOWTIME ────────────────────────────────────────────────
+  //
+  // A SEPARATE URL PARAM, never a field on `Selection`, and the reason is the
+  // money path. `selectionSignature` feeds `idempotencyKeyFor` and is compared
+  // against `bookingItemsSignature`, which is built from server items that can
+  // never carry a slot — so a session inside the selection would make every
+  // live reservation compare as STALE, which the review screen answers by
+  // cancelling and re-reserving. This is the same split the date filters make
+  // between a named window and a chosen range.
+  const sessionDays = React.useMemo(() => groupSessions(slots, tiers), [slots, tiers]);
+
+  const session = React.useMemo(() => {
+    if (!sessionDays.length) return null;
+    const requested = searchParams?.get(SESSION_PARAM);
+    const all = sessionDays.flatMap((day) => day.sessions);
+    // An unknown id falls back to the default rather than 404ing the screen:
+    // these arrive in links people share, and a retired showtime should show
+    // the next one rather than an empty checkout.
+    return all.find((candidate) => candidate.slot.id === requested) ?? defaultSession(sessionDays);
+  }, [sessionDays, searchParams]);
+
+  const setSession = React.useCallback(
+    (next: Session) => {
+      const params = new URLSearchParams(window.location.search);
+      params.set(SESSION_PARAM, next.slot.id);
+      // The previous session's tiers do not exist in this one, so the basket
+      // cannot survive the switch. Dropped here rather than left to
+      // `totalsFor`, which silently ignores a tier id it cannot resolve — the
+      // failure would be a basket that quietly empties on the way to pay.
+      params.delete(SELECTION_PARAM);
+      const query = params.toString();
+      window.history.replaceState(null, '', query ? `${pathname}?${query}` : pathname);
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router],
+  );
+
+  // What the picker renders. For a single-show event this is every tier, which
+  // is exactly the behaviour the funnel had before sessions were wired up.
+  const sessionTiers = React.useMemo(
+    () => (session ? tiersForSession(tiers, session.slot.id) : tiers),
+    [session, tiers],
+  );
+
   const totals = React.useMemo(() => totalsFor(selection, tiers), [selection, tiers]);
 
   const value = React.useMemo<BookingContextValue>(
@@ -227,6 +297,10 @@ export function BookingProvider({
       step,
       hasNavigated,
       query: searchParams?.toString() ?? '',
+      sessionDays,
+      session,
+      setSession,
+      sessionTiers,
     }),
     [
       event,
@@ -244,6 +318,10 @@ export function BookingProvider({
       step,
       hasNavigated,
       searchParams,
+      sessionDays,
+      session,
+      setSession,
+      sessionTiers,
     ],
   );
 

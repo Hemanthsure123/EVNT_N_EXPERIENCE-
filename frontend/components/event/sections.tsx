@@ -28,6 +28,7 @@ import { VenueMap } from '@/components/maps/venue-map';
 import type { EventDetail, EventPolicy } from '@/lib/api/types';
 import { inferCategory } from '@/lib/discovery/categories';
 import { tagLabel } from '@/lib/events/taxonomy';
+import { sessionNote, type SessionDay } from '@/lib/event/sessions';
 import { formatEventDateLong, formatEventTime, machineDate } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
 
@@ -581,6 +582,64 @@ const POLICIES: { icon: LucideIcon; title: string; body: string }[] = [
  * over a void, and never "Nothing listed", which reads as a claim that nothing
  * is included.
  */
+/**
+ * Every showtime an event runs, READ ONLY.
+ *
+ * Choosing one belongs to the booking funnel: `BookingCta` is forbidden from
+ * growing a tier list or a quantity control (the ASK ONCE invariant), and a
+ * session picked here would have to travel to a screen that asks again. This
+ * exists so a four-night run does not present itself as a one-night event —
+ * which is what it did while `content.slots` was fetched on every request of
+ * this page and read by nothing.
+ *
+ * A SOLD-OUT SHOW STAYS ON SCREEN, marked. Knowing Friday has gone is what
+ * makes Saturday make sense, and dropping it silently looks like the event has
+ * fewer nights than the poster said. Same rule the session picker follows.
+ */
+export function Showtimes({ days }: { days: SessionDay[] }) {
+  if (!days.length) return null;
+  return (
+    <div className="flex flex-col gap-5">
+      {days.map((day) => (
+        <section key={day.dayKey} className="flex flex-col gap-2">
+          <h3 className="text-body font-semibold text-foreground">{day.dayLabel}</h3>
+          <ul className="flex flex-wrap gap-2">
+            {day.sessions.map((session) => {
+              const note = sessionNote(session);
+              const gone = session.state === 'sold_out' || session.state === 'not_on_sale';
+              return (
+                <li
+                  key={session.slot.id}
+                  className={cn(
+                    'flex flex-col rounded-lg border px-3 py-2',
+                    gone ? 'border-border bg-sunken' : 'border-border bg-surface',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'text-body-sm font-medium',
+                      gone ? 'text-muted-foreground line-through' : 'text-foreground',
+                    )}
+                  >
+                    {session.timeLabel}
+                  </span>
+                  {session.label ? (
+                    <span className="text-caption text-muted-foreground">{session.label}</span>
+                  ) : null}
+                  {/* The note is the only place a number appears, and it comes
+                      from the same helper the picker uses — so the page and
+                      the checkout can never disagree about what is left. */}
+                  {note ? <span className="text-caption text-muted-foreground">{note}</span> : null}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function EventInclusions({
   included,
   excluded,

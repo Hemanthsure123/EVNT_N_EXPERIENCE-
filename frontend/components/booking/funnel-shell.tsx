@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
+import type { EventSlot } from '@/lib/api/event-content';
 import { cancelBooking } from '@/lib/api/bookings';
 import { bumpAllAttemptsForEvent } from '@/lib/booking/attempt';
 import { Button } from '@/components/ui/button';
@@ -49,14 +50,17 @@ import { CTA_PILL_LG } from './cta';
 export function FunnelShell({
   event,
   initialTiers,
+  slots,
   children,
 }: {
   event: EventDetail;
   initialTiers: TicketTier[];
+  /** Empty for a single-show event, which is most of them. */
+  slots?: EventSlot[];
   children: React.ReactNode;
 }) {
   return (
-    <BookingProvider event={event} initialTiers={initialTiers}>
+    <BookingProvider event={event} initialTiers={initialTiers} slots={slots ?? []}>
       {children}
     </BookingProvider>
   );
