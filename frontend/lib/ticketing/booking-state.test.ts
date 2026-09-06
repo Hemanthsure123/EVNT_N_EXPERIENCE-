@@ -27,6 +27,8 @@ function booking(overrides: Partial<MyBooking> = {}): MyBooking {
     total_amount: 101000,
     platform_fee: 1000,
     donation: 0,
+    discount: 0,
+    coupon_code: null,
     event_id: 'e1',
     event_title: 'Headline Show',
     event_slug: 'headline-show',

@@ -5,7 +5,15 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Loader2, Ticket, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cancelBooking, createBooking, setBookingDonation } from '@/lib/api/bookings';
+import { useQuery } from '@tanstack/react-query';
+import {
+  applyBookingCoupon,
+  cancelBooking,
+  clearBookingCoupon,
+  createBooking,
+  setBookingDonation,
+} from '@/lib/api/bookings';
+import { fetchEventOffersSafe } from '@/lib/api/events';
 import { ApiError } from '@/lib/api/errors';
 import type { Booking } from '@/lib/api/types';
 import { attemptFor, bumpAttempt } from '@/lib/booking/attempt';
@@ -23,6 +31,8 @@ import {
   toBookingItems,
 } from '@/lib/booking/selection';
 import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
+import { CouponCard } from './coupon-card';
+import { cn } from '@/lib/utils/cn';
 import { CTA_PILL_LG } from './cta';
 import { useBooking } from './booking-context';
 import { DonationCard, RuleHeading } from './donation-card';
@@ -423,6 +433,77 @@ export function ReviewStep() {
     })();
   };
 
+  // ── THE PROMOTIONAL CODE ────────────────────────────────────────────────
+  //
+  // Written to the BOOKING for the same reason the donation is: `total_amount`
+  // is the number the payment order is created for AND the number the webhook
+  // amount-checks against, so a discount that existed only on screen would put
+  // one figure on the pay button and charge another.
+  //
+  // NOT optimistic, and that is the difference from the donation. A donation is
+  // an amount the customer chose, so showing it immediately and reconciling is
+  // honest. A discount is the SERVER's to compute — how much a code is worth
+  // depends on terms and caps this screen does not have — so guessing it would
+  // put a number on the total that nothing had decided. The row shows a pending
+  // state instead, and the total moves once.
+  const [couponPending, setCouponPending] = React.useState(false);
+  const [couponError, setCouponError] = React.useState<string | null>(null);
+
+  /**
+   * The codes the organiser chose to ADVERTISE.
+   *
+   * `Safe` — it never throws. This is enrichment on the screen somebody is
+   * paying on: if it blips, the field still works and a typed code still
+   * applies, which is the entire reason the section exists. Taking a checkout
+   * down because an offers list failed would be the wrong trade by a wide
+   * margin.
+   */
+  const offersQuery = useQuery({
+    queryKey: ['event-offers', event.id],
+    queryFn: () => fetchEventOffersSafe(event.id),
+    staleTime: 30_000,
+  });
+  const offers = offersQuery.data ?? [];
+
+  const applyCoupon = (code: string) => {
+    if (!booking || couponPending) return;
+    setCouponError(null);
+    setCouponPending(true);
+    void (async () => {
+      try {
+        setBooking(await applyBookingCoupon(booking.id, code), reservedFor);
+      } catch (thrown) {
+        // The SERVER's sentence, verbatim. Every refusal carries its own code —
+        // expired, fully claimed, already used, wrong event — and each sends
+        // somebody somewhere different; "Invalid code" sends them nowhere.
+        setCouponError(
+          thrown instanceof ApiError
+            ? thrown.message
+            : 'We could not apply that just now. Nothing has changed.',
+        );
+      } finally {
+        setCouponPending(false);
+      }
+    })();
+  };
+
+  const clearCoupon = () => {
+    if (!booking || couponPending) return;
+    setCouponError(null);
+    setCouponPending(true);
+    void (async () => {
+      try {
+        setBooking(await clearBookingCoupon(booking.id), reservedFor);
+      } catch {
+        setCouponError('We could not remove that just now. Nothing has changed.');
+      } finally {
+        setCouponPending(false);
+      }
+    })();
+  };
+
+  const discount = booking?.discount ?? 0;
+
   // `POST /bookings` returns a SUMMARY — no line items (only `GET /bookings/{id}`
   // carries them). So the lines come from the selection that was just sent,
   // which is the same data by construction. `unit_price` is the tier's EFFECTIVE
@@ -461,7 +542,13 @@ export function ReviewStep() {
    * however the lock priced them.
    */
   const orderAmount = booking
-    ? booking.total_amount - booking.platform_fee - booking.donation
+    ? // `total_amount` contains the fee and the donation and has already had
+      // the discount taken off, so recovering what the TICKETS cost means
+      // adding it back. Without that term this row understates the order by
+      // exactly the discount and the column below stops adding up — which is
+      // the same class of bug the comment above was written for, one line
+      // further on.
+      booking.total_amount - booking.platform_fee - booking.donation + booking.discount
     : lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
   const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
 
@@ -731,6 +818,18 @@ export function ReviewStep() {
                   charged on top now, so it is a row between the order amount and
                   the total — a charge the customer pays that is not on its own
                   line is the definition of a hidden fee. */}
+              {/* The one row that COMES OFF, drawn only when there is one.
+                  Named with the code, because "Discount −₹100" leaves somebody
+                  wondering which of the three codes they were sent worked. */}
+              {discount > 0 ? (
+                <SummaryRow
+                  label={
+                    booking?.coupon_code ? `Discount (${booking.coupon_code})` : 'Discount'
+                  }
+                  value={discount}
+                  credit
+                />
+              ) : null}
               <SummaryRow label="Fees and charges" value={fee} />
               {donation > 0 ? <SummaryRow label="Donation" value={donation} /> : null}
             </div>
@@ -744,13 +843,30 @@ export function ReviewStep() {
                   Once the write lands the two are the same number by
                   construction: `total_amount` IS subtotal + fee + donation. */}
               <span className="text-h4 tabular-nums text-foreground">
-                {formatFromPrice(booking ? orderAmount + fee + donation : total)}
+                {/* Summed from the rows ABOVE it, discount included, so the
+                    column a reader checks by hand cannot disagree with the
+                    number they are about to pay. */}
+                {formatFromPrice(booking ? orderAmount - discount + fee + donation : total)}
               </span>
             </div>
           </div>
         </Rise>
 
-        {/* ── AN OFFER, AFTER THE TOTAL ───────────────────────────────────── */}
+        {/* ── A CODE, AND AN OFFER, AFTER THE TOTAL ──────────────────────── */}
+        <Rise index={3}>
+          <CouponCard
+            appliedCode={booking?.coupon_code ?? null}
+            discount={discount}
+            offers={offers}
+            pending={couponPending}
+            error={couponError}
+            onApply={applyCoupon}
+            onClear={clearCoupon}
+            /* No hold, no booking to attach a code to. The card draws nothing
+               at all in that state rather than a field that cannot work. */
+            disabled={!booking}
+          />
+        </Rise>
         <Rise index={3}>
           <DonationCard
             value={donation}
@@ -815,11 +931,33 @@ export function ReviewStep() {
   );
 }
 
-function SummaryRow({ label, value }: { label: string; value: number }) {
+function SummaryRow({
+  label,
+  value,
+  /**
+   * An amount that COMES OFF. Drawn with a leading minus and in the success
+   * colour, the same way `components/ticketing/bill-lines.tsx` draws a credit —
+   * one vocabulary across the five money surfaces, so a discount looks like a
+   * discount wherever somebody meets it.
+   */
+  credit = false,
+}: {
+  label: string;
+  value: number;
+  credit?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-4">
       <span className="text-body-sm text-muted-foreground">{label}</span>
-      <span className="text-body-sm tabular-nums text-foreground">{formatFromPrice(value)}</span>
+      <span
+        className={cn(
+          'text-body-sm tabular-nums',
+          credit ? 'text-success-subtle-foreground' : 'text-foreground',
+        )}
+      >
+        {credit ? '−' : ''}
+        {formatFromPrice(Math.abs(value))}
+      </span>
     </div>
   );
 }

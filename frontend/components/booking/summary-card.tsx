@@ -27,9 +27,11 @@ import { HoldTimer } from './hold-timer';
  * - **No taxes line.** The backend returns `total_amount` and `platform_fee` and
  *   nothing else; there is no tax field, so an itemised tax row would be a
  *   number nobody computed.
- * - **No promo code field.** There is no coupon endpoint. An input that always
- *   answers "invalid code" is worse than no input — it implies discounts exist
- *   and that you failed to find one.
+ * - **No promo code field HERE.** There is one now (`coupon-card.tsx`), and it
+ *   lives in the step body beside the payment summary rather than in this card.
+ *   This is a running summary that never unmounts; a control that writes to the
+ *   booking belongs on the screen that is asking about it, and a second copy of
+ *   it would be two inputs racing one another for the same field.
  * - **The platform fee is shown, never added.** It is the platform's cut taken
  *   OUT of the total at settlement, not a surcharge, so it appears as a note
  *   under the total rather than as a line above it. Adding it would overstate
@@ -57,6 +59,9 @@ export function SummaryCard({ className }: { className?: string }) {
   // selection is the best available answer.
   const total = booking?.total_amount ?? totals.total;
   const fee = booking?.platform_fee ?? totals.platformFee;
+  // A discount only ever exists once a booking does — it is applied to the
+  // hold, not to a selection — so there is no `totals` fallback for it.
+  const discount = booking?.discount ?? 0;
   // `phase_name` is the label the server RECORDED at reserve time, so a line
   // stays truthfully "Early bird" even after the phase itself has lapsed. Before
   // a booking exists the selection's live phase is the best answer there is.
@@ -175,6 +180,20 @@ export function SummaryCard({ className }: { className?: string }) {
       </motion.div>
 
       <div className="hidden flex-col gap-1 border-t border-border pt-stack-lg lg:flex">
+        {/* THE LINES ABOVE HAVE TO SUM TO THE TOTAL BELOW. `total_amount` has
+            already had the discount taken off, so without this row the column
+            is short by exactly it — on a running summary somebody checks by
+            eye against the step beside it. */}
+        {discount > 0 ? (
+          <div className="flex items-baseline justify-between gap-4 pb-1">
+            <span className="min-w-0 truncate text-body-sm text-muted-foreground">
+              {booking?.coupon_code ? `Discount (${booking.coupon_code})` : 'Discount'}
+            </span>
+            <span className="shrink-0 text-body-sm tabular-nums text-success-subtle-foreground">
+              −{formatFromPrice(discount)}
+            </span>
+          </div>
+        ) : null}
         <div className="flex items-baseline justify-between gap-4">
           <span className="text-body font-semibold text-foreground">Total</span>
           <AnimatedNumber

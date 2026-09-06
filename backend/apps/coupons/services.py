@@ -56,6 +56,7 @@ from .exceptions import (
     CouponNotFoundError,
     CouponNotStartedError,
     CouponUnknownError,
+    CouponWorthNothingError,
     CouponWrongEventError,
     InvalidCouponError,
 )
@@ -556,6 +557,11 @@ class CouponRedemptionService:
         )
 
         discount = discount_on(self._terms_of(locked), subtotal_minor=subtotal_minor)
+        if discount <= 0:
+            # A code worth nothing is refused rather than recorded. It keeps
+            # `discount_amount_minor > 0` and "a redemption exists" the SAME
+            # question, which every reader of the booking row relies on.
+            raise CouponWorthNothingError()
         self._check_leaves_something_to_charge(
             subtotal_minor=subtotal_minor,
             discount_minor=discount,

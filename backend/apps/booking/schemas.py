@@ -93,10 +93,26 @@ class BookingSummarySerializer(serializers.ModelSerializer):
     #: which are added — so the checkout's own arithmetic is
     #: `sum(items) - discount + platform_fee + donation == total_amount`.
     discount = serializers.IntegerField(source="discount_amount_minor", read_only=True)
-    # There is deliberately no `coupon_code` here. This serializer answers
-    # WRITE responses, whose instance is a plain model rather than a joined
-    # read, so resolving the code would cost one extra query on the money path
-    # for a string the caller just sent. The detail read carries it.
+    coupon_code = serializers.SerializerMethodField()
+
+    def get_coupon_code(self, obj) -> str | None:
+        """The code that produced `discount`, or null.
+
+        ── THE ZERO GUARD IS WHAT MAKES THIS FREE ──────────────────────────
+
+        This serializer answers WRITE responses, whose instance is a plain
+        model rather than a joined read — so touching the reverse OneToOne
+        would cost a query. It cannot, for a booking with no discount: a
+        redemption worth nothing is REFUSED (`CouponWorthNothingError`), so
+        `discount_amount_minor > 0` and "a redemption exists" are the same
+        question. Every booking created, cancelled or donated to therefore
+        returns here without a statement, and only the coupon endpoints — where
+        a row was just written and the answer is the point — pay for one.
+        """
+        if not obj.discount_amount_minor:
+            return None
+        redemption = getattr(obj, "coupon_redemption", None)
+        return redemption.coupon.code if redemption is not None else None
 
     class Meta:
         model = Booking
@@ -108,6 +124,7 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             "platform_fee",
             "donation",
             "discount",
+            "coupon_code",
             "hold_expires_at",
             "payment_order_id",
             "created_at",

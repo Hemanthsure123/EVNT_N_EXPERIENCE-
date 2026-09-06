@@ -26,6 +26,7 @@ from apps.coupons.exceptions import (
     CouponLeavesNothingToChargeError,
     CouponNotStartedError,
     CouponUnknownError,
+    CouponWorthNothingError,
     CouponWrongEventError,
 )
 from apps.coupons.models import CouponKind, CouponRedemption
@@ -474,3 +475,64 @@ class TestReleasing:
         result = redeem(redemption_service, event=event, booking=booking, user=buyer, code="TWO")
 
         assert result.code == "TWO"
+
+
+class TestACodeWorthNothing:
+    """`discount_amount_minor > 0` and "a redemption exists" must stay the SAME
+    question — every reader of the booking row relies on it, including the
+    serializer that decides whether to look for a code at all.
+    """
+
+    def test_a_discount_that_rounds_to_nothing_is_refused(
+        self, redemption_service, make_coupon, event, buyer, make_booking
+    ):
+        """1% of 50 paise truncates to zero, because rounding goes DOWN so a
+        coupon is never worth more than it says. Somebody who typed a code and
+        watched the total not move has been told nothing."""
+        make_coupon(code="ONEPCT", kind=CouponKind.PERCENT, value=1)
+
+        with pytest.raises(CouponWorthNothingError):
+            redeem(
+                redemption_service,
+                event=event,
+                booking=make_booking(subtotal_minor=50),
+                user=buyer,
+                code="ONEPCT",
+                subtotal_minor=50,
+                donation_minor=10_000,
+            )
+
+    def test_nothing_is_written_when_it_is_refused(
+        self, redemption_service, make_coupon, event, buyer, make_booking
+    ):
+        coupon = make_coupon(code="ONEPCT", kind=CouponKind.PERCENT, value=1)
+
+        with pytest.raises(CouponWorthNothingError):
+            redeem(
+                redemption_service,
+                event=event,
+                booking=make_booking(subtotal_minor=50),
+                user=buyer,
+                code="ONEPCT",
+                subtotal_minor=50,
+                donation_minor=10_000,
+            )
+
+        assert CouponRedemption.objects.filter(coupon_id=coupon.id).count() == 0
+
+    def test_one_paise_IS_a_discount(
+        self, redemption_service, make_coupon, event, buyer, make_booking
+    ):
+        """The rule is "worth nothing", not "worth little". Refusing a real if
+        tiny saving would be a rule nobody asked for."""
+        make_coupon(code="ONEPCT", kind=CouponKind.PERCENT, value=1)
+
+        result = redeem(
+            redemption_service,
+            event=event,
+            booking=make_booking(subtotal_minor=10_000),
+            user=buyer,
+            code="ONEPCT",
+            subtotal_minor=10_000,
+        )
+        assert result.discount_minor == 100

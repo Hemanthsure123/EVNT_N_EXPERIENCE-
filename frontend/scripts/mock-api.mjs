@@ -726,6 +726,84 @@ const reservedByTier = new Map(); // tier id -> quantity held
  */
 const PLATFORM_FEE_BPS = 100;
 const platformFeeFor = (subtotal) => Math.floor((subtotal * PLATFORM_FEE_BPS + 5_000) / 10_000);
+/**
+ * ── PROMOTIONAL CODES ────────────────────────────────────────────────────
+ *
+ * A fixture must be exactly as generous as the contract and no more. The
+ * CANCEL endpoint was once missing here entirely, which meant four call sites
+ * silently 404'd in local dev and the behaviour they existed for had never
+ * been observed — so these mirror `apps/coupons` closely enough that the
+ * checkout's refusal branches can actually be walked:
+ *
+ * - `MINE` is exhausted after its single redemption, so `coupon_exhausted` is
+ *   reachable.
+ * - `GONE` has already ended, so `coupon_expired` is.
+ * - `ALLOFIT` covers the whole order, so `coupon_leaves_nothing_to_charge` is.
+ * - `SUMMER20` and `FLAT100` are the ordinary happy paths, and the two that
+ *   are ADVERTISED — the others are private codes, which is what a promo code
+ *   usually is.
+ *
+ * Each carries the same fields the real `Coupon` row does, and `redeemed` is a
+ * count rather than a flag for the same reason the backend counts redemption
+ * ROWS: releasing one has to give it back.
+ */
+const MOCK_COUPONS = new Map(
+  [
+    { code: 'SUMMER20', kind: 'percent', value: 20, advertised: true },
+    { code: 'FLAT100', kind: 'fixed', value: 10_000, advertised: true },
+    { code: 'CAPPED', kind: 'percent', value: 50, max_discount_minor: 5_000, advertised: true },
+    { code: 'MINE', kind: 'percent', value: 25, max_redemptions: 1 },
+    { code: 'GONE', kind: 'percent', value: 25, expires_at: '2020-01-01T00:00:00Z' },
+    { code: 'ALLOFIT', kind: 'percent', value: 100 },
+  ].map((coupon, index) => [
+    coupon.code,
+    {
+      id: fixtureId(90_000 + index),
+      max_discount_minor: null,
+      max_redemptions: null,
+      max_per_user: 1,
+      advertised: false,
+      expires_at: null,
+      redeemed: 0,
+      ...coupon,
+    },
+  ]),
+);
+
+/** Matches backend `MIN_PAYABLE_TOTAL_MINOR` — Razorpay's ₹1 floor. */
+const MIN_PAYABLE_TOTAL_MINOR = 100;
+
+/**
+ * `apps/coupons/discounts.discount_on`, to the paise.
+ *
+ * Rounds DOWN, and is capped at the subtotal. A fixture that rounded the other
+ * way would show a discount the backend then refuses to honour, which is
+ * exactly the disagreement the shared rule exists to prevent.
+ */
+function discountOn(coupon, subtotal) {
+  if (subtotal <= 0) return 0;
+  const raw =
+    coupon.kind === 'percent'
+      ? Math.floor((subtotal * Math.max(0, Math.min(coupon.value, 100))) / 100)
+      : Math.max(0, coupon.value);
+  const capped = coupon.max_discount_minor ? Math.min(raw, coupon.max_discount_minor) : raw;
+  return Math.min(capped, subtotal);
+}
+
+/** The ticket subtotal of a booking — from its LINE ITEMS, like the backend. */
+const ticketSubtotal = (booking) =>
+  booking.items.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
+
+/** Rewrite a booking's money after its discount moved. One place, like `_reprice`. */
+function repriceBooking(booking, discount, code) {
+  const subtotal = ticketSubtotal(booking);
+  booking.discount = discount;
+  booking.coupon_code = code;
+  booking.platform_fee = platformFeeFor(subtotal - discount);
+  booking.total_amount = subtotal - discount + booking.platform_fee + booking.donation;
+  booking.payment_order_id = `order_fixture_${booking.id}_${discount}_${booking.donation}`;
+}
+
 /** Matches backend DONATION_MAX_MINOR. */
 const DONATION_MAX_MINOR = 100_000;
 /**
@@ -1452,6 +1530,8 @@ const server = createServer((req, res) => {
         total_amount: grandTotal,
         platform_fee: platformFee,
         donation,
+        discount: 0,
+        coupon_code: null,
         hold_expires_at: new Date(Date.now() + HOLD_MS).toISOString(),
         payment_order_id: `order_fixture_${bookings.size + 1}`,
         items,
@@ -1700,6 +1780,107 @@ const server = createServer((req, res) => {
   // it does NOT touch `reservedByTier`. A donation is not inventory, and a
   // fixture that released and re-reserved here would let a real release/reserve
   // bug through every test that used it.
+  // ── Apply / remove a promotional code ───────────────────────────────
+  //
+  // Beside the donation endpoint because it is the same shape: it moves the
+  // MONEY on a live hold and never touches `reservedByTier`. Applying a second
+  // code REPLACES the first, and a refusal leaves the booking exactly as it
+  // was — a fixture that cleared the old code before failing would hide the
+  // transaction the real service relies on.
+  const couponMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/coupon\/?$/);
+  if (couponMatch && (req.method === 'POST' || req.method === 'DELETE')) {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(couponMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    if (booking.status !== 'reserved') {
+      return authError(
+        res,
+        req,
+        409,
+        'booking_not_modifiable',
+        booking.status === 'paid'
+          ? 'This booking is already paid, so its total can no longer change.'
+          : 'Your hold has expired and these tickets were released, so nothing can be added to this booking.',
+      );
+    }
+
+    const release = () => {
+      if (booking.coupon_code) {
+        const held = MOCK_COUPONS.get(booking.coupon_code);
+        if (held) held.redeemed = Math.max(0, held.redeemed - 1);
+      }
+    };
+
+    if (req.method === 'DELETE') {
+      // Idempotent, and it does NOT churn the order when there was nothing to
+      // remove — a different order id for the same amount is a change the
+      // browser absorbs for nothing.
+      if (booking.coupon_code || booking.discount) {
+        release();
+        repriceBooking(booking, 0, null);
+      }
+      const { user_email: _ignored, ...payload } = booking;
+      sendJson(req, res, 200, payload, 'private, no-store');
+      return;
+    }
+
+    void readBody(req).then((body) => {
+      const typed = String(body.code ?? '').trim().toUpperCase();
+      const coupon = MOCK_COUPONS.get(typed);
+      // A code that does not exist and one an organizer switched off answer
+      // identically, exactly as the backend does — confirming a real code
+      // tells a guesser they found a live prefix.
+      if (!coupon) {
+        return authError(res, req, 422, 'coupon_not_found', 'That code isn’t valid.');
+      }
+      if (coupon.expires_at && Date.parse(coupon.expires_at) <= Date.now()) {
+        return authError(res, req, 422, 'coupon_expired', 'That code has expired.');
+      }
+      // The old redemption comes back BEFORE the caps are checked, so
+      // re-applying the same code to a booking that already has it works.
+      const previousCode = booking.coupon_code;
+      const previousDiscount = booking.discount;
+      release();
+      if (coupon.max_redemptions !== null && coupon.redeemed >= coupon.max_redemptions) {
+        if (previousCode) MOCK_COUPONS.get(previousCode).redeemed += 1;
+        return authError(res, req, 422, 'coupon_exhausted', 'That code has been fully claimed.');
+      }
+
+      const subtotal = ticketSubtotal(booking);
+      const discount = discountOn(coupon, subtotal);
+      if (discount <= 0) {
+        if (previousCode) MOCK_COUPONS.get(previousCode).redeemed += 1;
+        return authError(
+          res,
+          req,
+          422,
+          'coupon_worth_nothing',
+          'That code takes nothing off this order.',
+        );
+      }
+      if (subtotal - discount + booking.donation < MIN_PAYABLE_TOTAL_MINOR) {
+        if (previousCode) MOCK_COUPONS.get(previousCode).redeemed += 1;
+        return authError(
+          res,
+          req,
+          422,
+          'coupon_leaves_nothing_to_charge',
+          'That code covers more than this order — it can’t be used here.',
+        );
+      }
+
+      coupon.redeemed += 1;
+      repriceBooking(booking, discount, coupon.code);
+      void previousDiscount;
+      const { user_email: _ignored, ...payload } = booking;
+      sendJson(req, res, 200, payload, 'private, no-store');
+    });
+    return;
+  }
+
   const donationMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/donation\/?$/);
   if (donationMatch && req.method === 'POST') {
     const user = authenticate(req);
@@ -1799,6 +1980,39 @@ const server = createServer((req, res) => {
       return;
     }
     sendJson(req, res, 200, buildContent(all[index], index, all), DETAIL_CACHE_CONTROL);
+    return;
+  }
+
+  // ── The codes an organizer chose to ADVERTISE ───────────────────────
+  //
+  // Public and identical for everyone. Exhausted codes are excluded here as
+  // they are on the server: a checkout listing a code beside a field that
+  // answers "that code has been fully claimed" is the platform advertising a
+  // discount it will then refuse.
+  const offersMatch = path.match(/^\/api\/v1\/events\/([^/]+)\/offers\/?$/);
+  if (offersMatch) {
+    const event = buildEvents().find((e) => e.id === offersMatch[1]);
+    if (!event) {
+      sendJson(req, res, 404, {
+        error: { code: 'event_not_found', message: 'Event not found.', details: {} },
+      });
+      return;
+    }
+    const data = [...MOCK_COUPONS.values()]
+      .filter((coupon) => coupon.advertised)
+      .filter((coupon) => !coupon.expires_at || Date.parse(coupon.expires_at) > Date.now())
+      .filter(
+        (coupon) => coupon.max_redemptions === null || coupon.redeemed < coupon.max_redemptions,
+      )
+      .map((coupon) => ({
+        id: coupon.id,
+        code: coupon.code,
+        kind: coupon.kind,
+        value: coupon.value,
+        max_discount_minor: coupon.max_discount_minor,
+        expires_at: coupon.expires_at,
+      }));
+    sendJson(req, res, 200, { data }, 'public, max-age=30, s-maxage=60');
     return;
   }
 

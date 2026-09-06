@@ -13,7 +13,7 @@
 import { api } from './client';
 import { isApiError } from './errors';
 import type { EventContent } from './event-content';
-import type { EventCard, EventDetail, Paginated, TicketTier } from './types';
+import type { EventCard, EventDetail, Paginated, PublicOffer, TicketTier } from './types';
 
 /** Matches the backend's `s-maxage` for the public list. */
 export const PUBLIC_LIST_REVALIDATE_SECONDS = 30;
@@ -191,3 +191,39 @@ export async function fetchEventsSafe(
     };
   }
 }
+
+/**
+ * The promotional codes an organizer chose to ADVERTISE on this event.
+ *
+ * Public and identical for everyone, so it rides the same short edge cache the
+ * backend sets on it (30s browser / 60s shared). It carries the terms and never
+ * the limits: publishing "3 left" on a public read turns a promotion into a
+ * race.
+ *
+ * Exhausted codes are already excluded server-side. A checkout listing a code
+ * beside a field that answers "that code has been fully claimed" is the
+ * platform advertising a discount it will then refuse.
+ *
+ * NEVER throws, and an empty list means NO OFFERS SECTION rather than an empty
+ * panel — most events run no codes at all, and a blank "Offers" heading reads
+ * as an organizer who forgot. A failure here must not cost anybody the screen
+ * they are paying on.
+ */
+export async function fetchEventOffersSafe(eventId: string): Promise<PublicOffer[]> {
+  try {
+    const body = await api.get<{ data: PublicOffer[] }>(
+      `/events/${encodeURIComponent(eventId)}/offers`,
+      { auth: false, next: { revalidate: PUBLIC_OFFERS_REVALIDATE_SECONDS } },
+    );
+    return body.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Matches the backend's own `max-age` on that endpoint. A longer window here
+ * would show a code that has since been claimed; a shorter one would ask again
+ * for a list that changes hourly at most.
+ */
+const PUBLIC_OFFERS_REVALIDATE_SECONDS = 30;

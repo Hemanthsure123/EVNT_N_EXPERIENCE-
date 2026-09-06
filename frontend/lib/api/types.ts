@@ -352,6 +352,24 @@ export type Booking = {
   platform_fee: number;
   /** Optional charitable donation the buyer added. Included in `total_amount`. */
   donation: number;
+  /**
+   * What a promotional code took off the ticket subtotal, in minor units.
+   *
+   * SUBTRACTED from `total_amount`, unlike `platform_fee` and `donation`,
+   * which are added — so the bill's own arithmetic is
+   * `sum(items) - discount + platform_fee + donation === total_amount`.
+   */
+  discount: number;
+  /**
+   * The code that produced `discount`, or null.
+   *
+   * On every booking payload, read and write. It costs the server nothing to
+   * answer where there is no discount, because a redemption worth zero is
+   * refused — so `discount > 0` and "a code is applied" are the same question,
+   * and the serializer returns null without a query for every booking that has
+   * neither.
+   */
+  coupon_code: string | null;
   hold_expires_at: string | null;
   payment_order_id: string | null;
   items?: BookingItem[];
@@ -387,6 +405,16 @@ export type MyBooking = {
   total_amount: number;
   platform_fee: number;
   donation: number;
+  /**
+   * What a promotional code took off the ticket subtotal, in minor units.
+   *
+   * SUBTRACTED from `total_amount`, unlike `platform_fee` and `donation`,
+   * which are added — so the bill's own arithmetic is
+   * `sum(items) - discount + platform_fee + donation === total_amount`.
+   */
+  discount: number;
+  /** The code that produced `discount`, or null. Joined by the list query. */
+  coupon_code: string | null;
 
   event_id: string;
   event_title: string;
@@ -422,4 +450,29 @@ export type CreateBookingResponse = {
 export type TokenPair = {
   access: string;
   refresh: string;
+};
+
+/**
+ * One advertised promotional code on an event's checkout —
+ * `GET /events/{id}/offers`.
+ *
+ * Deliberately NOT the whole coupon. `max_redemptions` and `max_per_user` are
+ * the organizer's business, and publishing "3 left" on a public read turns a
+ * promotion into a race. What is here is what a customer needs to decide
+ * whether to type it: what it takes off, any ceiling on that, and when it ends.
+ *
+ * A code that is exhausted, scheduled, expired or switched off is not in the
+ * list at all — advertising a discount the checkout will then refuse is worse
+ * than showing nothing.
+ */
+export type PublicOffer = {
+  id: string;
+  code: string;
+  kind: 'percent' | 'fixed';
+  /** A whole percent when `kind` is `percent`, otherwise minor units. */
+  value: number;
+  /** A ceiling on a percentage, in minor units. Null means no ceiling. */
+  max_discount_minor: number | null;
+  /** Null when the organizer set no end date. */
+  expires_at: string | null;
 };

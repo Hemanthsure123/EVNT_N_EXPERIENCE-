@@ -16,17 +16,23 @@ import { cn } from '@/lib/utils/cn';
  *
  *     total_amount ALREADY CONTAINS platform_fee AND donation.
  *
- * The ticket subtotal is `total_amount - platform_fee - donation`, and adding
- * either back on overstates a charge on a screen somebody is about to pay or
- * has just paid. `bookingBill()` below is the single implementation, so a
- * fifth surface cannot re-derive it differently.
+ * ...and SUBTRACTS `discount`. So the ticket subtotal is
+ * `total_amount - platform_fee - donation + discount`, and getting any term
+ * of that wrong overstates or understates a charge on a screen somebody is
+ * about to pay or has just paid. `bookingBill()` below is the single
+ * implementation, so a fifth surface cannot re-derive it differently.
  *
  * ── LINES THAT DO NOT EXIST ARE ABSENT, NOT ZERO ──────────────────────────
  *
- * There is no discount, no coupon, no tax and no second fee anywhere in this
- * platform — one `platform_fee` at `PLATFORM_FEE_BPS` and an optional
- * donation, and that is the entire list. A "Discount −₹0.00" row would be a
- * claim that a discount mechanism exists. A zero donation is simply not drawn.
+ * There is no tax and no second fee anywhere in this platform — one
+ * `platform_fee` at `PLATFORM_FEE_BPS`, an optional donation, and an optional
+ * promotional discount. That is the entire list. A zero donation is simply not
+ * drawn, and neither is a discount on a booking that carries no code.
+ *
+ * This note used to say there was no discount either, which was true until
+ * `apps/coupons` shipped. The `discount` is the one line that SUBTRACTS, so it
+ * is drawn as a credit and the subtotal fallback below has to add it back —
+ * `total - fee - donation` is the DISCOUNTED subtotal, not the ticket one.
  */
 
 export type BillLine = {
@@ -52,18 +58,34 @@ export type BillLine = {
 export function bookingBill(
   booking: Pick<Booking | MyBooking, 'total_amount' | 'platform_fee' | 'donation'> & {
     items?: BookingItem[];
+    /** Absent on a payload that predates coupons; read as no discount. */
+    discount?: number;
+    coupon_code?: string | null;
   },
 ): { lines: BillLine[]; subtotal: number; total: number } {
   const items = booking.items ?? [];
+  const discount = booking.discount ?? 0;
   const subtotal = items.length
     ? items.reduce((sum, line) => sum + line.unit_price * line.quantity, 0)
-    : booking.total_amount - booking.platform_fee - booking.donation;
+    : // `total - fee - donation` is the subtotal AFTER the discount, so the
+      // discount goes back on to recover what the tickets cost. Without this
+      // the fallback understates the ticket line by exactly the discount and
+      // the column stops adding up to the total beneath it.
+      booking.total_amount - booking.platform_fee - booking.donation + discount;
 
   const lines: BillLine[] = [
     {
       label: items.length === 1 ? ticketLabel(items[0]) : 'Tickets',
       amount: subtotal,
       hint: items.length > 1 ? items.map(ticketLabel).join(' · ') : items[0]?.phase_name ?? undefined,
+    },
+    // The ONE line that comes off. Named with the code where the payload
+    // carries it — "Discount −₹100" leaves somebody wondering which of the
+    // three codes they were sent actually worked.
+    {
+      label: booking.coupon_code ? `Discount (${booking.coupon_code})` : 'Discount',
+      amount: discount || null,
+      credit: true,
     },
     // ONE fee, named for what it is. Splitting it into a "convenience fee" and
     // something else would be inventing a second charge; see the platform-fee

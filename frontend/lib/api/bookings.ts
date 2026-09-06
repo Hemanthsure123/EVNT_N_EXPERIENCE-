@@ -101,3 +101,44 @@ export const setBookingDonation = (bookingId: string, donationMinor: number) =>
  */
 export const cancelBooking = (bookingId: string) =>
   api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/cancel`, {});
+
+/**
+ * Apply a promotional code to a live hold. `POST` again to REPLACE it.
+ *
+ * Its own call rather than a field on `createBooking`, for the same reason the
+ * donation is: the hold is taken when the review screen opens and the code is
+ * typed while reading that screen. Applying it at create would mean either
+ * re-reserving for every code somebody tries — where the tier could be gone by
+ * the second reserve, so trying a code could cost them their seats — or folding
+ * the code into the idempotency key, which mints a new key per attempt on the
+ * money path.
+ *
+ * The backend decides the discount under the COUPON's row lock, inside the
+ * transaction that already holds the booking's, and prices it against the
+ * booking's own line items — which were priced under the tier locks when the
+ * hold was taken. Nothing about the money is sent from here, and nothing sent
+ * from here is trusted: only the code.
+ *
+ * A refusal is a `422` whose `code` names the reason — `coupon_not_found`,
+ * `coupon_expired`, `coupon_exhausted`, `coupon_already_used`,
+ * `coupon_wrong_event`, `coupon_leaves_nothing_to_charge` — so the field can
+ * say what is actually wrong instead of "invalid code". Its `message` is
+ * written to be shown verbatim.
+ *
+ * Replacing is safe: the backend releases the old redemption and takes the new
+ * one in ONE transaction, so a refused second code leaves the first in place.
+ */
+export const applyBookingCoupon = (bookingId: string, code: string) =>
+  api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/coupon`, { code });
+
+/**
+ * Take the code back off, and put the redemption back in the pool.
+ *
+ * Idempotent — a booking with no code answers `200` unchanged and does not
+ * churn the payment order, so this is safe to call without checking first.
+ * Answers with the booking rather than `204` because the caller needs the new
+ * total, and making it re-read would be a second round trip on a screen where
+ * the number just moved.
+ */
+export const clearBookingCoupon = (bookingId: string) =>
+  api.delete<Booking>(`/bookings/${encodeURIComponent(bookingId)}/coupon`);

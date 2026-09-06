@@ -279,6 +279,28 @@ export type CreateTicketTypeInput = {
   sale_end?: string | null;
   max_per_order?: number;
   phases?: SalePhaseInput[];
+  /**
+   * Cheaper per-ticket prices once somebody buys this many at once.
+   *
+   * DECLARED HERE rather than left to a conditional spread, which is the whole
+   * lesson of the `category` bug in CLAUDE.md: an undeclared field passes
+   * type-checking (a conditional spread bypasses excess-property checks) and
+   * then nobody notices when it stops being sent. A field the save engine
+   * writes must be a field this type names.
+   */
+  group_bands?: GroupBandInput[];
+};
+
+/**
+ * One group price. `min_quantity` is INCLUSIVE — the band applies at exactly
+ * that many tickets — and the server refuses one at a single ticket, one dearer
+ * than the tier's own price, and one beyond `max_per_order`, because each of
+ * those is a control that could never fire or would overcharge.
+ */
+export type GroupBandInput = {
+  min_quantity: number;
+  /** Minor units (paise). */
+  price_minor: number;
 };
 
 export type UpdateTicketTypeInput = Partial<CreateTicketTypeInput> & { version: number };

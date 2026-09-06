@@ -42,6 +42,7 @@ __all__ = [
     "CouponNotStartedError",
     "CouponRejectedError",
     "CouponUnknownError",
+    "CouponWorthNothingError",
     "CouponWrongEventError",
     "InvalidCouponError",
 ]
@@ -197,3 +198,25 @@ class CouponAlreadyAppliedError(ConflictError):
 
     def __init__(self) -> None:
         super().__init__("This booking already has a code on it.")
+
+
+class CouponWorthNothingError(CouponRejectedError):
+    """The discount rounds to nothing on this order.
+
+    Only reachable where the terms and the subtotal are both tiny — 1% of a
+    ₹0.50 line truncates to zero, and rounding goes DOWN so that a coupon is
+    never worth more than it says. Refused rather than applied, for two
+    reasons that both matter:
+
+    somebody who typed a code and watched the total not move has been told
+    nothing; and a redemption row worth zero would consume one of the
+    organizer's uses AND make "this booking has a discount" and "this booking
+    has a code" two different questions — which every surface that reads
+    `discount_amount_minor` to decide whether to look for a code would then get
+    wrong.
+    """
+
+    code = "coupon_worth_nothing"
+
+    def __init__(self) -> None:
+        super().__init__("That code takes nothing off this order.")
