@@ -199,6 +199,24 @@ handler, which normalizes them into the same envelope).
 - API tests use `rest_framework.test.APIClient` and assert on status codes
   and the response/error envelope shape, not on side effects (side effects
   belong in service/handler tests).
+- **Every test starts with an empty rate-limit budget** (`backend/conftest.py`,
+  autouse). `BurstAnonThrottle` is a DEFAULT throttle class and
+  `AnonRateThrottle` keys on client IP, so every `APIClient` request in the
+  suite arrives from `127.0.0.1` and shares ONE 120/min bucket — measured by
+  `SimpleRateThrottle` as a sliding window over WALL CLOCK, with nothing about
+  it per-test. That makes exhausting it **a function of how fast the machine
+  is**: the same commit ran 2873 tests in ~200s locally and passed, and in 91.7s
+  on a 2-vCPU CI runner and returned `429` to five ticketing tests that had
+  nothing wrong with them. Do NOT weaken the rates in `config/settings/test` to
+  fix that class of failure — `core/tests/test_throttling.py` refuses it twice
+  in docstrings, because a test passing against an override is testing a rate
+  that does not ship, and this limiter has already been silently broken once in
+  exactly that way. Clearing is safe to do before every test precisely because
+  `django.core.cache` and the application's cache are **different stores** here:
+  everything the app caches goes through `CachePort`, and DRF's throttling is
+  the one thing reaching for Django's cache directly — so the cold/warm query
+  budgets pinned in CI cannot move. `core/tests/test_suite_isolation.py` pins
+  both halves.
 
 ## Performance checklist (every module must satisfy this)
 
