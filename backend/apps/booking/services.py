@@ -33,6 +33,7 @@ from django.contrib.auth.models import BaseUserManager
 from django.db import IntegrityError
 from django.utils import timezone
 
+from apps.coupons.services import CouponRedemptionService
 from apps.events.repositories import EventContentRepository, EventRepository
 from apps.ticketing.repositories import TicketTypeRepository
 from apps.ticketing.services import TicketingService
@@ -99,6 +100,11 @@ class BookingService:
         #: keep working — it is a stateless reader, and `config/di.py` passes
         #: one explicitly on the real path.
         event_content: EventContentRepository | None = None,
+        #: The coupon redemption rule. Defaulted for the same reason
+        #: `event_content` is — it holds no ports, only repositories, and every
+        #: decision it makes is a database one under a lock this service's own
+        #: transaction opened.
+        coupons: CouponRedemptionService | None = None,
         payments: PaymentPort,
         cache: CachePort,
         qr_secret: str,
@@ -112,6 +118,7 @@ class BookingService:
         self._ticketing = ticketing
         self._events = events
         self._event_content = event_content or EventContentRepository()
+        self._coupons = coupons or CouponRedemptionService()
         self._payments = payments
         self._cache = cache
         self._qr_secret = qr_secret
@@ -614,6 +621,12 @@ class BookingService:
                 raise BookingNotCancellableError(booking.status)
 
             self._release_items(booking_id)
+            # And the coupon, if one was on it. Without this a code with fifty
+            # uses is exhausted by fifty people who abandoned their checkout —
+            # the coupon-shaped version of leaking held inventory. It takes no
+            # coupon lock (the redemption rows ARE the count), so it cannot
+            # order one against the tier locks just taken above.
+            self._coupons.release_for_booking(booking_id=booking_id)
             booking.status = BookingStatus.CANCELLED
             self._bookings.save(booking)
             uow.publish(
@@ -699,6 +712,147 @@ class BookingService:
 
         return self._ensure_payment_order(booking)
 
+    # --- SetCoupon ---------------------------------------------------------
+
+    def _ticket_subtotal_minor(self, booking_id) -> int:
+        """What the tickets cost, from the LINE ITEMS.
+
+        The items are the invoice. They were priced under the tier locks when
+        the hold was taken, and they are what the checkout renders as rows — so
+        deriving the subtotal from anything else is how a total stops adding up
+        to the lines above it, which on this path is not a display bug.
+
+        Recovering it by arithmetic on the row (`total - fee - donation +
+        discount`) would give the same answer while the invariant holds, and a
+        silently different one the first time it does not.
+        """
+        return sum(
+            item.unit_price_minor * item.quantity for item in self._bookings.list_items(booking_id)
+        )
+
+    def _reprice(self, booking: Booking, *, subtotal_minor: int, discount_minor: int) -> None:
+        """Rewrite the money on a live hold. Caller holds the booking's lock.
+
+        ONE place computes the total, so the fee can never be taken on a
+        different subtotal from the one the discount came off:
+
+            total = subtotal - discount + platform_fee(subtotal - discount)
+                    + donation
+
+        The fee follows the discount because the ORGANIZER funds it — see
+        `apps/coupons/models.py`. `payment_order_id` is dropped so
+        `_ensure_payment_order` issues a new one for the new amount: leaving a
+        stale order would guarantee the webhook's amount check refuses a
+        payment that was in every other sense fine, and auto-refunds it.
+        """
+        charged_subtotal = subtotal_minor - discount_minor
+        booking.discount_amount_minor = discount_minor
+        booking.platform_fee_minor = self._platform_fee_for(charged_subtotal)
+        booking.total_amount_minor = (
+            charged_subtotal + booking.platform_fee_minor + booking.donation_amount_minor
+        )
+        booking.payment_order_id = ""
+        self._bookings.save(booking)
+
+    def set_coupon(
+        self, *, booking_id: uuid.UUID | str, actor_id: uuid.UUID | str, code: str
+    ) -> Booking:
+        """Apply a promotional code to a live hold, and re-issue its order.
+
+        ── WHY THIS IS NOT PART OF `create_booking` ──────────────────────────
+
+        The same reason `set_donation` is not: the hold is taken when the review
+        screen opens, and the code is typed while reading that screen. Doing it
+        at create would mean either re-reserving for every code somebody tries —
+        a release-and-reserve cycle over a decision with nothing to do with
+        stock, where the tier could be gone by the second reserve, so TRYING A
+        CODE COULD COST SOMEBODY THEIR SEATS — or folding the code into the
+        idempotency key, which would mint a new key per attempt on the money
+        path and defeat the double-tap protection it exists for.
+
+        ── LOCK ORDER: BOOKING, THEN COUPON ──────────────────────────────────
+
+        The booking row is locked here and the coupon row inside `redeem`, in
+        that order, always. It is the only place the two are held together, so
+        there is exactly one ordering in the system. Nothing reserves, so no
+        tier lock is involved.
+
+        ── REPLACING A CODE IS RELEASE-THEN-REDEEM, IN ONE TRANSACTION ───────
+
+        A booking carries at most one code (`CouponRedemption.booking` is a
+        OneToOne), so applying a second releases the first. Both happen inside
+        this transaction, so a refused second code rolls the release back and
+        the original stays — the customer does not lose a working discount by
+        mistyping the next one.
+
+        Only while the hold is live: a paid booking's amount is settled, and a
+        cancelled or expired one has nothing to pay.
+        """
+        with UnitOfWork():
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None:
+                raise BookingNotFoundError(str(booking_id))
+            if str(booking.user_id) != str(actor_id):
+                raise NotBookingOwnerError()
+            if booking.status != BookingStatus.RESERVED:
+                raise BookingNotModifiableError(booking.status)
+
+            self._coupons.release_for_booking(booking_id=booking.id)
+            subtotal = self._ticket_subtotal_minor(booking.id)
+            redemption = self._coupons.redeem(
+                event_id=booking.event_id,
+                user_id=booking.user_id,
+                booking_id=booking.id,
+                code=code,
+                subtotal_minor=subtotal,
+                donation_minor=booking.donation_amount_minor,
+            )
+            self._reprice(
+                booking, subtotal_minor=subtotal, discount_minor=redemption.discount_minor
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="booking.coupon_applied",
+                target_type="booking",
+                target_id=str(booking.id),
+            )
+
+        return self._ensure_payment_order(booking)
+
+    def clear_coupon(self, *, booking_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Booking:
+        """Take the code back off, and put the redemption back in the pool.
+
+        Idempotent: a booking with no code returns unchanged and issues no new
+        payment order — churning one over a no-op would hand the browser a
+        different order id for the same amount.
+        """
+        with UnitOfWork():
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None:
+                raise BookingNotFoundError(str(booking_id))
+            if str(booking.user_id) != str(actor_id):
+                raise NotBookingOwnerError()
+            if booking.status != BookingStatus.RESERVED:
+                raise BookingNotModifiableError(booking.status)
+
+            released = self._coupons.release_for_booking(booking_id=booking.id)
+            if not released and booking.discount_amount_minor == 0:
+                return booking
+
+            self._reprice(
+                booking,
+                subtotal_minor=self._ticket_subtotal_minor(booking.id),
+                discount_minor=0,
+            )
+            record_audit(
+                actor_id=str(actor_id),
+                action="booking.coupon_cleared",
+                target_type="booking",
+                target_id=str(booking.id),
+            )
+
+        return self._ensure_payment_order(booking)
+
     # --- ReleaseExpired (the sweeper / reliability backstop) ---------------
 
     def release_expired_bookings(self, *, limit: int = 100) -> int:
@@ -728,6 +882,7 @@ class BookingService:
                 return False
 
             self._release_items(booking_id)
+            self._coupons.release_for_booking(booking_id=booking_id)
             booking.status = BookingStatus.EXPIRED
             self._bookings.save(booking)
             uow.publish(

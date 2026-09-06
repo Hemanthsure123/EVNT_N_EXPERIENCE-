@@ -16,6 +16,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
+
+# The code field's bounds belong to `coupons`, and one definition of them is
+# why this is imported rather than restated: a booking endpoint that
+# accepted a 40-character code the coupon module refuses would 422 from the
+# service instead of 400 from the boundary, for the same input.
+from apps.coupons.schemas import ApplyCouponRequestSerializer
 from config.di import build_booking_service
 from core.throttling import ShareReceiptThrottle
 
@@ -171,6 +177,53 @@ class BookingDonationView(APIView):
             actor_id=cast(User, request.user).id,
             donation_minor=payload.validated_data["donation_minor"],
         )
+        return _no_store(Response(BookingSummarySerializer(booking).data))
+
+
+class BookingCouponView(APIView):
+    """Apply or remove a promotional code on a live hold.
+
+    Beside the donation endpoint, and for the same reason: the hold is taken
+    when the review screen opens and the code is typed while reading it, so the
+    amount changes after the booking exists. Applying it at CREATE would mean
+    re-reserving for every code somebody tries — and the tier could be gone by
+    the second reserve, so trying a code could cost them their seats.
+
+    `POST` is also how a code is REPLACED. The service releases whatever was on
+    the booking and redeems the new one inside one transaction, so a refused
+    second code leaves the first in place rather than costing the customer a
+    working discount for a typo.
+
+    Every rule — ownership, the live-hold check, the coupon's window and caps,
+    and the discount itself — is decided in the service against locked rows.
+    The view only parses.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=ApplyCouponRequestSerializer, responses={200: BookingSummarySerializer})
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = ApplyCouponRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_booking_service()
+        booking = service.set_coupon(
+            booking_id=booking_id,
+            actor_id=cast(User, request.user).id,
+            code=payload.validated_data["code"],
+        )
+        return _no_store(Response(BookingSummarySerializer(booking).data))
+
+    @extend_schema(request=None, responses={200: BookingSummarySerializer})
+    def delete(self, request: Request, booking_id: str) -> Response:
+        """Idempotent — a booking with no code answers 200 unchanged.
+
+        200 with the booking rather than 204: the caller needs the new total,
+        and making it re-read is a second round trip on a screen where the
+        number just moved.
+        """
+        service = build_booking_service()
+        booking = service.clear_coupon(booking_id=booking_id, actor_id=cast(User, request.user).id)
         return _no_store(Response(BookingSummarySerializer(booking).data))
 
 

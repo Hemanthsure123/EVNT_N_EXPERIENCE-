@@ -88,6 +88,15 @@ class BookingSummarySerializer(serializers.ModelSerializer):
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
     donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
+    #: What a promotional code took off the ticket subtotal, in minor units.
+    #: SUBTRACTED from `total_amount`, unlike `platform_fee` and `donation`,
+    #: which are added — so the checkout's own arithmetic is
+    #: `sum(items) - discount + platform_fee + donation == total_amount`.
+    discount = serializers.IntegerField(source="discount_amount_minor", read_only=True)
+    # There is deliberately no `coupon_code` here. This serializer answers
+    # WRITE responses, whose instance is a plain model rather than a joined
+    # read, so resolving the code would cost one extra query on the money path
+    # for a string the caller just sent. The detail read carries it.
 
     class Meta:
         model = Booking
@@ -98,6 +107,7 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             "total_amount",
             "platform_fee",
             "donation",
+            "discount",
             "hold_expires_at",
             "payment_order_id",
             "created_at",
@@ -132,9 +142,28 @@ class BookingDetailSerializer(serializers.ModelSerializer):
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
     donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
+    #: What a promotional code took off the ticket subtotal, in minor units.
+    #: SUBTRACTED from `total_amount`, unlike `platform_fee` and `donation`,
+    #: which are added — so the checkout's own arithmetic is
+    #: `sum(items) - discount + platform_fee + donation == total_amount`.
+    discount = serializers.IntegerField(source="discount_amount_minor", read_only=True)
+    coupon_code = serializers.SerializerMethodField()
     items = BookingItemSerializer(many=True, read_only=True)
     # Empty until the booking is paid — tickets don't exist before that.
     tickets = BookingTicketSerializer(many=True, read_only=True)
+
+    def get_coupon_code(self, obj) -> str | None:
+        """The code that produced `discount`, or null.
+
+        Free: the reverse OneToOne and its coupon are `select_related` by the
+        repository method behind this response, so this is a column off a row
+        already joined rather than a query per booking. Written as a method
+        field because a reverse OneToOne raises `RelatedObjectDoesNotExist`
+        rather than returning None when there is no row, which a plain source
+        path cannot survive.
+        """
+        redemption = getattr(obj, "coupon_redemption", None)
+        return redemption.coupon.code if redemption is not None else None
 
     class Meta:
         model = Booking
@@ -146,6 +175,8 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "total_amount",
             "platform_fee",
             "donation",
+            "discount",
+            "coupon_code",
             "hold_expires_at",
             "payment_order_id",
             "items",
@@ -194,6 +225,25 @@ class MyBookingSerializer(serializers.ModelSerializer):
     total_amount = serializers.IntegerField(source="total_amount_minor", read_only=True)
     platform_fee = serializers.IntegerField(source="platform_fee_minor", read_only=True)
     donation = serializers.IntegerField(source="donation_amount_minor", read_only=True)
+    #: What a promotional code took off the ticket subtotal, in minor units.
+    #: SUBTRACTED from `total_amount`, unlike `platform_fee` and `donation`,
+    #: which are added — so the checkout's own arithmetic is
+    #: `sum(items) - discount + platform_fee + donation == total_amount`.
+    discount = serializers.IntegerField(source="discount_amount_minor", read_only=True)
+    coupon_code = serializers.SerializerMethodField()
+
+    def get_coupon_code(self, obj) -> str | None:
+        """The code that produced `discount`, or null.
+
+        Free: the reverse OneToOne and its coupon are `select_related` by the
+        repository method behind this response, so this is a column off a row
+        already joined rather than a query per booking. Written as a method
+        field because a reverse OneToOne raises `RelatedObjectDoesNotExist`
+        rather than returning None when there is no row, which a plain source
+        path cannot survive.
+        """
+        redemption = getattr(obj, "coupon_redemption", None)
+        return redemption.coupon.code if redemption is not None else None
 
     #: Annotated by `BookingRepository.list_for_user`. `default=0` keeps the
     #: serializer total against a row loaded without the annotation.
@@ -214,6 +264,8 @@ class MyBookingSerializer(serializers.ModelSerializer):
             "total_amount",
             "platform_fee",
             "donation",
+            "discount",
+            "coupon_code",
             "event_id",
             "event_title",
             "event_slug",

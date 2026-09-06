@@ -59,6 +59,21 @@ class Booking(models.Model):
     # a donation is given, not paid for. The one exception is a booking that
     # never issued a ticket at all; see `refundable_amount_minor`.
     donation_amount_minor = models.PositiveIntegerField(default=0)
+    # What a promotional code took off the ticket subtotal, decided under that
+    # coupon's row lock (see apps/coupons). SUBTRACTED from total_amount_minor,
+    # which therefore means:
+    #
+    #     total = subtotal - discount + platform_fee + donation
+    #
+    # The organizer funds it, so `platform_fee_minor` is recomputed on the
+    # DISCOUNTED subtotal whenever this moves — a fee on face value would bill
+    # a percentage of money nobody paid — and the Route transfer shrinks with
+    # it automatically, since it is already `total - fee - donation`.
+    #
+    # This column is a MIRROR of `CouponRedemption.amount_minor`, which is the
+    # financial record; it lives here so the checkout, the receipt and every
+    # money read can show the line without joining another module's table.
+    discount_amount_minor = models.PositiveIntegerField(default=0)
     # Set after commit, outside the reserve transaction (the external payment
     # order call must never happen under a DB lock).
     payment_order_id = models.CharField(max_length=255, blank=True, default="")

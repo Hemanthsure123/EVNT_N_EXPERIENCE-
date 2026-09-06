@@ -227,6 +227,10 @@ class _Payment:
 
     amount_display: str = ""
     platform_fee_display: str = ""
+    #: "SAVE20 · -₹100.00" when a promotional code was used, "" otherwise. The
+    #: string is composed by the handler, because the code and the amount live
+    #: on a row this module must not reach for.
+    discount_display: str = ""
     reference: str = ""
     method: str = ""
     paid_at: str = ""
@@ -237,6 +241,7 @@ class _Payment:
             (
                 self.amount_display,
                 self.platform_fee_display,
+                self.discount_display,
                 self.reference,
                 self.method,
                 self.paid_at,
@@ -260,6 +265,7 @@ def _payment_block(ctx: dict) -> _Payment | None:
     block = _Payment(
         amount_display=str(raw.get("amount_display") or ""),
         platform_fee_display=str(raw.get("platform_fee_display") or ""),
+        discount_display=str(raw.get("discount_display") or ""),
         reference=str(raw.get("reference") or ""),
         method=str(raw.get("method") or ""),
         paid_at=str(raw.get("paid_at") or ""),
@@ -398,6 +404,11 @@ def _ticket_delivery(ctx: dict) -> RenderedMessage:
         # total, so presenting it as a surcharge would be a number the buyer
         # was never charged.
         facts_rows.append(("Includes platform fee", payment.platform_fee_display))
+    if payment is not None and payment.discount_display:
+        # ABSENT when there was no code, never a zero row. The amount above is
+        # already the discounted one, so this says WHY it is what it is rather
+        # than being a figure to subtract from it.
+        facts_rows.append(("Discount applied", payment.discount_display))
     if payment is not None and payment.method:
         facts_rows.append(("Paid by", payment.method))
 

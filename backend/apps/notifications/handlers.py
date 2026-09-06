@@ -70,6 +70,24 @@ def handle_user_registered(payload: dict) -> None:
     )
 
 
+def discount_row(booking) -> dict[str, str]:
+    """The promotional code's line, or nothing at all.
+
+    ABSENT rather than a zero. A receipt reading "Discount ₹0.00" invites the
+    reader to work out what went wrong with a discount they never had.
+
+    `coupon_redemption` is joined by `get_detail`, so naming the code costs no
+    query — and the amount comes off the REDEMPTION row rather than being
+    recomputed from the coupon's terms, which the organizer may have edited
+    since. A receipt is a record of what somebody paid.
+    """
+    redemption = getattr(booking, "coupon_redemption", None)
+    if redemption is None or not redemption.amount_minor:
+        return {}
+    saved = _amount_display(redemption.amount_minor)
+    return {"discount_display": f"{redemption.coupon.code} · -{saved}"}
+
+
 def handle_booking_confirmed(payload: dict) -> None:
     """BOOKING_CONFIRMED -> the ticket delivery email (event + reference + QR),
     an SMS confirmation, and a push. The most important message in the system.
@@ -148,6 +166,7 @@ def handle_booking_confirmed(payload: dict) -> None:
             "reference": payment.rzp_payment_id,
             "paid_at": format_when(payment.updated_at),
             "status_label": payment.get_status_display(),
+            **discount_row(booking),
         }
     else:
         # NO PAYMENT ROW, BUT THE BOOKING IS PAID. `confirm_booking` is what
@@ -168,6 +187,7 @@ def handle_booking_confirmed(payload: dict) -> None:
         payment_context = {
             "amount_display": _amount_display(booking.total_amount_minor),
             "platform_fee_display": _amount_display(booking.platform_fee_minor),
+            **discount_row(booking),
         }
 
     # The ticket delivery email — event details + booking reference + the QR(s).

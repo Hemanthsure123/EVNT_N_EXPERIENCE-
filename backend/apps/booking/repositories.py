@@ -222,7 +222,14 @@ class BookingRepository(BaseRepository[Booking]):
         select_related on the same row's FK chain, and the query budgets this
         method is measured against (4 for GET /bookings/{id}) do not move."""
         return (
-            Booking.objects.select_related("event", "event__organization")
+            # `coupon_redemption__coupon` is a LEFT JOIN on a reverse
+            # OneToOne, so it costs no extra statement and the response can
+            # name the code that produced the discount line. Without it the
+            # serializer resolves it per booking, which is an N+1 the moment
+            # this shape is reused for a list.
+            Booking.objects.select_related(
+                "event", "event__organization", "coupon_redemption__coupon"
+            )
             .prefetch_related(
                 Prefetch("items", queryset=BookingItem.objects.select_related("ticket_type")),
                 Prefetch(
@@ -261,7 +268,10 @@ class BookingRepository(BaseRepository[Booking]):
         while standing outside a venue.
         """
         return (
-            Booking.objects.select_related("event")
+            # The redemption is joined for the same reason the event is: every
+            # row that used a code renders it, and resolving that per row is an
+            # N+1 on a purchase history.
+            Booking.objects.select_related("event", "coupon_redemption__coupon")
             .filter(user_id=user_id)
             .annotate(
                 ticket_count=Count("tickets", distinct=True),

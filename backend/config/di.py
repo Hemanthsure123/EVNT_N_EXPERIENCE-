@@ -659,6 +659,7 @@ def build_booking_service() -> BookingService:
         ticket_types=TicketTypeRepository(),
         ticketing=build_ticketing_service(),
         events=EventRepository(),
+        coupons=build_coupon_redemption_service(),
         event_content=EventContentRepository(),
         payments=payment_port(),
         cache=cache_port(),
