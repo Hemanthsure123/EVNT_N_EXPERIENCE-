@@ -210,6 +210,126 @@ export function DateField({
 }
 
 /**
+ * A plain date, and a plain time — two controls over ONE `datetime-local`.
+ *
+ * The single-day half of the schedule step. An organiser running one evening
+ * answers "which day" once and "from when to when" twice, and asking for the
+ * date a second time in the End field is a question whose answer they have
+ * already given — and can get wrong, which is how an event ends the day before
+ * it starts.
+ *
+ * ── WHY NOT SPLIT `Draft` INTO date AND time FIELDS ───────────────────────
+ *
+ * Because the API takes two datetimes and the model must not grow a shape only
+ * one screen uses. The composition happens HERE, at the edge, and everything
+ * downstream keeps seeing the `YYYY-MM-DDTHH:mm` string it always saw.
+ *
+ * `min` arrives as a `datetime-local` string and is SLICED for the date input.
+ * A `type="date"` control silently ignores a `min` carrying a time — it does
+ * not error, it just stops constraining, and the past quietly becomes
+ * selectable again.
+ */
+export function DateTimeField({
+  id,
+  label,
+  day,
+  time,
+  onChange,
+  hint,
+  error,
+  min,
+  timeLabel = 'Time',
+}: {
+  id: string;
+  label: string;
+  day: string;
+  time: string;
+  /** Called with both halves; the caller composes. */
+  onChange: (next: { day: string; time: string }) => void;
+  hint?: string;
+  error?: string;
+  /** A `datetime-local` string. Sliced to a date for the date input. */
+  min?: string;
+  timeLabel?: string;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} />
+      <div className="grid grid-cols-2 gap-2">
+        <Input
+          id={id}
+          type="date"
+          value={day}
+          min={min ? min.slice(0, 10) : undefined}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy || undefined}
+          onChange={(event) => onChange({ day: event.target.value, time })}
+        />
+        <Input
+          id={`${id}-time`}
+          type="time"
+          value={time}
+          aria-label={`${label} — ${timeLabel}`}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy || undefined}
+          onChange={(event) => onChange({ day, time: event.target.value })}
+        />
+      </div>
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+/**
+ * A time with no date — the End field while an event runs on one day.
+ *
+ * The date is the START's, composed by the caller. Offering a second date
+ * picker in single-day mode would ask a question already answered, and a
+ * mismatched pair is how an event ends before it begins.
+ *
+ * NO `min`. A time input's `min` is a wall-clock bound with no notion of the
+ * day, so `min="19:00"` on an end time would refuse a midnight finish — the
+ * ordering rule is a real comparison of two datetimes and it already lives in
+ * `validate()`, which is where an error belongs.
+ */
+export function TimeOnlyField({
+  id,
+  label,
+  value,
+  onChange,
+  hint,
+  error,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  error?: string;
+}) {
+  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} value={label} />
+      <Input
+        id={id}
+        type="time"
+        value={value}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy || undefined}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <Messages id={id} hint={hint} error={error} />
+    </div>
+  );
+}
+
+/**
  * A one-of-many field, wired the same way as the text ones.
  *
  * Radix's `Select` is not a native `<select>`, so `htmlFor` alone would not

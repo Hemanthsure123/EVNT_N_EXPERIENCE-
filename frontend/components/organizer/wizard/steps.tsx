@@ -7,7 +7,11 @@ import {
   CITY_MAX,
   TITLE_MAX,
   VENUE_MAX,
+  dayPart,
   isDraftUntouched,
+  joinDateTime,
+  spansMultipleDays,
+  timePart,
   toLocalInput,
   type Draft,
   type Issue,
@@ -20,6 +24,8 @@ import { VenueAutocomplete, type VenueSelection } from '@/components/maps/venue-
 import { cn } from '@/lib/utils/cn';
 import {
   DateField,
+  DateTimeField,
+  TimeOnlyField,
   FieldFrame,
   NeedsSavedDraft,
   Section,
@@ -418,32 +424,110 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
   // letting someone choose a date the API will reject.
   const nowLocal = toLocalInput(new Date().toISOString());
 
+  // DERIVED from the dates, with a manual override held only in component
+  // state. `null` means "nobody has said", so the layout follows the data —
+  // which is what makes an event loaded from the server open in the right
+  // shape without a stored flag.
+  const [multiDayOverride, setMultiDayOverride] = React.useState<boolean | null>(null);
+  const multiDay = multiDayOverride ?? spansMultipleDays(draft.startsAt, draft.endsAt);
+
   return (
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Schedule"
       />
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <DateField
-          id="event-starts"
-          label="Starts"
-          value={draft.startsAt}
-          onChange={(startsAt) => update({ startsAt })}
-          min={nowLocal}
-          error={errorFor(issues, 'startsAt')}
-          hint="Has to be in the future."
+      {/* ── ONE DAY OR SEVERAL ────────────────────────────────────────────
+          DERIVED, never stored. There is no `multi_day` column and there must
+          not be one: the two datetimes already say it, and a flag beside them
+          is a second source of truth that can disagree with the dates it
+          describes. The override lives in component state, so an organiser who
+          has not filled the End field yet can still switch to the multi-day
+          layout and get the second date picker.
+
+          Below, single-day asks "which day" ONCE. Asking again in the End
+          field is a question whose answer is already known — and can be
+          answered wrongly, which is how an event ends the day before it
+          starts. */}
+      <label className="flex w-fit items-center gap-2.5 text-body-sm">
+        <input
+          type="checkbox"
+          checked={multiDay}
+          onChange={(event) => {
+            const next = event.target.checked;
+            setMultiDayOverride(next);
+            // Going to single-day COLLAPSES the end onto the start's date,
+            // keeping the time. Clearing it instead would silently drop a
+            // check-in window and a payout date the organiser had set; moving
+            // it is the reading that loses nothing.
+            if (!next && draft.startsAt && draft.endsAt) {
+              update({ endsAt: joinDateTime(dayPart(draft.startsAt), timePart(draft.endsAt)) });
+            }
+          }}
+          className="size-4 rounded border-border accent-foreground"
         />
-        <DateField
-          id="event-ends"
-          label="Ends"
-          value={draft.endsAt}
-          onChange={(endsAt) => update({ endsAt })}
-          min={draft.startsAt || nowLocal}
-          error={errorFor(issues, 'endsAt')}
-          hint="Optional. Drives the check-in window and the payout date."
-        />
-      </div>
+        <span>This event runs across more than one day</span>
+      </label>
+
+      {multiDay ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DateField
+            id="event-starts"
+            label="Starts"
+            value={draft.startsAt}
+            onChange={(startsAt) => update({ startsAt })}
+            min={nowLocal}
+            error={errorFor(issues, 'startsAt')}
+            hint="Has to be in the future."
+          />
+          <DateField
+            id="event-ends"
+            label="Ends"
+            value={draft.endsAt}
+            onChange={(endsAt) => update({ endsAt })}
+            min={draft.startsAt || nowLocal}
+            error={errorFor(issues, 'endsAt')}
+            hint="Optional. Drives the check-in window and the payout date."
+          />
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DateTimeField
+            id="event-starts"
+            label="Starts"
+            day={dayPart(draft.startsAt)}
+            time={timePart(draft.startsAt)}
+            onChange={({ day, time }) => {
+              const startsAt = joinDateTime(day, time);
+              // The end follows the start's DATE while they are on one day —
+              // otherwise moving the event to next week leaves the end behind
+              // on the old date and the event finishes before it begins.
+              const endsAt = draft.endsAt
+                ? joinDateTime(day || dayPart(draft.endsAt), timePart(draft.endsAt))
+                : draft.endsAt;
+              update({ startsAt, endsAt });
+            }}
+            min={nowLocal}
+            error={errorFor(issues, 'startsAt')}
+            hint="Has to be in the future."
+            timeLabel="start time"
+          />
+          <TimeOnlyField
+            id="event-ends"
+            label="Ends"
+            /* The DATE is the start's, always, in this mode. Only the time is
+               the organiser's to set — which is the whole point of the split. */
+            value={timePart(draft.endsAt)}
+            onChange={(time) =>
+              update({
+                endsAt: time ? joinDateTime(dayPart(draft.startsAt), time) : '',
+              })
+            }
+            error={errorFor(issues, 'endsAt')}
+            hint="Optional. Drives the check-in window and the payout date."
+          />
+        </div>
+      )}
 
       {valid ? (
         <div className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">

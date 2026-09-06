@@ -11,8 +11,12 @@ import {
   completion,
   countWords,
   draftStorageKey,
+  dayPart,
   emptyDraft,
   isDraftUntouched,
+  joinDateTime,
+  spansMultipleDays,
+  timePart,
   newTier,
   patchFingerprint,
   priceSummary,
@@ -1003,5 +1007,64 @@ describe('isDraftUntouched', () => {
 
   it('ignores whitespace, so a stray space does not withdraw the offer', () => {
     expect(isDraftUntouched({ ...emptyDraft(), title: '   ' })).toBe(true);
+  });
+});
+
+describe('an end time can be CLEARED, not only set', () => {
+  /**
+   * `toPatchInput` used to spread `ends_at` conditionally, so a blank value
+   * omitted the key — and the server reads a missing key as "leave it alone".
+   * The field is optional and nullable everywhere, and `toCreateInput` has
+   * always sent `null` correctly, so the bug bit ONLY on edit: exactly where
+   * somebody clears a field. The stale value kept driving the check-in window
+   * and the payout date long after it had vanished from the form.
+   */
+  it('sends null when the field is emptied', () => {
+    const patch = toPatchInput(draftWith({ eventId: 'evt-1', endsAt: '' }));
+
+    expect('ends_at' in patch).toBe(true);
+    expect(patch.ends_at).toBeNull();
+  });
+
+  it('still sends the value when one is set', () => {
+    const patch = toPatchInput(draftWith({ eventId: 'evt-1', endsAt: FUTURE }));
+
+    expect(patch.ends_at).toBe(new Date(FUTURE).toISOString());
+  });
+});
+
+describe('spansMultipleDays', () => {
+  /**
+   * DERIVED, so that the schedule step opens in the right shape for an event
+   * loaded from the server without a stored flag — and so a flag can never
+   * disagree with the dates it describes.
+   */
+  it('is false for two times on one day', () => {
+    expect(spansMultipleDays('2030-03-14T19:00', '2030-03-14T23:30')).toBe(false);
+  });
+
+  it('is true across midnight into the next date', () => {
+    expect(spansMultipleDays('2030-03-14T19:00', '2030-03-15T02:00')).toBe(true);
+  });
+
+  it('is false when there is no end at all', () => {
+    // The field is optional. "We do not know when it finishes" is not a claim
+    // that it runs for days.
+    expect(spansMultipleDays('2030-03-14T19:00', '')).toBe(false);
+    expect(spansMultipleDays('', '')).toBe(false);
+  });
+});
+
+describe('the datetime halves', () => {
+  it('splits and rejoins without loss', () => {
+    const value = '2030-03-14T19:30';
+    expect(joinDateTime(dayPart(value), timePart(value))).toBe(value);
+  });
+
+  it('refuses to compose a half-valid string', () => {
+    // "2030-03-14T" parses as neither a Date nor an input value, and would
+    // render as a silently empty field over a value somebody believes is set.
+    expect(joinDateTime('2030-03-14', '')).toBe('');
+    expect(joinDateTime('', '19:30')).toBe('');
   });
 });

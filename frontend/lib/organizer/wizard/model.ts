@@ -983,6 +983,49 @@ export function toLocalInput(iso: string | null | undefined): string {
 }
 
 /**
+ * Does this event run across more than one calendar day?
+ *
+ * DERIVED, never stored. There is no `multi_day` column and there must not be
+ * one: the two datetimes already say everything, and a flag beside them is a
+ * second source of truth that can disagree with the dates it describes. This
+ * repo has shipped a control that wrote nowhere three times (`category`, tier
+ * `position`, `policies`); adding a draft field with no column is that same
+ * shape on purpose rather than by accident.
+ *
+ * Both halves of a `datetime-local` string are compared on their DATE part
+ * only, in the browser's own zone — which is the convention `toIso` and
+ * `toLocalInput` already use, and deliberately not the fixed-IST one in
+ * `lib/discovery/calendar.ts`. Mixing the two shifts every event by the
+ * reader's offset from IST.
+ *
+ * An event with no end is single-day: the field is optional, and "we do not
+ * know when it finishes" is not a claim that it runs for days.
+ */
+export function spansMultipleDays(startsAt: string, endsAt: string): boolean {
+  if (!startsAt || !endsAt) return false;
+  return dayPart(startsAt) !== dayPart(endsAt);
+}
+
+/** The `YYYY-MM-DD` half of a `datetime-local` value. */
+export const dayPart = (local: string): string => local.slice(0, 10);
+
+/** The `HH:mm` half. */
+export const timePart = (local: string): string => local.slice(11, 16);
+
+/**
+ * Rebuild a `datetime-local` string from its two halves.
+ *
+ * Returns `''` when either half is missing rather than composing a half-valid
+ * string: `"2026-03-14T"` is accepted by neither `new Date()` nor the input,
+ * and would render as a silently empty field over a value the organizer
+ * believes they set.
+ */
+export function joinDateTime(day: string, time: string): string {
+  if (!day || !time) return '';
+  return `${day}T${time}`;
+}
+
+/**
  * Minor units back to the MAJOR-unit string the price fields hold.
  *
  * The editors work in rupees because an organizer types 499 and means 499;
@@ -1183,7 +1226,22 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     place_id: draft.placeId,
     ...coordinates(draft),
     starts_at: toIso(draft.startsAt),
-    ...(draft.endsAt ? { ends_at: toIso(draft.endsAt) } : {}),
+    // ── AN END TIME MUST BE CLEARABLE ────────────────────────────────────
+    //
+    // This was a conditional spread, so a BLANK `endsAt` omitted the key
+    // entirely — and the server reads a missing key as "leave it alone". The
+    // field is optional and nullable everywhere, `ends_at` is in the editable
+    // set and the serializer is `allow_null=True`, so the one thing an
+    // organizer could not do was take back an end time they had entered.
+    //
+    // It only ever bit on EDIT (`toCreateInput` has always sent `null`
+    // correctly), which is precisely where somebody clears a field — and the
+    // stale value keeps driving the check-in window and the payout date long
+    // after it has vanished from the form.
+    //
+    // `null`, not `''`: the column is a nullable datetime and the serializer
+    // refuses a blank string.
+    ends_at: draft.endsAt ? toIso(draft.endsAt) : null,
     // ── THE PICKER USED TO WRITE NOWHERE ─────────────────────────────────
     // `category` was in the draft, in the model, in the picker, in the
     // server's editable set and in its update serializer — and in neither this
