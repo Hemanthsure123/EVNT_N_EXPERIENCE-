@@ -119,7 +119,7 @@ jobs:
 
       - name: Backend Failure Diagnostics
         if: ${{ failure() }}
-        # ── IT WRITES TO THE JOB SUMMARY, AND THAT IS THE POINT ───────────
+        # ── IT EMITS ANNOTATIONS, BECAUSE THOSE ARE THE PUBLIC CHANNEL ────
         #
         # Actions LOGS require authentication — an unauthenticated reader gets
         # 403 — so a backend failure on `main` was, in practice, invisible: the
@@ -127,10 +127,18 @@ jobs:
         # line number in a composed workflow. Diagnosing it meant reproducing
         # the whole runner locally and hoping.
         #
-        # `$GITHUB_STEP_SUMMARY` is different: it is rendered on the run page
-        # AND surfaced as the check run's own output, which the REST API serves
-        # without a token. So the names of the failing tests travel with the
-        # failure instead of being locked behind a login.
+        # The first attempt at this wrote only to `$GITHUB_STEP_SUMMARY`, on
+        # the belief that a job summary is surfaced as the check run's output.
+        # IT IS NOT: the step ran, wrote its summary, and `output.summary` and
+        # `output.text` both came back empty from the REST API. Measured, not
+        # assumed — and the reason the summary write stays but is no longer the
+        # thing being relied on.
+        #
+        # `::error::` workflow commands become ANNOTATIONS, and annotations ARE
+        # served unauthenticated (`/check-runs/{id}/annotations`). So the names
+        # of the failing tests travel with the failure instead of being locked
+        # behind a login. The summary is kept alongside for whoever opens the
+        # run page, where it is easier to read than a row of annotations.
         run: |
           # Every probe below is `|| true`. The shell is `bash -e`, and the
           # summary is written LAST — so one failing diagnostic (a `git` that
@@ -164,6 +172,19 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Backend job failed before pytest ran" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Backend::the job failed before pytest ran"
+          fi
+
+          # THE PART A LOGGED-OUT READER ACTUALLY SEES. One annotation per
+          # failing test, capped so a wholesale breakage does not bury the
+          # summary line under hundreds of them. A message may not contain a
+          # raw newline, so each is one line by construction.
+          if [ -f /tmp/pytest.out ]; then
+            grep -E '^(FAILED|ERROR)' /tmp/pytest.out | head -15 | while IFS= read -r line; do
+              echo "::error title=Backend test failed::${line}"
+            done || true
+            tally=$(grep -E '^[0-9]+ (failed|passed)|failed,' /tmp/pytest.out | tail -1 || true)
+            [ -n "$tally" ] && echo "::error title=Backend suite::${tally}" || true
           fi
 
   image:
