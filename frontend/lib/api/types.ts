@@ -207,6 +207,19 @@ export type TicketTier = {
   available: number;
   sale_start: string | null;
   sale_end: string | null;
+  /**
+   * GROUP PRICING — a cheaper per-ticket price once the order reaches a size.
+   *
+   * Sent as DATA rather than a resolved figure, because `effective_price` is
+   * ONE number and a group price depends on the order size, which the server
+   * does not know at read time. `unitPriceAt` in `lib/discovery/tiers.ts`
+   * resolves it, mirroring `apps/ticketing/pricing.py`.
+   *
+   * Optional on the type: a backend that predates the column sends nothing,
+   * and the resolver has to read that as "no bands" rather than crash a
+   * checkout.
+   */
+  group_bands?: { min_quantity: number; price_minor: number }[];
   max_per_order: number;
   is_on_sale: boolean;
   version: number;

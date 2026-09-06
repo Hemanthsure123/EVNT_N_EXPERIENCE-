@@ -5,7 +5,7 @@ import { Check, Minus, Plus } from 'lucide-react';
 import { PhaseBadge, PhaseNotes } from '@/components/pricing/sale-phase';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
-import { unitPriceFor } from '@/lib/discovery/tiers';
+import { groupBandAt, nextGroupBand, unitPriceAt, unitPriceFor } from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { useBooking } from './booking-context';
 import { FEW_LEFT } from '@/lib/event/sessions';
@@ -131,7 +131,13 @@ function TierRow({
   const sellingFast = !soldOut && tier.available <= SELLING_FAST_AT;
   const groupId = `tier-${tier.id}`;
   const phase = tier.current_phase;
-  const unitPrice = unitPriceFor(tier);
+  // QUANTITY-AWARE. `unitPriceFor` is phase-only, so on a tier with group
+  // bands it would show the face price beside a subtotal computed at the
+  // discounted one — the row contradicting itself. At quantity 0 this is the
+  // single-ticket price, which is the right thing to advertise.
+  const unitPrice = unitPriceAt(tier, Math.max(quantity, 1));
+  const band = groupBandAt(tier, quantity);
+  const upsell = nextGroupBand(tier, quantity);
 
   // Every secondary fact about the row, so the common case — a name, a price
   // and a button, which is what most tiers are — stays two lines tall.
@@ -203,6 +209,29 @@ function TierRow({
             </span>
           ) : null}
         </p>
+
+        {/* ── GROUP PRICING ────────────────────────────────────────────────
+            Absent entirely for a tier with no bands, which is nearly all of
+            them.
+
+            The UPSELL is the reason bands are shown at all: "2 more for ₹400
+            each" is a reason to add a ticket, where a discount only revealed
+            once you already qualify is one most buyers never find. It is
+            suppressed when it would not actually save anything — including
+            when an active sale phase already beats it, because telling
+            somebody to buy two more tickets for a worse price is the one thing
+            this line must never do (see `nextGroupBand`). */}
+        {band && !soldOut ? (
+          <p className="text-caption text-success-subtle-foreground">
+            Group price applied — {formatFromPrice(band.price_minor)} each for{' '}
+            {band.min_quantity}+
+          </p>
+        ) : upsell && !disabled ? (
+          <p className="text-caption text-muted-foreground">
+            Add {upsell.min_quantity - quantity} more for{' '}
+            {formatFromPrice(upsell.price_minor)} each
+          </p>
+        ) : null}
 
         {/* ── EVERYTHING BELOW IS CONDITIONAL, AND USUALLY ABSENT ──────────
             A tier that is on sale, in stock and self-describing renders none of

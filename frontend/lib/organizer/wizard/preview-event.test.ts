@@ -22,6 +22,7 @@ const tierWith = (over: Partial<DraftTier> = {}): DraftTier => ({
   saleStart: '',
   saleEnd: '',
   phases: [],
+  groupBands: [],
   ...over,
 });
 

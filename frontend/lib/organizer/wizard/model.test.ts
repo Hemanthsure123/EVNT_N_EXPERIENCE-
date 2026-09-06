@@ -13,6 +13,8 @@ import {
   draftStorageKey,
   dayPart,
   emptyDraft,
+  groupBandIssues,
+  tierIsSavable,
   isDraftUntouched,
   joinDateTime,
   spansMultipleDays,
@@ -1066,5 +1068,138 @@ describe('the datetime halves', () => {
     // render as a silently empty field over a value somebody believes is set.
     expect(joinDateTime('2030-03-14', '')).toBe('');
     expect(joinDateTime('', '19:30')).toBe('');
+  });
+});
+
+describe('group prices', () => {
+  const band = (minQuantity: string, price: string, key = `b-${minQuantity}`) => ({
+    key,
+    minQuantity,
+    price,
+  });
+
+  describe('groupBandIssues — mirroring the server', () => {
+    it('accepts a well-formed ladder', () => {
+      const tier = tierWith({
+        price: '500',
+        maxPerOrder: '10',
+        groupBands: [band('2', '450'), band('4', '400')],
+      });
+      expect(groupBandIssues(tier)).toEqual([]);
+    });
+
+    it('refuses a band at one ticket', () => {
+      // It is the face price wearing a label, and would apply to every
+      // single-ticket order.
+      const tier = tierWith({ price: '500', groupBands: [band('1', '450')] });
+      expect(groupBandIssues(tier).join(' ')).toContain('2 tickets or more');
+    });
+
+    it('refuses a band above the face price', () => {
+      const tier = tierWith({ price: '500', groupBands: [band('2', '600')] });
+      expect(groupBandIssues(tier).join(' ')).toContain('more than the normal price');
+    });
+
+    it('refuses a bigger group paying more per ticket', () => {
+      const tier = tierWith({
+        price: '500',
+        groupBands: [band('2', '400'), band('4', '450')],
+      });
+      expect(groupBandIssues(tier).join(' ')).toContain('more per ticket than a smaller group');
+    });
+
+    it('refuses group sizes that do not increase', () => {
+      const tier = tierWith({
+        price: '500',
+        groupBands: [band('4', '450', 'a'), band('4', '400', 'b')],
+      });
+      expect(groupBandIssues(tier).join(' ')).toContain('bigger group than the one above');
+    });
+
+    it('refuses a band nobody can reach', () => {
+      // Both numbers are on the same form, so a band beyond the per-order cap
+      // is a control that can never fire.
+      const tier = tierWith({ price: '500', maxPerOrder: '4', groupBands: [band('8', '400')] });
+      expect(groupBandIssues(tier).join(' ')).toContain('never apply');
+    });
+
+    it('blocks the save while a band is half-typed', () => {
+      // A partial band is a payload the serializer refuses, and sending it
+      // would make every autosave a 400 the organiser cannot act on.
+      const tier = tierWith({
+        name: 'Gold',
+        price: '500',
+        quantity: '10',
+        groupBands: [band('4', '')],
+      });
+      expect(tierIsSavable(tier)).toBe(false);
+    });
+  });
+
+  describe('the write', () => {
+    it('carries the bands, converted to paise', () => {
+      const tier = tierWith({ price: '500', groupBands: [band('4', '400')] });
+      expect(toTierInput(tier, 0).group_bands).toEqual([
+        { min_quantity: 4, price_minor: 40_000 },
+      ]);
+    });
+
+    it('sends [] on an EDIT so the bands can be cleared', () => {
+      // The bug this shape exists for. `phases` used to be omitted whenever
+      // empty, so deleting your last one produced no key at all, the server
+      // read the absence as "leave it alone", and it came back on reload.
+      const saved = tierWith({ serverId: 'tt-1', version: 1, groupBands: [], phases: [] });
+      const payload = toTierInput(saved, 0);
+
+      expect(payload.group_bands).toEqual([]);
+      expect(payload.phases).toEqual([]);
+    });
+
+    it('omits them on a CREATE, where there is nothing to clear', () => {
+      const fresh = tierWith({ groupBands: [], phases: [] });
+      const payload = toTierInput(fresh, 0);
+
+      expect('group_bands' in payload).toBe(false);
+      expect('phases' in payload).toBe(false);
+    });
+  });
+
+  describe('the fingerprint', () => {
+    it('changes when a band changes, or the edit never saves', () => {
+      // The FOURTH instance of this bug class in this file. A field in the
+      // payload and absent from the fingerprint is a control that updates the
+      // preview, marks its step done, and PATCHes nothing.
+      const before = tierWith({ groupBands: [band('4', '400')] });
+      const after = tierWith({ groupBands: [band('4', '350')] });
+
+      expect(tierFingerprint(before, 0)).not.toBe(tierFingerprint(after, 0));
+    });
+
+    it('changes when a band is added or removed', () => {
+      const none = tierWith({ groupBands: [] });
+      const one = tierWith({ groupBands: [band('4', '400')] });
+
+      expect(tierFingerprint(none, 0)).not.toBe(tierFingerprint(one, 0));
+    });
+
+    it('ignores the react key, so re-keying is not a change', () => {
+      const a = tierWith({ groupBands: [band('4', '400', 'key-a')] });
+      const b = tierWith({ groupBands: [band('4', '400', 'key-b')] });
+
+      expect(tierFingerprint(a, 0)).toBe(tierFingerprint(b, 0));
+    });
+  });
+
+  it('restores a draft written before group bands existed', () => {
+    // `tier.groupBands.map(...)` on `undefined` is a white screen over
+    // somebody's half-written event.
+    const stored = {
+      ...emptyDraft('org-1'),
+      tiers: [{ ...newTier(0), groupBands: undefined }],
+    } as unknown as Parameters<typeof restoreDraft>[0];
+
+    const restored = restoreDraft(stored, ['org-1']);
+
+    expect(restored.tiers[0].groupBands).toEqual([]);
   });
 });

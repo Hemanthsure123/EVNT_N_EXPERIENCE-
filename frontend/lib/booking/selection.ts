@@ -1,5 +1,5 @@
 import type { TicketTier } from '@/lib/api/types';
-import { unitPriceFor } from '@/lib/discovery/tiers';
+import { unitPriceAt } from '@/lib/discovery/tiers';
 
 /**
  * What the user has chosen, and what it costs.
@@ -172,7 +172,13 @@ export function totalsFor(selection: Selection, tiers: TicketTier[]): SelectionT
   for (const line of selection) {
     const tier = tiers.find((candidate) => candidate.id === line.tierId);
     if (!tier) continue; // a tier that vanished between screens simply drops out
-    const unitPrice = unitPriceFor(tier);
+    // QUANTITY-AWARE, mirroring `decide_unit_price` on the server: a group
+    // band makes the per-ticket price depend on how many are being bought.
+    // `unitPriceFor` (phase only) would quote the face price for a group order
+    // and then be corrected downward by the reserve — an estimate that is
+    // wrong in the buyer's favour is still an estimate that does not match the
+    // screen after it.
+    const unitPrice = unitPriceAt(tier, line.quantity);
     lines.push({
       tier,
       quantity: line.quantity,

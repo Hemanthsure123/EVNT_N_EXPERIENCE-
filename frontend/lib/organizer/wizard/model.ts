@@ -79,6 +79,17 @@ export type DraftPhase = {
   quantity: string;
 };
 
+export type DraftGroupBand = {
+  /** Client-side list handle. Bands have no server identity — the whole list
+   *  is replaced on every write, exactly like the phase schedule. */
+  key: string;
+  /** The smallest order this price applies to. At least 2; 1 would just be
+   *  the face price. MAJOR units are not involved — this is a count. */
+  minQuantity: string;
+  /** Per TICKET, in MAJOR units while editing. */
+  price: string;
+};
+
 export type DraftTier = {
   /** Client-side id. Becomes the server's id once the tier is created. */
   key: string;
@@ -110,6 +121,14 @@ export type DraftTier = {
   maxPerOrder: string;
   saleStart: string;
   saleEnd: string;
+  /**
+   * GROUP PRICES, smallest group first. Empty means "one price whatever the
+   * order size", which is nearly every tier.
+   *
+   * MAJOR units while editing, like `price` above — an organiser types 400 and
+   * means ₹400. Converted at the boundary by `toGroupBandInput`.
+   */
+  groupBands: DraftGroupBand[];
   /** The sale-phase schedule, in position order. Empty means "one price". */
   phases: DraftPhase[];
 };
@@ -407,7 +426,15 @@ export function restoreDraft(
     // array, and `tier.phases.map(...)` on an `undefined` is a white screen
     // holding somebody's half-written event.
     tiers: Array.isArray(stored.tiers)
-      ? stored.tiers.map((tier) => ({ ...tier, phases: Array.isArray(tier.phases) ? tier.phases : [] }))
+      ? stored.tiers.map((tier) => ({
+          ...tier,
+          phases: Array.isArray(tier.phases) ? tier.phases : [],
+          // A draft written before group bands existed has no array here, and
+          // `tier.groupBands.map(...)` on `undefined` is a white screen over
+          // somebody's half-written event — the same reason `phases` is
+          // normalised beside it.
+          groupBands: Array.isArray(tier.groupBands) ? tier.groupBands : [],
+        }))
       : [],
     // Same reason as `tiers`, and it is NOT covered by the spread above: an
     // absent key is safe (`undefined` never survives `JSON.stringify`), but a
@@ -438,6 +465,15 @@ export function newTier(index: number): DraftTier {
     saleStart: '',
     saleEnd: '',
     phases: [],
+    groupBands: [],
+  };
+}
+
+export function newGroupBand(index: number): DraftGroupBand {
+  return {
+    key: `band-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    minQuantity: '',
+    price: '',
   };
 }
 
@@ -579,6 +615,75 @@ export const PHASE_NAME_MAX = 40;
  * comparing the rupee strings would make "500" and "500.00" different numbers
  * and 0.1 + 0.2 decide whether a schedule is legal.
  */
+/** Mirrors `TicketingService.MAX_GROUP_BANDS`. */
+export const MAX_GROUP_BANDS = 5;
+
+/**
+ * What is wrong with a tier's group prices, in the organiser's words.
+ *
+ * MIRRORS `_validate_group_bands` on the server, which is the authority — this
+ * exists so the mistake is named beside the field rather than arriving as a
+ * 400 the autosave cannot act on. Every rule here has a counterpart there; the
+ * server is what actually refuses.
+ *
+ * The `max_per_order` rule is checked against the tier's OWN field, which is
+ * the same merged-row reasoning the server applies: both numbers move on the
+ * same form, and a band beyond the per-order cap is a control that can never
+ * fire.
+ */
+export function groupBandIssues(tier: DraftTier): string[] {
+  const problems: string[] = [];
+  const where = tier.name.trim() || 'This ticket';
+  if (tier.groupBands.length > MAX_GROUP_BANDS) {
+    problems.push(`${where}: at most ${MAX_GROUP_BANDS} group prices.`);
+  }
+
+  const facePrice = toMinor(tier.price);
+  const cap = Number(tier.maxPerOrder);
+  let previousMin: number | null = null;
+  let previousPrice: number | null = null;
+
+  tier.groupBands.forEach((band, index) => {
+    const label = band.minQuantity ? `${band.minQuantity}+ tickets` : `Group price ${index + 1}`;
+    const minimum = Number(band.minQuantity);
+    const price = toMinor(band.price);
+
+    if (band.minQuantity === '' || !Number.isInteger(minimum) || minimum < 2) {
+      problems.push(`${where}: "${label}" starts at 2 tickets or more — one is the normal price.`);
+    } else {
+      if (previousMin !== null && minimum <= previousMin) {
+        problems.push(`${where}: "${label}" has to start at a bigger group than the one above.`);
+      }
+      if (Number.isFinite(cap) && tier.maxPerOrder !== '' && minimum > cap) {
+        problems.push(
+          `${where}: "${label}" can never apply — this ticket allows at most ${cap} per order.`,
+        );
+      }
+      previousMin = minimum;
+    }
+
+    if (band.price === '' || !Number.isFinite(price) || price < 1) {
+      // Above ₹0, matching the phase rule: a free group is a different
+      // product, not a discount.
+      problems.push(`${where}: "${label}" needs a price above ₹0.`);
+      return;
+    }
+    if (Number.isFinite(facePrice) && tier.price !== '' && price > facePrice) {
+      // The server IGNORES a band above face price rather than billing it, so
+      // this can never overcharge — but a control that silently does nothing
+      // is worse than one that is refused.
+      problems.push(`${where}: "${label}" costs more than the normal price.`);
+    }
+    if (previousPrice !== null && price > previousPrice) {
+      problems.push(`${where}: "${label}" costs more per ticket than a smaller group.`);
+    }
+    previousPrice = price;
+  });
+
+  return problems;
+}
+
+
 export function phaseIssues(tier: DraftTier): string[] {
   const problems: string[] = [];
   const where = tier.name.trim() || 'This ticket';
@@ -651,7 +756,11 @@ export function tierIsSavable(tier: DraftTier): boolean {
     tier.name.trim() &&
       tier.price !== '' &&
       Number(tier.quantity) >= 1 &&
-      phaseIssues(tier).length === 0,
+      phaseIssues(tier).length === 0 &&
+      // Same reason as the phases: a half-typed band is a payload the
+      // serializer refuses, and sending it would make every autosave a 400 the
+      // organiser cannot act on.
+      groupBandIssues(tier).length === 0,
   );
 }
 
@@ -796,6 +905,9 @@ export function validate(draft: Draft, now = new Date()): Issue[] {
     // Keyed on the tier, so the schedule's problems appear inside the card that
     // holds it rather than in a list somewhere else on the step.
     for (const message of phaseIssues(tier)) {
+      issues.push({ step: 'tickets', field: tier.key, message });
+    }
+    for (const message of groupBandIssues(tier)) {
       issues.push({ step: 'tickets', field: tier.key, message });
     }
   });
@@ -1137,6 +1249,14 @@ export function draftFromEvent(
       maxPerOrder: String(tier.max_per_order),
       saleStart: toLocalInput(tier.sale_start),
       saleEnd: toLocalInput(tier.sale_end),
+      // `?? []` is load-bearing: a backend that predates the column sends
+      // nothing, and `undefined.map` in the ticket builder is a white screen
+      // over a real event.
+      groupBands: (tier.group_bands ?? []).map((band, index) => ({
+        key: `band-${index}-${band.min_quantity}`,
+        minQuantity: String(band.min_quantity),
+        price: toMajorInput(band.price_minor),
+      })),
       phases: (tier.phases ?? []).map((phase) => ({
         key: phase.id,
         name: phase.name,
@@ -1333,10 +1453,32 @@ export function toTierInput(tier: DraftTier, position: number): CreateTicketType
     // write — a phase has no server identity to preserve (see `DraftPhase`), so
     // there is nothing to diff and no per-phase patch to get wrong.
     //
-    // Omitted entirely when there are no phases rather than sent as `[]`: an
-    // absent key leaves an existing schedule alone, and a tier that never had
-    // one must not send a payload implying its schedule was just cleared.
-    ...(tier.phases.length ? { phases: tier.phases.map(toPhaseInput) } : {}),
+    // ── EMPTY MEANS "CLEAR IT" ON AN EDIT, AND "SAY NOTHING" ON A CREATE ──
+    //
+    // This used to omit an empty list unconditionally, on the reasonable
+    // ground that a tier which never had a schedule should not send a payload
+    // implying one was just cleared. The cost was that CLEARING became
+    // impossible: an organiser deleting their last phase produced no `phases`
+    // key, the server read the absence as "leave it alone", and the schedule
+    // came back on the next reload. Exactly the shape of the `ends_at` bug.
+    //
+    // A server-backed tier is an EDIT, so `[]` is a real instruction and is
+    // sent. A tier with no id is a CREATE, where the old reasoning still
+    // holds. The same rule governs the group bands below.
+    ...(tier.serverId || tier.phases.length
+      ? { phases: tier.phases.map(toPhaseInput) }
+      : {}),
+    ...(tier.serverId || tier.groupBands.length
+      ? { group_bands: tier.groupBands.map(toGroupBandInput) }
+      : {}),
+  };
+}
+
+/** One band, converted the way the tier's own price is: rupees to paise. */
+function toGroupBandInput(band: DraftGroupBand): { min_quantity: number; price_minor: number } {
+  return {
+    min_quantity: Number(band.minQuantity) || 0,
+    price_minor: toMinor(band.price),
   };
 }
 
@@ -1428,6 +1570,12 @@ export function tierFingerprint(tier: DraftTier, position: number): string {
     // list handle, and including it would make re-ordering identical phases
     // look like a change.
     tier.phases.map((phase) => [phase.name, phase.price, phase.endsAt, phase.quantity]),
+    // Part of the write, so part of the fingerprint. The FOURTH time this file
+    // has had to say it (`category`, the tier content fields, `policies`): a
+    // field in the payload and absent here is a control that updates the
+    // preview, marks its step done, and never PATCHes anything. `key` excluded
+    // for the same reason as the phases' — it is a React list handle.
+    tier.groupBands.map((band) => [band.minQuantity, band.price]),
   ]);
 }
 

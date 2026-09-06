@@ -30,6 +30,94 @@ import type { TicketTier } from '@/lib/api/types';
  */
 export const unitPriceFor = (tier: TicketTier): number => tier.effective_price ?? tier.price;
 
+/**
+ * What ONE ticket costs at a given ORDER SIZE — the group-pricing answer.
+ *
+ * ── THIS MIRRORS A MONEY RULE, AND SAYS SO ────────────────────────────────
+ *
+ * The authority is `decide_unit_price` in `apps/ticketing/pricing.py`, decided
+ * under the per-tier row lock. This is the DISPLAY half, and it exists because
+ * `effective_price` cannot express a group price: that is one number and a
+ * group price depends on the order size, which the server does not know when it
+ * serves the tier.
+ *
+ * It is a second implementation of a money rule in TypeScript, which this
+ * codebase does exactly once elsewhere (`PLATFORM_FEE_BPS`) and flags there for
+ * the same reason: the two can silently disagree. Kept safe by being trivial
+ * and by mirroring the Python case for case in `tiers.test.ts`. If it ever
+ * needs to be cleverer than this, it belongs behind an endpoint instead.
+ *
+ * ── THE COMPOSITION: THE LOWER OF PHASE AND BAND ──────────────────────────
+ *
+ * Both are advertised before the press, so charging the higher of two visible
+ * discounts is overcharging against what was on screen. `Math.min` is the
+ * server's rule verbatim, and it means nobody loses a discount by qualifying
+ * for a second one.
+ *
+ * ── THE SAME FLOOR THE CHARGE PATH APPLIES ────────────────────────────────
+ *
+ * A band above the face price and a band at one ticket are both IGNORED, per
+ * `_eligible_bands`. Without it a corrupt row would quote somebody MORE than
+ * the face price on the screen where they decide to buy.
+ */
+export function unitPriceAt(tier: TicketTier, quantity: number): number {
+  const phasePrice = unitPriceFor(tier);
+  const band = groupBandAt(tier, quantity);
+  return band === null ? phasePrice : Math.min(phasePrice, band.price_minor);
+}
+
+/**
+ * The band an order of this size qualifies for — the LARGEST it reaches.
+ *
+ * Largest rather than first: bands are thresholds on party size, so an order
+ * of 6 against bands at 2 and 4 gets the 4+ price. Taking the first would
+ * withhold the better one the organiser advertised.
+ *
+ * Returned rather than folded into `unitPriceAt` so the picker can NAME it —
+ * "₹400 each for 4+" is what makes the discount visible before somebody has
+ * added the fourth ticket.
+ */
+export function groupBandAt(
+  tier: TicketTier,
+  quantity: number,
+): { min_quantity: number; price_minor: number } | null {
+  let winner: { min_quantity: number; price_minor: number } | null = null;
+  for (const band of eligibleBands(tier)) {
+    if (quantity >= band.min_quantity) winner = band;
+  }
+  return winner;
+}
+
+/** Every band that could honestly apply, smallest group first. */
+export function eligibleBands(
+  tier: TicketTier,
+): { min_quantity: number; price_minor: number }[] {
+  return (tier.group_bands ?? [])
+    .filter((band) => band.min_quantity > 1 && band.price_minor <= tier.price)
+    .slice()
+    .sort((a, b) => a.min_quantity - b.min_quantity);
+}
+
+/**
+ * The NEXT group price a buyer has not reached yet, if there is one.
+ *
+ * The whole point of showing bands: "add 2 more for ₹400 each" is a reason to
+ * buy another ticket, where a discount only revealed once you qualify is a
+ * discount most people never find.
+ */
+export function nextGroupBand(
+  tier: TicketTier,
+  quantity: number,
+): { min_quantity: number; price_minor: number } | null {
+  const current = groupBandAt(tier, quantity);
+  for (const band of eligibleBands(tier)) {
+    if (band.min_quantity <= quantity) continue;
+    // Only worth naming if it actually beats what they would pay now.
+    if (band.price_minor < (current?.price_minor ?? unitPriceFor(tier))) return band;
+  }
+  return null;
+}
+
 /** At or below this, name the exact number — it's the honest kind of urgency. */
 export const FEW_LEFT = 10;
 /** At or below this, it's genuinely moving. Above it, say nothing. */

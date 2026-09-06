@@ -16,8 +16,11 @@ import type { EventSlot } from '@/lib/api/event-content';
 import { formatMoney } from '@/lib/discovery/format';
 import {
   MAX_PHASES,
+  MAX_GROUP_BANDS,
+  newGroupBand,
   newPhase,
   newTier,
+  type DraftGroupBand,
   type DraftPhase,
   type DraftTier,
 } from '@/lib/organizer/wizard/model';
@@ -362,6 +365,10 @@ export function TicketBuilder({
 
 
                   <PhaseEditor tier={tier} onChange={(phases) => patch(tier.key, { phases })} />
+                  <GroupBandEditor
+                    tier={tier}
+                    onChange={(groupBands) => patch(tier.key, { groupBands })}
+                  />
 
                   {problems.length ? (
                     <ul className="mt-stack-lg flex flex-col gap-1" role="alert">
@@ -421,6 +428,113 @@ export function TicketBuilder({
  * validation of its own — one statement of the rules, in the module the save
  * engine also consults.
  */
+/**
+ * Group prices for one tier.
+ *
+ * ── A SIBLING OF `PhaseEditor`, NOT A VARIANT OF IT ───────────────────────
+ *
+ * They look alike and answer different questions. A phase is a price that
+ * moves over TIME or as seats sell; a band is a price that depends on how many
+ * somebody buys at once. An organiser can run both, and the buyer pays the
+ * lower — so folding them into one control would force a precedence the rule
+ * does not have.
+ *
+ * Validation lives in `groupBandIssues`, rendered by the tier card's existing
+ * error list below these fields. This component holds none of its own: one
+ * statement of the rules, in the module the save engine also consults.
+ */
+function GroupBandEditor({
+  tier,
+  onChange,
+}: {
+  tier: DraftTier;
+  onChange: (bands: DraftGroupBand[]) => void;
+}) {
+  const bands = tier.groupBands;
+  const atLimit = bands.length >= MAX_GROUP_BANDS;
+
+  const update = (key: string, changes: Partial<DraftGroupBand>) =>
+    onChange(bands.map((band) => (band.key === key ? { ...band, ...changes } : band)));
+
+  return (
+    <section className="mt-stack-lg flex flex-col gap-stack border-t border-border pt-stack-lg">
+      <div className="flex flex-wrap items-start justify-between gap-stack">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h4 className="text-body-sm font-medium text-foreground">Group prices</h4>
+          <p className="text-caption text-muted-foreground">
+            A cheaper price per ticket once somebody buys this many at once.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={atLimit}
+          onClick={() => onChange([...bands, newGroupBand(bands.length)])}
+          leftIcon={<Plus className="size-4" aria-hidden />}
+        >
+          Add group price
+        </Button>
+      </div>
+
+      {bands.length ? (
+        <ul className="flex flex-col gap-stack">
+          {bands.map((band, index) => (
+            <li
+              key={band.key}
+              className="flex flex-col gap-stack rounded-lg border border-border bg-surface p-stack"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-caption font-medium text-muted-foreground">
+                  {/* The GROUP SIZE, not the row number: unlike a phase, a
+                      band's identity is the threshold itself, and it is what
+                      the buyer sees on the picker. */}
+                  {band.minQuantity ? `${band.minQuantity}+ tickets` : `Group price ${index + 1}`}
+                </span>
+                <IconButton
+                  label="Remove this group price"
+                  onClick={() => onChange(bands.filter((row) => row.key !== band.key))}
+                >
+                  <Trash2 className="size-4" aria-hidden />
+                </IconButton>
+              </div>
+
+              <div className="grid gap-stack sm:grid-cols-2">
+                <Field
+                  label="From this many tickets"
+                  id={`${band.key}-min`}
+                  value={band.minQuantity}
+                  onChange={(value) => update(band.key, { minQuantity: value })}
+                  type="number"
+                  min="2"
+                  placeholder="4"
+                  hint="Two or more — one ticket is the normal price."
+                />
+                <Field
+                  label="Price each (₹)"
+                  id={`${band.key}-price`}
+                  value={band.price}
+                  onChange={(value) => update(band.key, { price: value })}
+                  type="number"
+                  min="1"
+                  placeholder="400"
+                  hint="At or below the normal price, and never dearer than a smaller group."
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {atLimit ? (
+        <p className="text-caption text-muted-foreground">
+          That is the maximum ({MAX_GROUP_BANDS}).
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+
 function PhaseEditor({
   tier,
   onChange,
