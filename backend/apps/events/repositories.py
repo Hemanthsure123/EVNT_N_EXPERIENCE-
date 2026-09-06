@@ -20,6 +20,7 @@ from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from core.base_repository import BaseRepository
+from core.uploads import EVENT_PORTRAIT_SPEC
 
 from .models import (
     CrewMember,
@@ -1166,6 +1167,23 @@ MEDIA_LIMITS = {
     MediaKind.VIDEO: 1,
     MediaKind.THUMBNAIL: 1,
     MediaKind.MOBILE: 1,
+}
+
+#: What SHAPE each kind has to be, beside the table saying how many.
+#:
+#: Every image used to go through `EVENT_IMAGE_SPEC`, so every slot was
+#: landscape — including `MOBILE`, whose entire job is to be the picture
+#: somebody sees on a phone, where the card is taller than it is wide. The
+#: frontend's zone table documented the absence verbatim and named this map as
+#: the precondition for fixing it.
+#:
+#: A kind MISSING from here falls back to the landscape spec rather than being
+#: unconstrained — the opposite of `MEDIA_LIMITS`, where a missing key means
+#: UNLIMITED. Shape is a rendering guarantee and the safe default is the
+#: existing one; a cap is a policy and the safe default there is to refuse
+#: nothing silently. Both defaults are deliberate and they point different ways.
+MEDIA_SPECS = {
+    MediaKind.MOBILE: EVENT_PORTRAIT_SPEC,
 }
 
 

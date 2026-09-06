@@ -296,8 +296,11 @@ export function checkFile(file: File): string | null {
  * reason.
  */
 export const EVENT_IMAGE = {
+  label: 'Event images',
+  orientation: 'landscape',
   recommendedWidth: 1920,
   recommendedHeight: 1080,
+  recommendedLabel: '16:9',
   minWidth: 1280,
   minHeight: 720,
   /** 3:2 (a camera) through 2:1 (Eventbrite's banner). Anything inside loses
@@ -305,6 +308,44 @@ export const EVENT_IMAGE = {
   minRatio: 1.5,
   maxRatio: 2.0,
 } as const;
+
+/**
+ * The PORTRAIT poster — mirrors `core.uploads.EVENT_PORTRAIT_SPEC`.
+ *
+ * The band accepts 2:3 through 3:4 rather than the brief's single ratio,
+ * because those are the two shapes organisers actually have: a print poster is
+ * 2:3, the mobile deck draws 2:3 cards, and 3:4 is the brief's. Demanding
+ * exactly one would refuse the others in favour of a shape somebody would have
+ * to make.
+ */
+export const EVENT_PORTRAIT = {
+  label: 'The portrait poster',
+  orientation: 'portrait',
+  recommendedWidth: 1200,
+  recommendedHeight: 1600,
+  recommendedLabel: '3:4',
+  minWidth: 800,
+  minHeight: 1000,
+  minRatio: 0.6,
+  maxRatio: 0.8,
+} as const;
+
+export type ImageShape = typeof EVENT_IMAGE | typeof EVENT_PORTRAIT;
+
+/**
+ * Which shape each kind has to be — mirrors `MEDIA_SPECS` on the server.
+ *
+ * A kind missing here falls back to the LANDSCAPE spec, exactly as the server
+ * does. The two defaults point different ways on purpose: an unlisted kind is
+ * shape-CONSTRAINED (the safe default for a rendering guarantee) and
+ * cap-UNLIMITED (the safe default for a policy).
+ */
+export const SHAPE_FOR_KIND: Partial<Record<MediaKind, ImageShape>> = {
+  mobile: EVENT_PORTRAIT,
+};
+
+export const shapeForKind = (kind: MediaKind): ImageShape =>
+  SHAPE_FOR_KIND[kind] ?? EVENT_IMAGE;
 
 /** One sentence for the dropzone, so the rule is visible before the mistake. */
 export const EVENT_IMAGE_HINT = `Landscape only — ${EVENT_IMAGE.recommendedWidth} x ${EVENT_IMAGE.recommendedHeight} (16:9) is ideal, ${EVENT_IMAGE.minWidth} x ${EVENT_IMAGE.minHeight} minimum.`;
@@ -348,7 +389,19 @@ async function readDimensions(file: File): Promise<{ width: number; height: numb
  * a 1200x1800 poster fails both, and telling somebody to enlarge it sends them
  * back with a 1400x2100 poster that fails again. Scaling cannot fix a shape.
  */
-export async function checkImageFile(file: File): Promise<string | null> {
+export async function checkImageFile(
+  file: File,
+  /**
+   * Which slot the file is bound for. Defaults to the landscape spec so every
+   * existing caller keeps its behaviour — including the cover upload, which is
+   * a column rather than a media row and really is landscape.
+   *
+   * WITHOUT THIS PARAMETER A PER-KIND SERVER SPEC CHANGES NOTHING VISIBLE: the
+   * browser refuses a portrait file here, before the API is ever consulted,
+   * with a message contradicting the label above the dropzone.
+   */
+  shape: ImageShape = EVENT_IMAGE,
+): Promise<string | null> {
   const basic = checkFile(file);
   if (basic) return basic;
 
@@ -356,13 +409,13 @@ export async function checkImageFile(file: File): Promise<string | null> {
   if (!size || size.width <= 0 || size.height <= 0) return null;
 
   const ratio = size.width / size.height;
-  if (ratio < EVENT_IMAGE.minRatio || ratio > EVENT_IMAGE.maxRatio) {
-    const shape =
-      ratio < 1 ? 'taller than it is wide' : ratio < EVENT_IMAGE.minRatio ? 'close to square' : 'very wide';
-    return `${file.name} is ${size.width} x ${size.height}, which is ${shape}. Event images have to be landscape — export it at ${EVENT_IMAGE.recommendedWidth} x ${EVENT_IMAGE.recommendedHeight} (16:9).`;
+  if (ratio < shape.minRatio || ratio > shape.maxRatio) {
+    const described =
+      ratio < 1 ? 'taller than it is wide' : ratio < 1.5 ? 'close to square' : 'very wide';
+    return `${file.name} is ${size.width} x ${size.height}, which is ${described}. ${shape.label} have to be ${shape.orientation} — export it at ${shape.recommendedWidth} x ${shape.recommendedHeight} (${shape.recommendedLabel}).`;
   }
-  if (size.width < EVENT_IMAGE.minWidth || size.height < EVENT_IMAGE.minHeight) {
-    return `${file.name} is ${size.width} x ${size.height} — too small. Event images need at least ${EVENT_IMAGE.minWidth} x ${EVENT_IMAGE.minHeight}.`;
+  if (size.width < shape.minWidth || size.height < shape.minHeight) {
+    return `${file.name} is ${size.width} x ${size.height} — too small. ${shape.label} need at least ${shape.minWidth} x ${shape.minHeight}.`;
   }
   return null;
 }

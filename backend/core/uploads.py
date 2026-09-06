@@ -100,9 +100,47 @@ class ImageSpec:
     recommended_width: int
     recommended_height: int
 
+    #: One clause naming WHERE this shape is drawn, completing the sentence
+    #: "…because {frame}". It is per-spec because the reason differs: the event
+    #: hero is a widescreen frame, a lineup card is a tall one. A shared
+    #: sentence is what made every refusal say "landscape".
+    frame: str = "every image on the event page is shown in the same frame"
+
     @property
     def recommended(self) -> str:
         return f"{self.recommended_width} x {self.recommended_height}"
+
+    @property
+    def orientation(self) -> str:
+        """ "landscape", "portrait" or "roughly square", DERIVED from the band.
+
+        The refusal message used to hard-code "landscape" for every spec. That
+        was true of the only spec there was when it was written, and has been
+        wrong since `CREW_PORTRAIT_SPEC` landed: a landscape headshot is
+        currently told the crew photo "has to be landscape — between 0.6:1 and
+        1.05:1", which is a contradiction inside one sentence. No test caught
+        it because the message assertions only ever used the event spec.
+        """
+        if self.max_ratio <= 1.0:
+            return "portrait"
+        if self.min_ratio >= 1.0 and self.max_ratio > 1.0 and self.min_ratio > 1.0:
+            return "landscape"
+        # A band straddling 1.0 (a headshot: 0.6–1.05) accepts both a tall
+        # picture and a square one, so naming either would refuse something the
+        # spec allows.
+        return "portrait or square"
+
+    @property
+    def recommended_shape(self) -> str:
+        """The recommended export as a ratio, e.g. "16:9" — COMPUTED.
+
+        It was the literal string "(16:9)" in the message, so a 3:4 spec would
+        have told an organiser to export their portrait poster at 16:9.
+        """
+        from math import gcd
+
+        divisor = gcd(self.recommended_width, self.recommended_height) or 1
+        return f"{self.recommended_width // divisor}:{self.recommended_height // divisor}"
 
 
 #: The one shape the event page renders.
@@ -120,6 +158,35 @@ EVENT_IMAGE_SPEC = ImageSpec(
     max_ratio=2.0,
     recommended_width=1920,
     recommended_height=1080,
+    frame="every image on the event page is shown in the same widescreen frame",
+)
+
+
+#: The event's PORTRAIT poster — the primary mobile visual.
+#:
+#: `EVENT_IMAGE_SPEC` would refuse every one of these, and that is exactly why
+#: the frontend's zone table carried a paragraph explaining that no 3:4 zone
+#: could exist until this constant did.
+#:
+#: THE BAND ACCEPTS 2:3 THROUGH 3:4, which is wider than the brief's single
+#: ratio and deliberately so: the mobile deck draws 2:3 cards, a poster
+#: designed for print is usually 2:3, and Instagram's portrait crop is 4:5.
+#: Demanding exactly 3:4 would refuse the two shapes organisers actually have
+#: in favour of one they would have to make. The frame crops to fill, so
+#: anything inside the band works.
+#:
+#: The floor is 800x1000 rather than the landscape spec's 1280x720: a portrait
+#: poster is drawn at card width on a phone, and a 1280 minimum would refuse
+#: perfectly good artwork to protect a 200px card.
+EVENT_PORTRAIT_SPEC = ImageSpec(
+    label="portrait poster",
+    min_width=800,
+    min_height=1000,
+    min_ratio=0.6,
+    max_ratio=0.8,
+    recommended_width=1200,
+    recommended_height=1600,
+    frame="it is the picture people see first on a phone, where the card is taller than it is wide",
 )
 
 
@@ -142,6 +209,7 @@ CREW_PORTRAIT_SPEC = ImageSpec(
     max_ratio=1.05,
     recommended_width=800,
     recommended_height=1000,
+    frame="the lineup draws tall cards and a landscape crop of a face is a picture of a forehead",
 )
 
 
@@ -213,11 +281,16 @@ def validate_dimensions(upload: UploadedFile, spec: ImageSpec) -> tuple[int, int
 
     ratio = width / height
     if ratio < spec.min_ratio or ratio > spec.max_ratio:
+        # EVERY part of this sentence comes from the spec. It used to hard-code
+        # "landscape", "widescreen frame" and "(16:9)", which made it a
+        # contradiction for any non-landscape slot — and the whole point of
+        # naming real numbers is that an organiser fixes their export in two
+        # minutes instead of filing a support ticket.
         raise InvalidInputError(
             f"That image is {width} x {height}, which is {describe_shape(ratio)}. "
-            f"The {spec.label} has to be landscape — between {spec.min_ratio:g}:1 and "
-            f"{spec.max_ratio:g}:1 — because every image on the event page is shown in the "
-            f"same widescreen frame. Export it at {spec.recommended} (16:9) to fit exactly."
+            f"The {spec.label} has to be {spec.orientation} — between {spec.min_ratio:g}:1 "
+            f"and {spec.max_ratio:g}:1 — because {spec.frame}. Export it at "
+            f"{spec.recommended} ({spec.recommended_shape}) to fit exactly."
         )
 
     if width < spec.min_width or height < spec.min_height:

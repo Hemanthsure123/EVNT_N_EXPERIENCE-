@@ -1369,10 +1369,18 @@ class EventContentService:
         if not alt_text.strip():
             raise InvalidInputError("Alt text is required — it is what a screen reader reads.")
 
-        # `EVENT_IMAGE_SPEC` because every one of these renders in the event
-        # page's single widescreen frame — the hero, the filmstrip and the
-        # lightbox all draw the same shape. See the note on `ImageSpec`.
-        content_type = validate_image(upload, spec=EVENT_IMAGE_SPEC)
+        # PER KIND, not one spec for all of them. The hero, the filmstrip and
+        # the lightbox really do share one widescreen frame — but `MOBILE` does
+        # not: its whole job is the picture somebody sees on a phone, where the
+        # card is taller than it is wide, and forcing it landscape made the one
+        # slot named for mobile the one slot that could not be.
+        #
+        # An unlisted kind falls back to the landscape spec (see `MEDIA_SPECS`).
+        from .repositories import MEDIA_SPECS
+
+        content_type = validate_image(
+            upload, spec=MEDIA_SPECS.get(MediaKind(kind), EVENT_IMAGE_SPEC)
+        )
         path = storage_path(prefix="event-media", owner_id=str(event.id), filename=upload.name)
 
         # OUTSIDE the transaction: storage is slow external I/O, and CLAUDE.md's
@@ -1434,6 +1442,30 @@ class EventContentService:
         kind = applied.get("kind")
         if kind is not None and kind != media.kind:
             self._require_media_slot(event.id, kind)
+            # ── AND THE SHAPES HAVE TO MATCH ──────────────────────────────
+            #
+            # The cap re-check above exists because a row uploaded as `gallery`
+            # and PATCHed to `hero` would otherwise skip the create path's cap.
+            # The SPEC has exactly the same hole and no equivalent guard: a
+            # landscape image moved to `mobile` would sit in the portrait slot
+            # having never been measured against it, and by then the bytes are
+            # gone — there is nothing left to re-validate.
+            #
+            # So a move BETWEEN SHAPES is refused, naming the fix. Moves within
+            # one shape (gallery -> hero) stay free, which is every move an
+            # organizer actually makes from the studio.
+            from core.uploads import EVENT_IMAGE_SPEC
+
+            from .repositories import MEDIA_SPECS
+
+            before = MEDIA_SPECS.get(MediaKind(media.kind), EVENT_IMAGE_SPEC)
+            after = MEDIA_SPECS.get(MediaKind(kind), EVENT_IMAGE_SPEC)
+            if before is not after:
+                raise InvalidInputError(
+                    f"A {before.label} cannot become a {after.label} — they are different "
+                    f"shapes, and this image was only ever checked against the first. "
+                    f"Upload it again in the new slot."
+                )
 
         with UnitOfWork():
             updated = self._content.update_media(

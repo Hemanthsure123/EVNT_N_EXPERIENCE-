@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EVENT_IMAGE } from '@/lib/api/event-content';
+import { EVENT_IMAGE, shapeForKind } from '@/lib/api/event-content';
 import {
   GALLERY_COMBINED_WARN_BYTES,
   GALLERY_UI_CAP,
@@ -23,14 +23,41 @@ const hero = IMAGE_ZONES.find((zone) => zone.kind === 'hero') as ImageZone;
  * will not take. So every number in the table is checked against the server's.
  */
 describe('the zone table agrees with the server', () => {
-  it('never advertises a shape outside EVENT_IMAGE_SPEC', () => {
-    // `EventContentService.upload_media` runs `validate_image(..., spec=
-    // EVENT_IMAGE_SPEC)` for EVERY kind — there is no per-kind spec — so a
-    // zone whose target sits outside 1.5–2.0 would be a dropzone that refuses
-    // everything it asks for. This is why there is no 3:4 portrait zone.
+  it('never advertises a shape the server would refuse FOR THAT KIND', () => {
+    // PER ZONE, not against one shared band. `upload_media` used to run
+    // `validate_image(..., spec=EVENT_IMAGE_SPEC)` for every kind, and this
+    // test read `EVENT_IMAGE.minRatio` directly — correct then, and the reason
+    // the comment here said "this is why there is no 3:4 portrait zone".
+    //
+    // `MEDIA_SPECS` gives `mobile` a portrait spec now. The GUARANTEE is
+    // unchanged and is the whole point of the file: a zone that advertises
+    // something its own kind's spec refuses is a dropzone whose every upload
+    // comes back 400, with a message contradicting the label above it. Only
+    // the single-band assumption died.
     for (const zone of IMAGE_ZONES) {
-      expect(zone.targetRatio).toBeGreaterThanOrEqual(EVENT_IMAGE.minRatio);
-      expect(zone.targetRatio).toBeLessThanOrEqual(EVENT_IMAGE.maxRatio);
+      const shape = shapeForKind(zone.kind);
+      expect(zone.targetRatio).toBeGreaterThanOrEqual(shape.minRatio);
+      expect(zone.targetRatio).toBeLessThanOrEqual(shape.maxRatio);
+    }
+  });
+
+  it('gives the portrait slot a genuinely portrait target', () => {
+    // The regression that would undo the whole change while keeping every
+    // other test green: revert `mobile` to 16:9 and the loop above still
+    // passes, because `shapeForKind` would then be asked about a landscape
+    // ratio against... the portrait spec. It would fail — but only if the map
+    // and the zone disagree. This pins the INTENT.
+    const mobile = IMAGE_ZONES.find((zone) => zone.kind === 'mobile') as ImageZone;
+    expect(mobile.targetRatio).toBeLessThan(1);
+    expect(shapeForKind('mobile').orientation).toBe('portrait');
+  });
+
+  it('still holds every OTHER zone to the landscape spec', () => {
+    // A kind absent from `SHAPE_FOR_KIND` falls back to landscape, exactly as
+    // the server does. If that fallback ever inverted, every zone would pass
+    // the loop above vacuously.
+    for (const zone of IMAGE_ZONES.filter((candidate) => candidate.kind !== 'mobile')) {
+      expect(shapeForKind(zone.kind)).toBe(EVENT_IMAGE);
     }
   });
 

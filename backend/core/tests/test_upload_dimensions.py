@@ -15,7 +15,9 @@ from PIL import Image
 
 from core.errors import InvalidInputError
 from core.uploads import (
+    CREW_PORTRAIT_SPEC,
     EVENT_IMAGE_SPEC,
+    EVENT_PORTRAIT_SPEC,
     ImageSpec,
     describe_shape,
     validate_dimensions,
@@ -157,3 +159,93 @@ class TestTheSpecIsReusable:
 def test_a_wrong_shape_is_named_in_words_somebody_can_check(ratio, expected):
     # "aspect ratio 0.67" is a number nobody chose and cannot act on.
     assert expected in describe_shape(ratio)
+
+
+class TestTheRefusalDescribesTheSlotItIsRefusingFor:
+    """The message is built from the SPEC, not from the one slot that existed
+    when it was written.
+
+    Every clause used to be hard-coded landscape: "has to be landscape",
+    "shown in the same widescreen frame", "(16:9)". That was true of
+    `EVENT_IMAGE_SPEC` and became a contradiction the moment a second spec
+    landed — `CREW_PORTRAIT_SPEC` told anyone uploading a landscape headshot
+    that the crew photo "has to be landscape - between 0.6:1 and 1.05:1", which
+    is impossible on its face. No test covered it because the assertions here
+    only ever used the event spec.
+    """
+
+    def test_a_landscape_upload_to_a_PORTRAIT_slot_is_not_told_to_make_it_landscape(self):
+        with pytest.raises(InvalidInputError) as refusal:
+            validate_dimensions(png(1920, 1080), EVENT_PORTRAIT_SPEC)
+
+        message = str(refusal.value)
+        assert "has to be portrait" in message
+        # The exact sentence that used to be produced, asserted as ABSENT.
+        assert "has to be landscape" not in message
+
+    def test_the_recommended_ratio_is_computed_not_the_literal_16_9(self):
+        with pytest.raises(InvalidInputError) as refusal:
+            validate_dimensions(png(1920, 1080), EVENT_PORTRAIT_SPEC)
+
+        message = str(refusal.value)
+        # 1200x1600 reduces to 3:4. It used to say "(16:9)" for every spec.
+        assert "1200 x 1600 (3:4)" in message
+        assert "16:9" not in message
+
+    def test_the_crew_spec_no_longer_contradicts_itself(self):
+        """The live bug this fixes. A headshot band straddles 1.0, so neither
+        "portrait" nor "square" alone is true — it says both."""
+        with pytest.raises(InvalidInputError) as refusal:
+            validate_dimensions(png(1920, 1080), CREW_PORTRAIT_SPEC)
+
+        message = str(refusal.value)
+        assert "portrait or square" in message
+        assert "has to be landscape" not in message
+
+    def test_the_event_spec_still_says_landscape(self):
+        """The fix must not have changed the message that was already right."""
+        with pytest.raises(InvalidInputError) as refusal:
+            validate_dimensions(png(1200, 1600), EVENT_IMAGE_SPEC)
+
+        assert "has to be landscape" in str(refusal.value)
+
+    def test_each_spec_names_its_own_frame(self):
+        """The "because …" clause is the part that tells somebody WHY, and one
+        shared sentence about "the event page" is wrong for a lineup card."""
+        with pytest.raises(InvalidInputError) as refusal:
+            validate_dimensions(png(1920, 1080), CREW_PORTRAIT_SPEC)
+
+        assert "picture of a forehead" in str(refusal.value)
+
+
+class TestThePortraitPosterSlot:
+    """`EVENT_PORTRAIT_SPEC` — the primary mobile visual.
+
+    It exists because `MOBILE` was the one media kind named for phones and the
+    one kind that could not be shaped for them: every image went through the
+    landscape spec.
+    """
+
+    def test_it_accepts_the_two_shapes_organisers_actually_have(self):
+        # 2:3 is a print poster and the shape of the mobile deck's own cards;
+        # 3:4 is the brief's ratio. Demanding exactly one would refuse the
+        # other, so the band covers both.
+        validate_dimensions(png(1200, 1800), EVENT_PORTRAIT_SPEC)  # 2:3
+        validate_dimensions(png(1200, 1600), EVENT_PORTRAIT_SPEC)  # 3:4
+
+    def test_it_refuses_a_landscape_export(self):
+        with pytest.raises(InvalidInputError):
+            validate_dimensions(png(1920, 1080), EVENT_PORTRAIT_SPEC)
+
+    def test_it_refuses_a_square_one(self):
+        """A square crop in a tall frame is either letterboxed or cropped to a
+        detail nobody chose."""
+        with pytest.raises(InvalidInputError):
+            validate_dimensions(png(1200, 1200), EVENT_PORTRAIT_SPEC)
+
+    def test_its_floor_is_lower_than_the_landscape_one(self):
+        """A portrait poster is drawn at card width on a phone. A 1280px
+        minimum would refuse good artwork to protect a 200px card."""
+        validate_dimensions(png(800, 1000), EVENT_PORTRAIT_SPEC)
+        with pytest.raises(InvalidInputError):
+            validate_dimensions(png(400, 500), EVENT_PORTRAIT_SPEC)

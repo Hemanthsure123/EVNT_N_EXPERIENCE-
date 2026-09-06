@@ -17,6 +17,7 @@ import {
   EVENT_IMAGE_HINT,
   addMedia,
   checkImageFile,
+  shapeForKind,
   fetchEventContent,
   removeMedia,
   reorderMedia,
@@ -222,9 +223,15 @@ export function MediaStep({
     const accepted: Staged[] = [];
     const rejected: Pending[] = [];
     for (const file of files) {
-      // The SERVER's rule, mirrored: type, size, then shape against
-      // `EVENT_IMAGE_SPEC`. Everything below this line is advice.
-      const problem = await checkImageFile(file);
+      // The SERVER's rule, mirrored: type, size, then shape against THIS
+      // KIND's spec. Everything below this line is advice.
+      //
+      // Passing the shape is what makes the portrait slot reachable at all: the
+      // browser pre-check runs before the API is consulted, so without it a
+      // portrait poster is refused here with "Event images have to be
+      // landscape" — a message contradicting the label directly above the
+      // dropzone, and the server's per-kind spec never gets a say.
+      const problem = await checkImageFile(file, shapeForKind(forKind));
       if (problem) {
         // Rejected client-side, but shown as a failed tile rather than a toast
         // — the organizer needs to see WHICH file was refused.
@@ -822,11 +829,15 @@ function CoverUploader({
 
   const take = async (candidate: File | undefined) => {
     if (!candidate) return;
-    // The same pre-check the gallery uses — type, size AND shape — so a 14 MB
+    // The same pre-check the zones use — type, size AND shape — so a 14 MB
     // cover or a portrait poster is refused here rather than at the end of the
-    // next autosave. The cover is the picture the hero frame draws, so if
-    // anything has to be 16:9 it is this one.
-    const rejected = await checkImageFile(candidate);
+    // next autosave.
+    //
+    // LANDSCAPE, explicitly, and it stays that way now the portrait slot
+    // exists: `Event.poster_url` is the denormal every card on the platform
+    // reads and the picture the hero frame draws. The portrait poster is a
+    // MEDIA row (`mobile`), not this column.
+    const rejected = await checkImageFile(candidate, EVENT_IMAGE);
     setProblem(rejected);
     if (!rejected) onPoster(candidate);
   };

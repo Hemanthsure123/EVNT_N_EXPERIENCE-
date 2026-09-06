@@ -1,4 +1,4 @@
-import { EVENT_IMAGE, type MediaKind } from '@/lib/api/event-content';
+import { EVENT_IMAGE, EVENT_PORTRAIT, type MediaKind } from '@/lib/api/event-content';
 
 /**
  * What each image slot on an event is FOR, and what shape it has to be.
@@ -17,25 +17,25 @@ import { EVENT_IMAGE, type MediaKind } from '@/lib/api/event-content';
  * A zone per slot answers all three questions before the file picker opens:
  * what it is, what shape it has to be, and how many are left.
  *
- * ── EVERY EVENT IMAGE IS LANDSCAPE, INCLUDING THE MOBILE ONE ──────────────
+ * ── THE MOBILE SLOT IS PORTRAIT NOW, AND THAT IS A BACKEND CHANGE ─────────
  *
- * A "portrait poster (3:4)" zone is the obvious thing to want here and it
- * cannot be built today. `EventContentService.upload_media` calls
- * `validate_image(upload, spec=EVENT_IMAGE_SPEC)` for EVERY kind — there is no
- * per-kind spec — and `EVENT_IMAGE_SPEC` refuses anything outside 1.5:1 to
- * 2:1. A 3:4 poster is 0.75. So a zone captioned "portrait" would be a
- * dropzone in which every single upload is refused by the server, with a
- * message contradicting the label directly above it: the worst kind of broken,
- * because the control looks like it works right up to the point money is spent
- * on a designer's time.
+ * This paragraph used to explain why a "portrait poster (3:4)" zone could not
+ * be built: `upload_media` called `validate_image(upload, spec=
+ * EVENT_IMAGE_SPEC)` for EVERY kind, so a zone captioned "portrait" would have
+ * been a dropzone in which every upload was refused by the server, with a
+ * message contradicting the label above it.
  *
- * The `mobile` kind is therefore drawn as what the server will actually
- * accept, and the portrait slot is a backend change (a `MOBILE_IMAGE_SPEC`
- * beside `CREW_PORTRAIT_SPEC`, which is exactly the precedent — the crew
- * portrait exists because `EVENT_IMAGE_SPEC` "would refuse every one of
- * these"). Until that lands, `targetRatio` here is the server's own
- * recommendation and nothing in this file invents a shape the API will not
- * take.
+ * That precondition is met. `MEDIA_SPECS` in `apps/events/repositories.py`
+ * maps `mobile` to `EVENT_PORTRAIT_SPEC`, and `SHAPE_FOR_KIND` in
+ * `lib/api/event-content.ts` mirrors it so the browser pre-check agrees. The
+ * band accepts 2:3 through 3:4 — the two shapes organisers actually have —
+ * rather than the single ratio the brief names.
+ *
+ * The rule the old paragraph was really stating still holds and is worth
+ * keeping: NOTHING IN THIS FILE INVENTS A SHAPE THE API WILL NOT TAKE. Every
+ * `targetRatio` here is inside its kind's server spec, and `media-zones.test`
+ * checks each zone against the spec for ITS OWN kind rather than against one
+ * shared band.
  *
  * ── THE CAPS: WHICH ARE RULES AND WHICH ARE ADVICE ────────────────────────
  *
@@ -75,6 +75,9 @@ export type ImageZone = {
 
 /** 16:9 — the shape `EVENT_IMAGE_SPEC` recommends and the event page draws. */
 const SIXTEEN_NINE = EVENT_IMAGE.recommendedWidth / EVENT_IMAGE.recommendedHeight;
+/** DERIVED from the spec, like the one above it — a literal 0.75 here and a
+ *  changed recommendation there is how the label and the gate drift apart. */
+const THREE_FOUR = EVENT_PORTRAIT.recommendedWidth / EVENT_PORTRAIT.recommendedHeight;
 
 /**
  * How large a gallery may get before this step says something.
@@ -103,10 +106,11 @@ export const IMAGE_ZONES: readonly ImageZone[] = [
   },
   {
     kind: 'mobile',
-    title: 'Mobile banner',
-    purpose: 'The banner shown above the event on a phone.',
-    targetRatio: SIXTEEN_NINE,
-    targetLabel: '16:9',
+    title: 'Portrait poster',
+    purpose:
+      'The picture people see first on a phone, where the card is taller than it is wide.',
+    targetRatio: THREE_FOUR,
+    targetLabel: '3:4',
     serverCap: 1,
     uiCap: 1,
     capIsGuideline: false,
