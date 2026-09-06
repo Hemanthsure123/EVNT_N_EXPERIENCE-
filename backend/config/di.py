@@ -609,7 +609,7 @@ def build_ticketing_service() -> TicketingService:
 def build_booking_service() -> BookingService:
     from apps.booking.repositories import BookingRepository, TicketRepository
     from apps.booking.services import BookingService
-    from apps.events.repositories import EventRepository
+    from apps.events.repositories import EventContentRepository, EventRepository
     from apps.ticketing.repositories import TicketTypeRepository
 
     return BookingService(
@@ -618,6 +618,7 @@ def build_booking_service() -> BookingService:
         ticket_types=TicketTypeRepository(),
         ticketing=build_ticketing_service(),
         events=EventRepository(),
+        event_content=EventContentRepository(),
         payments=payment_port(),
         cache=cache_port(),
         qr_secret=settings.TICKET_QR_SIGNING_KEY,

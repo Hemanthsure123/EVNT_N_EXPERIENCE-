@@ -137,7 +137,14 @@ describe('draftToPreview', () => {
 
     // These live on the server against their own endpoints, so a draft holds
     // none. The page omits each section entirely, which is what a visitor sees.
-    expect(content).toEqual({ media: [], faqs: [], timeline: [], slots: [], crew: [] });
+    expect(content).toEqual({
+      media: [],
+      faqs: [],
+      timeline: [],
+      slots: [],
+      crew: [],
+      questions: [],
+    });
   });
 
   it('never previews an unsaved draft as live', () => {

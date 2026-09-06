@@ -28,6 +28,7 @@ from .models import (
     EventCrew,
     EventFaq,
     EventMedia,
+    EventQuestion,
     EventSlot,
     EventStatus,
     EventTimelineEntry,
@@ -1122,6 +1123,80 @@ class EventContentRepository:
             )
             == 1
         )
+
+    # ---------------------------------------------------------- questions
+
+    def questions_for(self, event_id: uuid.UUID | str) -> list[EventQuestion]:
+        """The live questions, in the organiser's order.
+
+        `.only()` covers everything `EventQuestionSerializer` reads — a field
+        the serializer touches and this omits is a deferred load, one extra
+        query per question on a checkout.
+        """
+        return list(
+            EventQuestion.objects.filter(event_id=event_id, deleted_at__isnull=True)
+            .only(
+                "id",
+                "prompt",
+                "help_text",
+                "kind",
+                "choices",
+                "is_required",
+                "position",
+                "event_id",
+            )
+            .order_by("position", "created_at")
+        )
+
+    def required_question_ids(self, event_id: uuid.UUID | str) -> set[str]:
+        """Just the ids that must be answered — the check on the write path.
+
+        A `values_list` rather than loading rows: this runs on every booking
+        creation for every event, and the answer is a set of uuids.
+        """
+        return {
+            str(value)
+            for value in EventQuestion.objects.filter(
+                event_id=event_id, deleted_at__isnull=True, is_required=True
+            ).values_list("id", flat=True)
+        }
+
+    def count_questions(self, event_id: uuid.UUID | str) -> int:
+        return EventQuestion.objects.filter(event_id=event_id, deleted_at__isnull=True).count()
+
+    def add_question(self, **fields) -> EventQuestion:
+        return EventQuestion.objects.create(**fields)
+
+    def update_question(
+        self, *, event_id: uuid.UUID | str, question_id: uuid.UUID | str, changes: dict
+    ) -> EventQuestion | None:
+        """In-place edit, scoped by event. None when nothing matched."""
+        updated = EventQuestion.objects.filter(
+            pk=question_id, event_id=event_id, deleted_at__isnull=True
+        ).update(updated_at=timezone.now(), **changes)
+        if updated != 1:
+            return None
+        return EventQuestion.objects.filter(pk=question_id, event_id=event_id).first()
+
+    def soft_delete_question(self, question_id: uuid.UUID | str) -> bool:
+        """SOFT, and `BookingAnswer.question` is `PROTECT`ed besides.
+
+        An answer whose prompt was hard-deleted is a value with no question —
+        "Vegetarian" against nothing, which an organiser cannot act on.
+        """
+        return (
+            EventQuestion.objects.filter(pk=question_id, deleted_at__isnull=True).update(
+                deleted_at=timezone.now()
+            )
+            == 1
+        )
+
+    def get_question(
+        self, *, event_id: uuid.UUID | str, question_id: uuid.UUID | str
+    ) -> EventQuestion | None:
+        return EventQuestion.objects.filter(
+            pk=question_id, event_id=event_id, deleted_at__isnull=True
+        ).first()
 
     # ----------------------------------------------------------- timeline
 

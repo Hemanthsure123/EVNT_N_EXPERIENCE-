@@ -54,6 +54,7 @@ from .schemas import (
     EventFaqSerializer,
     EventMediaListSerializer,
     EventMediaSerializer,
+    EventQuestionSerializer,
     EventSearchQuerySerializer,
     EventSitemapEntrySerializer,
     EventSlotSerializer,
@@ -67,11 +68,13 @@ from .schemas import (
     UpdateCrewMemberRequestSerializer,
     UpdateEventFaqSerializer,
     UpdateEventMediaSerializer,
+    UpdateEventQuestionSerializer,
     UpdateEventRequestSerializer,
     UpdateEventSlotSerializer,
     UpdateEventTimelineSerializer,
     WriteEventFaqSerializer,
     WriteEventMediaSerializer,
+    WriteEventQuestionSerializer,
     WriteEventTimelineSerializer,
 )
 from .selectors import (
@@ -413,6 +416,15 @@ class EventContentView(APIView):
             "crew": EventCrewEntrySerializer(
                 EventCrewRepository().for_event(event_id), many=True
             ).data,
+            # The questionnaire the checkout has to render before somebody can
+            # book. Here rather than on its own route for the same reason as
+            # `slots` and `crew`: this document is already edge-cached and
+            # already invalidated by every content write, so it costs one
+            # cached read instead of a round trip the checkout would have to
+            # wait on. `[]` for the great majority of events.
+            "questions": EventQuestionSerializer(
+                repository.questions_for(event_id), many=True
+            ).data,
         }
         etag = make_etag(body)
         if is_not_modified(request, etag):
@@ -516,6 +528,53 @@ class EventMediaDetailView(_OwnerWriteView):
     @extend_schema(responses={204: None})
     def delete(self, request: Request, event_id: str, media_id: str) -> Response:
         self._service.remove_media(event_id=event_id, actor_id=self._actor, media_id=media_id)
+        return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
+
+
+class EventQuestionView(_OwnerWriteView):
+    """The organiser's questionnaire: list and add.
+
+    GET is owner-scoped even though the questions are public — the CHECKOUT
+    reads them off `GET /events/{id}/content` with everything else, and giving
+    this route a second public audience would mean two caching postures for one
+    collection. Here it is `private, no-store`, like every other owner read.
+    """
+
+    @extend_schema(responses={200: EventQuestionSerializer(many=True)})
+    def get(self, request: Request, event_id: str) -> Response:
+        rows = self._service.list_questions(event_id=event_id, actor_id=self._actor)
+        return _no_store(Response({"data": EventQuestionSerializer(rows, many=True).data}))
+
+    @extend_schema(request=WriteEventQuestionSerializer, responses={201: EventQuestionSerializer})
+    def post(self, request: Request, event_id: str) -> Response:
+        payload = WriteEventQuestionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        question = self._service.add_question(
+            event_id=event_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(
+            Response(EventQuestionSerializer(question).data, status=status.HTTP_201_CREATED)
+        )
+
+
+class EventQuestionDetailView(_OwnerWriteView):
+    @extend_schema(request=UpdateEventQuestionSerializer, responses={200: EventQuestionSerializer})
+    def patch(self, request: Request, event_id: str, question_id: str) -> Response:
+        payload = UpdateEventQuestionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        question = self._service.update_question(
+            event_id=event_id,
+            actor_id=self._actor,
+            question_id=question_id,
+            changes=dict(payload.validated_data),
+        )
+        return _no_store(Response(EventQuestionSerializer(question).data))
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, event_id: str, question_id: str) -> Response:
+        self._service.remove_question(
+            event_id=event_id, actor_id=self._actor, question_id=question_id
+        )
         return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
 
 

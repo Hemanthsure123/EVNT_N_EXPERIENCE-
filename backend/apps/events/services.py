@@ -58,7 +58,7 @@ from .exceptions import (
     SlotInUseError,
     StaleEventVersionError,
 )
-from .models import CrewMember, Event, EventSlot, EventStatus, MediaKind
+from .models import CrewMember, Event, EventSlot, EventStatus, MediaKind, QuestionKind
 from .publish_checks import run_publish_checks
 from .repositories import (
     CrewMemberRepository,
@@ -1109,6 +1109,18 @@ class EventModerationService:
 # see `UpdateEventMediaSerializer`.
 _EDITABLE_MEDIA_FIELDS = ("kind", "alt_text", "caption", "position")
 _EDITABLE_FAQ_FIELDS = ("question", "answer", "position")
+#: `position` so the studio can reorder, `is_required` so a question can be
+#: relaxed without retyping it. NOT `event`: a question cannot move between
+#: events, and accepting the field would let a PATCH reparent one straight past
+#: the ownership check that has just run.
+_EDITABLE_QUESTION_FIELDS = (
+    "prompt",
+    "help_text",
+    "kind",
+    "choices",
+    "is_required",
+    "position",
+)
 _EDITABLE_TIMELINE_FIELDS = ("label", "description", "starts_at", "position")
 
 
@@ -1546,6 +1558,138 @@ class EventContentService:
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
 
     # ---------------------------------------------------------------- faq
+
+    # ---------------------------------------------------------- questions
+
+    #: The brief's cap, and a real one: a checkout that asks six questions is a
+    #: checkout people leave. Enforced here rather than in the database for the
+    #: same reason `MEDIA_LIMITS` is — it is a product policy, not an invariant
+    #: the data would be corrupt without.
+    MAX_QUESTIONS = 5
+
+    def list_questions(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str):
+        """The organiser's own view — every live question, in their order."""
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        return self._content.questions_for(event.id)
+
+    def add_question(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        prompt: str,
+        kind: str,
+        help_text: str = "",
+        choices: list[str] | None = None,
+        is_required: bool = False,
+        position: int = 0,
+    ):
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        if not prompt.strip():
+            raise InvalidInputError("A question needs something to ask.")
+
+        if self._content.count_questions(event.id) >= self.MAX_QUESTIONS:
+            raise InvalidInputError(
+                f"An event can ask at most {self.MAX_QUESTIONS} questions. "
+                "Remove one to add another."
+            )
+
+        cleaned = self._clean_choices(kind, choices)
+
+        with UnitOfWork():
+            question = self._content.add_question(
+                event_id=event.id,
+                prompt=prompt.strip(),
+                help_text=help_text.strip(),
+                kind=kind,
+                choices=cleaned,
+                is_required=is_required,
+                position=position,
+            )
+            self._invalidate_if_public(event)
+        return question
+
+    def update_question(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        question_id: uuid.UUID | str,
+        changes: dict,
+    ):
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        applied = _applied(changes, _EDITABLE_QUESTION_FIELDS)
+        if "prompt" in applied and not applied["prompt"].strip():
+            raise InvalidInputError("A question needs something to ask.")
+
+        # The kind decides whether choices mean anything, so BOTH have to be
+        # considered together — even when only one of them is being changed.
+        # Editing a `choice` question's options without re-reading its kind, or
+        # switching kind without clearing the options, leaves a row whose
+        # `choices` contradict its `kind`, and the renderer trusts the kind.
+        if "kind" in applied or "choices" in applied:
+            existing = self._content.get_question(event_id=event.id, question_id=question_id)
+            if existing is None:
+                raise EventNotFoundError(str(question_id))
+            kind = applied.get("kind", existing.kind)
+            applied["kind"] = kind
+            applied["choices"] = self._clean_choices(kind, applied.get("choices", existing.choices))
+
+        if "prompt" in applied:
+            applied["prompt"] = applied["prompt"].strip()
+        if "help_text" in applied:
+            applied["help_text"] = applied["help_text"].strip()
+
+        with UnitOfWork():
+            updated = self._content.update_question(
+                event_id=event.id, question_id=question_id, changes=applied
+            )
+            if updated is None:
+                raise EventNotFoundError(str(question_id))
+            self._invalidate_if_public(event)
+        return updated
+
+    def remove_question(
+        self,
+        *,
+        event_id: uuid.UUID | str,
+        actor_id: uuid.UUID | str,
+        question_id: uuid.UUID | str,
+    ) -> None:
+        """Retire a question. SOFT, always.
+
+        `BookingAnswer.question` is `PROTECT`ed, so a hard delete of a question
+        somebody has answered would raise an IntegrityError — and even if it
+        did not, it would leave the answer as a value with no prompt, which an
+        organiser reading their export cannot act on.
+        """
+        event = self._owned(event_id=event_id, actor_id=actor_id)
+        with UnitOfWork():
+            if not self._content.soft_delete_question(question_id):
+                raise EventNotFoundError(str(question_id))
+            self._invalidate_if_public(event)
+
+    @staticmethod
+    def _clean_choices(kind: str, choices: list[str] | None) -> list[str]:
+        """Trim, drop blanks, collapse duplicates — and refuse an empty set.
+
+        A `CHOICE` question with no options is a control with nothing to pick,
+        which renders as a dead dropdown at a checkout. Every other kind stores
+        an empty list: options on a yes/no question are options nothing reads,
+        and leaving them would let a kind change resurrect stale ones.
+        """
+        if kind != QuestionKind.CHOICE:
+            return []
+        cleaned: list[str] = []
+        for option in choices or []:
+            text = option.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        if len(cleaned) < 2:
+            raise InvalidInputError(
+                "A multiple-choice question needs at least two options to choose between."
+            )
+        return cleaned
 
     def add_faq(
         self,

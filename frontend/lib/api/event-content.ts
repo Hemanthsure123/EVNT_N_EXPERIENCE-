@@ -101,6 +101,15 @@ export type EventContent = {
    */
   slots: EventSlot[];
   /**
+   * The organiser's questionnaire — what they need to know before somebody
+   * turns up. Empty for the great majority of events.
+   *
+   * On this payload for the same reason `slots` and `crew` are: it is already
+   * edge-cached and already invalidated by every content write, so the
+   * checkout renders it without a second round trip.
+   */
+  questions: EventQuestion[];
+  /**
    * Who is taking the stage, in the organiser's own order.
    *
    * On THIS payload rather than an endpoint of its own for the same reason
@@ -126,6 +135,21 @@ export type EventCrewEntry = {
 };
 
 const base = (eventId: string) => `/events/${encodeURIComponent(eventId)}`;
+
+/** One question on an event's questionnaire. */
+export type EventQuestion = {
+  id: string;
+  prompt: string;
+  /** One line under the prompt. Blank far more often than not. */
+  help_text: string;
+  /** `short_text` | `long_text` | `choice` | `boolean`. */
+  kind: string;
+  /** The options, for `choice` only. Empty for every other kind. */
+  choices: string[];
+  /** A required question must be answered before the booking is made. */
+  is_required: boolean;
+  position: number;
+};
 
 export const fetchEventContent = (eventId: string) =>
   api.get<EventContent>(`${base(eventId)}/content`);

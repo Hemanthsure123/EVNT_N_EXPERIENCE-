@@ -57,6 +57,7 @@ class TestReads:
             "timeline": [],
             "slots": [],
             "crew": [],
+            "questions": [],
         }
 
     def test_content_is_edge_cacheable(self, api_client, make_event):

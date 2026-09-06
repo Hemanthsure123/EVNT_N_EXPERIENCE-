@@ -33,7 +33,7 @@ from django.contrib.auth.models import BaseUserManager
 from django.db import IntegrityError
 from django.utils import timezone
 
-from apps.events.repositories import EventRepository
+from apps.events.repositories import EventContentRepository, EventRepository
 from apps.ticketing.repositories import TicketTypeRepository
 from apps.ticketing.services import TicketingService
 from core.audit import record_audit
@@ -60,7 +60,7 @@ from .exceptions import (
     InvalidBookingItemsError,
     NotBookingOwnerError,
 )
-from .models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
+from .models import Booking, BookingAnswer, BookingItem, BookingStatus, Ticket, TicketStatus
 from .qr import sign_ticket
 from .repositories import BookingRepository, TicketRepository
 
@@ -94,6 +94,11 @@ class BookingService:
         ticket_types: TicketTypeRepository,
         ticketing: TicketingService,
         events: EventRepository,
+        #: The event's CONTENT, for the questionnaire. Defaulted rather than
+        #: required so the dozens of tests that construct this service by hand
+        #: keep working — it is a stateless reader, and `config/di.py` passes
+        #: one explicitly on the real path.
+        event_content: EventContentRepository | None = None,
         payments: PaymentPort,
         cache: CachePort,
         qr_secret: str,
@@ -106,6 +111,7 @@ class BookingService:
         self._ticket_types = ticket_types
         self._ticketing = ticketing
         self._events = events
+        self._event_content = event_content or EventContentRepository()
         self._payments = payments
         self._cache = cache
         self._qr_secret = qr_secret
@@ -235,6 +241,7 @@ class BookingService:
         items: list[dict],
         donation_minor: int = 0,
         idempotency_key: str | None = None,
+        answers: dict[str, str] | None = None,
     ) -> BookingCreationResult:
         if not items:
             raise InvalidBookingItemsError("At least one item is required.")
@@ -250,6 +257,22 @@ class BookingService:
         # no face price carried forward for a later line to bill by mistake.
         tiers = {str(t.id): t for t in self._ticket_types.list_for_event(event_id)}
         requested = self._validate_items(items, tiers)
+
+        # ── THE QUESTIONNAIRE, CHECKED BEFORE ANY LOCK IS TAKEN ──────────
+        #
+        # One read and a dict comparison. It runs HERE, ahead of the reserve,
+        # for the same reason `_validate_items` does: refusing a booking after
+        # taking per-tier row locks means holding those locks to do work that
+        # was always going to fail, on the platform's hottest write.
+        #
+        # It is part of `create_booking` rather than a later endpoint because
+        # this is the ONE place the rule cannot be bypassed. A separate
+        # "submit your answers" call that the client is trusted to make before
+        # paying is a gate with an API-shaped hole in it, and the alternative —
+        # refusing at confirm — would mean taking somebody's money and then
+        # declining to issue the ticket, which is the single outcome the
+        # payments module exists to prevent.
+        checked_answers = self._validate_answers(event_id, answers or {})
 
         if idempotency_key:
             existing = self._bookings.get_replayable_by_idempotency_key(user_id, idempotency_key)
@@ -277,10 +300,17 @@ class BookingService:
                 # slip between the release and the insert.
                 self._bookings.release_idempotency_key(user_id, idempotency_key)
                 booking = self._reserve_and_insert(
-                    user_id, event_id, requested, donation_minor, idempotency_key
+                    user_id,
+                    event_id,
+                    requested,
+                    donation_minor,
+                    idempotency_key,
+                    checked_answers,
                 )
         else:
-            booking = self._reserve_and_insert(user_id, event_id, requested, donation_minor, None)
+            booking = self._reserve_and_insert(
+                user_id, event_id, requested, donation_minor, None, checked_answers
+            )
 
         # OUTSIDE the transaction/lock: the external payment-order call.
         return self._creation_result(self._ensure_payment_order(booking))
@@ -301,6 +331,51 @@ class BookingService:
                 f"A donation may not exceed {self._donation_max_minor} paise."
             )
         return int(donation_minor)
+
+    def _validate_answers(
+        self, event_id: uuid.UUID | str, answers: dict[str, str]
+    ) -> dict[str, str]:
+        """Every required question answered, and nothing answered that was not asked.
+
+        Returns the cleaned map, keyed by question id as a string.
+
+        ── BOTH DIRECTIONS ARE CHECKED, AND THE SECOND ONE IS THE SECURITY ONE ──
+
+        A missing REQUIRED answer is a product rule: the organiser said they
+        need it before somebody turns up. A submitted answer for a question
+        that is not on THIS event is a client sending ids it should not have —
+        it would either write a row pointing at another organiser's question,
+        or fail on the FK much later inside the reserve transaction. Refused
+        here, by name, so a client can fix a payload in one round trip.
+
+        Blank strings count as UNANSWERED for a required question. A field
+        somebody tabbed through is not an answer, and storing `""` would make
+        the organiser's export claim they had responded.
+        """
+        required = self._event_content.required_question_ids(event_id)
+        if not required and not answers:
+            # The overwhelmingly common case: no questionnaire, nothing sent.
+            # One query is already spent above; this avoids a second.
+            return {}
+
+        askable = {str(q.id) for q in self._event_content.questions_for(event_id)}
+        cleaned: dict[str, str] = {}
+        for question_id, answer in answers.items():
+            key = str(question_id)
+            if key not in askable:
+                raise InvalidBookingItemsError(
+                    "An answer refers to a question that is not on this event."
+                )
+            text = (answer or "").strip()
+            if text:
+                cleaned[key] = text
+
+        missing = sorted(required - cleaned.keys())
+        if missing:
+            raise InvalidBookingItemsError(
+                f"{len(missing)} required question(s) still need an answer."
+            )
+        return cleaned
 
     def _platform_fee_for(self, subtotal_minor: int) -> int:
         """The platform's fee on a ticket subtotal, in whole paise.
@@ -339,6 +414,7 @@ class BookingService:
         requested: list[tuple[uuid.UUID | str, int]],
         donation_minor: int,
         idempotency_key: str | None,
+        answers: dict[str, str] | None = None,
     ) -> Booking:
         booking_id = uuid.uuid4()
         hold_expires_at = timezone.now() + timedelta(minutes=self._hold_minutes)
@@ -420,6 +496,23 @@ class BookingService:
                         for tier_id, quantity, price, phase_name in priced
                     ]
                 )
+                # The questionnaire, in the SAME transaction as the reserve.
+                # Answers already passed `_validate_answers` before any lock
+                # was taken; this is only the write. Inside the transaction so
+                # a booking can never exist without the answers it was accepted
+                # on — a partial failure rolls both back together.
+                if answers:
+                    self._bookings.create_answers(
+                        [
+                            BookingAnswer(
+                                id=uuid.uuid4(),
+                                booking=booking,
+                                question_id=question_id,
+                                answer=text,
+                            )
+                            for question_id, text in answers.items()
+                        ]
+                    )
                 uow.publish(
                     BOOKING_CREATED,
                     {

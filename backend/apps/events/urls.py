@@ -63,6 +63,16 @@ urlpatterns += [
     ),
     path("events/<uuid:event_id>/faqs", api.EventFaqView.as_view(), name="event-faqs"),
     path(
+        "events/<uuid:event_id>/questions",
+        api.EventQuestionView.as_view(),
+        name="event-questions",
+    ),
+    path(
+        "events/<uuid:event_id>/questions/<uuid:question_id>",
+        api.EventQuestionDetailView.as_view(),
+        name="event-question-detail",
+    ),
+    path(
         "events/<uuid:event_id>/faqs/<uuid:faq_id>",
         api.EventFaqDetailView.as_view(),
         name="event-faq-detail",

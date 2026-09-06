@@ -499,6 +499,92 @@ class EventFaq(models.Model):
         return self.question
 
 
+class QuestionKind(models.TextChoices):
+    """How an attendee answers.
+
+    Four, and no more, because every one has to render as a real control and
+    be answerable on a phone at a checkout. A date picker, a file upload and a
+    number spinner were each considered and left out: none has a question an
+    organiser actually asked for, and an unused control is a control nobody
+    tests.
+    """
+
+    SHORT_TEXT = "short_text", "Short answer"
+    LONG_TEXT = "long_text", "Long answer"
+    CHOICE = "choice", "Choose one"
+    BOOLEAN = "boolean", "Yes or no"
+
+
+class EventQuestion(models.Model):
+    """Something the organiser needs to know before somebody turns up.
+
+    Dietary requirements, a T-shirt size, whether they have played before. The
+    answers are the organiser's operational data — they are not used for
+    anything on the money path and never gate a payment.
+
+    ── WHY A TABLE AND NOT A JSON COLUMN ─────────────────────────────────────
+
+    Unlike `Event.policies` (a list written whole, read whole, never queried
+    across rows), a question is JOINED to answers: an organiser exports "every
+    dietary answer for this event", and an answer needs a stable id to point
+    at. A JSON list has no ids, so re-ordering the questions would silently
+    re-point every answer already collected.
+
+    ── FIVE, ENFORCED IN THE SERVICE ─────────────────────────────────────────
+
+    A checkout that asks six questions is a checkout people leave. The cap is
+    the brief's and it lives beside the other content caps rather than in the
+    database, for the same reason `MEDIA_LIMITS` does: it is a product policy,
+    not an invariant the data would be corrupt without.
+
+    ── SOFT DELETE, AND THAT IS LOAD-BEARING ─────────────────────────────────
+
+    `BookingAnswer.question` is `PROTECT`ed, so a question somebody has already
+    answered cannot be removed — the answer would be a value with no prompt,
+    which is worse than no answer at all. Retiring one hides it from new
+    checkouts and keeps every answer already given readable.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="questions")
+    prompt = models.CharField(max_length=200)
+    #: One line under the prompt. "So we can cater for you", not a second
+    #: question — a help text that asks something is a question with no answer
+    #: field.
+    help_text = models.CharField(max_length=200, blank=True, default="")
+    kind = models.CharField(
+        max_length=20, choices=QuestionKind.choices, default=QuestionKind.SHORT_TEXT
+    )
+    #: The options, for `CHOICE` only. A list of short strings; empty for every
+    #: other kind. Same shape as `TicketType.perks`, and validated the same way
+    #: at the boundary — trimmed, blanks dropped, duplicates collapsed.
+    choices = models.JSONField(default=list, blank=True)
+    #: A REQUIRED question must be answered before the booking is made.
+    #:
+    #: Optional is the default deliberately: an organiser adding a question
+    #: mid-sale would otherwise make every existing checkout invalid, and the
+    #: commonest question ("anything we should know?") is one nobody should be
+    #: forced to answer.
+    is_required = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "events_event_question"
+        indexes = [
+            models.Index(
+                fields=["event", "position"],
+                name="event_question_ordered_idx",
+                condition=models.Q(deleted_at__isnull=True),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.prompt
+
+
 class TimelineKind(models.TextChoices):
     DOORS = "doors", "Doors open"
     OPENING = "opening", "Opening act"

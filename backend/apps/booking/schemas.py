@@ -22,6 +22,21 @@ class CreateBookingRequestSerializer(serializers.Serializer):
     # rejects the nonsensical, the service owns the policy — a maximum that
     # lives in settings does not belong in a serializer that cannot read it.
     donation_minor = serializers.IntegerField(min_value=0, required=False, default=0)
+    #: The questionnaire, as `{question_id: answer}`.
+    #:
+    #: A MAP rather than a list of `{question_id, answer}` objects, because one
+    #: question can be answered exactly once and a map says so in its shape —
+    #: a list would need a duplicate check the map gets for free.
+    #:
+    #: Every rule about it lives in the service: which questions this event
+    #: asks, which are required, and whether a blank counts. None of that is
+    #: knowable here, and half-checking it at the boundary is how two places
+    #: end up disagreeing about what a valid answer is.
+    answers = serializers.DictField(
+        child=serializers.CharField(allow_blank=True, max_length=2000),
+        required=False,
+        default=dict,
+    )
 
 
 class SetDonationRequestSerializer(serializers.Serializer):

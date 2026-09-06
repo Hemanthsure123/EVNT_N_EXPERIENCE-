@@ -18,7 +18,15 @@ from rest_framework import serializers
 
 from apps.organizations.models import VerifiedLevel
 
-from .models import Event, EventCategory, EventSlot, EventStatus, MediaKind, TimelineKind
+from .models import (
+    Event,
+    EventCategory,
+    EventSlot,
+    EventStatus,
+    MediaKind,
+    QuestionKind,
+    TimelineKind,
+)
 from .repositories import MEDIA_LIMITS
 from .taxonomy import MAX_TAGS, EventType, unknown_tags
 
@@ -602,6 +610,60 @@ class WriteEventMediaSerializer(serializers.Serializer):
     position = serializers.IntegerField(min_value=0, default=0)
 
 
+class EventQuestionSerializer(serializers.Serializer):
+    """One question, as both the organiser's editor and the checkout read it.
+
+    The SAME serializer for both audiences, because there is nothing private
+    here: a question is shown to every buyer by definition. `EventFaq` has the
+    same property and shares its serializer the same way.
+    """
+
+    id = serializers.UUIDField()
+    prompt = serializers.CharField()
+    #: Shadows DRF's `Field.help_text`, which is a typing artifact only —
+    #: the serializer metaclass moves declared fields into `_declared_fields`,
+    #: so nothing is actually overwritten. Same ignore as `label` on
+    #: `WriteEventTimelineSerializer`.
+    help_text = serializers.CharField(allow_blank=True)  # type: ignore[assignment]
+    kind = serializers.CharField()
+    #: Empty for every kind except `choice` — see `QuestionKind`.
+    choices = serializers.ListField(child=serializers.CharField())
+    is_required = serializers.BooleanField()
+    position = serializers.IntegerField()
+
+
+class WriteEventQuestionSerializer(serializers.Serializer):
+    prompt = serializers.CharField(max_length=200)
+    kind = serializers.ChoiceField(choices=QuestionKind.choices, default=QuestionKind.SHORT_TEXT)
+    help_text = serializers.CharField(  # type: ignore[assignment]
+        max_length=200, required=False, allow_blank=True, default=""
+    )
+    #: Validated in the SERVICE rather than here, because the rule is
+    #: conditional on `kind` and a serializer that enforced it would have to
+    #: re-derive the kind on a PATCH that changes only one of the two.
+    choices = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, default=list
+    )
+    is_required = serializers.BooleanField(default=False)
+    position = serializers.IntegerField(min_value=0, default=0)
+
+
+class UpdateEventQuestionSerializer(serializers.Serializer):
+    prompt = serializers.CharField(max_length=200, required=False)
+    kind = serializers.ChoiceField(choices=QuestionKind.choices, required=False)
+    help_text = serializers.CharField(  # type: ignore[assignment]
+        max_length=200, required=False, allow_blank=True
+    )
+    choices = serializers.ListField(child=serializers.CharField(max_length=100), required=False)
+    is_required = serializers.BooleanField(required=False)
+    position = serializers.IntegerField(min_value=0, required=False)
+
+    def validate(self, attrs: dict) -> dict:
+        if not attrs:
+            raise serializers.ValidationError("Provide at least one field to update.")
+        return attrs
+
+
 class WriteEventFaqSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=200)
     answer = serializers.CharField()
@@ -873,6 +935,12 @@ class EventContentSerializer(serializers.Serializer):
 
     media = EventMediaSerializer(many=True)
     faqs = EventFaqSerializer(many=True)
+    #: What the organiser needs to know before somebody turns up. On this
+    #: payload for the same reason `slots` and `crew` are: already
+    #: edge-cached, already invalidated by every content write, so the
+    #: checkout renders them without a second round trip. `[]` for the
+    #: great majority of events.
+    questions = EventQuestionSerializer(many=True)
     timeline = EventTimelineSerializer(many=True)
     #: Who is taking the stage. On this payload for the same reason `slots` is:
     #: it is already edge-cached and already invalidated by every content write,

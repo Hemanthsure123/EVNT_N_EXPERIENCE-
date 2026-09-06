@@ -177,3 +177,64 @@ class Ticket(models.Model):
 
     def __str__(self) -> str:
         return f"Ticket {self.id} ({self.status})"
+
+
+class BookingAnswer(models.Model):
+    """One attendee's answer to one of the organiser's questions.
+
+    ── WHY IT LIVES HERE AND NOT IN `events` ─────────────────────────────────
+
+    The QUESTION is content an organiser authors, so it belongs to `events`.
+    The ANSWER is part of a purchase, so it belongs to the booking — and
+    dependencies point one way: `booking` already imports `events` (the event
+    FK on `Booking`), never the reverse.
+
+    ── ONE SET PER BOOKING, NOT PER TICKET ───────────────────────────────────
+
+    The brief asks for answers "before finalizing booking", and that is also
+    the only shape that survives contact with a checkout: five questions across
+    four tickets is twenty fields between somebody and paying. Per-ATTENDEE
+    data already has its own seam — `Ticket.attendee_name`/`attendee_email`,
+    assignable after payment — and that is where a per-person question belongs
+    if one is ever genuinely needed.
+
+    ── `PROTECT` ON THE QUESTION ─────────────────────────────────────────────
+
+    An answer whose prompt has been hard-deleted is a value with no question,
+    which is worse than no answer: an organiser reading "Vegetarian" against
+    nothing cannot act on it. `EventQuestion` soft-deletes for exactly this
+    reason, and the `PROTECT` is what makes that the only available path.
+
+    The unique constraint is what makes re-answering an UPDATE rather than a
+    second row — a checkout that is edited before payment must not leave two
+    answers with no way to tell which is current.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="answers")
+    question = models.ForeignKey(
+        "events.EventQuestion", on_delete=models.PROTECT, related_name="answers"
+    )
+    #: The answer as typed or chosen. One TEXT column for every kind rather
+    #: than a column per kind: a `CHOICE` answer is one of the prompt's own
+    #: strings and a `BOOLEAN` is "yes"/"no", both of which read correctly in an
+    #: export without a join to work out which column to look in.
+    answer = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "booking_answer"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["booking", "question"], name="booking_answer_once_per_question"
+            ),
+        ]
+        indexes = [
+            # The organiser's export: every answer to one question, for one
+            # event. Reached through the question rather than the booking.
+            models.Index(fields=["question", "created_at"], name="answer_question_created_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"Answer to {self.question_id} on {self.booking_id}"

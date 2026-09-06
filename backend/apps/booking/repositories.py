@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from core.base_repository import BaseRepository
 
-from .models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
+from .models import Booking, BookingAnswer, BookingItem, BookingStatus, Ticket, TicketStatus
 
 # Columns the check-in gate path needs from a ticket — deliberately tiny so the
 # per-ticket locked section stays as small and fast as possible (see the
@@ -96,6 +96,16 @@ class BookingRepository(BaseRepository[Booking]):
 
     def create_items(self, items: list[BookingItem]) -> None:
         BookingItem.objects.bulk_create(items)
+
+    def create_answers(self, answers: list[BookingAnswer]) -> None:
+        """The questionnaire responses, written with the booking.
+
+        `bulk_create` like the items beside it: one statement inside the
+        reserve transaction, which is held while per-tier row locks are open —
+        five separate INSERTs there would be five more statements in the
+        critical section for no gain.
+        """
+        BookingAnswer.objects.bulk_create(answers)
 
     def lock_for_update(self, booking_id: uuid.UUID | str) -> Booking | None:
         """SELECT ... FOR UPDATE on the booking row — the coordination point

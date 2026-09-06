@@ -60,6 +60,7 @@ class BookingCreateView(APIView):
             items=list(data["items"]),
             donation_minor=data.get("donation_minor", 0),
             idempotency_key=idempotency_key,
+            answers=dict(data.get("answers") or {}),
         )
 
         # WHICH PROVIDER, STATED PLAINLY.
