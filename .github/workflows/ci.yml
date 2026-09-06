@@ -105,16 +105,66 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       - name: Pytest (with coverage)
-        run: python -m pytest --cov=core --cov=apps --cov-report=term-missing
+        # ── `set -o pipefail` IS LOAD-BEARING, NOT STYLE ──────────────────
+        #
+        # The default shell here is `bash -e {0}`: `-e` is on, pipefail is NOT.
+        # Without it the pipeline's status is `tee`'s, which always succeeds —
+        # so a FAILING suite would report GREEN and the release gate would open
+        # on a broken commit. That is strictly worse than the problem the tee
+        # is here to solve, so the two lines belong together and neither may be
+        # removed on its own.
+        run: |
+          set -o pipefail
+          python -m pytest --cov=core --cov=apps --cov-report=term-missing 2>&1 | tee /tmp/pytest.out
 
       - name: Backend Failure Diagnostics
         if: ${{ failure() }}
+        # ── IT WRITES TO THE JOB SUMMARY, AND THAT IS THE POINT ───────────
+        #
+        # Actions LOGS require authentication — an unauthenticated reader gets
+        # 403 — so a backend failure on `main` was, in practice, invisible: the
+        # only public signal was "Process completed with exit code 1" against a
+        # line number in a composed workflow. Diagnosing it meant reproducing
+        # the whole runner locally and hoping.
+        #
+        # `$GITHUB_STEP_SUMMARY` is different: it is rendered on the run page
+        # AND surfaced as the check run's own output, which the REST API serves
+        # without a token. So the names of the failing tests travel with the
+        # failure instead of being locked behind a login.
         run: |
+          # Every probe below is `|| true`. The shell is `bash -e`, and the
+          # summary is written LAST — so one failing diagnostic (a `git` that
+          # is unhappy, a `pip list` that errors) would abort this step before
+          # the summary existed, losing the only public record of WHY the suite
+          # failed. A diagnostic that can suppress the diagnosis is worse than
+          # none.
           echo "=== BACKEND FAILURE DIAGNOSTICS ==="
           echo "CWD: $(pwd)"
-          echo "Python executable: $(which python)"
-          python -m pip list
-          git status --short
+          echo "Python executable: $(which python || true)"
+          python -m pip list || true
+          git status --short || true
+
+          if [ -f /tmp/pytest.out ]; then
+            {
+              echo "### Backend suite failed"
+              echo ""
+              echo "Failing tests:"
+              echo ""
+              echo '```'
+              # `|| true` because grep exits 1 on no match, and `-e` would then
+              # fail this step — turning a diagnostic into a second failure.
+              grep -E '^(FAILED|ERROR)' /tmp/pytest.out | head -50 || true
+              echo '```'
+              echo ""
+              echo "Last 40 lines:"
+              echo ""
+              echo '```'
+              tail -40 /tmp/pytest.out || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Backend job failed before pytest ran" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   image:
     runs-on: ubuntu-latest
