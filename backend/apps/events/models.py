@@ -431,6 +431,20 @@ class EventMedia(models.Model):
     alt_text = models.CharField(max_length=200, blank=True, default="")
     caption = models.CharField(max_length=200, blank=True, default="")
     position = models.PositiveIntegerField(default=0)
+    #: A VIDEO embed that is taller than it is wide — a YouTube Short.
+    #:
+    #: A column rather than something derived at render time, because it is
+    #: unrecoverable after the write: a Short's stored `embed_url` is
+    #: byte-for-byte what a normal video gets, and `core.video_embeds` refuses
+    #: to keep the pasted link or a query parameter (that is the whole security
+    #: posture of the embed — the URL in the iframe is BUILT, never echoed). So
+    #: the shape is knowable exactly once, while the path is still in hand.
+    #:
+    #: Meaningless for the image kinds, which get their shape from
+    #: `MEDIA_SPECS` at upload and are drawn in a fixed frame. It stays `False`
+    #: for them rather than nullable: "not a vertical video" is true of an
+    #: image, and a null would invite a three-state check nobody needs.
+    is_vertical = models.BooleanField(default=False)
     #: Hidden without deleting — an organizer pulling an image mid-sale should
     #: not lose the asset, and a hard delete would orphan a CDN object.
     is_visible = models.BooleanField(default=True)

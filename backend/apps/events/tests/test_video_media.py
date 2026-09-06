@@ -173,6 +173,43 @@ class TestTheParser:
     def test_youtube_shapes(self, link):
         assert parse_video_url(link).video_id == "dQw4w9WgXcQ"
 
+    def test_a_short_is_recorded_as_vertical(self):
+        """The one moment it is knowable.
+
+        A Short's `embed_url` is byte-for-byte what a normal video gets, and
+        the pasted link is deliberately never stored — so if the shape is not
+        captured during the parse it is gone for good, and the player
+        letterboxes a 9:16 video inside a 16:9 frame for ever.
+        """
+        assert parse_video_url("https://www.youtube.com/shorts/dQw4w9WgXcQ").is_vertical is True
+
+    @pytest.mark.parametrize(
+        "link",
+        [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube.com/live/dQw4w9WgXcQ",
+        ],
+    )
+    def test_an_ordinary_youtube_video_is_not_vertical(self, link):
+        assert parse_video_url(link).is_vertical is False
+
+    def test_a_short_and_a_normal_video_still_share_an_embed_url(self):
+        """Pinning WHY the column exists. If this ever stops being true the
+        flag could be derived instead — and until then it cannot."""
+        short = parse_video_url("https://www.youtube.com/shorts/dQw4w9WgXcQ")
+        normal = parse_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        assert short.embed_url == normal.embed_url
+        assert short.is_vertical != normal.is_vertical
+
+    def test_vimeo_is_never_vertical_and_that_is_a_limitation(self):
+        """Vimeo has no vertical marker in its URL — the orientation lives in
+        oEmbed metadata, which would be a network call on a write path. A
+        vertical Vimeo renders 16:9 with bars, exactly as it did before."""
+        assert parse_video_url("https://vimeo.com/123456789").is_vertical is False
+
     @pytest.mark.parametrize(
         "link",
         [

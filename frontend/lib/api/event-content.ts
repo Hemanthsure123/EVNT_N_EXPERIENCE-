@@ -33,6 +33,18 @@ export type EventMedia = {
   alt_text: string;
   caption: string;
   position: number;
+  /**
+   * A VERTICAL video embed — a YouTube Short.
+   *
+   * Carried on the row because it cannot be recovered later: a Short's
+   * `url` is byte-for-byte what a normal video gets, and the server refuses
+   * to store the pasted link (the embed URL is BUILT, never echoed).
+   *
+   * Always false for the image kinds. Optional on the type so a payload from
+   * an older API — or a fixture that predates the column — reads as "not
+   * vertical" rather than crashing the player.
+   */
+  is_vertical?: boolean;
 };
 
 export type EventFaq = {

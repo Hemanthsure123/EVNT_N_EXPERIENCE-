@@ -839,11 +839,26 @@ export function Policies() {
  * paint.
  */
 export function EventVideo({ video }: { video: EventMedia }) {
+  // A YouTube Short is 9:16. Drawn in the 16:9 frame it gets two black bars
+  // covering roughly two thirds of the width — which is what every Short on
+  // this platform looked like, because the shape was thrown away during the
+  // parse and nothing downstream could recover it.
+  const vertical = video.is_vertical === true;
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-sunken">
-      {/* 16:9 by construction rather than by a fixed height: a hard height is
-          how an embed ends up letterboxed on a phone and cropped on a desktop. */}
-      <div className="relative aspect-video">
+    <div
+      className={cn(
+        'overflow-hidden rounded-xl border border-border bg-sunken',
+        // A RATIO SWAP ALONE IS NOT ENOUGH. `aspect-short` on a full-width
+        // container makes the player 16/9 times the column height — taller
+        // than the viewport on a desktop, with the controls off-screen. The
+        // cap keeps it phone-shaped and centred; on a phone the column is
+        // already narrower than the cap, so nothing changes there.
+        vertical && 'mx-auto w-full max-w-sm',
+      )}
+    >
+      {/* By construction rather than by a fixed height: a hard height is how
+          an embed ends up letterboxed on a phone and cropped on a desktop. */}
+      <div className={cn('relative', vertical ? 'aspect-short' : 'aspect-video')}>
         <iframe
           src={video.url}
           title={video.alt_text || 'Event video'}

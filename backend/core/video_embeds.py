@@ -58,6 +58,20 @@ class VideoEmbed:
     embed_url: str
     #: Where to send somebody who would rather watch it on the source site.
     watch_url: str
+    #: The video is TALLER THAN IT IS WIDE — a YouTube Short.
+    #:
+    #: It has to be carried here because it is unrecoverable afterwards: the
+    #: stored `embed_url` for a Short is byte-for-byte the URL a normal video
+    #: gets, and the security doctrine forbids keeping the pasted link or a
+    #: query parameter to sniff later. So the ONE moment this is knowable is
+    #: while the path is still in hand.
+    #:
+    #: FALSE FOR VIMEO, always, and that is a limitation rather than a claim:
+    #: Vimeo has no vertical marker in its URL, and the orientation is only in
+    #: the oEmbed metadata, which would be a network call on a write path. A
+    #: vertical Vimeo therefore renders 16:9 with bars, which is the same thing
+    #: every Vimeo did before this existed.
+    is_vertical: bool = False
 
 
 def parse_video_url(raw: str) -> VideoEmbed:
@@ -98,6 +112,9 @@ def parse_video_url(raw: str) -> VideoEmbed:
 def _youtube(parsed) -> VideoEmbed:
     host = (parsed.hostname or "").lower()
     path = parsed.path.strip("/")
+    # Read BEFORE the id is extracted, because extracting it throws the path
+    # away — and this is the only place the shape is ever visible.
+    is_short = path.startswith("shorts/")
 
     if host in ("youtu.be", "www.youtu.be"):
         video_id = path.split("/")[0]
@@ -119,6 +136,7 @@ def _youtube(parsed) -> VideoEmbed:
         # nobody consented to be tracked on.
         embed_url=f"https://www.youtube-nocookie.com/embed/{video_id}",
         watch_url=f"https://www.youtube.com/watch?v={video_id}",
+        is_vertical=is_short,
     )
 
 

@@ -1295,6 +1295,10 @@ class EventContentService:
         event = self._owned(event_id=event_id, actor_id=actor_id)
 
         self._require_media_slot(event.id, kind)
+        # False for every image kind: their shape is settled by `MEDIA_SPECS`
+        # at upload and they are drawn in a fixed frame. Only a video embed can
+        # be vertical in a way nothing downstream could otherwise discover.
+        is_vertical = False
         if kind == MediaKind.VIDEO:
             # NORMALISED, not merely validated. The URL stored is one we build
             # from an extracted id, so a crafted `youtube.com/embed/...?x=` can
@@ -1302,7 +1306,13 @@ class EventContentService:
             # the same class of problem SVG uploads are, handled the same way.
             from core.video_embeds import parse_video_url
 
-            url = parse_video_url(url).embed_url
+            # Both halves of the parse are kept. The embed URL is what the
+            # iframe loads; `is_vertical` is the ONLY moment a Short is
+            # distinguishable, because the URL it produces is identical to a
+            # normal video's and the pasted link is deliberately not stored.
+            embed = parse_video_url(url)
+            url = embed.embed_url
+            is_vertical = embed.is_vertical
         if not alt_text.strip():
             # The most-viewed image on the platform must not be invisible to a
             # screen reader. The column allows blank so historical rows survive;
@@ -1317,6 +1327,7 @@ class EventContentService:
                 alt_text=alt_text.strip(),
                 caption=caption.strip(),
                 position=position,
+                is_vertical=is_vertical,
             )
             record_audit(
                 actor_id=str(actor_id),

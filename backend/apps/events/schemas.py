@@ -434,6 +434,10 @@ class EventMediaSerializer(serializers.Serializer):
     alt_text = serializers.CharField(allow_blank=True)
     caption = serializers.CharField(allow_blank=True)
     position = serializers.IntegerField()
+    #: A vertical VIDEO — a YouTube Short. The player draws 9:16 for these
+    #: instead of letterboxing them inside a 16:9 frame. Always false for the
+    #: image kinds, whose shape comes from `MEDIA_SPECS` at upload.
+    is_vertical = serializers.BooleanField()
 
 
 class EventFaqSerializer(serializers.Serializer):

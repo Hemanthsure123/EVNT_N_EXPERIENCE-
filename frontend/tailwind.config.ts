@@ -338,6 +338,10 @@ const config: Config = {
         feature: '4 / 3', // hero featured slide
         poster: '4 / 5', // the taller portrait frame (mobile carousel)
         hero: '21 / 8', // full-bleed banner
+        // A vertical video embed — a YouTube Short. Named rather than written
+        // as `aspect-[9/16]` because the eslint `no-raw-values` rule bans
+        // arbitrary values, and a shape used by a player belongs in the scale.
+        short: '9 / 16',
       },
       keyframes: {
         shimmer: {

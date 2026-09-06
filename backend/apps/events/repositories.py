@@ -992,7 +992,19 @@ class EventContentRepository:
         """Visible media, ordered. One query, no N+1 from the caller."""
         return list(
             EventMedia.objects.filter(event_id=event_id, deleted_at__isnull=True, is_visible=True)
-            .only("id", "kind", "url", "alt_text", "caption", "position", "event_id")
+            # `is_vertical` is read by `EventMediaSerializer`, so omitting it
+            # here would make it a DEFERRED load — one extra query per media
+            # row on the edge-cached content payload.
+            .only(
+                "id",
+                "kind",
+                "url",
+                "alt_text",
+                "caption",
+                "position",
+                "is_vertical",
+                "event_id",
+            )
             .order_by("kind", "position", "created_at")
         )
 
