@@ -53,6 +53,10 @@ import type {
   UpdateEventInput,
 } from '@/lib/api/organizer-writes';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
+// A VALUE import, unlike everything else here, and safe: `lib/events/taxonomy`
+// is pure data with no imports of its own (asserted by the backend's
+// `test_taxonomy.py`), so this module stays framework-free.
+import { MIN_TAGS_TO_PUBLISH } from '@/lib/events/taxonomy';
 
 /**
  * One step of a tier's pricing schedule, as edited.
@@ -167,6 +171,22 @@ export type Draft = {
    * "unlocks once saved" panel.
    */
   policies: DraftPolicy[];
+  /**
+   * The three bullet lists. Plain string arrays, unlike `policies` above,
+   * because the content is single scannable points rather than named rules
+   * with a paragraph under each.
+   *
+   * They carry no `key`: a policy row needs one because it holds two inputs
+   * and re-orders, where these are a flat list rendered by index. Adding one
+   * would be state to keep in step for nothing.
+   */
+  highlightsIncluded: string[];
+  highlightsExcluded: string[];
+  guidelines: string[];
+  /** Slug from `lib/events/taxonomy.ts`, or `''` for "not said". */
+  eventType: string;
+  /** Closed vocabulary, max `MAX_TAGS`. */
+  tags: string[];
   seoTitle: string;
   seoDescription: string;
   tiers: DraftTier[];
@@ -250,6 +270,11 @@ export function emptyDraft(organizationId = ''): Draft {
     ageRestriction: '',
     accessibilityNotes: '',
     policies: [],
+    highlightsIncluded: [],
+    highlightsExcluded: [],
+    guidelines: [],
+    eventType: '',
+    tags: [],
     seoTitle: '',
     seoDescription: '',
     tiers: [],
@@ -384,7 +409,21 @@ export function restoreDraft(
     tiers: Array.isArray(stored.tiers)
       ? stored.tiers.map((tier) => ({ ...tier, phases: Array.isArray(tier.phases) ? tier.phases : [] }))
       : [],
+    // Same reason as `tiers`, and it is NOT covered by the spread above: an
+    // absent key is safe (`undefined` never survives `JSON.stringify`), but a
+    // stored `null` round-trips intact and overwrites the fresh `[]`. A draft
+    // written by a build that predates these fields is exactly that case, and
+    // `draft.tags.length` on `null` is a white screen over real work.
+    highlightsIncluded: asStrings(stored.highlightsIncluded),
+    highlightsExcluded: asStrings(stored.highlightsExcluded),
+    guidelines: asStrings(stored.guidelines),
+    tags: asStrings(stored.tags),
   };
+}
+
+/** A stored value we can safely treat as a list of strings. */
+export function asStrings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 export function newTier(index: number): DraftTier {
@@ -814,6 +853,21 @@ export function publishBlockers(
     blockers.push('One or more ticket types have not saved yet.');
   }
 
+  // The server's `_require_tags`.
+  //
+  // HERE AND NOT IN `validate()`, deliberately. `stepStatus` turns any Issue
+  // into a red step, and `completion()` counts `validate(draft).length === 0`
+  // — so a minimum in there would paint a step red and pin the progress bar
+  // below 100% on a brand-new draft, before the picker had even been
+  // scrolled to. A blocker is the honest shape: it appears on the review
+  // checklist, names the number, and jumps to the step that fixes it.
+  if (draft.tags.length < MIN_TAGS_TO_PUBLISH) {
+    const missing = MIN_TAGS_TO_PUBLISH - draft.tags.length;
+    blockers.push(
+      `Pick ${missing} more tag${missing === 1 ? '' : 's'} so people browsing can find this event.`,
+    );
+  }
+
   // The server's `_require_future_start`. A draft left alone long enough
   // becomes unpublishable purely by its start time passing, and without this
   // the only notice is a failed submit.
@@ -1010,6 +1064,15 @@ export function draftFromEvent(
       title: policy.title,
       body: policy.body,
     })),
+    // `?? []` is not decoration: an older API build, or a fixture that predates
+    // these columns, hands back `undefined`, and a draft holding `undefined`
+    // where the editor expects an array is a white screen over somebody's
+    // half-written event.
+    highlightsIncluded: event.highlights_included ?? [],
+    highlightsExcluded: event.highlights_excluded ?? [],
+    guidelines: event.guidelines ?? [],
+    eventType: event.event_type ?? '',
+    tags: event.tags ?? [],
     seoTitle: event.seo_title ?? '',
     seoDescription: event.seo_description ?? '',
     tiers: tiers.map((tier) => ({
@@ -1144,9 +1207,37 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     policies: draft.policies
       .map((policy) => ({ title: policy.title.trim(), body: policy.body.trim() }))
       .filter((policy) => policy.title && policy.body),
+    // UNCONDITIONAL, unlike `event_type` below. These lists replace wholesale,
+    // so an omitted empty array would mean "leave it alone" — and deleting
+    // your last bullet would silently fail to delete it.
+    highlights_included: cleanPoints(draft.highlightsIncluded),
+    highlights_excluded: cleanPoints(draft.highlightsExcluded),
+    guidelines: cleanPoints(draft.guidelines),
+    tags: draft.tags,
+    // CONDITIONAL, and the asymmetry is the whole point. `event_type` is a
+    // ChoiceField; a blank one is refused, so sending `''` on a draft nobody
+    // has classified yet would 400 EVERY autosave on that event.
+    ...(draft.eventType ? { event_type: draft.eventType } : {}),
     seo_title: draft.seoTitle.trim(),
     seo_description: draft.seoDescription.trim(),
   };
+}
+
+/**
+ * Trim, drop blanks, collapse duplicates — the same cleaning the server does.
+ *
+ * Done on the way out as well as on the way in so the FINGERPRINT sees the
+ * cleaned value: without it, opening an empty bullet row and closing it again
+ * changes the draft, queues a save, and sends a payload identical to the one
+ * already stored — a write per keystroke that can never converge.
+ */
+function cleanPoints(points: string[]): string[] {
+  const cleaned: string[] = [];
+  for (const point of points) {
+    const text = point.trim();
+    if (text && !cleaned.includes(text)) cleaned.push(text);
+  }
+  return cleaned;
 }
 
 /** Rupees in the field -> paise on the wire. Money is integer minor units
@@ -1231,6 +1322,22 @@ export function patchFingerprint(draft: Draft): string {
     // choosing a category changes nothing the save engine can see and the
     // field is never sent at all. Same reason the pin is here.
     draft.category,
+    // ── `policies` WAS MISSING FROM THIS LIST ────────────────────────────
+    //
+    // It was in the draft, in the editor, in `toPatchInput` and in the
+    // server's editable set — and absent here, which is the one place that
+    // decides whether a save is queued at all. So adding, editing or deleting
+    // a rule updated the preview, marked the step done and wrote NOTHING; the
+    // rules came back on the next reload. This is the THIRD instance of that
+    // exact bug (`category` and the tier fields were the first two), which is
+    // why the five fields below were added in the same commit rather than on
+    // top of an unfixed one.
+    draft.policies,
+    draft.highlightsIncluded,
+    draft.highlightsExcluded,
+    draft.guidelines,
+    draft.eventType,
+    draft.tags,
   ]);
 }
 

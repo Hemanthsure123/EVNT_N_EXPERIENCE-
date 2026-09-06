@@ -78,6 +78,30 @@ export type EventContentFields = {
    * wrong. Capped at 12 by the server.
    */
   policies: { title: string; body: string }[];
+  /**
+   * The three bullet lists, same wholesale contract as `policies`: an empty
+   * array CLEARS the list, an absent key leaves it alone. So the mapper sends
+   * them unconditionally — omitting an empty one would make deleting your last
+   * bullet silently fail.
+   *
+   * Server-side each entry is trimmed, blanks are dropped and duplicates are
+   * collapsed, so the editor does not have to police an empty row.
+   */
+  highlights_included: string[];
+  highlights_excluded: string[];
+  guidelines: string[];
+  /**
+   * The sub-classification. A CHOICE on the server, so `''` is a legal value
+   * meaning "clear it" — but it must still be sent CONDITIONALLY on create,
+   * where a blank ChoiceField is refused.
+   */
+  event_type: string;
+  /**
+   * Closed vocabulary (`lib/events/taxonomy.ts`), max 10, and an unknown slug
+   * is REFUSED by name rather than stored — it would match no filter and
+   * appear on no chip.
+   */
+  tags: string[];
   seo_title: string;
   seo_description: string;
 };

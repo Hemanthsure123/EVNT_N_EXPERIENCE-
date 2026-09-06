@@ -11,6 +11,12 @@ import {
 } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { PolicyEditor } from './policy-editor';
+import { BulletListEditor } from './bullet-list-editor';
+import { TagMatrix } from './tag-matrix';
+
+/** Mirrors the server's `MAX_HIGHLIGHTS`, so the control cannot ask for a save
+ *  the boundary would refuse. */
+const MAX_HIGHLIGHTS = 8;
 import { FaqBuilder } from './faq-builder';
 import {
   NeedsSavedDraft,
@@ -173,6 +179,56 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
             error={errorFor(issues, 'accessibilityNotes')}
           />
         </div>
+      </Section>
+
+      {/* ── THE THREE BULLET LISTS ────────────────────────────────────────
+          Above the policies rather than below, because they answer the
+          questions a buyer has FIRST — what do I get, what am I not getting —
+          where a policy is read after deciding. They are also the two lists a
+          refund dispute turns on, which is why "not included" is its own list
+          rather than a line inside the guidelines. */}
+      <Section title="What people get">
+        <div className="flex flex-col gap-block">
+          <BulletListEditor
+            id="event-highlights-included"
+            label="What's included"
+            hint="What the ticket covers. Materials, refreshments, a take-home piece."
+            placeholder="All materials and tools"
+            value={draft.highlightsIncluded}
+            onChange={(highlightsIncluded) => update({ highlightsIncluded })}
+            max={MAX_HIGHLIGHTS}
+          />
+          <BulletListEditor
+            id="event-highlights-excluded"
+            label="What's not included"
+            hint="Say it here and nobody arrives expecting it. Travel, food, equipment to bring."
+            placeholder="Travel to the venue"
+            value={draft.highlightsExcluded}
+            onChange={(highlightsExcluded) => update({ highlightsExcluded })}
+            max={MAX_HIGHLIGHTS}
+          />
+          <BulletListEditor
+            id="event-guidelines"
+            label="Guidelines"
+            hint="How to turn up: dress code, what to bring, anything the venue asks."
+            placeholder="Carry a photo ID"
+            value={draft.guidelines}
+            onChange={(guidelines) => update({ guidelines })}
+            max={MAX_HIGHLIGHTS}
+            addLabel="Add guideline"
+          />
+        </div>
+      </Section>
+
+      {/* ── TAGS ──────────────────────────────────────────────────────────
+          Here rather than in Basics, beside the category, and the reason is
+          what they are FOR. A category is an identity — which tile the event
+          belongs under. Tags are how it is FOUND: who it suits, what is
+          included, how it feels. That is the same question the rest of this
+          step answers (language, age, access), which is why it reads as
+          belonging here. */}
+      <Section title="Tags">
+        <TagMatrix value={draft.tags} onChange={(tags) => update({ tags })} />
       </Section>
 
       <Section

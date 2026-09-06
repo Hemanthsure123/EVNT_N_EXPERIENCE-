@@ -134,6 +134,18 @@ export function draftToPreview(
     // The organiser's own choice, so the preview's chip is the one the
     // browse tile will show rather than a blank.
     category: draft.category,
+    // Same reasoning, one level down: the preview mounts the real event page,
+    // so anything that page renders has to arrive here or the preview quietly
+    // becomes a different product from the thing being previewed.
+    //
+    // CLEANED the way `toPatchInput` cleans them, so a half-typed bullet does
+    // not appear in the preview as a stray empty line — what is shown is what
+    // will be stored.
+    highlights_included: draft.highlightsIncluded.map((p) => p.trim()).filter(Boolean),
+    highlights_excluded: draft.highlightsExcluded.map((p) => p.trim()).filter(Boolean),
+    guidelines: draft.guidelines.map((p) => p.trim()).filter(Boolean),
+    event_type: draft.eventType,
+    tags: draft.tags,
     place_id: draft.placeId,
     latitude: draft.latitude,
     longitude: draft.longitude,

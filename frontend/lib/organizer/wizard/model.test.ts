@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MIN_TAGS_TO_PUBLISH, TAG_DIMENSIONS } from '@/lib/events/taxonomy';
 import {
   DESCRIPTION_SOFT_MAX,
   SEO_TITLE_MAX,
@@ -33,6 +34,17 @@ const NOW = new Date('2026-07-28T00:00:00Z');
 const FUTURE = '2026-12-01T19:00';
 const PAST = '2026-01-01T19:00';
 
+/**
+ * A tag selection that satisfies `MIN_TAGS_TO_PUBLISH`.
+ *
+ * Taken from the real vocabulary rather than invented, so renaming a tag does
+ * not leave the suite carrying a slug that no longer exists — the failure
+ * would read as "publishing is broken" rather than "that tag moved".
+ */
+const PUBLISHABLE_TAGS = TAG_DIMENSIONS.slice(0, MIN_TAGS_TO_PUBLISH).map(
+  (dimension) => dimension.tags[0].value,
+);
+
 function draftWith(patch: Partial<Draft> = {}): Draft {
   return {
     ...emptyDraft('org-1'),
@@ -40,6 +52,10 @@ function draftWith(patch: Partial<Draft> = {}): Draft {
     venue: 'Phoenix Arena',
     city: 'Mumbai',
     startsAt: FUTURE,
+    // Enough tags to publish, because this helper means "a draft that is
+    // otherwise complete" and every caller relies on that. A test about the
+    // TAG gate passes `tags: []` explicitly, which reads as the point.
+    tags: PUBLISHABLE_TAGS,
     ...patch,
   };
 }
@@ -240,6 +256,40 @@ describe('publishBlockers', () => {
   it('still blocks while a tier is only local', () => {
     const draft = draftWith({ eventId: 'evt-1', tiers: [tierWith()] });
     expect(publishBlockers(draft)).toContain('One or more ticket types have not saved yet.');
+  });
+
+  it('mirrors the server tag minimum, and says how many are missing', () => {
+    // Mirrors `events.publish_checks._require_tags`. Counting DOWN is the
+    // point: "pick 5 more" is actionable where "at least 7 required" makes
+    // somebody count their own chips.
+    const draft = draftWith({
+      eventId: 'evt-1',
+      tiers: [tierWith({ serverId: 'tt-1', version: 1 })],
+      tags: ['outdoor', 'networking'],
+    });
+    expect(publishBlockers(draft)).toEqual([
+      `Pick ${MIN_TAGS_TO_PUBLISH - 2} more tags so people browsing can find this event.`,
+    ]);
+  });
+
+  it('says "tag" rather than "tags" when exactly one is missing', () => {
+    const draft = draftWith({
+      eventId: 'evt-1',
+      tiers: [tierWith({ serverId: 'tt-1', version: 1 })],
+      tags: PUBLISHABLE_TAGS.slice(0, MIN_TAGS_TO_PUBLISH - 1),
+    });
+    expect(publishBlockers(draft)).toEqual([
+      'Pick 1 more tag so people browsing can find this event.',
+    ]);
+  });
+
+  it('does NOT appear in validate(), so an empty draft is not painted red', () => {
+    // The rule this protects: `stepStatus` turns any Issue into a red step and
+    // `completion()` requires `validate()` to be empty, so a tag minimum in
+    // there would mark a brand-new draft as broken and pin the progress bar
+    // below 100% before the picker had been scrolled to.
+    const fresh = emptyDraft('org-1');
+    expect(validate(fresh).some((issue) => issue.field === 'tags')).toBe(false);
   });
 });
 
@@ -948,7 +998,7 @@ describe('isDraftUntouched', () => {
   });
 
   it('is false once a tier exists, which is a step nobody reaches by accident', () => {
-    expect(isDraftUntouched({ ...emptyDraft(), tiers: [newTier()] })).toBe(false);
+    expect(isDraftUntouched({ ...emptyDraft(), tiers: [newTier(0)] })).toBe(false);
   });
 
   it('ignores whitespace, so a stray space does not withdraw the offer', () => {

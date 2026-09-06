@@ -10,6 +10,9 @@ import { ShareMenu } from '@/components/event/share-menu';
 import {
   AccessibilityNotes,
   EventFaqs,
+  EventGuidelines,
+  EventInclusions,
+  EventTags,
   Faqs,
   OrganizerCard,
   EventVideo,
@@ -307,12 +310,28 @@ export function EventPageBody({
               </section>
             ) : null}
 
+            {/* SECONDARY: what the ticket covers changes the price somebody
+                is comparing against, so it decides whether to book and belongs
+                on the page. The GUIDELINES do not — a dress code matters on
+                the day — so those ride inside the terms disclosure below.
+                Absent, not empty, when the organiser listed neither. */}
+            <EventInclusions
+              included={event.highlights_included ?? []}
+              excluded={event.highlights_excluded ?? []}
+            />
+
             {/* SECONDARY, and in the same slot as the mobile widget's — one
                 information order rendered two ways, so a page and its widget
                 never disagree about what matters. For a club night the names
                 ARE the product, so this sits above the disclosure rows rather
                 than inside one. Absent, not empty. */}
             <LineupRail crew={content.crew ?? []} className="max-w-2xl" />
+
+            {/* Last of the secondary run, because it is the one thing here
+                that leads AWAY from this event. Each is a real browse filter,
+                so "more like this" is one press rather than a search somebody
+                has to compose. */}
+            <EventTags tags={event.tags ?? []} />
 
             {/* ── EVERYTHING ELSE, ONE PRESS AWAY ───────────────────────────
                 These six used to be six full-weight sections stacked here,
@@ -525,6 +544,11 @@ function buildDisclosures(event: EventDetail, content: EventContent): Disclosure
         {/* The organiser's rules FIRST: "carry a photo ID" is the one that
             stops somebody at the gate, and "no card data is stored" is
             reassurance. A reader gives this about four seconds. */}
+        {/* Guidelines FIRST: "carry a photo ID" is the one that stops
+            somebody at the gate, ahead of the organiser's refund terms and
+            well ahead of "no card data is stored", which is reassurance. A
+            reader gives this about four seconds. */}
+        <EventGuidelines guidelines={event.guidelines ?? []} />
         <OrganizerPolicies policies={event.policies} />
         <Policies />
       </div>

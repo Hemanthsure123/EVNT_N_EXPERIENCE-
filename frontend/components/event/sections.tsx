@@ -4,8 +4,10 @@ import {
   Accessibility,
   Building2,
   CalendarDays,
+  Check,
   Clock,
   Info,
+  Minus,
   Languages,
   MapPin,
   Navigation,
@@ -25,6 +27,7 @@ import type {
 import { VenueMap } from '@/components/maps/venue-map';
 import type { EventDetail, EventPolicy } from '@/lib/api/types';
 import { inferCategory } from '@/lib/discovery/categories';
+import { tagLabel } from '@/lib/events/taxonomy';
 import { formatEventDateLong, formatEventTime, machineDate } from '@/lib/discovery/format';
 import { cn } from '@/lib/utils/cn';
 
@@ -555,6 +558,159 @@ const POLICIES: { icon: LucideIcon; title: string; body: string }[] = [
  * space under it, and not a placeholder inviting them to add some (this is the
  * public page; that prompt belongs in the studio).
  */
+/**
+ * What the ticket covers, and what it does not.
+ *
+ * ── SECONDARY, NOT TERTIARY ───────────────────────────────────────────────
+ *
+ * The page's ranking puts "what decides whether to book" first and "what you
+ * need before arriving" behind a press. These are the former: whether dinner
+ * is included changes the price somebody is comparing against, and finding out
+ * after buying is the complaint this section exists to prevent. So it sits on
+ * the page beside the description rather than inside a disclosure row.
+ *
+ * ── TWO COLUMNS, AND THE SECOND ONE EARNS ITS PLACE ───────────────────────
+ *
+ * "Not included" reads as negative and is the more valuable half. An organiser
+ * who writes "travel not included" is not managing expectations downward, they
+ * are stopping somebody turning up at the wrong station — and it is the list a
+ * refund dispute turns on. Drawn with the same weight as its opposite, in
+ * muted rather than destructive colours: this is information, not a warning.
+ *
+ * ABSENT, NOT EMPTY. Both lists blank renders nothing at all — never a heading
+ * over a void, and never "Nothing listed", which reads as a claim that nothing
+ * is included.
+ */
+export function EventInclusions({
+  included,
+  excluded,
+}: {
+  included: string[];
+  excluded: string[];
+}) {
+  if (!included.length && !excluded.length) return null;
+  return (
+    <div className="grid max-w-2xl gap-6 sm:grid-cols-2">
+      {included.length ? (
+        <PointList
+          title="What's included"
+          points={included}
+          marker={<Check className="size-3.5" aria-hidden />}
+          markerClass="bg-success-subtle text-success-subtle-foreground"
+        />
+      ) : null}
+      {excluded.length ? (
+        <PointList
+          title="Not included"
+          points={excluded}
+          marker={<Minus className="size-3.5" aria-hidden />}
+          markerClass="bg-muted text-muted-foreground"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function PointList({
+  title,
+  points,
+  marker,
+  markerClass,
+}: {
+  title: string;
+  points: string[];
+  marker: React.ReactNode;
+  markerClass: string;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-body font-semibold text-foreground">{title}</h3>
+      <ul className="flex flex-col gap-2">
+        {points.map((point) => (
+          <li key={point} className="flex items-start gap-2.5">
+            <span
+              aria-hidden
+              className={cn(
+                'mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full',
+                markerClass,
+              )}
+            >
+              {marker}
+            </span>
+            <span className="text-body-sm text-muted-foreground">{point}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The organiser's guidelines — how to turn up.
+ *
+ * TERTIARY, unlike the inclusions above, and the split is by WHEN somebody
+ * needs it: what is included decides whether to buy, a dress code matters on
+ * the day. So this rides inside the terms disclosure alongside the policies,
+ * where a reader goes looking for it.
+ *
+ * Distinct from `policies` beside it because the shapes differ: a policy is a
+ * named rule with a paragraph ("Refunds — up to 48 hours before…"), these are
+ * single lines. Rendering them through the policy component would force an
+ * invented heading onto each.
+ */
+export function EventGuidelines({ guidelines }: { guidelines: string[] }) {
+  if (!guidelines.length) return null;
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-body font-semibold text-foreground">Before you come</h3>
+      <ul className="flex flex-col gap-2">
+        {guidelines.map((guideline) => (
+          <li key={guideline} className="flex items-start gap-2.5">
+            <span
+              aria-hidden
+              className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground"
+            />
+            <span className="text-body-sm text-muted-foreground">{guideline}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The event's tags, as LINKS into the browse page.
+ *
+ * They are filters, so they behave like filters: pressing "Rooftop" shows
+ * every rooftop event rather than doing nothing. A tag rendered as an inert
+ * pill would be the decoration this vocabulary exists not to be — the whole
+ * argument for a closed set is that a browse page can offer it.
+ *
+ * An UNKNOWN slug is omitted rather than shown raw. A retired tag on an old
+ * event would otherwise render as "beginner-frendly", presenting our own data
+ * as if it were correct.
+ */
+export function EventTags({ tags }: { tags: string[] }) {
+  const known = tags
+    .map((slug) => ({ slug, label: tagLabel(slug) }))
+    .filter((tag): tag is { slug: string; label: string } => tag.label !== null);
+  if (!known.length) return null;
+  return (
+    <ul className="flex max-w-2xl flex-wrap gap-2">
+      {known.map((tag) => (
+        <li key={tag.slug}>
+          <Link
+            href={`/events?tag=${encodeURIComponent(tag.slug)}`}
+            className="inline-flex rounded-full border border-border px-3 py-1 text-caption text-muted-foreground transition-colors duration-fast hover:border-foreground/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {tag.label}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function OrganizerPolicies({ policies }: { policies: EventPolicy[] }) {
   if (!policies.length) return null;
   return (

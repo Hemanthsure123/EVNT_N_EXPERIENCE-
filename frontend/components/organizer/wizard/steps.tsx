@@ -37,6 +37,7 @@ import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
 import { CrewPicker } from './crew-picker';
 import { StartFromEvent } from './start-from-event';
+import { EVENT_TYPES } from '@/lib/events/taxonomy';
 import { RunningOrder } from './running-order';
 
 type StepProps = {
@@ -143,6 +144,31 @@ export function BasicsStep({
         title="Category"
       >
         <CategoryPicker value={draft.category} onChange={(category) => update({ category })} />
+
+        {/* ── THE SUB-CLASSIFICATION, BENEATH THE TILE IT REFINES ──────────
+            Inside the same section rather than beside it, because it is not a
+            second question — it is the same one asked more precisely. "Music
+            & dance" covers a club night, an open mic and a classical recital,
+            and somebody looking for one is not served by the other two.
+
+            A plain select and not a second scene grid: forty-eight options
+            drawn as artwork would out-shout the eight that decide which
+            landing page the event lives on. */}
+        <div className="mt-stack">
+          <SelectField
+            id="event-type"
+            label="More specifically"
+            value={draft.eventType}
+            onChange={(eventType) => update({ eventType })}
+            options={EVENT_TYPES.map((type) => ({ value: type.value, label: type.label }))}
+            /* "Not sure yet" is a REAL state, distinct from every value in the
+               list, and it has to stay reachable — an organiser who picks by
+               accident must be able to clear it. The server stores `''` for
+               exactly this. */
+            placeholder="Not sure yet"
+            hint="Optional. It helps people searching for this kind of night find you."
+          />
+        </div>
       </Section>
 
     </div>

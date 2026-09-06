@@ -89,6 +89,21 @@ export type EventDetail = EventCard & {
    * and these are not.
    */
   policies: EventPolicy[];
+  /**
+   * The three bullet lists. Always arrays, never null — an event that set
+   * none returns `[]`, and the page omits the section rather than drawing a
+   * heading with nothing under it.
+   */
+  highlights_included: string[];
+  highlights_excluded: string[];
+  guidelines: string[];
+  /**
+   * The sub-classification beneath `category`, or `''` for "not said" — a
+   * legal, distinct state. Slugs are in `lib/events/taxonomy.ts`.
+   */
+  event_type: string;
+  /** What the event is LIKE. Closed vocabulary, capped at 10 by the server. */
+  tags: string[];
   seo_title: string;
   seo_description: string;
 };

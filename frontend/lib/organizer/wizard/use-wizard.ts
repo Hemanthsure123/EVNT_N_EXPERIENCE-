@@ -17,6 +17,7 @@ import {
   emptyDraft,
   patchFingerprint,
   resolveOrganizationId,
+  asStrings,
   restoreDraft,
   tierFingerprint,
   tierIsSavable,
@@ -208,8 +209,31 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
     const usableStored =
       server && stored ? (stored.version === server.version ? stored : null) : stored;
 
+    // ── THE EDIT PATH DOES NOT GO THROUGH `restoreDraft` ─────────────────
+    //
+    // So it gets none of that function's normalisation, and this spread pours
+    // unvalidated `localStorage` straight onto the server draft. `undefined`
+    // is safe (it never survives `JSON.stringify`), but a stored `null` — from
+    // a build that predates a field — round-trips intact and overwrites the
+    // server's array. `draft.tags.length` on `null` is a white screen over a
+    // real event. The version gate narrows the window; it does not close it,
+    // because a stored draft at the same version is exactly the case this
+    // branch exists to restore.
     const restored = server
-      ? { ...server, ...(usableStored ?? {}), eventId: server.eventId, version: server.version }
+      ? {
+          ...server,
+          ...(usableStored ?? {}),
+          eventId: server.eventId,
+          version: server.version,
+          highlightsIncluded: asStrings(
+            usableStored?.highlightsIncluded ?? server.highlightsIncluded,
+          ),
+          highlightsExcluded: asStrings(
+            usableStored?.highlightsExcluded ?? server.highlightsExcluded,
+          ),
+          guidelines: asStrings(usableStored?.guidelines ?? server.guidelines),
+          tags: asStrings(usableStored?.tags ?? server.tags),
+        }
       : restoreDraft(stored, organizationIds);
     past.current = [];
     future.current = [];
