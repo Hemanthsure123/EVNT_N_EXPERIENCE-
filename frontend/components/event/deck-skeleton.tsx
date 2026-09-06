@@ -29,7 +29,22 @@ import {
  * `sm:hidden` throughout: above that width the deck does not render and the
  * real page is the right answer.
  */
-export function DeckShell({ posterUrl, title }: { posterUrl?: string | null; title?: string }) {
+export function DeckShell({
+  posterUrl,
+  title,
+  categoryLabel,
+}: {
+  posterUrl?: string | null;
+  title?: string;
+  /**
+   * The category chip the real content leads with, when the event has one.
+   *
+   * Without it the cover's title sat about fifty pixels higher than the
+   * title it hands over to, so the handover — the one moment this component
+   * exists to make invisible — moved the largest text on the screen.
+   */
+  categoryLabel?: string | null;
+}) {
   const cardTop = `${SHEET_SNAP_FRACTIONS[EXPANDED_SNAP_INDEX] * 100}dvh`;
   const posterHeight = `${POSTER_FRACTION * 100}dvh`;
   const sideInset = `${((1 - EXPANDED_CARD_FRACTION) / 2) * 100}vw`;
@@ -62,22 +77,41 @@ export function DeckShell({ posterUrl, title }: { posterUrl?: string | null; tit
         ) : (
           <div className="absolute inset-x-0 top-0 bg-muted" style={{ height: posterHeight }} />
         )}
+        {/* `rounded-t-3xl border-t`, matching the deck's own page exactly. A
+            page is the full width of the viewport now, so its side and bottom
+            edges are off screen and a full border here would draw a hairline
+            the deck does not — visible for the one frame of the handover,
+            which is the frame this component exists to make invisible. */}
         <div
-          className="absolute overflow-hidden rounded-3xl border border-border bg-background shadow-deck"
+          className="absolute overflow-hidden rounded-t-3xl border-t border-border bg-background shadow-deck"
           style={{ top: cardTop, bottom: 0, left: sideInset, right: sideInset }}
         >
-          <div className="flex justify-center pb-1 pt-2.5">
+          <div className="flex h-11 items-center justify-center">
             <span className="h-1.5 w-12 rounded-full bg-border-strong" />
           </div>
-          <div className="flex flex-col gap-3 px-5 pt-5">
-            {title ? (
-              <p className="line-clamp-2 text-h3 font-extrabold leading-tight text-foreground">
-                {title}
-              </p>
-            ) : (
-              <span className="h-6 w-3/4 rounded-md bg-muted" />
-            )}
-            <span className="h-4 w-1/2 rounded-md bg-muted" />
+          {/* Every class here mirrors `EventWidgetContent`'s first block —
+              `px-4` not `px-5`, `gap-6` not `gap-3`, and the title's own
+              `leading-snug tracking-tight`. A stand-in that is four pixels and
+              one line-height away from what replaces it is a stand-in that
+              announces the swap. */}
+          <div className="flex flex-col gap-6 px-4 pt-4">
+            {categoryLabel ? (
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-border bg-muted px-3 py-1 text-caption font-semibold text-muted-foreground">
+                  {categoryLabel}
+                </span>
+              </div>
+            ) : null}
+            <div className="flex flex-col gap-1">
+              {title ? (
+                <p className="text-h3 font-extrabold leading-snug tracking-tight text-foreground">
+                  {title}
+                </p>
+              ) : (
+                <span className="h-7 w-3/4 rounded-md bg-muted" />
+              )}
+              <span className="h-5 w-1/2 rounded-md bg-muted" />
+            </div>
           </div>
         </div>
       </div>

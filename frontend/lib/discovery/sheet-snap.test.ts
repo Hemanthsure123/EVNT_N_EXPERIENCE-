@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CARD_HEIGHT_REDUCTION,
   DISMISS_FRACTION,
+  EXPANDED_CARD_FRACTION,
+  EXPANDED_CARD_HEIGHT_FRACTION,
   MIN_CARD_FRACTION,
   POSTER_FRACTION,
   EXPANDED_SNAP_INDEX,
   INITIAL_SNAP_INDEX,
   resolveSnap,
+  RESTING_CARD_HEIGHT_FRACTION,
   SHEET_SNAP_FRACTIONS,
   snapPixels,
 } from './sheet-snap';
@@ -144,5 +148,66 @@ describe('resolveSnap', () => {
   it('is safe with no snap points rather than throwing on an unmeasured viewport', () => {
     const result = resolveSnap({ y: 120, velocity: 0, snaps: [], viewportHeight: 0 });
     expect(result).toEqual({ index: 0, y: 120, shouldClose: false });
+  });
+});
+
+describe('the content widget is a tenth shorter than it was', () => {
+  /**
+   * The reduction was specified as EXACTLY ten per cent, and the derivation
+   * that used to produce these numbers could not express that: the ceiling was
+   * `Number((POSTER_FRACTION / 2).toFixed(2))`, so the only reachable values
+   * near 0.594 were 0.59 and 0.60 — a 10.6% or a 9.1% cut, either of which is
+   * a number nobody chose. The card fractions are the primary constants for
+   * that reason, and these tests are what stop somebody quietly turning the
+   * derivation back around.
+   */
+  it('is exactly nine tenths of each previous card height', () => {
+    expect(EXPANDED_CARD_HEIGHT_FRACTION).toBeCloseTo(0.66 * (1 - CARD_HEIGHT_REDUCTION), 10);
+    expect(RESTING_CARD_HEIGHT_FRACTION).toBeCloseTo(0.61 * (1 - CARD_HEIGHT_REDUCTION), 10);
+  });
+
+  it('leaves the sheet resting exactly where the card height says it should', () => {
+    // The snaps are the card heights subtracted from the screen and nothing
+    // else. A stop that drifted from its card height would put the CTA bar
+    // and the content's bottom padding on two different numbers.
+    expect(SHEET_SNAP_FRACTIONS[EXPANDED_SNAP_INDEX]).toBeCloseTo(
+      1 - EXPANDED_CARD_HEIGHT_FRACTION,
+      10,
+    );
+    expect(SHEET_SNAP_FRACTIONS[INITIAL_SNAP_INDEX]).toBeCloseTo(
+      1 - RESTING_CARD_HEIGHT_FRACTION,
+      10,
+    );
+  });
+
+  it('keeps half the poster showing at the tallest stop', () => {
+    // The invariant survived the derivation turning around: the poster is now
+    // computed FROM the ceiling rather than the ceiling from the poster, and
+    // the rule it encodes is identical.
+    expect(SHEET_SNAP_FRACTIONS[EXPANDED_SNAP_INDEX] / POSTER_FRACTION).toBeCloseTo(0.5, 2);
+  });
+
+  it('moved the floor by the same tenth, rather than vetoing the change', () => {
+    expect(MIN_CARD_FRACTION).toBeCloseTo(0.6 * (1 - CARD_HEIGHT_REDUCTION), 10);
+    // And the shortest stop still clears it, which is the thing the floor is
+    // actually for.
+    expect(RESTING_CARD_HEIGHT_FRACTION).toBeGreaterThan(MIN_CARD_FRACTION);
+  });
+});
+
+describe('a page is the whole screen', () => {
+  it('has no peek left to bleed at either edge', () => {
+    // The deck multiplies the viewport width by this. Anything below 1 puts
+    // slivers of the previous and next events down both sides of the one
+    // somebody opened, and — because the width used to change with the snap
+    // state — slid the entire track sideways when the sheet was expanded.
+    expect(EXPANDED_CARD_FRACTION).toBe(1);
+  });
+
+  it('leaves no side inset for the pre-hydration cover to draw', () => {
+    // `deck-skeleton` paints `(1 - EXPANDED_CARD_FRACTION) / 2` down each
+    // side. A cover inset by a margin the deck no longer has is a page that
+    // visibly widens at the handover.
+    expect((1 - EXPANDED_CARD_FRACTION) / 2).toBe(0);
   });
 });

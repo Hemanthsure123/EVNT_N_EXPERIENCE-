@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import type { EventContent } from '@/lib/api/event-content';
 import type { EventDetail } from '@/lib/api/types';
+import { categoryBySlug } from '@/lib/discovery/categories';
 import { DeckShell } from './deck-skeleton';
 
 /**
@@ -105,7 +106,13 @@ export function DeckBoot({ event, content }: { event: EventDetail; content: Even
 
   // The same shell the route's loading state paints, so the two frames either
   // side of hydration are one picture. It carries its own `<noscript>` escape.
-  return <DeckShell posterUrl={event.poster_url} title={event.title} />;
+  return (
+    <DeckShell
+      posterUrl={event.poster_url}
+      title={event.title}
+      categoryLabel={categoryBySlug(event.category)?.label ?? null}
+    />
+  );
 }
 
 /**

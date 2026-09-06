@@ -62,7 +62,17 @@ export function SharedPoster({
   const ref = React.useRef<HTMLDivElement>(null);
   const done = React.useRef(false);
 
-  React.useEffect(() => {
+  /**
+   * A LAYOUT effect, so the flight starts in the frame this first paints.
+   *
+   * As a passive effect it ran after the browser had painted, which put the
+   * clone's first moving frame a whole paint behind the sheet's — measured on
+   * a production build, the sheet had all but finished arriving before this
+   * animation began. `fill: 'both'` also means the un-started clone would
+   * paint once at identity, i.e. at full hero size, before jumping back to its
+   * starting transform.
+   */
+  React.useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
 
@@ -154,8 +164,13 @@ export function SharedPoster({
         height: to.height,
         willChange: 'transform',
         // Matches the hero's own corner treatment, so the shape does not
-        // change at the handover.
-        borderRadius: '1.5rem',
+        // change at the handover. The deck's poster is full-bleed and square
+        // now — rounded corners on a full-width image anchored to the top of
+        // the screen are two wedges of background in the display's corners —
+        // so this is square too. It is the DESTINATION's shape that matters:
+        // the clone is positioned at the hero's box and ends at identity, so
+        // any radius the card had is what the flight is travelling away from.
+        borderRadius: 0,
         overflow: 'hidden',
       }}
       className="pointer-events-none z-modal bg-muted"

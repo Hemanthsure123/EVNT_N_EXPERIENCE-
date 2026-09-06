@@ -5,13 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Ticket } from 'lucide-react';
-import {
-  animate,
-  motion,
-  useMotionValue,
-  useMotionValueEvent,
-  useReducedMotion,
-} from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
 import { useScrollLock } from '@/lib/discovery/use-scroll-lock';
@@ -19,6 +13,7 @@ import {
   EXPANDED_CARD_FRACTION,
   EXPANDED_SNAP_INDEX,
   INITIAL_SNAP_INDEX,
+  POSTER_FRACTION,
   resolveSnap,
   snapPixels,
 } from '@/lib/discovery/sheet-snap';
@@ -135,27 +130,84 @@ import { SharedPoster } from './shared-poster';
  * dimmed page instead, which is what every other sheet in the product does.
  */
 
-const SPRING = { type: 'spring', stiffness: 340, damping: 36, mass: 0.9 } as const;
 /**
- * How long the poster takes to travel between a card and the hero.
+ * ── ONE CLOCK FOR THE WHOLE ARRIVAL, AND IT USED TO BE TWO ────────────────
  *
- * Short on purpose. This is a booking app, not a presentation: the transition
- * has to explain WHICH event was selected and then get out of the way, and
- * anything past about a third of a second starts to read as the interface
- * making the reader wait. It is also the scrim's duration, so the list fading
- * and the poster arriving are one movement rather than two.
+ * Opening the deck moves three things: the poster clone flying from the card,
+ * the sheet rising under it, and the scrim taking the feed away behind both.
+ * They were driven by two different kinds of animation — the poster and the
+ * scrim by a `220ms` cubic-bezier, the sheet by this spring — and a spring at
+ * `stiffness 340 / damping 36 / mass 0.9` needs the better part of half a
+ * second to visually settle a 300px displacement.
+ *
+ * So the picture landed, and THEN the panel finished climbing. Nothing was
+ * dropping frames; the two halves of one movement were simply running on two
+ * clocks, which is exactly what "the poster expands first and then the sheet
+ * slides up" describes. Nobody perceives that as two animations — they
+ * perceive it as one slow one.
+ *
+ * Everything that moves during an open or a close now shares this duration
+ * and `TRANSITION_EASE` — same numbers, one curve, started in the same frame.
+ * The spring is gone entirely, including from the release of a drag: the
+ * brief asks for one timing configuration shared by the image and the panel,
+ * and a CSS transition cannot be a spring. What a flick still decides is
+ * WHERE the sheet lands (`resolveSnap` projects along the release velocity to
+ * pick the snap); what it no longer decides is the shape of the last 200ms.
  */
 const FLIGHT_MS = 220;
 /**
- * How far back a neighbouring card sits when it is fully off-centre.
+ * ── AND ONE DRIVER, WHICH IS THE OTHER HALF OF IT ─────────────────────────
  *
- * These are the values the static classes carried; what changed is that they
- * are now the ENDPOINTS of an interpolation rather than a state a card snaps
- * between. Keeping the numbers identical means the resting appearance of the
- * deck is unchanged — only the way it gets there is.
+ * Sharing a duration is not enough if the two halves are driven by different
+ * machinery. The poster clone is a Web Animations API animation, so it runs on
+ * the COMPOSITOR: once started it is immune to whatever the main thread is
+ * doing. The sheet was `animate(y, ...)` on a framer motion value, which is a
+ * requestAnimationFrame tween on the MAIN thread — and framer only hands a
+ * value to the compositor when it is a named CSS property on an element it
+ * owns, which a standalone `y` value is not.
+ *
+ * Opening this deck is the busiest moment the main thread ever has: a fetch is
+ * dispatched, and a whole event page renders. Measured in a real browser, the
+ * sheet's tween got ONE frame in its entire 220ms — it jumped from its start
+ * to its end in a single step while the clone above it animated perfectly
+ * smoothly, because only one of them needed the main thread. That is not a
+ * timing bug and no amount of matching durations fixes it.
+ *
+ * So the sheet is driven exactly the way the horizontal track already is (see
+ * `applyTrack`): a `transform` written straight onto the node with a CSS
+ * transition to settle it. Compositor-driven, no React render per frame, and
+ * no motion value to be starved. `y` is gone as a motion value entirely —
+ * `sheetYRef` is the commanded position and `readSheetY` reads the live
+ * interpolated one, which is the same pair `readTrackX` already uses.
+ *
+ * One consequence worth stating: the release of a DRAG used to settle on a
+ * spring. A CSS transition cannot be a spring, and the brief asks for the
+ * image and the panel to share one timing configuration, so there is now
+ * exactly one curve and one duration for every vertical movement. The
+ * velocity a finger imparts is still honoured — `resolveSnap` projects along
+ * it to choose WHERE to land; what it no longer does is colour how the sheet
+ * gets there.
  */
-const PEEK_SCALE = 0.97;
-const PEEK_OPACITY = 0.7;
+/**
+ * The one curve. Typed as a mutable tuple because that is what framer's
+ * `ease` accepts, and shared by every open/close animation, the track's CSS
+ * settle and the scrim — a second copy of these four numbers is how two halves
+ * of one movement come to disagree.
+ */
+const TRANSITION_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+/**
+ * The same curve and duration, in the shape framer wants, for the scrim.
+ *
+ * The scrim is the one thing here still animated by framer, and legitimately:
+ * it animates OPACITY, which framer does hand to the compositor (`opacity` is
+ * on its accelerated list where a standalone `y` value is not). So it is on
+ * the same clock AND the same thread as everything else.
+ */
+const PAGE_TRANSITION = { duration: FLIGHT_MS / 1000, ease: TRANSITION_EASE };
+/** How long the track takes to settle onto a page after a release. */
+const SETTLE_MS = 340;
+const SETTLE_EASE = `cubic-bezier(${TRANSITION_EASE.join(', ')})`;
+
 /** How far a gesture must travel before it is allowed to commit to an axis. */
 const COMMIT_SLOP = 10;
 /**
@@ -170,17 +222,16 @@ const AXIS_DOMINANCE = 1.2;
  * does not travel eight pixels.
  */
 const OVERLAY_SLOP = 8;
-/** Fraction of the viewport the active card occupies while the deck is inset. */
-const CARD_FRACTION = 0.88;
-/** Gap between cards in the track, in px, while the deck is inset. */
-const CARD_GAP = 10;
 /**
- * The gap between cards once the sheet is expanded. Wider cards and a tighter
- * gap, NOT full-bleed: the neighbours stay in frame so the deck is still a deck
- * at its tallest. The width itself is `EXPANDED_CARD_FRACTION`, which lives in
- * `sheet-snap` because the pre-hydration cover reads it too.
+ * The gap between pages in the track, in px.
+ *
+ * Zero, because the pages are the full width of the viewport and a gap would
+ * be a black seam sliding through the middle of a swipe. It stays a named
+ * constant rather than being deleted: `stride` is `cardWidth + gap`, and a
+ * pager that has quietly stopped accounting for a gap is a pager that
+ * mis-centres the moment anybody wants one back.
  */
-const EXPANDED_CARD_GAP = 6;
+const CARD_GAP = 0;
 /**
  * How far a horizontal drag must go, as a share of one card stride, before a
  * release ADVANCES rather than springs back — when there is no flick to carry it.
@@ -254,11 +305,45 @@ export function EventWidgetDeck() {
   React.useEffect(() => installPosterOriginTracker(), []);
 
   const [activeSubSheet, setActiveSubSheet] = React.useState<SubSheetType>(null);
+  /** True from the moment a close is committed, so the scrim can leave with
+   *  the sheet — and so nothing can half-rescue a close already in flight. */
+  const [leaving, setLeaving] = React.useState(false);
+  const closingRef = React.useRef(false);
   const [snapIndex, setSnapIndex] = React.useState(INITIAL_SNAP_INDEX);
+  /**
+   * The snap the sheet is on, readable from imperative code — and written
+   * BEFORE the state, never from the render.
+   *
+   * It was `snapIndexRef.current = snapIndex` on every render, which is a
+   * frame behind by construction: a layout effect that calls `setSnapIndex`
+   * and a layout effect that READS the snap can land in the same commit, and
+   * the second one then acts on the value the first one just replaced. That
+   * is what sent every shared link to the resting stop instead of the
+   * maximized one — the placement effect chose EXPANDED, the re-placement
+   * effect ran in the same commit, read the stale INITIAL, and wrote it.
+   *
+   * So `applySnapIndex` is the only writer and it updates the ref first.
+   */
+  const snapIndexRef = React.useRef(INITIAL_SNAP_INDEX);
+  const applySnapIndex = React.useCallback((index: number) => {
+    snapIndexRef.current = index;
+    setSnapIndex(index);
+  }, []);
   const [viewport, setViewport] = React.useState({ width: 0, height: 0 });
   const [ctaHeight, setCtaHeight] = React.useState(0);
 
-  const y = useMotionValue(0);
+  /**
+   * The sheet's COMMANDED translate, in px from the top of the viewport.
+   *
+   * A ref and not a motion value: the sheet is driven by a transform written
+   * straight onto the node with a CSS transition, exactly as the horizontal
+   * track is, so nothing needs to re-render or tick when it moves. See the
+   * note on `FLIGHT_MS` for why the motion value had to go.
+   *
+   * While a transition is running this is the DESTINATION; `readSheetY` reads
+   * the interpolated position, which is the only place the live value exists.
+   */
+  const sheetYRef = React.useRef(0);
   /**
    * The gesture in progress. `origin` is where the finger LANDED — on the
    * scrolling content, or on the overlay (poster, scrim, empty space) — and it
@@ -286,6 +371,9 @@ export function EventWidgetDeck() {
   /** True for the first positioning pass of an open, so the deck does not
    *  slide sideways into place while it is sliding up. */
   const justOpenedRef = React.useRef(true);
+  /** True once this open has been placed and its entrance played — see the
+   *  entrance layout effect for why a resize must not replay it. */
+  const enteredRef = React.useRef(false);
   /** The live horizontal drag, or null. A ref, so moving costs no render. */
   const swipeRef = React.useRef<{
     startX: number;
@@ -308,54 +396,282 @@ export function EventWidgetDeck() {
   const isExpanded = snapIndex === EXPANDED_SNAP_INDEX;
   const snaps = React.useMemo(() => snapPixels(viewport.height), [viewport.height]);
   /**
-   * ── EXPANDING IS NOT A CHANGE OF IDENTITY ──────────────────────────────
+   * ── ONE WIDTH, AT EVERY SNAP ───────────────────────────────────────────
    *
-   * This used to go full-bleed at the top snap — `viewport.width`, zero gap,
-   * square corners — because the top snap WAS the whole screen. It is not any
-   * more (see `SHEET_SNAP_FRACTIONS`), and the transformation was always the
-   * wrong instinct: a card that becomes a page mid-gesture takes its
-   * neighbours with it, so the swipe that was carrying somebody through a deck
-   * silently stops being available at exactly the moment they are most
-   * engaged.
+   * This was `0.88` inset and `0.96` expanded, so the event somebody opened
+   * was never the whole screen and, worse, CHANGED WIDTH when the sheet was
+   * expanded. That second half is the "layout jumping on the first swipe":
+   * a drag upward ends in `snapTo`, `isExpanded` flips, the stride is
+   * remeasured, and the centring effect slides the entire track sideways
+   * under a finger that only ever moved vertically. Two animations the reader
+   * did not ask for, arriving one frame after the one they did.
    *
-   * It widens instead. Same object, more of it — the neighbours stay in the
-   * frame, narrower, so the deck is still legibly a deck.
+   * A page is the viewport, at every stop, with no gap. The stride is
+   * therefore a constant for the life of an open, so expanding is purely a
+   * vertical movement and the horizontal track never has to be re-derived.
    */
-  const cardWidth = Math.round(
-    viewport.width * (isExpanded ? EXPANDED_CARD_FRACTION : CARD_FRACTION),
-  );
-  const gap = isExpanded ? EXPANDED_CARD_GAP : CARD_GAP;
+  const cardWidth = Math.round(viewport.width * EXPANDED_CARD_FRACTION);
+  const gap = CARD_GAP;
   const stride = cardWidth + gap;
-  const railPadding = Math.round((viewport.width - cardWidth) / 2);
+  const railPadding = 0;
+  /**
+   * How much of the page hangs below the bottom of the screen at this snap.
+   *
+   * The page is a constant `100dvh` inside a sheet translated down by `y`, so
+   * its last `y` pixels are off screen. The content's bottom padding has to
+   * clear them as well as the CTA bar, or the final section stops exactly at
+   * the screen edge and reads as truncated.
+   *
+   * Deliberately taken from the SNAP and not from the live `y`: a padding that
+   * tracked the drag would be a layout write per frame, which is the whole
+   * thing this component just stopped doing. It is only ever consulted at the
+   * very end of a long scroll, and it is correct again the moment the sheet
+   * comes to rest.
+   */
+  const bottomInset = snaps[snapIndex] ?? 0;
   const restingX = React.useCallback((index: number) => -index * stride, [stride]);
 
   /**
-   * ── THE CARD IS AS TALL AS WHAT YOU CAN SEE ────────────────────────────
+   * ── THE CTA IS PULLED BACK ONTO THE SCREEN; THE CARD IS NOT RESIZED ────
    *
-   * The sheet is a full-viewport element translated DOWN by `y`, so at any
-   * snap below full screen its bottom edge sits `y` pixels past the bottom of
-   * the screen. A card of `100dvh` inside it therefore hangs off the bottom by
-   * exactly that much — and the sticky "Book tickets" bar, anchored to the
-   * card's bottom, went with it. At the resting snap the primary call to
-   * action was 113px below the visible area: present in the DOM, clickable by
-   * a test that scrolls, and invisible to a person.
+   * The sheet is a full-viewport element translated DOWN by `y`, so its bottom
+   * edge sits `y` pixels past the bottom of the screen and the sticky "Book
+   * tickets" bar anchored to it went with it — at the resting snap the primary
+   * call to action was over a hundred pixels below the visible area.
    *
-   * So the card's height is `100dvh - y`, published as a CSS variable written
-   * straight from the motion value. One `setProperty` per frame on one
-   * element, inherited by the cards — no React render, and the bottom of the
-   * card is the bottom of the screen at every snap and all the way through a
-   * drag.
+   * The fix for that was to publish `y` as a CSS variable and give the card
+   * `height: calc(100dvh - var(--deck-y))`. It put the CTA back on screen and
+   * it was the single most expensive thing in this component: `height` is a
+   * LAYOUT property, so every frame of every drag — and every frame of the
+   * opening animation — relaid out the whole event page inside that card,
+   * on the main thread, while the finger was moving. That is what "heavy" and
+   * "laggy" were.
+   *
+   * Only one element ever needed to move, so only one element moves. The bar
+   * is translated back up by exactly the sheet's own offset, which puts it in
+   * precisely the place the resize used to, and `transform` is a compositor
+   * property: no layout, no paint, no style invalidation on anything it does
+   * not own. The card itself is a constant `100dvh` and is never measured
+   * again.
+   *
+   * Written straight to the node rather than through a custom property on the
+   * sheet, because changing an inherited custom property invalidates style for
+   * every descendant — which is most of what the resize was costing.
    */
-  useMotionValueEvent(y, 'change', (value) => {
-    sheetRef.current?.style.setProperty('--deck-y', `${Math.max(value, 0)}px`);
-  });
+  /**
+   * Writes the sheet's position, and the CTA bar's counter-offset, in one go.
+   *
+   * BOTH get the same transition, and that is what keeps the bar pinned. The
+   * bar's offset is `-y`, so while the two interpolate along the identical
+   * curve their sum is constant and the bar does not move relative to the
+   * screen at all — no per-frame arithmetic, no motion value, and correct at
+   * every point of the settle rather than only at its ends.
+   */
+  const writeSheetY = React.useCallback(
+    (value: number, settle: boolean) => {
+      sheetYRef.current = value;
+      const transition = settle && !reduceMotion ? `transform ${FLIGHT_MS}ms ${SETTLE_EASE}` : 'none';
+      // ── BOTH PROPERTIES, ON BOTH NODES, EVERY TIME ──────────────────────
+      //
+      // There was a "only write `transition` when the string changes" guard
+      // here, memoising the last value in a ref. It was wrong, because the two
+      // nodes do not live equally long: the sheet survives an open, while the
+      // CTA bar is a NEW element after every horizontal page change and starts
+      // at `transition: none`. One cache for two lifetimes desynchronises the
+      // moment `seedCtaOffset` touches the fresh bar — the cache then says
+      // "220ms", the bar says "none", the next settle skips the write, and the
+      // sheet eases while the bar JUMPS. That is precisely the invariant this
+      // function exists to hold.
+      //
+      // And the guard bought nothing: the `transform` write on the next line
+      // already dirties the same element's style in the same frame, so the
+      // second property costs no additional recalc.
+      const sheet = sheetRef.current;
+      if (sheet) {
+        sheet.style.transition = transition;
+        sheet.style.transform = `translate3d(0, ${value}px, 0)`;
+      }
+      const cta = ctaRef.current;
+      if (cta) {
+        cta.style.transition = transition;
+        cta.style.transform = `translate3d(0, ${-Math.max(value, 0)}px, 0)`;
+      }
+    },
+    [reduceMotion],
+  );
+
+  /**
+   * Copies the sheet's current position and transition onto the CTA bar.
+   *
+   * For the bar that arrives with a new page: the node is fresh, so it starts
+   * at `transform: none` and would sit below the screen until something moved
+   * it. It must NOT go through `writeSheetY` — that re-commands the sheet, and
+   * a swipe landing while a vertical settle is still running would cut that
+   * settle short and snap the sheet to its target.
+   */
+  const seedCtaOffset = React.useCallback(() => {
+    const cta = ctaRef.current;
+    if (!cta) return;
+    // `none`, always. A fresh node computes to `transform: none`, so giving it
+    // a settle's transition here would ANIMATE it from identity to its offset
+    // — the ticket bar sliding up from below the fold on every page change.
+    // It has to be in place in the frame it mounts, not eased into place.
+    cta.style.transition = 'none';
+    // The COMMANDED offset, not the live one. If a vertical settle happens to
+    // be running when a page change lands, the bar is seeded at the settle's
+    // destination and is therefore wrong by a shrinking amount that reaches
+    // zero when the sheet arrives; seeding it at the live position would be
+    // right for one frame and then wrong by the whole delta.
+    cta.style.transform = `translate3d(0, ${-Math.max(sheetYRef.current, 0)}px, 0)`;
+  }, []);
+
+  /**
+   * The sheet's LIVE translate — mid-transition included.
+   *
+   * The same trick, and for the same reason, as `readTrackX`: during a CSS
+   * transition the computed transform is the INTERPOLATED value, and that is
+   * the only place it exists. One computed read, on the pointerdown that
+   * starts a gesture, never per frame.
+   */
+  const readSheetY = React.useCallback((fallback: number) => {
+    const node = sheetRef.current;
+    if (!node || typeof window === 'undefined') return fallback;
+    try {
+      const transform = window.getComputedStyle(node).transform;
+      if (!transform || transform === 'none') return fallback;
+      const matrix = new DOMMatrixReadOnly(transform);
+      return Number.isFinite(matrix.m42) ? matrix.m42 : fallback;
+    } catch {
+      // DOMMatrix is missing in some test environments, and a browser handing
+      // back something unparseable is not worth a thrown gesture.
+      return fallback;
+    }
+  }, []);
+
+  /**
+   * ── WHY A GESTURE MUST TAKE THE SHEET, NOT JOIN IT ─────────────────────
+   *
+   * The entrance was `animate(y, ...)` on a motion value, and the drag wrote
+   * that same value with `y.set()`. A motion value does not stop a running
+   * animation because somebody set it — the animation writes over the set
+   * value on its very next frame.
+   *
+   * That is "the first swipe does not maximise". The entrance is still
+   * settling for the first fraction of a second of the deck being open, which
+   * is exactly when a thumb arrives, and every pixel the drag wrote was
+   * overwritten before it could be painted. The sheet sat still while the
+   * finger moved and then jumped to wherever the animation had reached. It
+   * was not a gesture that failed to commit; it was a gesture that was never
+   * allowed to move anything.
+   *
+   * `settleSheetY` and `freezeSheetY` are the two halves of the answer: one
+   * owns the settle, the other takes it away and pins the sheet at the
+   * position it is CURRENTLY painted at. There is no window in which the deck
+   * is animating and deaf.
+   */
+  /**
+   * Moves the sheet to `target`, settling on the compositor.
+   *
+   * `onDone` is delivered from `transitionend` rather than from a timer: a
+   * timer that agrees with the duration today is a timer that disagrees with
+   * it the next time somebody retunes `FLIGHT_MS`, and this callback commits
+   * a CLOSE — the one place a few frames early means unmounting a deck that
+   * is still visibly on screen.
+   */
+  /**
+   * Drops a pending completion watcher.
+   *
+   * ── WHY THIS IS NOT OPTIONAL ──────────────────────────────────────────
+   *
+   * The only settle that carries an `onDone` is the DISMISS, and its callback
+   * closes the deck — a route-origin one NAVIGATES. A transition that is
+   * CANCELLED, which is what happens if a finger grabs the sheet during the
+   * ~200ms of a close, never fires `transitionend`. Left attached, that
+   * listener would sit on a node still on screen and fire on the next ordinary
+   * snap, running the abandoned close in the middle of a gesture.
+   *
+   * `transitioncancel` is the browser's own answer to that and is listened for
+   * below. This exists so the guarantee does not REST on it: a watcher is
+   * superseded by whatever supersedes its settle — a new settle, a gesture
+   * taking the sheet, or the deck closing — whether or not the event arrives.
+   * The failure it prevents is a navigation nobody asked for, which is worth
+   * not depending on an event to avoid.
+   */
+  const settleWatcherRef = React.useRef<(() => void) | null>(null);
+  const clearSettleWatcher = React.useCallback(() => {
+    settleWatcherRef.current?.();
+    settleWatcherRef.current = null;
+  }, []);
+
+  const settleSheetY = React.useCallback(
+    (target: number, onDone?: () => void) => {
+      clearSettleWatcher();
+      const node = sheetRef.current;
+      const from = readSheetY(sheetYRef.current);
+      writeSheetY(target, true);
+      if (!onDone) return;
+      // Nothing to transition — no `transitionend` will ever come.
+      if (!node || reduceMotion || Math.abs(target - from) < 0.5) {
+        onDone();
+        return;
+      }
+      const detach = () => {
+        node.removeEventListener('transitionend', finish);
+        node.removeEventListener('transitioncancel', abandon);
+      };
+      // A descendant's own transition bubbles to here, so BOTH the target and
+      // the property are checked — a button's `transition-transform` finishing
+      // is not this settle finishing.
+      const finish = (event: TransitionEvent) => {
+        if (event.target !== node || event.propertyName !== 'transform') return;
+        detach();
+        settleWatcherRef.current = null;
+        onDone();
+      };
+      const abandon = (event: TransitionEvent) => {
+        if (event.target !== node || event.propertyName !== 'transform') return;
+        detach();
+        settleWatcherRef.current = null;
+      };
+      node.addEventListener('transitionend', finish);
+      node.addEventListener('transitioncancel', abandon);
+      settleWatcherRef.current = detach;
+    },
+    [clearSettleWatcher, readSheetY, reduceMotion, writeSheetY],
+  );
+
+  /**
+   * Hands the sheet to a finger: pin it exactly where it LOOKS like it is.
+   *
+   * This is the fix for "the first swipe does not maximise". A settle was
+   * still running for the first fraction of a second of the deck being open —
+   * which is exactly when a thumb arrives — and the drag used to read the
+   * COMMANDED position while the transition kept driving the element. The
+   * sheet either ignored the finger or jumped. Freezing at the interpolated
+   * value means a gesture can interrupt an arrival at any point and the sheet
+   * is already under the thumb when it does.
+   */
+  const freezeSheetY = React.useCallback(() => {
+    // The gesture supersedes whatever the settle was going to do next — see
+    // `clearSettleWatcher`. Without this a grab during a close leaves the
+    // close's callback armed on the sheet, to fire on some later snap.
+    clearSettleWatcher();
+    const live = readSheetY(sheetYRef.current);
+    writeSheetY(live, false);
+    return live;
+  }, [clearSettleWatcher, readSheetY, writeSheetY]);
+
+  /** Forces the pending transform to be committed, so the NEXT one animates. */
+  const flushSheet = React.useCallback(() => {
+    void sheetRef.current?.offsetHeight;
+  }, []);
 
   /** Writes the sheet's translate while a finger is on it. */
   const applySheet = React.useCallback(
     (offset: number) => {
-      y.set(offset);
+      writeSheetY(offset, false);
     },
-    [y],
+    [writeSheetY],
   );
 
   /**
@@ -375,54 +691,34 @@ export function EventWidgetDeck() {
    */
   const applyTrack = React.useCallback(
     (offset: number, settle: boolean) => {
-      const transition =
-        settle && !reduceMotion ? 'transform 340ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
+      const transition = settle && !reduceMotion ? `transform ${SETTLE_MS}ms ${SETTLE_EASE}` : 'none';
       const transform = `translate3d(${offset}px, 0, 0)`;
       for (const node of [trackRef.current, posterTrackRef.current]) {
         if (!node) continue;
         node.style.transition = transition;
         node.style.transform = transform;
       }
-
       /**
-       * ── PROMINENCE IS INTERPOLATED, NOT SWITCHED ──────────────────────
+       * ── AND NOTHING ELSE, WHICH IS THE POINT ──────────────────────────
        *
-       * The neighbours used to carry a STATIC `scale-[0.97] opacity-70` class
-       * with a 300ms transition, so an incoming card sat at its dimmed size
-       * for the whole swipe and then cross-faded once the index flipped. That
-       * is the `drag -> wait -> change -> animate` shape: the visual state
-       * lagged the finger by an entire gesture, and reversing mid-swipe made
-       * two cards animate the wrong way at once.
+       * There was a second half here: a `querySelectorAll` over every cell,
+       * once per frame of a swipe, interpolating a `scale(0.97)` and an
+       * `opacity(0.7)` onto the neighbours so a card halfway in was halfway
+       * bright. It was written for a deck whose neighbours PEEKED — six
+       * percent of each showing at the rim, where dimming them read as depth.
        *
-       * The same `offset` that positions the track also says exactly where
-       * each card is relative to the centre, so the state is DERIVED from it
-       * in the same frame. A card halfway in is halfway bright. Reversing
-       * direction reverses it immediately, because there is nothing running
-       * that has to be cancelled first — the only thing moving is the finger.
+       * A page is the full viewport now, so there is no rim. Scaling the
+       * incoming page down would open a black wedge down both sides of it for
+       * the length of every swipe, and fading it would show the poster
+       * through the panel — the interpolation would be actively visible as a
+       * defect rather than invisible as polish. So it is gone, along with a
+       * DOM query and up to twenty style writes per animation frame on the
+       * one code path where the finger is already on the glass.
        *
-       * Writes only: `transform` and `opacity`, both compositor properties,
-       * and no `getBoundingClientRect` anywhere near a gesture.
+       * Full-screen pagers do not do this. Pages slide.
        */
-      const track = trackRef.current;
-      if (!track || stride <= 0) return;
-      const centre = -offset / stride;
-      const cells = track.querySelectorAll<HTMLElement>('[data-deck-card]');
-      const cellTransition =
-        settle && !reduceMotion
-          ? 'transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 340ms cubic-bezier(0.22, 1, 0.36, 1)'
-          : 'none';
-      for (let index = 0; index < cells.length; index += 1) {
-        const cell = cells[index];
-        // Clamped at one card's distance: everything further out is simply
-        // "not the one", and letting it keep shrinking would make a long list
-        // fade to nothing at the edges for no reason.
-        const distance = Math.min(Math.abs(index - centre), 1);
-        cell.style.transition = cellTransition;
-        cell.style.transform = `scale(${1 - distance * (1 - PEEK_SCALE)})`;
-        cell.style.opacity = String(1 - distance * (1 - PEEK_OPACITY));
-      }
     },
-    [reduceMotion, stride],
+    [reduceMotion],
   );
 
   // The bottom padding under the content is the REAL height of the sticky bar
@@ -434,8 +730,31 @@ export function EventWidgetDeck() {
     const observer = new ResizeObserver(() => setCtaHeight(node.offsetHeight));
     observer.observe(node);
     setCtaHeight(node.offsetHeight);
+    // The bar is a fresh node after a swipe (the incoming page's `ActiveCard`
+    // replaces the outgoing one), so it starts at `transform: none` and would
+    // sit `y` pixels below the screen until the next frame of a drag moved it.
+    // Seeded here, where the ref is known to point at the live one.
     return () => observer.disconnect();
-  }, [isOpen]);
+    // `currentEvent?.id` because that swap also left the observer watching the
+    // OLD bar, so `ctaHeight` — and therefore the content's bottom padding —
+    // was measured from a node no longer on screen.
+  }, [isOpen, currentEvent?.id]);
+
+  /**
+   * Put the incoming page's ticket bar in place BEFORE the browser paints it.
+   *
+   * A horizontal page change unmounts the outgoing `ActiveCard` and mounts a
+   * new one, so `ctaRef` points at a fresh node with no transform — which puts
+   * it at the bottom of the PAGE, `bottomInset` px below the screen. As a
+   * passive effect this seeding ran after paint, so every swipe showed one
+   * frame with no ticket bar at all, on the surface whose whole job is to sell
+   * a ticket. None of the other layout effects cover it: they are keyed on
+   * `isOpen` and the viewport, and an index change moves neither.
+   */
+  React.useLayoutEffect(() => {
+    if (!isOpen) return;
+    seedCtaOffset();
+  }, [isOpen, currentEvent?.id, seedCtaOffset]);
 
   /**
    * ── THE POSTER IS A SHARED ELEMENT, NOT A NEW IMAGE ────────────────────
@@ -454,54 +773,107 @@ export function EventWidgetDeck() {
    * card scrolled out of view, reduced motion.
    */
   const [flight, setFlight] = React.useState<{
+    /** Distinct per flight, so a new one can never reuse the old layer. */
+    id: number;
     from: Box;
     to: Box;
     direction: 'in' | 'out';
     src: string;
     alt: string;
   } | null>(null);
+  const flightIdRef = React.useRef(0);
 
   /**
    * ── WHERE THE SHEET IS ON ITS FIRST PAINTED FRAME ──────────────────────
    *
-   * `y` is a motion value initialised to 0, and until now it was first set
-   * inside the passive enter effect below — which runs AFTER the browser has
-   * painted. On the very first open of a session that painted one frame with
-   * the sheet at translateY(0): a full-height card covering the whole screen,
-   * poster hidden, at the resting position of nothing. From the feed nobody
-   * ever saw it, because a previous close had left `y` off-screen. From a
-   * shared link it is the first frame the reader sees, on the platform's
-   * most-shared URL.
+   * The sheet's transform starts unset, and it was first written inside the
+   * passive enter effect below — which runs AFTER the browser has painted. On
+   * the very first open of a session that painted one frame with the sheet at
+   * translate zero: a full-height card covering the whole screen, poster
+   * hidden, at the resting position of nothing. From the feed nobody ever saw
+   * it, because a previous close had left it off-screen. From a shared link it
+   * is the first frame the reader sees, on the platform's most-shared URL.
    *
    * A layout effect runs before paint. A deep link lands the sheet directly at
    * its expanded snap — it IS the page, and the brief is explicit that it must
    * not arrive minimized and wait for a gesture. A feed open parks it below
-   * the viewport, where the passive effect then decides how it enters.
+   * the viewport, where the entrance effect then decides how it enters.
    */
   React.useLayoutEffect(() => {
-    if (!isOpen || viewport.height === 0) return;
-    const snaps = snapPixels(viewport.height);
-    if (openOptionsRef.current.expanded) {
-      setSnapIndex(EXPANDED_SNAP_INDEX);
-      y.set(snaps[EXPANDED_SNAP_INDEX]);
+    // Reset here rather than in a passive effect, so a close and an immediate
+    // reopen cannot land in the same tick with the flag still set.
+    if (!isOpen) {
+      enteredRef.current = false;
       return;
     }
-    y.set(viewport.height);
+    if (viewport.height === 0 || enteredRef.current) return;
+    justOpenedRef.current = true;
+    const snaps = snapPixels(viewport.height);
+    if (openOptionsRef.current.expanded) {
+      applySnapIndex(EXPANDED_SNAP_INDEX);
+      writeSheetY(snaps[EXPANDED_SNAP_INDEX], false);
+      // Placed, with no entrance to play — so the arrival is over.
+      enteredRef.current = true;
+      return;
+    }
+    writeSheetY(viewport.height, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, viewport.height]);
 
-  // Enter: from just below the viewport up to the resting snap, with the
-  // tapped event already centred.
-  React.useEffect(() => {
+  // A LAYOUT effect, so the neighbours are already dimmed and set back in the
+  // first frame the deck paints. `applyTrack` runs again from the ordinary
+  // effects a frame later, which is fine — it is idempotent for the same offset.
+  React.useLayoutEffect(() => {
+    if (!isOpen || viewport.width === 0) return;
+    applyTrack(restingX(currentIndex), false);
+    // Only on open and on a viewport change. `currentIndex` is handled by the
+    // centring effect, which also knows whether to settle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, viewport.width]);
+
+  /**
+   * The ENTRANCE, and it is a LAYOUT effect for a measured reason.
+   *
+   * It was a passive effect, which runs after the browser has painted, so
+   * `setFlight` landed one paint late: the clone mounted, and only then did
+   * its own animation start. Measured on a production build, the sheet had
+   * finished arriving at t~250ms while the poster clone had not begun to move
+   * until t~231ms. Two movements, visibly sequential — which is exactly the
+   * "the poster goes first and then the sheet follows" this exists to fix, and
+   * no amount of matching durations closes a gap that is a React commit wide.
+   *
+   * A state update inside a LAYOUT effect is flushed synchronously before the
+   * browser paints, so `SharedPoster` mounts and starts in the SAME frame the
+   * sheet's transition does. One frame, one start, one movement.
+   *
+   * It is declared AFTER the `applyTrack` layout effect on purpose: the deck's
+   * hero is measured here, and until the track has been positioned the active
+   * page's poster is still a screen-width or more off to the side. Measuring
+   * before that would fly the clone to a box nobody can see.
+   */
+  React.useLayoutEffect(() => {
     if (!isOpen || viewport.height === 0) return;
+    /**
+     * ── ONCE PER OPEN, NOT ONCE PER VIEWPORT HEIGHT ────────────────────
+     *
+     * This effect lists `viewport.height` because it needs a measured
+     * viewport to compute the resting snap from. It must not RUN again when
+     * that number changes, and on a phone it changes constantly: the URL bar
+     * collapses on the first scroll. Without this guard that ordinary event
+     * re-parked the sheet below the screen and replayed the whole arrival —
+     * collapsing a sheet the reader had expanded and re-flying the poster,
+     * mid-read. The effect below re-places the sheet on a resize instead.
+     */
+    if (enteredRef.current) return;
+    enteredRef.current = true;
     justOpenedRef.current = true;
     // Opened already expanded — a deep link. There is no card on the page to
     // fly from and no entrance to play; the layout effect above has placed it.
     if (openOptionsRef.current.expanded) return;
     const resting = snapPixels(viewport.height)[INITIAL_SNAP_INDEX];
-    setSnapIndex(INITIAL_SNAP_INDEX);
+    applySnapIndex(INITIAL_SNAP_INDEX);
     if (reduceMotion) {
-      y.set(resting);
+      writeSheetY(resting, false);
       return;
     }
 
@@ -518,6 +890,7 @@ export function EventWidgetDeck() {
 
     if (canFly && opening) {
       setFlight({
+        id: (flightIdRef.current += 1),
         from: source,
         to: destination,
         direction: 'in',
@@ -528,31 +901,60 @@ export function EventWidgetDeck() {
       // bottom of the screen. It has less distance to cover than the poster,
       // so both arrive together instead of the panel racing ahead of the image
       // it is supposed to be carrying.
-      y.set(Math.min(viewport.height, destination.top + destination.height));
+      writeSheetY(Math.min(viewport.height, destination.top + destination.height), false);
     } else {
-      y.set(viewport.height);
+      writeSheetY(viewport.height, false);
     }
 
-    const controls = animate(y, resting, SPRING);
-    return () => controls.stop();
+    // The start position has to be COMMITTED before the target is written, or
+    // the browser sees a single style change and there is nothing to
+    // transition between. One forced reflow, at open time, never per frame.
+    flushSheet();
+    settleSheetY(resting);
     // `currentIndex` is deliberately absent: this runs on OPEN, and re-running
     // it when the reader swipes would drop the sheet back to its entry height.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, viewport.height]);
 
-  // A LAYOUT effect, so the neighbours are already dimmed and set back in the
-  // first frame the deck paints. `applyTrack` runs again from the ordinary
-  // effects a frame later, which is fine — it is idempotent for the same offset.
+  /**
+   * A viewport change RE-PLACES the sheet; it does not re-open it.
+   *
+   * The snaps are fractions of the viewport, so when a phone's URL bar
+   * collapses every one of them moves. The sheet is at an absolute pixel
+   * offset, so left alone it would be at the old snap's position against the
+   * new geometry — a gap under the ticket bar, or the poster covered by a few
+   * pixels more than the reader chose.
+   *
+   * Instantly, and at the snap the reader is ACTUALLY on: this is the
+   * viewport correcting itself, not a movement anybody asked to watch.
+   */
   React.useLayoutEffect(() => {
-    if (!isOpen || viewport.width === 0) return;
-    applyTrack(restingX(currentIndex), false);
-    // Only on open and on a viewport change. `currentIndex` is handled by the
-    // centring effect, which also knows whether to settle.
+    /**
+     * ── `viewport.height` AND NOTHING ELSE ─────────────────────────────
+     *
+     * This listed `isOpen` too, and that broke every shared link. Opening
+     * changes `isOpen`, so the effect ran during the open — after the
+     * placement effect had called `setSnapIndex(EXPANDED_SNAP_INDEX)` but
+     * BEFORE that state reached a render. It therefore read the previous
+     * snap and wrote it, and a deep-linked deck that is supposed to arrive
+     * maximized arrived at the resting stop instead. Caught by the deep-link
+     * check, which is why that check exists.
+     *
+     * A re-placement is a response to the VIEWPORT moving and to nothing
+     * else. `isOpen` and the snap are read from refs so they are the live
+     * values rather than whichever render this closure belongs to.
+     */
+    if (!isOpenRef.current || !enteredRef.current || viewport.height === 0) return;
+    const target = snapPixels(viewport.height)[snapIndexRef.current];
+    if (target !== undefined) writeSheetY(target, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, viewport.width]);
+  }, [viewport.height]);
 
   React.useEffect(() => {
     if (!isOpen) {
+      clearSettleWatcher();
+      closingRef.current = false;
+      setLeaving(false);
       setActiveSubSheet(null);
       // The flight belongs to the deck, not to the layer that draws it. Clearing
       // it here is what makes `SharedPoster`'s cleanup able to be a plain
@@ -560,7 +962,7 @@ export function EventWidgetDeck() {
       // hidden, because the only thing that hides it is this state.
       setFlight(null);
     }
-  }, [isOpen]);
+  }, [isOpen, clearSettleWatcher]);
 
   // Keep the active card centred when the index changes (a swipe, a tap on a
   // similar-events card) and when the card WIDTH changes (entering or leaving
@@ -664,11 +1066,10 @@ export function EventWidgetDeck() {
     (index: number) => {
       const target = snaps[index];
       if (target === undefined) return;
-      setSnapIndex(index);
-      if (reduceMotion) y.set(target);
-      else animate(y, target, SPRING);
+      applySnapIndex(index);
+      settleSheetY(target);
     },
-    [snaps, y, reduceMotion],
+    [applySnapIndex, settleSheetY, snaps],
   );
 
   /**
@@ -721,6 +1122,11 @@ export function EventWidgetDeck() {
   }, [closeDeck, router]);
 
   const dismiss = React.useCallback(() => {
+    // Idempotent: Escape twice, or a drag-dismiss landing on a tap, must not
+    // start a second close over the first.
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setLeaving(true);
     if (reduceMotion || viewport.height === 0) {
       finishClose();
       return;
@@ -736,21 +1142,28 @@ export function EventWidgetDeck() {
 
     if (canFly && leaving) {
       setFlight({
+        id: (flightIdRef.current += 1),
         from: target,
         to: source,
         direction: 'out',
         src: leaving.poster_url,
         alt: leaving.title,
       });
-      // The sheet drops only as far as the poster's lower edge, so the two
-      // finish together rather than the panel disappearing and leaving the
-      // image to travel alone.
-      animate(y, Math.min(viewport.height, source.top + source.height), SPRING);
+      // ── ALL THE WAY OFF, LIKE THE OTHER BRANCH ──────────────────────
+      //
+      // This used to stop at the poster's lower edge, on the reasoning that a
+      // shorter journey made the sheet and the clone finish together. They
+      // finish together now because they share a duration, and stopping there
+      // meant the card was still covering the bottom 19% of the screen,
+      // opaque, at the moment the whole deck unmounted. The close ended in a
+      // hard cut — which is the "closing repeats the two-step lag" half of
+      // the complaint, and it was the sheet never actually leaving.
+      settleSheetY(viewport.height);
       return;
     }
 
-    animate(y, viewport.height, { ...SPRING, onComplete: finishClose });
-  }, [finishClose, viewport.height, viewport.width, y, reduceMotion]);
+    settleSheetY(viewport.height, finishClose);
+  }, [settleSheetY, finishClose, viewport.height, viewport.width, reduceMotion]);
 
   // ── THE THREE NON-POINTER WAYS OUT ─────────────────────────────────────
   //
@@ -815,7 +1228,10 @@ export function EventWidgetDeck() {
    */
   const beginVerticalDrag = React.useCallback(
     (event: React.PointerEvent) => {
-      const base = y.get();
+      // Pin the sheet at the position it VISUALLY holds, cancelling any
+      // settle still in flight — see the note on `freezeSheetY`. It returns
+      // that position, which is what the drag has to start from.
+      const base = freezeSheetY();
       const pointerId = event.pointerId;
       // A finger on the artwork or the scrim has no article under it. Without
       // this the overlay path would scroll the content it is nowhere near —
@@ -916,10 +1332,12 @@ export function EventWidgetDeck() {
         gestureRef.current.committed = false;
         gestureRef.current.pointerId = -1;
         const resolution = resolveSnap({
-          // `y.get()` IS the live, resistance-damped position — the term that
-          // used to be added here was multiplied by zero, so it described
-          // nothing and only made the line look like it accounted for travel.
-          y: y.get(),
+          // `sheetYRef` IS the live, resistance-damped position: no
+          // transition is running during a drag, so the commanded value and
+          // the painted one are the same number. (The term that used to be
+          // added here was multiplied by zero, so it described nothing and
+          // only made the line look like it accounted for travel.)
+          y: sheetYRef.current,
           // A finger that paused before lifting has no velocity, whatever the
           // last `pointermove` measured — see `liveVelocity`.
           velocity: liveVelocity(velocity, lastAt, endEvent.timeStamp),
@@ -934,7 +1352,7 @@ export function EventWidgetDeck() {
       window.addEventListener('pointerup', end);
       window.addEventListener('pointercancel', end);
     },
-    [applySheet, dismiss, snapTo, snaps, viewport.height, y],
+    [applySheet, dismiss, freezeSheetY, snapTo, snaps, viewport.height],
   );
 
   /**
@@ -1173,6 +1591,21 @@ export function EventWidgetDeck() {
 
   const commitGesture = React.useCallback(
     (event: React.PointerEvent) => {
+      /**
+       * ── A CLOSE IN FLIGHT IS NOT NEGOTIABLE ──────────────────────────
+       *
+       * Only ONE of the two dismiss paths could ever be called off. The
+       * non-flying one settles with an `onDone`, which `freezeSheetY` can
+       * supersede; the flying one is committed by the poster clone's own
+       * animation finishing, and no gesture cancels that. So a grab during a
+       * flying close pulled the sheet back under the finger and then closed
+       * anyway a moment later — a rescue that visibly worked and then did not.
+       *
+       * Refusing the gesture is the honest version. Leaving IS what was just
+       * asked for, ~200ms ago, and the alternative is two exit paths with
+       * different rules on the surface that sells a ticket.
+       */
+      if (closingRef.current) return;
       const gesture = gestureRef.current;
       if (gesture.committed || gesture.pointerId !== event.pointerId) return;
       const dx = event.clientX - gesture.x;
@@ -1254,9 +1687,18 @@ export function EventWidgetDeck() {
           this change is about timing, not about redesigning the scrim. */}
       <motion.div
         initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: reduceMotion ? 0 : FLIGHT_MS / 1000, ease: [0.22, 1, 0.36, 1] }}
+        /* ── IT FADES OUT TOO, AND `exit` NEVER DID ────────────────────────
+           `exit` only runs under an `AnimatePresence`, and nothing renders one
+           around this component — it simply returns null when the deck closes.
+           So the scrim was declared to fade and instead vanished in one frame,
+           at full opacity, on top of a sheet that had also stopped short. The
+           close ended as a cut.
+
+           Driven by state instead, on the same duration and curve as the sheet
+           and the clone. `opacity` is one of the properties framer hands to
+           the compositor, so this stays off the main thread like the rest. */
+        animate={{ opacity: leaving ? 0 : 1 }}
+        transition={{ duration: reduceMotion ? 0 : PAGE_TRANSITION.duration, ease: TRANSITION_EASE }}
         // Decoration only. Its tap-to-close moved to the gesture plate below,
         // where it can be guarded against the click that follows a drag.
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
@@ -1267,6 +1709,23 @@ export function EventWidgetDeck() {
           the length of one transition, and it removes itself. */}
       {flight ? (
         <SharedPoster
+          /* ── A NEW FLIGHT IS A NEW LAYER, AND THAT IS A HANG FIX ───────
+             `SharedPoster` starts its animation in a MOUNT-ONLY effect and
+             latches a `done` flag, so React reusing one instance for a second
+             flight means: no new animation, and a `settle()` that no-ops
+             against a completion callback captured on the first mount.
+
+             Reachable, and it strands the deck. Dismiss inside the ~220ms
+             entrance and the state goes 'in' -> 'out' with the layer still
+             mounted: the close's `onDone` — the ONLY thing that calls
+             `finishClose` on the poster-flight path — never runs. The sheet
+             settles onto the poster's lower edge and stops there, open,
+             with no exit having happened.
+
+             Keying by flight id makes every flight its own element, so the
+             effect and the `done` latch are fresh by construction rather than
+             by everyone remembering that this component is mount-only. */
+          key={flight.id}
           src={flight.src}
           alt={flight.alt}
           from={flight.from}
@@ -1331,7 +1790,14 @@ export function EventWidgetDeck() {
                 // from the constants above, so it stays correct on any
                 // viewport (and if the poster's height ever changes).
                 {...(index === currentIndex ? { [DECK_POSTER_ATTR]: '' } : {})}
-                className="absolute inset-x-0 top-0 h-[68dvh] overflow-hidden rounded-3xl bg-muted"
+                // NO rounding, and the height comes from `POSTER_FRACTION`
+                // rather than an `h-[81dvh]` class. Rounded corners on a
+                // full-width poster anchored to the top of the screen are two
+                // black wedges in the top corners of the display; and the
+                // height has already been a literal that drifted from this
+                // constant once, in four files.
+                style={{ height: `${POSTER_FRACTION * 100}dvh` }}
+                className="absolute inset-x-0 top-0 overflow-hidden bg-muted"
               >
                 <Poster event={event} priority={index === currentIndex} />
                 {/* NO scrim across the top of the artwork. It existed to keep
@@ -1368,13 +1834,19 @@ export function EventWidgetDeck() {
 
       {/* The SHEET. Drags on Y only; it is transparent, because the visible
           panels are the cards inside the track. */}
-      <motion.div
+      {/* The SHEET. A plain div, not a `motion.div`: its transform is
+          written straight onto the node by `writeSheetY` and settled with a
+          CSS transition, so it animates on the compositor and costs no React
+          render per frame — the same treatment, for the same reason, as the
+          horizontal track inside it.
+
+          NOTHING here may name `transform` or `transition`. React re-applies
+          the inline styles it owns on every render, so a `transform` in this
+          object would land on top of whatever the gesture had just written,
+          mid-drag. It owns `willChange` and nothing else. */}
+      <div
         ref={sheetRef}
-        // The variable is seeded here rather than in a class, because the
-        // project's lint rule (correctly) refuses raw px in Tailwind arbitrary
-        // values — and this one is not a design token, it is a live readout of
-        // the sheet's own translate.
-        style={{ y, ...({ '--deck-y': '0px' } as React.CSSProperties) }}
+        style={{ willChange: 'transform' }}
         className="absolute inset-x-0 top-0 h-[100dvh] touch-none overflow-hidden"
       >
         {/* The TRACK. Positioned by hand — see the note at the top. */}
@@ -1391,9 +1863,27 @@ export function EventWidgetDeck() {
                 style={{
                   width: cardWidth,
                   marginRight: index === events.length - 1 ? 0 : gap,
-                  height: 'calc(100dvh - var(--deck-y, 0px))',
+                  // A CONSTANT. It used to be `calc(100dvh - var(--deck-y))`,
+                  // which relaid out the whole event page on every frame of
+                  // every drag — see `writeSheetY` for what replaced it.
+                  height: '100dvh',
+                  // ── THE ACTIVE PAGE PAINTS ABOVE ITS NEIGHBOURS ─────────
+                  //
+                  // `shadow-deck` is `0 40px 90px` — a 90px blur, so it
+                  // spreads about 45px sideways. When the pages PEEKED that
+                  // fell on a dimmed backdrop and read as depth. Full-bleed,
+                  // the pages abut exactly, and the next one is a LATER
+                  // sibling: its shadow painted over the active page's right
+                  // edge, a visible dark gradient down the last ~45px of every
+                  // screen. Measured in a screenshot before it was believed.
+                  //
+                  // Raising the active page puts both neighbours underneath,
+                  // so nothing can cast onto the page being read. During a
+                  // swipe the outgoing page passes over the incoming one,
+                  // which is what two cards moving past each other look like.
+                  zIndex: active ? 1 : 0,
                 }}
-                className="shrink-0"
+                className="relative shrink-0"
                 aria-hidden={active ? undefined : true}
               >
                 <div
@@ -1415,24 +1905,20 @@ export function EventWidgetDeck() {
                   // before the browser draws.
                   className={cn(
                     'relative flex h-full flex-col overflow-hidden bg-background text-foreground shadow-deck',
-                    // ── ALL FOUR CORNERS, IN EVERY STATE ─────────────────
-                    // It was `rounded-t-3xl` only, so the card met the bottom
-                    // of the screen with two hard corners and the neighbours
-                    // either side read as square slabs rather than as cards.
-                    // The bottom rounding is invisible on the ACTIVE card
-                    // (its CTA bar sits on the screen edge) and is exactly
-                    // what makes the peeking ones look like objects.
+                    // ── THE TOP TWO CORNERS ONLY ─────────────────────────
+                    // All four were rounded and there was a border all the
+                    // way round, because the neighbours PEEKED and those
+                    // edges were the thing that made a sliver read as a card
+                    // rather than as a slab.
                     //
-                    // It used to square off at the top snap, because the top
-                    // snap was the whole screen. The sheet no longer reaches
-                    // the top, so there is no state in which this is a page
-                    // rather than a card — and no radius animation to run.
-                    'rounded-3xl border border-border',
-                    // The neighbours are context, not content: dimmed and set
-                    // back a little so the centre reads as the one in focus.
-                    // Those two values now live in `PEEK_SCALE`/`PEEK_OPACITY`
-                    // and are applied as INLINE styles, because they are
-                    // interpolated per frame rather than toggled per index.
+                    // A page is the full width of the viewport now, so the
+                    // side and bottom edges are off the screen: a border
+                    // there is a hairline nobody can see, and a bottom radius
+                    // is two wedges of black under a CTA bar that sits on the
+                    // screen edge. What is left is the one edge that is
+                    // actually visible — the top, meeting the artwork — which
+                    // is the shape every bottom sheet has.
+                    'rounded-t-3xl border-t border-border',
                   )}
                 >
                   {active ? (
@@ -1444,6 +1930,7 @@ export function EventWidgetDeck() {
                       events={events}
                       isExpanded={isExpanded}
                       ctaHeight={ctaHeight}
+                      bottomInset={bottomInset}
                       price={price}
                       scrollerRef={scrollerRef}
                       ctaRef={ctaRef}
@@ -1463,14 +1950,14 @@ export function EventWidgetDeck() {
                     // screen, so it renders the poster and nothing else —
                     // twenty full event pages mounted at once would cost a
                     // fetch and a subtree each for a sliver of artwork.
-                    <NeighbourCard event={event} />
+                    <NeighbourCard event={event} bottomInset={bottomInset} />
                   )}
                 </div>
               </div>
             );
           })}
         </div>
-      </motion.div>
+      </div>
 
       <EventSubSheets
         sheetType={activeSubSheet}
@@ -1510,47 +1997,91 @@ function Poster({ event, priority }: { event: EventCardData; priority?: boolean 
 }
 
 /**
- * A NEIGHBOUR's content sheet — a blank panel and its title, nothing more.
+ * A NEIGHBOUR's content sheet — everything the LIST already knows, and no more.
  *
  * It used to render the poster itself. It must not any more: the anchored
  * layer behind now draws a poster for EVERY event in the track, so a neighbour
  * drawing its own would be the same artwork twice, the lower copy sliding over
  * the upper one on every drag.
  *
- * About six percent of this is ever on screen, which is why it is a title on a
- * surface rather than an event page: twenty of those mounted at once would
- * cost a fetch and a subtree each for a sliver.
+ * ── IT GREW WHEN THE PEEK WENT AWAY ───────────────────────────────────────
+ *
+ * When neighbours peeked, about six percent of this was ever on screen and a
+ * handle plus a title was more than enough. A page is the full viewport now,
+ * so the incoming event is entirely visible for the whole length of a swipe —
+ * and a screen that is blank below the title for that half-second reads as the
+ * next event having failed to load, which is the opposite of the confidence a
+ * pager is supposed to give.
+ *
+ * So it carries the same first screen as an active card: handle, title, date,
+ * venue, and the ticket bar with the real price. On release the swap for the
+ * real `ActiveCard` then only fills in what was below the fold, and the eye
+ * reads the page as having been there all along.
+ *
+ * ── AND IT STILL DOES NOT FETCH ───────────────────────────────────────────
+ *
+ * Every field here is on the `EventCard` the list already handed us. Twenty of
+ * these are mounted at once, so there is no request, no `useEventWidgetData`,
+ * and no event-page subtree — the cost of a neighbour is a handful of DOM
+ * nodes, exactly as before.
  */
-function NeighbourCard({ event }: { event: EventCardData }) {
-  /**
-   * Shaped like the TOP of an active card — handle, title, date line — rather
-   * than a title alone on a gradient.
-   *
-   * On release the incoming neighbour is swapped for a full `ActiveCard` in the
-   * same frame the index changes. When the neighbour looked nothing like the
-   * card that replaces it, that swap read as a REPLACE: a slab with three lines
-   * of text became a page with a handle, rows and a CTA bar in one frame. When
-   * the neighbour already carries the same first hundred pixels, the swap only
-   * fills in what was below the fold, and the eye reads the card as having
-   * been there all along.
-   *
-   * Still no data fetch and no subtree: twenty of these are mounted at once.
-   */
+function NeighbourCard({
+  event,
+  bottomInset,
+}: {
+  event: EventCardData;
+  /** See the active page's `bottomInset` — the page hangs below the screen. */
+  bottomInset: number;
+}) {
+  const price = formatFromPrice(event.from_price);
+  const when = event.starts_at
+    ? [formatEventDate(event.starts_at), formatEventTime(event.starts_at)]
+        .filter(Boolean)
+        .join(' · ')
+    : null;
+  const where = [event.venue, event.city].filter(Boolean).join(', ');
+
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
-      <div className="flex shrink-0 justify-center pb-1 pt-2.5" aria-hidden>
+      <div className="flex h-11 shrink-0 items-center justify-center" aria-hidden>
         <span className="h-1.5 w-12 rounded-full bg-border-strong" />
       </div>
-      <div className="flex flex-col gap-1.5 px-5 pt-5">
+      <div className="flex flex-col gap-1.5 px-5 pt-4">
         <p className="line-clamp-2 text-h3 font-extrabold leading-tight text-foreground">
           {event.title}
         </p>
-        {event.starts_at ? (
-          <p className="text-body-sm font-semibold text-primary">
-            {formatEventDate(event.starts_at)}
-            {formatEventTime(event.starts_at) ? ` · ${formatEventTime(event.starts_at)}` : ''}
-          </p>
+        {when ? <p className="text-body-sm font-semibold text-primary">{when}</p> : null}
+        {where ? (
+          <p className="line-clamp-1 text-body-sm text-muted-foreground">{where}</p>
         ) : null}
+      </div>
+      {/* The same bar the active page carries, so the swap on release does not
+          make a control appear. Not a link and not focusable: this page is
+          `aria-hidden` and is on its way past. */}
+      <div
+        className="absolute inset-x-0 border-t border-border bg-background px-4 pt-3"
+        // A plain `bottom`, not the active bar's per-frame transform: this
+        // page is only ever on screen during a horizontal swipe, where `y` is
+        // not moving, so the snap's inset is the whole answer.
+        style={{
+          bottom: bottomInset,
+          paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))',
+        }}
+        aria-hidden
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-h4 font-extrabold tabular-nums text-foreground">
+              {price === null ? 'See tickets' : price === 'Free' ? 'Free entry' : price}
+            </span>
+            {price !== null && price !== 'Free' ? (
+              <span className="text-caption font-semibold text-muted-foreground">onwards</span>
+            ) : null}
+          </div>
+          <span className="inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-cta px-7 text-body-sm font-extrabold text-cta-foreground">
+            Book tickets
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -1564,6 +2095,7 @@ function ActiveCard({
   events,
   isExpanded,
   ctaHeight,
+  bottomInset,
   price,
   scrollerRef,
   ctaRef,
@@ -1582,6 +2114,8 @@ function ActiveCard({
   events: readonly EventCardData[];
   isExpanded: boolean;
   ctaHeight: number;
+  /** Pixels of the page that sit below the screen at the current snap. */
+  bottomInset: number;
   price: string | null;
   scrollerRef: React.RefObject<HTMLDivElement>;
   ctaRef: React.RefObject<HTMLDivElement>;
@@ -1641,7 +2175,11 @@ function ActiveCard({
         onPointerDown={onContentPointerDown}
         onPointerMove={onContentPointerMove}
         className="flex-1 overflow-y-auto overscroll-contain"
-        style={{ paddingBottom: ctaHeight ? `${ctaHeight + 16}px` : '7rem' }}
+        // The bar's real height, PLUS the part of the page that is below the
+        // screen at this snap — see `bottomInset`. The old value cleared only
+        // the bar, which was right when the page was resized to the visible
+        // area and leaves the last section under the fold now that it is not.
+        style={{ paddingBottom: `${(ctaHeight || 112) + bottomInset + 16}px` }}
       >
         <EventWidgetContent
           key={event.id}
@@ -1660,7 +2198,16 @@ function ActiveCard({
       <div
         ref={ctaRef}
         className="absolute inset-x-0 bottom-0 z-30 border-t border-border bg-background px-4 pt-3"
-        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        // `transform` and `transition` are written straight onto this node
+        // by `writeSheetY`, never from here: it is anchored to the bottom of
+        // the PAGE, which hangs below the screen, and is pulled back up by
+        // exactly that much on the same curve the sheet uses, so it stays
+        // pinned to the screen edge throughout a settle rather than only at
+        // its ends. `willChange` keeps it on its own compositor layer.
+        style={{
+          paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))',
+          willChange: 'transform',
+        }}
       >
         {/* NO EMI banner. This platform has no EMI arrangement and no column
             saying whether one applies — a claim about somebody's money, on the
