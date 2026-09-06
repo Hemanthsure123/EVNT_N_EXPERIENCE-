@@ -34,6 +34,11 @@ _LOCK_FIELDS = (
     "sale_end",
     "max_per_order",
     "price_minor",
+    # The group bands, for the same reason `price_minor` is here: the PRICE
+    # decision is made under this lock, so a column the rule reads must come
+    # with the locked row. Deferred, Django re-fetches it mid-critical-section,
+    # which is exactly what holding the lock is meant to avoid.
+    "group_bands",
 )
 
 # Columns the pricing rule needs from a phase row — the locked read stays lean.
@@ -179,6 +184,7 @@ class TicketTypeRepository(BaseRepository[TicketType]):
         description: str = "",
         perks: list[str] | None = None,
         position: int = 0,
+        group_bands: list[dict] | None = None,
     ) -> TicketType:
         return TicketType.objects.create(
             event_id=event_id,
@@ -188,6 +194,8 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             # `or []` is not laziness: the DEFAULT must be a fresh list per row.
             # A shared one would let an append on one tier reach another.
             perks=perks or [],
+            # Same rule as `perks` above — a fresh list per row.
+            group_bands=group_bands or [],
             position=position,
             price_minor=price_minor,
             quantity=quantity,

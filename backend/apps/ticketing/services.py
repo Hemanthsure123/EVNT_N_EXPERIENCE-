@@ -46,6 +46,7 @@ from core.events import TICKET_TYPE_ADDED, TICKET_TYPE_SOLD_OUT, TICKET_TYPE_UPD
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
+    InvalidGroupBandsError,
     InvalidPhaseScheduleError,
     InvalidReservationQuantityError,
     NotTicketTypeOwnerError,
@@ -74,9 +75,82 @@ _EDITABLE_TIER_FIELDS = (
     "description",
     "perks",
     "position",
+    # GROUP BANDS. Unlike the three above, this one DOES affect what is sold —
+    # it is a price. It rides the same optimistic-locked UPDATE, and the
+    # validation below is what stands between an organiser's form and an
+    # amount somebody is charged.
+    #
+    # A field absent from this tuple is silently dropped by the `applied`
+    # comprehension in `update_ticket_type`: the organiser saves, sees no
+    # error, and nothing is written. That is the exact failure CLAUDE.md
+    # records under "four organizer controls wrote NOTHING".
+    "group_bands",
 )
 
 MAX_PHASES = 5
+
+#: The same handful `MAX_PHASES` allows, for the same reason: group pricing is
+#: a few named steps ("pairs", "groups of four"), not a curve.
+MAX_GROUP_BANDS = 5
+
+
+def _validate_group_bands(
+    bands: list[dict], *, face_price_minor: int, max_per_order: int | None
+) -> None:
+    """The band list's structural rules, enforced in the SERVICE.
+
+    A JSON column cannot carry a CHECK constraint comparing a band's price to
+    the tier's own `price_minor`, so — exactly as with the phase schedule —
+    this is the only writer-side guard, and `pricing._eligible_bands` repeats
+    the never-overcharge floor at the charge path because a guard one writer
+    honours is not defense in depth.
+
+    - max 5 bands, per `MAX_GROUP_BANDS`;
+    - `min_quantity` at least 2 — a band at 1 is the face price wearing a
+      label, and would apply to every single-ticket order;
+    - each price at or below the face price — a "discount" dearer than the
+      normal price would OVERCHARGE every group that hit it;
+    - `min_quantity` strictly increasing, so the "largest band the order
+      reaches" rule has exactly one answer per order size;
+    - prices NON-INCREASING as the group grows — a bigger group paying more
+      per head is not a group discount, and would make buying six cost more
+      than buying four;
+    - every `min_quantity` within `max_per_order` — a band nobody can reach
+      because the tier refuses that many tickets is a control that can never
+      fire, and both numbers live on the same row so this is checkable.
+    """
+    if len(bands) > MAX_GROUP_BANDS:
+        raise InvalidGroupBandsError(
+            f"A ticket type can have at most {MAX_GROUP_BANDS} group prices."
+        )
+    previous_min: int | None = None
+    previous_price: int | None = None
+    for band in bands:
+        minimum = band["min_quantity"]
+        price = band["price_minor"]
+        if minimum < 2:
+            raise InvalidGroupBandsError(
+                "A group price starts at 2 tickets or more — one ticket is the normal price."
+            )
+        if price > face_price_minor:
+            raise InvalidGroupBandsError(
+                "A group price cannot be higher than the ticket's normal price."
+            )
+        if previous_min is not None and minimum <= previous_min:
+            raise InvalidGroupBandsError(
+                "Each group price has to start at a larger group than the one before it."
+            )
+        if previous_price is not None and price > previous_price:
+            raise InvalidGroupBandsError(
+                "A larger group cannot pay more per ticket than a smaller one."
+            )
+        if max_per_order is not None and minimum > max_per_order:
+            raise InvalidGroupBandsError(
+                f"This ticket allows at most {max_per_order} per order, so a group price "
+                f"starting at {minimum} could never apply."
+            )
+        previous_min = minimum
+        previous_price = price
 
 
 def _validate_phase_schedule(phases: list[dict], *, face_price_minor: int) -> None:
@@ -170,6 +244,7 @@ class TicketingService:
         description: str = "",
         perks: list[str] | None = None,
         position: int = 0,
+        group_bands: list[dict] | None = None,
     ) -> TicketType:
         event = self._events.get_active_for_write(event_id)
         if event is None:
@@ -178,6 +253,10 @@ class TicketingService:
             raise NotTicketTypeOwnerError()
         if phases:
             _validate_phase_schedule(phases, face_price_minor=price_minor)
+        if group_bands:
+            _validate_group_bands(
+                group_bands, face_price_minor=price_minor, max_per_order=max_per_order
+            )
         if slot_id is not None:
             # Scoped by EVENT, not just by id. Without this an organiser could
             # attach their tier to somebody else's session — and every counter
@@ -200,6 +279,7 @@ class TicketingService:
                 description=description.strip(),
                 perks=perks or [],
                 position=position,
+                group_bands=group_bands or [],
             )
             if phases:
                 self._ticket_types.set_phases(ticket_type_id=tt.id, phases=phases)
@@ -263,6 +343,25 @@ class TicketingService:
         )
         if merged_phases:
             _validate_phase_schedule(merged_phases, face_price_minor=merged_price)
+
+        # ── THE BANDS ARE CHECKED AGAINST THE MERGED ROW TOO ──────────────
+        #
+        # Three things this rule depends on are independently editable and any
+        # of them may be absent from this PATCH: the bands themselves, the
+        # face price, and `max_per_order`. Validating the submitted bands
+        # against the STORED price would let "cut the face price to 300" pass
+        # while leaving a 400 band above it — the same error as submitting
+        # that band directly, arrived at from the other side. `max_per_order`
+        # matters for the identical reason: lowering it can strand a band
+        # nobody can reach any more.
+        merged_bands = (
+            applied["group_bands"] if "group_bands" in applied else list(tt.group_bands or [])
+        )
+        merged_max = applied.get("max_per_order", tt.max_per_order)
+        if merged_bands:
+            _validate_group_bands(
+                merged_bands, face_price_minor=merged_price, max_per_order=merged_max
+            )
 
         with UnitOfWork() as uow:
             try:

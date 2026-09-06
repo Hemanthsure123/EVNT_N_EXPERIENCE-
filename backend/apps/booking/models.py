@@ -129,6 +129,16 @@ class BookingItem(models.Model):
     # would dangle while what the buyer needs on their invoice is the label
     # they were shown at checkout. Nothing queries by it, so no index.
     phase_name = models.CharField(max_length=40, null=True, blank=True)
+    # WHICH GROUP BAND priced it — the band's `min_quantity`, NULL when no
+    # band applied. Beside `phase_name` for the same reason it exists: an
+    # invoice has to be able to say why this line cost what it did.
+    #
+    # A NUMBER, not a name, because a band has no name to show — the label a
+    # buyer sees is generated from the size ("4+ tickets"), so storing the
+    # threshold stores the whole fact. Exactly one of this and `phase_name` is
+    # ever set: the buyer pays the lower of the two prices and only the winner
+    # is recorded, or the receipt would claim a discount they did not get.
+    group_min_quantity = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

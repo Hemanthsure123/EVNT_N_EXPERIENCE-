@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from apps.ticketing.pricing import Phase, decide_unit_price, evaluate_phases
+from apps.ticketing.pricing import Phase, decide_phase_price, evaluate_phases
 
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -37,7 +37,7 @@ def _evaluate(phases: list[Phase], *, sold: int = 0, reserved: int = 0, now: dat
 def _decide(
     phases: list[Phase], *, quantity: int, sold: int = 0, reserved: int = 0, now: datetime = NOW
 ):
-    return decide_unit_price(
+    return decide_phase_price(
         price_minor=FACE, phases=phases, quantity=quantity, sold=sold, reserved=reserved, now=now
     )
 

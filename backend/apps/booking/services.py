@@ -447,13 +447,21 @@ class BookingService:
                 # disagreed, and the total is what payments' webhook
                 # amount-checks. An invoice that doesn't add up to the amount
                 # charged is not a display bug on the money path.
-                priced: list[tuple[uuid.UUID | str, int, int, str | None]] = []
+                priced: list[tuple[uuid.UUID | str, int, int, str | None, int | None]] = []
                 for tier_id, quantity in requested:
                     outcome = self._ticketing.reserve(ticket_type_id=tier_id, quantity=quantity)
                     # reserve() always decides a price; the Optional on the
                     # outcome is for release/confirm, which decide none.
                     assert outcome.unit_price_minor is not None
-                    priced.append((tier_id, quantity, outcome.unit_price_minor, outcome.phase_name))
+                    priced.append(
+                        (
+                            tier_id,
+                            quantity,
+                            outcome.unit_price_minor,
+                            outcome.phase_name,
+                            outcome.group_min_quantity,
+                        )
+                    )
 
                 # ── WHAT THE CUSTOMER PAYS ───────────────────────────────
                 #
@@ -469,7 +477,7 @@ class BookingService:
                 # locked prices as the subtotal. Computing it earlier from the
                 # unlocked read would let a sale phase change between the two
                 # and bill a percentage of a price nobody was charged.
-                subtotal = sum(q * price for _, q, price, _ in priced)
+                subtotal = sum(q * price for _, q, price, _, _ in priced)
                 platform_fee = self._platform_fee_for(subtotal)
                 total_amount = subtotal + platform_fee + donation_minor
 
@@ -492,8 +500,9 @@ class BookingService:
                             quantity=quantity,
                             unit_price_minor=price,
                             phase_name=phase_name,
+                            group_min_quantity=group_min,
                         )
-                        for tier_id, quantity, price, phase_name in priced
+                        for tier_id, quantity, price, phase_name, group_min in priced
                     ]
                 )
                 # The questionnaire, in the SAME transaction as the reserve.

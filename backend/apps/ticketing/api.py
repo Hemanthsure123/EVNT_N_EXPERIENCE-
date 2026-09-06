@@ -60,6 +60,11 @@ def _to_service_changes(validated: dict) -> dict:
         changes["price_minor"] = changes.pop("price")
     if "phases" in changes:
         changes["phases"] = _to_service_phases(changes["phases"])
+    if "group_bands" in changes:
+        # Plain dicts into the JSON column, for the reason stated at the
+        # create call site. `[]` is meaningful and must survive: it CLEARS the
+        # group prices, so it cannot be treated as "not supplied".
+        changes["group_bands"] = [dict(band) for band in changes["group_bands"]]
     return changes
 
 
@@ -130,6 +135,10 @@ class TicketTypeListCreateView(APIView):
             description=data.get("description", ""),
             perks=data.get("perks"),
             position=data.get("position", 0),
+            # `[dict(band) for ...]` rather than the OrderedDicts DRF hands
+            # back: these go straight into a JSON column, and a serializer's
+            # own mapping type is not what should be persisted there.
+            group_bands=[dict(band) for band in data.get("group_bands") or []],
         )
         return _no_store(
             Response(TicketTypeSerializer(ticket_type).data, status=status.HTTP_201_CREATED)

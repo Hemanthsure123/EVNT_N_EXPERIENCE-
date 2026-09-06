@@ -37,7 +37,7 @@ from .exceptions import (
     SoldOutError,
     TicketTypeNotFoundError,
 )
-from .pricing import decide_unit_price
+from .pricing import decide_unit_price, group_bands_from_rows
 from .repositories import TicketTypeRepository
 
 
@@ -63,6 +63,15 @@ class ReservationOutcome:
     became_sold_out: bool
     unit_price_minor: int | None = None
     phase_name: str | None = None
+    #: The GROUP BAND's `min_quantity`, when a band priced this line.
+    #:
+    #: Beside `phase_name` rather than folded into it, because they are
+    #: different things and the booking records them in different columns —
+    #: putting a band's size into `phase_name` would make every consumer of
+    #: that column read it as a sale phase. Exactly one of the two is ever
+    #: set: the buyer pays the lower of the two prices, and only the winner
+    #: is named.
+    group_min_quantity: int | None = None
 
 
 class ReservationStrategy(ABC):
@@ -117,9 +126,13 @@ class RowLockReservationStrategy(ReservationStrategy):
         # schedule is the ONE extra statement the locked section allows — a
         # single indexed child SELECT, from the same repository whose write
         # side serialises schedule edits on this very row lock.
-        unit_price_minor, phase_name = decide_unit_price(
+        # The bands ride on the locked row itself (`_LOCK_FIELDS`), so adding
+        # group pricing costs the critical section NOTHING — the phase
+        # schedule is still the one extra statement it allows.
+        priced = decide_unit_price(
             price_minor=tt.price_minor,
             phases=self._ticket_types.phases_for_pricing(tt.id),
+            bands=group_bands_from_rows(tt.group_bands),
             quantity=quantity,
             sold=tt.sold,
             reserved=tt.reserved,
@@ -136,8 +149,9 @@ class RowLockReservationStrategy(ReservationStrategy):
             quantity=quantity,
             available_after=available_after,
             became_sold_out=available_after == 0,
-            unit_price_minor=unit_price_minor,
-            phase_name=phase_name,
+            unit_price_minor=priced.price_minor,
+            phase_name=priced.phase_name,
+            group_min_quantity=priced.group_min_quantity,
         )
 
     def release(self, *, ticket_type_id: uuid.UUID | str, quantity: int) -> ReservationOutcome:

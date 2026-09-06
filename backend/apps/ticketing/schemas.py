@@ -88,6 +88,24 @@ class PerkListField(serializers.ListField):
         return cleaned
 
 
+class GroupBandWriteSerializer(serializers.Serializer):
+    """One group price: from this many tickets, this much each.
+
+    A per-UNIT price rather than a percentage or a discount amount, matching
+    the column — see `TicketType.group_bands` for why the rest of the money
+    path depends on that shape.
+
+    The structural rules (ordering, never above face price, reachable within
+    `max_per_order`) live in the SERVICE, because every one of them compares a
+    band against another field that may or may not be in the same PATCH. A
+    serializer cannot see the stored row, so half-checking here is how two
+    places end up disagreeing about what is valid.
+    """
+
+    min_quantity = serializers.IntegerField(min_value=2)
+    price_minor = serializers.IntegerField(min_value=0)
+
+
 class CreateTicketTypeRequestSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
     description = serializers.CharField(
@@ -105,6 +123,7 @@ class CreateTicketTypeRequestSerializer(serializers.Serializer):
     sale_end = serializers.DateTimeField(required=False, allow_null=True)
     max_per_order = serializers.IntegerField(min_value=1, default=10)
     phases = SalePhaseWriteSerializer(many=True, required=False)
+    group_bands = GroupBandWriteSerializer(many=True, required=False)
 
     def validate(self, attrs: dict) -> dict:
         start, end = attrs.get("sale_start"), attrs.get("sale_end")
@@ -129,6 +148,10 @@ class UpdateTicketTypeRequestSerializer(serializers.Serializer):
     max_per_order = serializers.IntegerField(min_value=1, required=False)
     # The whole schedule, replaced wholesale; an empty list CLEARS it.
     phases = SalePhaseWriteSerializer(many=True, required=False)
+    #: Same contract: replaced wholesale, an empty list CLEARS the group
+    #: prices. Wholesale rather than per-band because a band has no server
+    #: identity to preserve — there is nothing to diff.
+    group_bands = GroupBandWriteSerializer(many=True, required=False)
 
     _EDITABLE = {
         "name",
@@ -141,6 +164,7 @@ class UpdateTicketTypeRequestSerializer(serializers.Serializer):
         "sale_end",
         "max_per_order",
         "phases",
+        "group_bands",
     }
 
     def validate(self, attrs: dict) -> dict:
@@ -191,6 +215,19 @@ class TicketTypeSerializer(serializers.ModelSerializer):
             "current_phase",
             "next_price",
             "phases",
+            # The group prices, as DATA rather than as a resolved number.
+            #
+            # `effective_price` above cannot express these: it is a single
+            # figure and a group price depends on the order size, which the
+            # server does not know at read time. So the bands travel to the
+            # client, which resolves the per-person price for whatever
+            # quantity is on screen — the same arrangement the platform fee
+            # already has, and mirrored by one small tested function rather
+            # than reimplemented.
+            #
+            # The CHARGED price is still decided under the row lock and
+            # nowhere else. This is display.
+            "group_bands",
             "quantity",
             "sold",
             "available",

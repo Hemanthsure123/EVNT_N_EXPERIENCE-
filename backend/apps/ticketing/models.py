@@ -86,6 +86,40 @@ class TicketType(models.Model):
     #: every instance that does not set it, so one tier appending a perk would
     #: append it to the next.
     perks = models.JSONField(default=list, blank=True)
+    #: GROUP PRICING — a cheaper per-unit price once the order reaches a size.
+    #:
+    #: A JSON list of `{"min_quantity": int, "price_minor": int}`, ordered by
+    #: `min_quantity`. The band that applies is the LAST one whose
+    #: `min_quantity` the order reaches, and its `price_minor` is the per-UNIT
+    #: price for the whole order.
+    #:
+    #: ── A PER-UNIT PRICE, NOT A PERCENTAGE OR AN ORDER TOTAL ──────────────
+    #:
+    #: This is the decision the rest of the money path depends on.
+    #: `BookingItem` stores `quantity` beside `unit_price_minor` and its
+    #: docstring states the identity every consumer relies on: "unit_price
+    #: x quantity sums to the booking's total_amount_minor". The receipt PDF
+    #: and four frontend surfaces multiply those two numbers.
+    #:
+    #: A percentage would put a rounding decision at the unit level, and an
+    #: order-level discount amount would break the identity outright — the line
+    #: would no longer be `unit x quantity` and every one of those consumers
+    #: would silently disagree with the amount charged. An absolute per-unit
+    #: price keeps all of them correct with no changes at all, which is why it
+    #: is the shape.
+    #:
+    #: ── JSON ON THE TIER, NOT A CHILD TABLE LIKE `SalePhase` ──────────────
+    #:
+    #: `strategies.py` states the locked section's budget: the phase schedule
+    #: is "the ONE extra statement the locked section allows". A second child
+    #: table would double that while a per-tier row lock is held, on the
+    #: platform's hottest write. A JSON column rides inside the row read that
+    #: is already happening, at zero extra statements — and it must therefore
+    #: be in `_LOCK_FIELDS`, or `.only()` defers it and Django re-fetches the
+    #: row mid-critical-section.
+    #:
+    #: The default is the `list` CALLABLE, for the reason stated on `perks`.
+    group_bands = models.JSONField(default=list, blank=True)
     #: The organiser's own order for the ticket panel.
     #:
     #: Tiers used to be listed by price alone, which is the right DEFAULT and

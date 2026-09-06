@@ -54,6 +54,20 @@ class InvalidPhaseScheduleError(InvalidInputError):
         super().__init__(message)
 
 
+class InvalidGroupBandsError(InvalidInputError):
+    """The submitted group prices break a structural rule.
+
+    Its own code rather than reusing `invalid_phase_schedule`: they are
+    different controls on the same screen, and a frontend that cannot tell
+    them apart cannot put the error next to the field that caused it.
+    """
+
+    code = "invalid_group_bands"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class QuantityBelowCommittedError(ConflictError):
     """A requested quantity reduction would drop below tickets already sold/held."""
 
