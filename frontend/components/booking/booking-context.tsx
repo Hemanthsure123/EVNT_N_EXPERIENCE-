@@ -5,7 +5,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEventTiers } from '@/lib/api/events';
 import type { Booking, EventDetail, TicketTier } from '@/lib/api/types';
-import type { EventSlot } from '@/lib/api/event-content';
+import type { EventQuestion, EventSlot } from '@/lib/api/event-content';
+import { answersFor, setAnswer, unansweredRequired } from '@/lib/booking/answers';
 import {
   defaultSession,
   groupSessions,
@@ -125,6 +126,20 @@ type BookingContextValue = {
   setSession: (session: Session) => void;
   /** The tiers belonging to the chosen session — what the picker renders. */
   sessionTiers: TicketTier[];
+
+  // ── THE QUESTIONNAIRE ───────────────────────────────────────────────────
+  /** What the organiser asks before somebody books. Empty for most events. */
+  questions: EventQuestion[];
+  /** The answers held for this checkout, as `{question_id: answer}`. */
+  answers: Record<string, string>;
+  /** Record one answer. Persisted per event so it survives the navigation. */
+  answerQuestion: (questionId: string, answer: string) => void;
+  /**
+   * The REQUIRED questions still unanswered. Non-empty blocks Checkout — the
+   * server refuses the reserve anyway, and finding that out on the screen
+   * after the one holding the form is a dead end.
+   */
+  unanswered: EventQuestion[];
 };
 
 const BookingContext = React.createContext<BookingContextValue | null>(null);
@@ -135,11 +150,13 @@ export function BookingProvider({
   event,
   initialTiers,
   slots = [],
+  questions = [],
   children,
 }: {
   event: EventDetail;
   initialTiers: TicketTier[];
   slots?: EventSlot[];
+  questions?: EventQuestion[];
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -269,6 +286,31 @@ export function BookingProvider({
     [pathname, router],
   );
 
+  // ── THE QUESTIONNAIRE ─────────────────────────────────────────────────
+  //
+  // Held in `sessionStorage` rather than the URL: a dietary requirement is
+  // free text with commas and newlines in it, and the selection's own encoding
+  // is a comma/colon scheme that would have to grow escaping. Read into state
+  // AFTER mount, because the server has no `sessionStorage` and reading during
+  // render is a hydration mismatch.
+  const [answers, setAnswers] = React.useState<Record<string, string>>({});
+  React.useEffect(() => {
+    setAnswers(answersFor(event.id));
+  }, [event.id]);
+
+  const answerQuestion = React.useCallback(
+    (questionId: string, answer: string) => {
+      setAnswer(event.id, questionId, answer);
+      setAnswers((current) => ({ ...current, [questionId]: answer }));
+    },
+    [event.id],
+  );
+
+  const unanswered = React.useMemo(
+    () => unansweredRequired(questions, answers),
+    [questions, answers],
+  );
+
   // What the picker renders. For a single-show event this is every tier, which
   // is exactly the behaviour the funnel had before sessions were wired up.
   const sessionTiers = React.useMemo(
@@ -301,6 +343,10 @@ export function BookingProvider({
       session,
       setSession,
       sessionTiers,
+      questions,
+      answers,
+      answerQuestion,
+      unanswered,
     }),
     [
       event,
@@ -322,6 +368,10 @@ export function BookingProvider({
       session,
       setSession,
       sessionTiers,
+      questions,
+      answers,
+      answerQuestion,
+      unanswered,
     ],
   );
 

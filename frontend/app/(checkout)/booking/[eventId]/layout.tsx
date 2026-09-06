@@ -70,7 +70,12 @@ export default async function BookingLayout({
   if (!event) notFound();
 
   return (
-    <FunnelShell event={event} initialTiers={tiers} slots={content.slots}>
+    <FunnelShell
+      event={event}
+      initialTiers={tiers}
+      slots={content.slots}
+      questions={content.questions}
+    >
       {children}
     </FunnelShell>
   );

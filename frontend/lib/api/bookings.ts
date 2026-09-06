@@ -21,10 +21,25 @@ export function createBooking(
   eventId: string,
   items: { ticket_type_id: string; quantity: number }[],
   idempotencyKey: string,
+  /**
+   * The organiser's questionnaire, as `{question_id: answer}`.
+   *
+   * Sent WITH the reserve rather than afterwards, because this is the one
+   * place the required-answer rule cannot be routed around: a later "submit
+   * your answers" call the browser is trusted to make before paying is a gate
+   * with an API-shaped hole in it, and refusing at confirm would mean taking
+   * money and then declining to issue a ticket.
+   *
+   * Omitted entirely when empty — the overwhelming majority of events ask
+   * nothing, and an empty object on every booking request is noise on the
+   * platform's hottest write.
+   */
+  answers?: Record<string, string>,
 ): Promise<CreateBookingResponse> {
+  const hasAnswers = answers && Object.keys(answers).length > 0;
   return api.post<CreateBookingResponse>(
     '/bookings',
-    { event_id: eventId, items },
+    { event_id: eventId, items, ...(hasAnswers ? { answers } : {}) },
     { headers: { 'Idempotency-Key': idempotencyKey } },
   );
 }

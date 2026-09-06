@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
-import type { EventSlot } from '@/lib/api/event-content';
+import type { EventQuestion, EventSlot } from '@/lib/api/event-content';
 import { cancelBooking } from '@/lib/api/bookings';
 import { bumpAllAttemptsForEvent } from '@/lib/booking/attempt';
 import { Button } from '@/components/ui/button';
@@ -51,16 +51,24 @@ export function FunnelShell({
   event,
   initialTiers,
   slots,
+  questions,
   children,
 }: {
   event: EventDetail;
   initialTiers: TicketTier[];
   /** Empty for a single-show event, which is most of them. */
   slots?: EventSlot[];
+  /** The organiser's questionnaire. Empty for most events. */
+  questions?: EventQuestion[];
   children: React.ReactNode;
 }) {
   return (
-    <BookingProvider event={event} initialTiers={initialTiers} slots={slots ?? []}>
+    <BookingProvider
+      event={event}
+      initialTiers={initialTiers}
+      slots={slots ?? []}
+      questions={questions ?? []}
+    >
       {children}
     </BookingProvider>
   );

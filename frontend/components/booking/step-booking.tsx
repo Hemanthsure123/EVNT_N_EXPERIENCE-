@@ -15,6 +15,7 @@ import { Rise, StepTransition } from './motion';
 import { StickyActionBar } from './sticky-action-bar';
 import { TierPicker } from './tier-picker';
 import { SessionPicker } from '@/components/event/session-picker';
+import { Questionnaire } from './questionnaire';
 
 /**
  * Screen 1 — choose tickets.
@@ -52,8 +53,22 @@ import { SessionPicker } from '@/components/event/session-picker';
  * exactly where it paused.
  */
 export function BookingStep() {
-  const { event, selection, totals, tiers, booking, setBooking, query, sessionDays, session, setSession } =
-    useBooking();
+  const {
+    event,
+    selection,
+    totals,
+    tiers,
+    booking,
+    setBooking,
+    query,
+    sessionDays,
+    session,
+    setSession,
+    unanswered,
+  } = useBooking();
+  // Nothing is marked wrong until somebody tries to leave — a required
+  // question is not a mistake on arrival.
+  const [showAnswerErrors, setShowAnswerErrors] = React.useState(false);
   const { status } = useAuth();
   const router = useRouter();
 
@@ -126,6 +141,15 @@ export function BookingStep() {
 
   const [authOpen, setAuthOpen] = React.useState(false);
   const advance = () => {
+    // ── THE QUESTIONNAIRE IS CHECKED BEFORE LEAVING THIS SCREEN ──────────
+    //
+    // The server refuses the reserve without the required answers anyway, and
+    // that refusal would land on the NEXT screen — the one with no form on it.
+    // Blocking here is what keeps the fix reachable from where the mistake is.
+    if (unanswered.length > 0) {
+      setShowAnswerErrors(true);
+      return;
+    }
     if (status === 'authenticated') router.push(reviewHref);
     else setAuthOpen(true);
   };
@@ -156,6 +180,13 @@ export function BookingStep() {
 
         <Rise index={sessionDays.length > 0 ? 2 : 1}>
           <TierPicker />
+        </Rise>
+
+        {/* AFTER the tiers: what somebody is buying comes before what the
+            organiser needs to know about them. Renders nothing at all for the
+            great majority of events, which ask nothing. */}
+        <Rise index={sessionDays.length > 0 ? 3 : 2}>
+          <Questionnaire showErrors={showAnswerErrors} />
         </Rise>
 
         {totals.overAvailable ? (

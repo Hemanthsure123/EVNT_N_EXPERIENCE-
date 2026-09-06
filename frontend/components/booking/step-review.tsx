@@ -9,6 +9,7 @@ import { cancelBooking, createBooking, setBookingDonation } from '@/lib/api/book
 import { ApiError } from '@/lib/api/errors';
 import type { Booking } from '@/lib/api/types';
 import { attemptFor, bumpAttempt } from '@/lib/booking/attempt';
+import { answersFor, clearAnswers } from '@/lib/booking/answers';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { rememberProvider } from '@/lib/booking/payment-provider';
 import { rememberKeyId } from '@/lib/booking/razorpay';
@@ -207,6 +208,17 @@ export function ReviewStep() {
           event.id,
           toBookingItems(selection),
           idempotencyKeyFor(event.id, selection, attemptFor(event.id, selection)),
+          // Collected on the PICKER, one screen back — this reserve fires on
+          // mount, before anybody could have read a form. They travel with the
+          // request because `create_booking` is the one place the
+          // required-answer rule cannot be routed around.
+          //
+          // Read from the STORE here rather than from context, deliberately:
+          // this effect runs once and would otherwise close over whatever
+          // render it was created in. Reading at reserve time is both the
+          // freshest value and one fewer dependency on an effect that must
+          // never re-fire — a second run is a second hold on real inventory.
+          answersFor(event.id),
         );
 
         // ── PREVIOUS PURCHASE DETECTED ──────────────────────────────────
@@ -215,6 +227,11 @@ export function ReviewStep() {
         // spoke for an earlier completed purchase. Never block with
         // "You already have these tickets" — bump the attempt to generate a
         // new idempotency key and immediately reserve a brand new booking.
+        // The answers are on the server now. Dropped so a second, unrelated
+        // purchase for the same event does not open with the last one's form
+        // already filled in.
+        clearAnswers(event.id);
+
         if (result.booking.status === 'paid') {
           bumpAttempt(event.id, selection);
           attempted.current = false;

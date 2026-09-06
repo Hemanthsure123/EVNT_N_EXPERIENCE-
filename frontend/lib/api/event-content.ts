@@ -482,6 +482,47 @@ export const reorderMedia = (eventId: string, items: { id: string; position: num
 
 /** Fix a typo in a question or answer without deleting and re-adding it,
  *  which is what the studio had to offer before this existed. */
+/**
+ * The attendee questionnaire.
+ *
+ * Unlike the FAQs beside it, questions have a real PATCH — so an editor can
+ * correct a typo in place rather than delete-and-retype, which would change
+ * the id and orphan every answer already given against it.
+ *
+ * `remove` is a SOFT delete server-side: `BookingAnswer.question` is
+ * `PROTECT`ed, and an answer whose prompt has gone is a value with no
+ * question. Retired questions leave the checkout and stop being required.
+ */
+export type WriteEventQuestion = {
+  prompt: string;
+  kind: string;
+  help_text?: string;
+  choices?: string[];
+  is_required?: boolean;
+  position?: number;
+};
+
+export const fetchEventQuestions = (eventId: string) =>
+  api
+    .get<{ data: EventQuestion[] }>(`${base(eventId)}/questions`)
+    .then((page) => page.data);
+
+export const addQuestion = (eventId: string, input: WriteEventQuestion) =>
+  api.post<EventQuestion>(`${base(eventId)}/questions`, input);
+
+export const updateQuestion = (
+  eventId: string,
+  questionId: string,
+  changes: Partial<WriteEventQuestion>,
+) =>
+  api.patch<EventQuestion>(
+    `${base(eventId)}/questions/${encodeURIComponent(questionId)}`,
+    changes,
+  );
+
+export const removeQuestion = (eventId: string, questionId: string) =>
+  api.delete<void>(`${base(eventId)}/questions/${encodeURIComponent(questionId)}`);
+
 export const updateFaq = (
   eventId: string,
   faqId: string,
