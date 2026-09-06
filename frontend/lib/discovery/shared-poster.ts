@@ -86,28 +86,41 @@ export function flipTransform(source: Box, target: Box): FlipTransform {
 }
 
 /**
- * How much of the full card-to-hero journey the opening actually plays.
+ * How much of the full card-to-hero journey the opening plays. All of it.
  *
- * ── WHY THIS IS NOT 1 ─────────────────────────────────────────────────────
+ * ── IT WAS 0.35, AND THAT WAS MEASURED TO BE A CROSS-FADE ─────────────────
  *
- * At 390px a browse-grid poster is about 171px wide against a 374px hero, so
- * the honest FLIP starts the clone at scale 0.46 and grows it to 1 across a
- * couple of hundred pixels of travel. That is a card MORPHING into a page —
- * technically a perfect shared element and, at this size difference, a piece
- * of choreography that draws attention to itself rather than to the event.
+ * A third of the journey was chosen when the brief was "subtle, NOT dramatic
+ * card morphing". The problem is what a third actually looks like once the
+ * hero is full-bleed. Measured on the real page, at 0.35 the clone entered at
+ * **324x568 in the top-left corner** — 83% of its final size, already most of
+ * the screen — and grew 17% while its opacity went 0.4 -> 1. The source card
+ * it was supposedly travelling from was 96x128, four hundred pixels away.
  *
- * Playing a THIRD of it keeps everything the connection is for: the poster
- * still arrives from the direction of the card that was pressed, and the
- * return still leaves toward it, so the spatial link is intact. What goes is
- * the growth — the clone starts near its final size, slightly offset and
- * slightly small, and settles. Subtle, which is what was asked for; the
- * alternative on the table was deleting the shared element entirely, and that
- * would have made the RETURN-to-origin animation impossible rather than quiet.
+ * Nobody reads that as a poster moving. The movement is 17% and the opacity is
+ * 150%, so what the eye gets is the hero FADING IN, with the fade doing the
+ * work the travel was meant to do. The spatial link the restraint existed to
+ * preserve was the first thing it cost.
+ *
+ * The full FLIP is a single continuous object: the clone starts at the card's
+ * width, in the card's place, and grows into the hero. That is what a shared
+ * element is, it is what "the card fluidly scales up into the full page in one
+ * continuous motion" describes, and it needs no opacity ramp at all — see
+ * `SharedPoster`, where the arrival is now opaque throughout.
+ *
+ * ── WHAT PLAYING ALL OF IT COSTS ──────────────────────────────────────────
+ *
+ * The scale is uniform and keyed to WIDTH (see the note at the top of this
+ * file), so at the start the clone matches the card's width exactly and is
+ * about a third taller than it — a 2:3 card against a 3:5 hero. That overhang
+ * is real, and it is visible for the first frames of the flight while the
+ * object is small and moving fastest. It is the price of not distorting the
+ * photograph, and it is a better trade than a transition that reads as a fade.
  *
  * One exported constant, because the right value is a judgement about feel and
  * whoever retunes it should have exactly one number to change.
  */
-export const ORIGIN_RESTRAINT = 0.35;
+export const ORIGIN_RESTRAINT = 1;
 
 /**
  * The same transform, played only part of the way from the source.

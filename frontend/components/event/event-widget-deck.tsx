@@ -1929,6 +1929,7 @@ export function EventWidgetDeck() {
                       tiers={tiers}
                       events={events}
                       isExpanded={isExpanded}
+                      deckIndex={currentIndex}
                       ctaHeight={ctaHeight}
                       bottomInset={bottomInset}
                       price={price}
@@ -2087,6 +2088,65 @@ function NeighbourCard({
   );
 }
 
+/**
+ * Where you are in the deck, and that there is a deck at all.
+ *
+ * ── WHAT THIS REPLACES ────────────────────────────────────────────────────
+ *
+ * The neighbours used to peek a few percent in at both edges, and that peek
+ * was the ENTIRE affordance: two real posters at the rim saying "there are
+ * more of these and they move sideways", with no instruction and no chrome.
+ * Full-bleed pages are what was asked for and they are unarguably better to
+ * read, but they took the hint with them — a page that fills the screen looks
+ * like a page, and nobody swipes a page.
+ *
+ * Dots are the one pagination signal that needs no explaining, and every
+ * number in them is real: the deck's own `currentIndex` and `events.length`.
+ * Nothing is invented, which is the rule everywhere else on this platform.
+ *
+ * ── WHY A WINDOW ─────────────────────────────────────────────────────────
+ *
+ * A browse deck is twenty events and a rail can be more. Twenty dots is not a
+ * position indicator, it is a texture. Five, sliding so the active one stays
+ * near the middle, says "there are more either side" at any length — and at
+ * three events it just shows three, because a window wider than the deck
+ * would claim events that are not there.
+ *
+ * ── AND WHY IT IS `aria-hidden` ──────────────────────────────────────────
+ *
+ * Swiping the deck is a pointer gesture with no keyboard or screen-reader
+ * equivalent — there are no previous/next buttons, by the owner's decision to
+ * strip floating controls from this surface. Announcing a position somebody
+ * cannot act on is noise, so this stays decoration until there is an operable
+ * control to attach it to, which is the clean place to add one.
+ */
+function DeckPager({ index, total }: { index: number; total: number }) {
+  // Absent, not empty: one event is not a deck.
+  if (total < 2) return null;
+  const size = Math.min(5, total);
+  // Slid so the active dot sits mid-window wherever the deck allows it, and
+  // clamped at both ends so the window never runs past the real events.
+  const start = Math.max(0, Math.min(index - Math.floor(size / 2), total - size));
+  return (
+    <span
+      aria-hidden
+      // `pointer-events-none`: it sits over the handle's 44px grab area, and a
+      // pager that swallowed the drag would break the control it is next to.
+      className="pointer-events-none absolute right-4 top-0 flex h-11 items-center gap-1"
+    >
+      {Array.from({ length: size }, (_, offset) => start + offset).map((dot) => (
+        <span
+          key={dot}
+          className={cn(
+            'h-1.5 rounded-full transition-[width,background-color] duration-base ease-out',
+            dot === index ? 'w-4 bg-foreground' : 'w-1.5 bg-border-strong',
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
 function ActiveCard({
   event,
   detail,
@@ -2094,6 +2154,7 @@ function ActiveCard({
   tiers,
   events,
   isExpanded,
+  deckIndex,
   ctaHeight,
   bottomInset,
   price,
@@ -2113,6 +2174,8 @@ function ActiveCard({
   tiers: React.ComponentProps<typeof EventWidgetContent>['tiers'];
   events: readonly EventCardData[];
   isExpanded: boolean;
+  /** Which event of the deck this is, for the pager. */
+  deckIndex: number;
   ctaHeight: number;
   /** Pixels of the page that sit below the screen at the current snap. */
   bottomInset: number;
@@ -2160,6 +2223,7 @@ function ActiveCard({
       >
         <span className="h-1.5 w-12 rounded-full bg-border-strong" aria-hidden />
       </button>
+      <DeckPager index={deckIndex} total={events.length} />
 
       {/* Content ONLY. The hero has moved out to the anchored layer behind
           this sheet — see the note there. It has been both ways: pinned

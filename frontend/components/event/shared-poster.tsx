@@ -76,10 +76,9 @@ export function SharedPoster({
     const node = ref.current;
     if (!node) return;
 
-    // RESTRAINED, not the full FLIP — see `ORIGIN_RESTRAINT`. The clone starts
-    // near the hero, offset toward the card that was pressed, rather than at
-    // the card's own size: a directional arrival instead of a card growing
-    // into a page.
+    // The FULL flip — see `ORIGIN_RESTRAINT`, which is 1. The clone starts at
+    // the card's width, in the card's place, and grows into the hero: one
+    // continuous object rather than a picture appearing near its final size.
     const collapsed = toCss(restrain(flipTransform(from, to)));
     const expanded = 'translate3d(0px, 0px, 0) scale(1)';
     const start = direction === 'in' ? collapsed : expanded;
@@ -89,14 +88,22 @@ export function SharedPoster({
     // the main thread for transform and opacity, it cannot be interrupted by a
     // re-render, and `finished` gives one settlement callback that fires
     // whether the animation completed or was cancelled.
-    // Opacity carries what the shortened travel no longer can. Arriving, the
-    // clone fades UP over the last of its movement, so the eye reads an image
-    // settling into place rather than a small picture sliding a short way;
-    // leaving, it fades out entirely, which is what lets the return end
-    // wherever the card is without needing to land on it precisely.
+    // ── ARRIVING IS OPAQUE; ONLY THE RETURN FADES ──────────────────────
+    //
+    // The arrival used to ramp 0.4 -> 1, because at a third of the journey the
+    // movement was too small to read on its own and the fade was carrying it.
+    // Playing the whole flip means the movement IS the transition, and a fade
+    // on top of it would be the one thing that stops it reading as a single
+    // object: a solid poster that grows is a shared element, the same poster
+    // arriving translucent is a cross-fade that happens to move.
+    //
+    // The RETURN still fades out. It ends on a card in a list that may have
+    // re-rendered or scrolled, and the uniform scale leaves the height about a
+    // third out at that end, so it must not have to land pixel-perfect on
+    // something the reader can compare it against.
     const animation = node.animate(
       [
-        { transform: start, opacity: direction === 'in' ? 0.4 : 1 },
+        { transform: start, opacity: 1 },
         { transform: end, opacity: direction === 'in' ? 1 : 0 },
       ],
       {

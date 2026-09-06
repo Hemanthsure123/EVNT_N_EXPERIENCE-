@@ -130,27 +130,39 @@ describe('toCss', () => {
 
 describe('restrain', () => {
   /**
-   * The opening used to play the whole FLIP: a 171px grid poster growing to a
-   * 374px hero is a scale of 0.46, which is a card visibly morphing into a
-   * page. Restrained, it starts near its final size and arrives from the right
-   * direction — the spatial link without the choreography.
+   * It went the other way. A third of the journey was measured on the real
+   * page and the clone entered at 83% of its final size, most of the screen
+   * already, four hundred pixels from the card it was supposedly leaving —
+   * a fade with a little movement under it rather than a shared element.
+   * `ORIGIN_RESTRAINT` is 1 now, so the whole flip plays and these tests pin
+   * that rather than the softening that replaced it.
    */
   const CARD: Box = { top: 420, left: 16, width: 171, height: 256 };
 
-  it('starts the poster near its final size rather than at the card size', () => {
+  it('starts the poster AT the card size, which is what a shared element is', () => {
     const raw = flipTransform(CARD, HERO);
     const eased = restrain(raw);
     expect(raw.scale).toBeCloseTo(0.499, 3);
-    expect(eased.scale).toBeGreaterThan(0.8);
-    expect(eased.scale).toBeLessThan(1);
+    // The whole journey: the eased scale IS the raw one.
+    expect(eased.scale).toBeCloseTo(raw.scale, 6);
   });
 
-  it('keeps the direction of travel, at a third of the distance', () => {
+  it('keeps the direction of travel, over the whole distance', () => {
     const raw = flipTransform(CARD, HERO);
     const eased = restrain(raw);
     expect(Math.sign(eased.x)).toBe(Math.sign(raw.x));
     expect(Math.sign(eased.y)).toBe(Math.sign(raw.y));
     expect(eased.y).toBeCloseTo(raw.y * ORIGIN_RESTRAINT, 6);
+  });
+
+  it('is still a dial, so a future softening is one number', () => {
+    // The mechanism survives the value: `restrain` is what makes the amount of
+    // travel a judgement somebody can retune without touching the animation.
+    const raw = flipTransform(CARD, HERO);
+    const softened = restrain(raw, 0.5);
+    expect(softened.scale).toBeGreaterThan(raw.scale);
+    expect(softened.scale).toBeLessThan(1);
+    expect(Math.abs(softened.y)).toBeLessThan(Math.abs(raw.y));
   });
 
   it('is the identity at factor 1 and no movement at factor 0', () => {
