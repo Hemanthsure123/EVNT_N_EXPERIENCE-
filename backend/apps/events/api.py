@@ -32,7 +32,7 @@ from config.di import build_event_service, build_waitlist_service, cache_port
 from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
 from core.throttling import UploadThrottle, WriteThrottle
-from core.uploads import CATEGORY_TILE_SPEC, CREW_PORTRAIT_SPEC, validate_image
+from core.uploads import CATEGORY_TILE_SPEC, MAX_CREW_PHOTO_BYTES, validate_image
 
 from .exceptions import EventNotFoundError
 from .models import MediaKind
@@ -958,7 +958,7 @@ class CrewRosterView(_CrewView):
         """Add somebody to the roster, optionally with their portrait.
 
         The bytes take the SAME validation path as the dedicated photo
-        endpoint — `validate_image` against `CREW_PORTRAIT_SPEC`, which checks
+        endpoint -- `validate_image`, which checks
         size, then the declared type against an allow-list, then the leading
         bytes against that type. A second door to a column must not be a
         laxer one.
@@ -971,7 +971,11 @@ class CrewRosterView(_CrewView):
         alt_text = (data.pop("photo_alt_text", "") or "").strip()
         content_type = ""
         if upload is not None:
-            content_type = validate_image(upload, spec=CREW_PORTRAIT_SPEC)
+            # SIZE AND SAFETY ONLY: the type allow-list with its magic-byte
+            # check, and a 5 MB cap. NO shape gate -- a lineup card crops to
+            # fill, so refusing a landscape press shot or a screenshot bought
+            # nothing. See the note on `CREW_PORTRAIT_SPEC`.
+            content_type = validate_image(upload, max_bytes=MAX_CREW_PHOTO_BYTES)
 
         member = self._service.add_member_with_photo(
             organization_id=organization_id,
@@ -1043,7 +1047,11 @@ class CrewMemberPhotoView(_CrewView):
         payload = CrewPhotoRequestSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
         upload = payload.validated_data["file"]
-        content_type = validate_image(upload, spec=CREW_PORTRAIT_SPEC)
+        # SIZE AND SAFETY ONLY: the type allow-list with its magic-byte
+        # check, and a 5 MB cap. NO shape gate -- a lineup card crops to
+        # fill, so refusing a landscape press shot or a screenshot bought
+        # nothing. See the note on `CREW_PORTRAIT_SPEC`.
+        content_type = validate_image(upload, max_bytes=MAX_CREW_PHOTO_BYTES)
         member = self._service.attach_photo(
             organization_id=organization_id,
             actor_id=self._actor,

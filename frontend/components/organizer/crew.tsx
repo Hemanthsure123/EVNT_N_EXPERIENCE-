@@ -530,11 +530,19 @@ function MemberSheet({
  * other.
  */
 function validatePhoto(chosen: File): string | null {
-  if (!CREW_PHOTO_TYPES.includes(chosen.type)) {
-    return 'That file type is not accepted. Use a JPEG, PNG, WebP or AVIF.';
+  // An EMPTY type is a browser that could not identify the file. Refused
+  // here rather than sent, because the server compares the declared type
+  // against the leading bytes and would refuse it anyway — with a round trip
+  // and somebody's data spent first.
+  if (!chosen.type || !CREW_PHOTO_TYPES.includes(chosen.type)) {
+    return 'That file type is not accepted. Use a JPEG, PNG, WebP, AVIF, GIF, BMP or ICO.';
   }
   if (chosen.size > CREW_PHOTO_MAX_BYTES) {
-    return `That file is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is 10 MB.`;
+    // The limit is DERIVED from the constant, not typed into the sentence.
+    // The two were written separately once and the message went a version out
+    // of date the first time the cap moved.
+    const limit = Math.round(CREW_PHOTO_MAX_BYTES / 1024 / 1024);
+    return `That file is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${limit} MB.`;
   }
   return null;
 }
@@ -575,6 +583,7 @@ function NewMemberPhotoField({
   // `createObjectURL` rather than a FileReader data URL: no base64 pass over
   // a phone photo, and it is revoked when the choice changes.
   const [preview, setPreview] = React.useState<string | null>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (!file) return setPreview(null);
@@ -614,10 +623,17 @@ function NewMemberPhotoField({
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <input
             id="crew-new-photo"
+            ref={inputRef}
             type="file"
             accept={CREW_PHOTO_TYPES.join(',')}
             onChange={(event) => pick(event.target.files?.[0] ?? null)}
-            className="text-caption file:mr-3 file:rounded-full file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-caption file:font-medium"
+            // Hidden once a file is chosen: the preview's own Replace and
+            // Remove take over, and leaving the native control beside them
+            // gives the same job two different-looking buttons.
+            className={cn(
+              'text-caption file:mr-3 file:rounded-full file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-caption file:font-medium',
+              file && 'sr-only',
+            )}
           />
 
           {file ? (
@@ -638,19 +654,44 @@ function NewMemberPhotoField({
                   place of the picture.
                 </p>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => pick(null)}
-                className="w-fit"
-              >
-                Choose a different photo
-              </Button>
+              {/* BOTH operations, on the preview itself. "Choose a different
+                  photo" alone left no way to change your mind about having
+                  one at all: the only route back to no-photo was closing the
+                  sheet and losing the name you had typed. Replace re-opens
+                  the picker; Remove drops the file AND its description, so a
+                  stale alt text cannot survive onto the next choice. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  Replace
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    pick(null);
+                    onAltText('');
+                    // The input keeps its old selection otherwise, so
+                    // re-choosing the SAME file fires no `change` event and
+                    // the preview silently stays empty.
+                    if (inputRef.current) inputRef.current.value = '';
+                  }}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  Remove
+                </Button>
+              </div>
             </>
           ) : (
             <p className="text-caption text-muted-foreground">
-              A portrait or a square works best — it is drawn as a circle on the event page.
+              Any image up to 5 MB. A portrait or a square works best — it is drawn as a
+              circle on the event page, and anything else is cropped to fit rather than
+              refused.
             </p>
           )}
 

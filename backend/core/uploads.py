@@ -39,17 +39,41 @@ from core.errors import InvalidInputError
 #: that a hundred concurrent uploads cannot exhaust a worker's memory.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+#: 5 MB for a crew portrait, which is drawn at ~200px on a lineup card and
+#: ~56px in the picker. Nothing at that size needs ten megabytes, and the
+#: commonest upload here is a phone photo straight off a camera roll --
+#: where the cap is the one thing between the roster and a folder of
+#: 12-megapixel originals nobody will ever see at full size.
+MAX_CREW_PHOTO_BYTES = 5 * 1024 * 1024
+
 #: Raster formats a browser can render, plus the two modern ones we prefer.
 #: SVG is deliberately ABSENT: it is an XML document that can carry script, and
 #: serving one from our own origin is a stored-XSS vector. An organizer who
 #: needs a vector logo can export a PNG.
+#:
+#: HEIC/HEIF and TIFF are absent for the OPPOSITE reason to SVG: not
+#: safety, but that no browser renders either and nothing here
+#: transcodes an upload. Accepting an iPhone's HEIC would store it
+#: happily and then draw a BROKEN IMAGE on the event page, which is
+#: worse than refusing it with a message naming what to do instead.
+#: They belong here the day a transcode step exists, not before.
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg": (b"\xff\xd8\xff",),
+    "image/jpg": (b"\xff\xd8\xff",),
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/webp": (b"RIFF",),
     "image/avif": (b"\x00\x00\x00",),  # ftyp box; the brand is checked below
     "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/bmp": (b"BM",),
+    # Windows icon, and the legacy alias browsers still send for it.
+    "image/vnd.microsoft.icon": (b"\x00\x00\x01\x00",),
+    "image/x-icon": (b"\x00\x00\x01\x00",),
 }
+
+#: What a refusal lists. Derived from the rule rather than written beside
+#: it: the two were separate strings and the message was already a format
+#: out of date.
+_ALLOWED_LABEL = "JPEG, PNG, WebP, AVIF, GIF, BMP or ICO"
 
 #: How many leading bytes to inspect. Every signature above fits comfortably.
 _SNIFF_BYTES = 16
@@ -201,6 +225,21 @@ EVENT_PORTRAIT_SPEC = ImageSpec(
 #: The floor is deliberately low. Most crew photos are phone pictures or
 #: cropped Instagram exports, and a 1280px minimum would refuse the majority of
 #: real submissions to protect a card that is 200px wide.
+#: ── NO LONGER APPLIED, AND KEPT ONLY AS ADVICE ──────────────────────────
+#:
+#: The crew upload paths used to pass this to `validate_image`, so a portrait
+#: had to be at least 400x400 AND fall between 0.6:1 and square. That refused
+#: a cropped Instagram export, a landscape press shot and any screenshot --
+#: for a picture drawn at ~200px in a card that crops to fill anyway.
+#:
+#: A shape gate earns its place where a page renders every image in ONE frame
+#: and a wrong shape visibly breaks the layout (`EVENT_IMAGE_SPEC`). A lineup
+#: card is not that. So the only rules on a crew photo are now the two that
+#: protect something real: the type allow-list with its magic-byte check, and
+#: `MAX_CREW_PHOTO_BYTES`.
+#:
+#: Kept rather than deleted because the numbers are still the right ADVICE,
+#: and the frontend prints them as a hint.
 CREW_PORTRAIT_SPEC = ImageSpec(
     label="crew photo",
     min_width=400,
@@ -332,7 +371,12 @@ def validate_dimensions(upload: UploadedFile, spec: ImageSpec) -> tuple[int, int
     return width, height
 
 
-def validate_image(upload: UploadedFile, *, spec: ImageSpec | None = None) -> str:
+def validate_image(
+    upload: UploadedFile,
+    *,
+    spec: ImageSpec | None = None,
+    max_bytes: int = MAX_IMAGE_BYTES,
+) -> str:
     """Check size, declared type and leading bytes. Returns the content type.
 
     Raises `InvalidInputError` with a message an organizer can act on — "that
@@ -343,12 +387,15 @@ def validate_image(upload: UploadedFile, *, spec: ImageSpec | None = None) -> st
     organisation logo is square, and one global rule would either refuse every
     logo or admit every off-shape hero. A caller that renders into a fixed
     frame passes its spec; a caller that does not, does not.
+
+    `max_bytes` is per-slot for the same reason. A hero and a 200px portrait
+    have no business sharing a ceiling.
     """
     if upload.size is None or upload.size == 0:
         raise InvalidInputError("That file is empty.")
-    if upload.size > MAX_IMAGE_BYTES:
+    if upload.size > max_bytes:
         megabytes = upload.size / (1024 * 1024)
-        limit = MAX_IMAGE_BYTES // (1024 * 1024)
+        limit = max_bytes // (1024 * 1024)
         raise InvalidInputError(
             f"That image is {megabytes:.1f} MB — the limit is {limit} MB. "
             "Try exporting it at a lower quality."
@@ -356,9 +403,7 @@ def validate_image(upload: UploadedFile, *, spec: ImageSpec | None = None) -> st
 
     content_type = (upload.content_type or "").lower().split(";")[0].strip()
     if content_type not in ALLOWED_IMAGE_TYPES:
-        raise InvalidInputError(
-            "That file type is not supported. Upload a JPEG, PNG, WebP, AVIF or GIF."
-        )
+        raise InvalidInputError(f"That file type is not supported. Upload a {_ALLOWED_LABEL}.")
 
     # Read the signature WITHOUT consuming the stream for the caller.
     head = upload.read(_SNIFF_BYTES)

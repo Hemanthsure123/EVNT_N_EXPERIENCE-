@@ -62,10 +62,45 @@ export const updateCrewMember = (
 export const deleteCrewMember = (organizationId: string, memberId: string) =>
   api.delete<void>(`${roster(organizationId)}/${encodeURIComponent(memberId)}`);
 
-/** Mirrors `core.uploads.CREW_PORTRAIT_SPEC` so the browser refuses what the
- *  server would, before spending somebody's data on the round trip. */
-export const CREW_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
-export const CREW_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
+/**
+ * Mirrors `core.uploads` so the browser refuses what the server would, before
+ * spending somebody's data on the round trip.
+ *
+ * ── TWO RULES, AND ONLY TWO ──────────────────────────────────────────────
+ *
+ * A crew portrait used to be gated on SHAPE as well: at least 400x400 and
+ * between 0.6:1 and square, from `CREW_PORTRAIT_SPEC`. That refused a cropped
+ * Instagram export, a landscape press shot and any screenshot — for a picture
+ * drawn at ~200px in a card that crops to fill anyway. The gate is gone
+ * server-side; what is left is what protects something real:
+ *
+ * 1. THE TYPE ALLOW-LIST, which is a security control and not a preference.
+ *    An allow-list is a promise to have thought of the safe types; a
+ *    deny-list is a promise to have thought of every dangerous one. SVG is
+ *    absent and always will be — it is an XML document that can carry script,
+ *    and serving one from our own origin is stored XSS. The server checks the
+ *    leading BYTES against the declared type too, so renaming a file gets
+ *    past neither end.
+ * 2. FIVE MEGABYTES. The commonest upload here is a phone photo straight off
+ *    a camera roll, and nothing drawn at 200px needs more.
+ *
+ * HEIC and TIFF are deliberately out, for the opposite reason to SVG: no
+ * browser renders either, so accepting one would store it happily and then
+ * draw a broken image on the event page.
+ */
+export const CREW_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+export const CREW_PHOTO_TYPES = [
+  'image/jpeg',
+  // Non-standard, still sent by some Windows tooling for an ordinary JPEG.
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+  'image/gif',
+  'image/bmp',
+  'image/vnd.microsoft.icon',
+  'image/x-icon',
+];
 
 /**
  * Attach a portrait.
