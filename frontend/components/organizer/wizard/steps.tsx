@@ -18,7 +18,9 @@ import {
 } from '@/lib/organizer/wizard/model';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
 import { directionsUrl } from '@/lib/api/maps';
-import { Button, SegmentedControl } from '@/components/ui';
+import { createOrganizerCategory } from '@/lib/api/categories';
+import { errorMessage } from '@/lib/api/errors';
+import { Button, Input, Label, SegmentedControl } from '@/components/ui';
 import { PinPicker } from '@/components/maps/pin-picker';
 import { VenueAutocomplete, type VenueSelection } from '@/components/maps/venue-autocomplete';
 import { cn } from '@/lib/utils/cn';
@@ -28,7 +30,6 @@ import {
   TimeOnlyField,
   FieldFrame,
   FieldGroup,
-  NeedsSavedDraft,
   Section,
   SelectField,
   StepHeader,
@@ -37,7 +38,6 @@ import {
   fieldMessageId,
   type DraftSave,
 } from './fields';
-import { missingForSave } from './details-step';
 import { DescriptionExample } from './description-example';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { CategoryScene } from '@/components/illustrations/category-scenes';
@@ -150,7 +150,15 @@ export function BasicsStep({
       <Section
         title="Category"
       >
-        <CategoryPicker value={draft.category} onChange={(category) => update({ category })} />
+        <CategoryPicker
+          value={draft.category}
+          onChange={(category) => update({ category })}
+          organizationId={draft.organizationId}
+          customLabel={draft.customCategoryLabel}
+          onCustom={(customCategoryId, customCategoryLabel) =>
+            update({ customCategoryId, customCategoryLabel })
+          }
+        />
 
         {/* ── THE SUB-CLASSIFICATION, BENEATH THE TILE IT REFINES ──────────
             Inside the same section rather than beside it, because it is not a
@@ -369,10 +377,59 @@ export function VenueStep({ draft, update, issues }: StepProps) {
 function CategoryPicker({
   value,
   onChange,
+  organizationId,
+  customLabel,
+  onCustom,
 }: {
   value: string;
   onChange: (value: string) => void;
+  organizationId: string;
+  customLabel: string;
+  onCustom: (id: string, label: string) => void;
 }) {
+  /**
+   * ── "NONE OF THESE" NOW MEANS SOMETHING ─────────────────────────────────
+   *
+   * It used to be `aria-pressed={!value}` over `onChange('')` — pressed
+   * whenever no tile was chosen, which is the state a fresh draft starts in.
+   * So it was highlighted before anybody touched it, pressing it did nothing
+   * observable, and there was no way to say what the event actually was.
+   *
+   * The intent is now EXPLICIT and held here rather than derived from an
+   * absence: pressing it opens a field for the organizer's own label. It
+   * re-opens on reload when a label is already stored, so the state survives
+   * the draft being restored.
+   */
+  const [choosingOwn, setChoosingOwn] = React.useState(Boolean(customLabel));
+  const [text, setText] = React.useState(customLabel);
+  const [saving, setSaving] = React.useState(false);
+  const [failure, setFailure] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    // Keeps the box in step with a draft restored under it, without fighting
+    // somebody who is mid-type: only adopts a label that is actually new.
+    if (customLabel && customLabel !== text) setText(customLabel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customLabel]);
+
+  const commit = () => {
+    const label = text.trim();
+    if (!label || saving || !organizationId) return;
+    setSaving(true);
+    setFailure(null);
+    // Created NOW rather than at save time, so the organizer sees it accepted
+    // while they are looking at it. The endpoint is idempotent on the label —
+    // typing one they already have returns that row rather than refusing —
+    // so pressing this twice is safe and needs no existence check.
+    void createOrganizerCategory(organizationId, label)
+      .then((saved) => {
+        onCustom(saved.id, saved.label);
+        setText(saved.label);
+      })
+      .catch((thrown: Error) => setFailure(errorMessage(thrown)))
+      .finally(() => setSaving(false));
+  };
+
   return (
     <div className="flex flex-col gap-stack">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -383,7 +440,15 @@ function CategoryPicker({
               key={category.slug}
               type="button"
               aria-pressed={selected}
-              onClick={() => onChange(selected ? '' : category.slug)}
+              onClick={() => {
+                onChange(selected ? '' : category.slug);
+                // Picking a tile answers the question the custom box was for,
+                // so the box closes. The stored row is NOT deleted — it is
+                // their vocabulary and they may want it on the next event —
+                // it is merely detached from this draft.
+                setChoosingOwn(false);
+                onCustom('', '');
+              }}
               className={cn(
                 'flex flex-col items-start gap-1.5 rounded-xl border p-2 text-left',
                 'transition-colors duration-fast',
@@ -404,26 +469,83 @@ function CategoryPicker({
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
-          aria-pressed={!value}
-          onClick={() => onChange('')}
+          aria-expanded={choosingOwn}
+          aria-controls="custom-category"
+          onClick={() => {
+            setChoosingOwn((open) => !open);
+            // Clears any tile: "none of these" is the answer, so leaving a
+            // scene selected behind an open custom box would say both.
+            onChange('');
+          }}
           className={cn(
             'inline-flex h-control items-center rounded-full border px-4 text-body-sm transition-colors',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            value
-              ? 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
-              : 'border-primary bg-primary-subtle text-primary-subtle-foreground',
+            choosingOwn
+              ? 'border-primary bg-primary-subtle text-primary-subtle-foreground'
+              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
           )}
         >
           None of these
         </button>
       </div>
+
+      {choosingOwn ? (
+        <div id="custom-category" className="flex flex-col gap-2 rounded-xl bg-sunken p-card">
+          <Label htmlFor="custom-category-input">Your own category</Label>
+          <div className="flex flex-wrap items-start gap-2">
+            <Input
+              id="custom-category-input"
+              value={text}
+              maxLength={60}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                // The field sits inside the wizard's form, so a bare Enter
+                // would submit that instead of adding the category.
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commit();
+                }
+              }}
+              placeholder="Sufi night"
+              className="min-w-0 flex-1"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={commit}
+              disabled={!text.trim() || saving || text.trim() === customLabel}
+              loading={saving}
+            >
+              {text.trim() === customLabel && customLabel ? 'Saved' : 'Use this'}
+            </Button>
+          </div>
+
+          {failure ? (
+            <p role="alert" className="text-caption text-destructive">
+              {failure}
+            </p>
+          ) : (
+            <p className="text-caption text-muted-foreground">
+              {/* Says what it does and does NOT do. Somebody typing here would
+                  otherwise reasonably assume they had made a new browse
+                  category for the whole platform. */}
+              Kept on your organisation and offered on your next event. It is your label — it
+              does not add a tile to the public browse pages.
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 /* ─────────────────────────────── schedule ───────────────────────────── */
 
-export function ScheduleStep({ draft, update, issues, save }: StepProps) {
+// `save` is no longer destructured: the three sections below used to hand it
+// to a `NeedsSavedDraft` panel so the wall could offer a Save button. With the
+// wall gone there is nothing on this step that saves on demand — the wizard's
+// own autosave and the action bar own that.
+export function ScheduleStep({ draft, update, issues }: StepProps) {
   const starts = draft.startsAt ? new Date(draft.startsAt) : null;
   const ends = draft.endsAt ? new Date(draft.endsAt) : null;
   const valid = starts && !Number.isNaN(starts.valueOf());
@@ -594,34 +716,37 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
         </div>
       ) : null}
 
+      {/* ── NO LONGER GATED ON A SAVED DRAFT ─────────────────────────────
+          These three sections used to render a `NeedsSavedDraft` wall until
+          the event existed, because every write in them addresses
+          `/events/{id}/...`. That was accurate and it stacked three of them on
+          one step, each answering "go back two steps first".
+
+          The dependency is real and has not been wished away: what changed is
+          that rows typed before the event exists are STAGED IN THE DRAFT and
+          flushed by the save engine the moment it is created. They ride the
+          local-first autosave, so a reload keeps them. See `PendingSlot` in
+          `model.ts` and the flush in `use-wizard.ts`. */}
       <Section
         title="Sessions"
       >
-        {draft.eventId ? (
-          <SessionsEditor eventId={draft.eventId} startsAtLocal={draft.startsAt} />
-        ) : (
-          <NeedsSavedDraft
-            title="Sessions unlock once the draft is saved"
-            what="Each session sells its own tickets. Add them once the event exists."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        )}
+        <SessionsEditor
+          eventId={draft.eventId || null}
+          startsAtLocal={draft.startsAt}
+          pending={draft.pendingSlots}
+          onPending={(pendingSlots) => update({ pendingSlots })}
+        />
       </Section>
 
       <Section
         title="Running order"
       >
-        {draft.eventId ? (
-          <RunningOrder eventId={draft.eventId} startsAtLocal={draft.startsAt} />
-        ) : (
-          <NeedsSavedDraft
-            title="The running order unlocks once the draft is saved"
-            what="Add the running order once the event exists. Nothing above is lost in the meantime."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        )}
+        <RunningOrder
+          eventId={draft.eventId || null}
+          startsAtLocal={draft.startsAt}
+          pending={draft.pendingTimeline}
+          onPending={(pendingTimeline) => update({ pendingTimeline })}
+        />
       </Section>
 
       {/* A SECTION HERE, NOT A NINTH STEP.
@@ -631,21 +756,16 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
           sidebar and the ⌘K palette make, which `nav.test.ts` pins to
           `STEPS.length`.
 
-          Gated exactly as Sessions and Running order are: it writes to
-          server-backed rows, so it needs an event to write them to, and it
-          names the fields that unlock it rather than rendering a form that
-          404s. */}
+          Open from the start, like the two above. The ROSTER never needed an
+          event — it hangs off the organization — so the crew list and the add
+          form always worked; only the LINEUP needs an id, and that is held in
+          the draft until there is one. */}
       <Section title="Who's taking the stage">
-        {draft.eventId ? (
-          <CrewPicker eventId={draft.eventId} />
-        ) : (
-          <NeedsSavedDraft
-            title="The lineup unlocks once the draft is saved"
-            what="Pick who is performing once the event exists. Your crew list is kept on the organisation, so it is ready either way."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        )}
+        <CrewPicker
+          eventId={draft.eventId || null}
+          staged={draft.crewIds}
+          onStaged={(crewIds) => update({ crewIds })}
+        />
       </Section>
 
     </div>

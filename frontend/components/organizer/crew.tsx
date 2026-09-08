@@ -278,10 +278,16 @@ function MemberSheet({
    * create that is the person who was just added.
    */
   const [created, setCreated] = React.useState<CrewMember | null>(null);
+  // Held for a member who does not exist yet — see `NewMemberPhotoField`. The
+  // create mutation uploads it as soon as there is an id to attach it to.
+  const [newPhoto, setNewPhoto] = React.useState<File | null>(null);
+  const [newPhotoAlt, setNewPhotoAlt] = React.useState('');
 
   React.useEffect(() => {
     if (!open) return;
     setCreated(null);
+    setNewPhoto(null);
+    setNewPhotoAlt('');
     setName(member?.name ?? '');
     setRole(member?.role ?? '');
     setDetails(member?.details ?? '');
@@ -328,6 +334,26 @@ function MemberSheet({
      * is saved, and the photo control was already there the whole time.
      */
     onSuccess: async (saved) => {
+      // THE PHOTO GOES UP HERE, not on a second press. `saved.id` is the row
+      // the portrait attaches to and it did not exist a moment ago, which is
+      // the whole reason the file was held rather than uploaded with the form.
+      //
+      // A FAILED UPLOAD DOES NOT FAIL THE SAVE. The member is real either way,
+      // and losing the name somebody typed because a photo did not transfer is
+      // the worse of the two outcomes — so the error surfaces and the sheet
+      // stays open on its edit state, where `PhotoField` can retry.
+      if (!subject && newPhoto && newPhotoAlt.trim()) {
+        try {
+          await uploadCrewPhoto(organizationId, saved.id, {
+            file: newPhoto,
+            altText: newPhotoAlt.trim(),
+          }).promise;
+          setNewPhoto(null);
+          setNewPhotoAlt('');
+        } catch (thrown) {
+          setError(errorMessage(thrown));
+        }
+      }
       await invalidate();
       if (subject) return onClose();
       setCreated(saved);
@@ -428,9 +454,12 @@ function MemberSheet({
                 hint={created ? `${created.name} is saved. Add a photo now, or close.` : undefined}
               />
             ) : (
-              <p className="rounded-xl border border-dashed border-border px-card py-3 text-caption text-muted-foreground">
-                A photo attaches to somebody who exists, so it appears here the moment you save.
-              </p>
+              <NewMemberPhotoField
+                file={newPhoto}
+                altText={newPhotoAlt}
+                onFile={setNewPhoto}
+                onAltText={setNewPhotoAlt}
+              />
             )}
 
             {error ? (
@@ -444,7 +473,19 @@ function MemberSheet({
           </div>
 
           <footer className="flex shrink-0 flex-col gap-2 border-t border-border px-6 py-card">
-            <Button type="submit" size="lg" disabled={!name.trim() || save.isPending}>
+            {/* A chosen photo with no description blocks the save rather than
+                being silently dropped: the server refuses the upload without
+                alt text, so saving anyway would create the member and lose the
+                picture with no explanation. */}
+            <Button
+              type="submit"
+              size="lg"
+              disabled={
+                !name.trim() ||
+                save.isPending ||
+                Boolean(!subject && newPhoto && !newPhotoAlt.trim())
+              }
+            >
               {save.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
               {member ? 'Save changes' : 'Add to crew'}
             </Button>
@@ -475,6 +516,152 @@ function MemberSheet({
         </form>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+/**
+ * The local half of the upload gate, shared by both pickers.
+ *
+ * Refuses what the server would refuse anyway, before spending somebody's
+ * data on the round trip. Extracted the moment there were TWO pickers — the
+ * one on an existing member and the one on the create form — because a
+ * duplicated size limit is a limit that drifts, and the drift is invisible
+ * until somebody's 11MB photo is accepted by one form and rejected by the
+ * other.
+ */
+function validatePhoto(chosen: File): string | null {
+  if (!CREW_PHOTO_TYPES.includes(chosen.type)) {
+    return 'That file type is not accepted. Use a JPEG, PNG, WebP or AVIF.';
+  }
+  if (chosen.size > CREW_PHOTO_MAX_BYTES) {
+    return `That file is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is 10 MB.`;
+  }
+  return null;
+}
+
+/**
+ * The photo picker for somebody who does not exist yet.
+ *
+ * ── WHY THIS IS NOT `PhotoField` ─────────────────────────────────────────
+ *
+ * `PhotoField` uploads on press, because its member has a row to attach to.
+ * Here there is no row and no id, so there is nothing to POST to: the file is
+ * HELD and the sheet's own save uploads it immediately after the create
+ * returns an id. The order is a fact about the API, not a limitation to design
+ * around — a portrait attaches to a member.
+ *
+ * What WAS wrong is what stood here before: a dashed box reading "A photo
+ * attaches to somebody who exists, so it appears here the moment you save".
+ * True, and it reads as "there is no way to add a photo", which is how the
+ * whole field got reported as missing. One press does both now.
+ *
+ * ALT TEXT IS COLLECTED WITH THE FILE, before either goes anywhere — the rule
+ * the rest of this codebase follows, because text written while looking at the
+ * picture is real alt text where a field appended to a finished grid gets
+ * "image1". The server refuses an upload without it.
+ */
+function NewMemberPhotoField({
+  file,
+  altText,
+  onFile,
+  onAltText,
+}: {
+  file: File | null;
+  altText: string;
+  onFile: (file: File | null) => void;
+  onAltText: (value: string) => void;
+}) {
+  const [error, setError] = React.useState<string | null>(null);
+  // `createObjectURL` rather than a FileReader data URL: no base64 pass over
+  // a phone photo, and it is revoked when the choice changes.
+  const [preview, setPreview] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!file) return setPreview(null);
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const pick = (chosen: File | null) => {
+    setError(null);
+    if (!chosen) return onFile(null);
+    const refusal = validatePhoto(chosen);
+    if (refusal) return setError(refusal);
+    onFile(chosen);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="crew-new-photo">
+        Photo <span className="font-normal text-muted-foreground">— optional</span>
+      </Label>
+      <div className="flex items-start gap-3 rounded-xl border border-border p-card">
+        <span className="relative size-14 shrink-0 overflow-hidden rounded-full bg-muted">
+          {preview ? (
+            // Not `next/image`: the source is a blob URL for a file that has
+            // not been uploaded, so there is no remote host to configure and
+            // nothing for the optimizer to fetch.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview} alt="" className="size-full object-cover" />
+          ) : (
+            <span className="flex size-full items-center justify-center text-muted-foreground">
+              <UserRound className="size-6" aria-hidden />
+            </span>
+          )}
+        </span>
+
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <input
+            id="crew-new-photo"
+            type="file"
+            accept={CREW_PHOTO_TYPES.join(',')}
+            onChange={(event) => pick(event.target.files?.[0] ?? null)}
+            className="text-caption file:mr-3 file:rounded-full file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-caption file:font-medium"
+          />
+
+          {file ? (
+            <>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="crew-new-alt" className="text-caption">
+                  Describe the photo
+                </Label>
+                <Input
+                  id="crew-new-alt"
+                  value={altText}
+                  onChange={(event) => onAltText(event.target.value)}
+                  placeholder="A DJ behind a mixer, smiling"
+                />
+                {/* Said before the press, not after a refusal. */}
+                <p className="text-caption text-muted-foreground">
+                  Required with a photo. It is what someone using a screen reader hears in
+                  place of the picture.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => pick(null)}
+                className="w-fit"
+              >
+                Choose a different photo
+              </Button>
+            </>
+          ) : (
+            <p className="text-caption text-muted-foreground">
+              A portrait or a square works best — it is drawn as a circle on the event page.
+            </p>
+          )}
+
+          {error ? (
+            <p role="alert" className="text-caption text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -527,16 +714,8 @@ function PhotoField({
   const pick = (chosen: File | null) => {
     setError(null);
     if (!chosen) return setFile(null);
-    // Refuse locally what the server would refuse anyway, before spending
-    // somebody's data on the round trip.
-    if (!CREW_PHOTO_TYPES.includes(chosen.type)) {
-      return setError('That file type is not accepted. Use a JPEG, PNG, WebP or AVIF.');
-    }
-    if (chosen.size > CREW_PHOTO_MAX_BYTES) {
-      return setError(
-        `That file is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is 10 MB.`,
-      );
-    }
+    const refusal = validatePhoto(chosen);
+    if (refusal) return setError(refusal);
     setFile(chosen);
   };
 

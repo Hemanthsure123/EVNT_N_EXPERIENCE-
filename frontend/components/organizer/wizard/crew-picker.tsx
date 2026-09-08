@@ -42,7 +42,35 @@ import { cn } from '@/lib/utils/cn';
  * would issue a write per press — and, on a slow connection, let two of them
  * land out of order and settle on a lineup nobody chose. One press, one write.
  */
-export function CrewPicker({ eventId }: { eventId: string }) {
+/**
+ * ── IT WORKS BEFORE THE EVENT EXISTS ──────────────────────────────────────
+ *
+ * `eventId` is nullable, and this section is the one of the three where that
+ * costs almost nothing: THE ROSTER IS ORGANIZATION-SCOPED. Reading the crew
+ * list, and adding somebody to it, never needed an event at all — only the
+ * LINEUP (which of them is on this event) does.
+ *
+ * So with no id the roster and the add form work exactly as they always have,
+ * and the selection is held in the wizard draft (`draft.crewIds`) instead of
+ * being PUT. The save engine sends it as a whole set the moment the event is
+ * created — which is safe to retry and needs no per-row bookkeeping, because
+ * `PUT /events/{id}/crew` is a set replacement.
+ *
+ * That also means the "Save lineup" button is ABSENT rather than disabled
+ * before the event exists: there is nothing to save it to, the draft already
+ * has the selection, and a button whose job is to fail is worse than none.
+ */
+export function CrewPicker({
+  eventId,
+  staged,
+  onStaged,
+}: {
+  /** `null` until the draft has been saved — see the note above. */
+  eventId: string | null;
+  /** The draft's lineup, used only while there is no event to PUT it to. */
+  staged: string[];
+  onStaged: (next: string[]) => void;
+}) {
   const client = useQueryClient();
   const organizations = useOrganizations();
   const organizationId = organizations.data?.data?.[0]?.id ?? null;
@@ -57,20 +85,24 @@ export function CrewPicker({ eventId }: { eventId: string }) {
 
   const lineup = useQuery({
     queryKey: ['organizer', 'event-crew', eventId],
-    queryFn: () => fetchEventCrew(eventId),
+    queryFn: () => fetchEventCrew(eventId as string),
     staleTime: 30_000,
+    enabled: Boolean(eventId),
   });
 
   // Local, ordered, and seeded ONCE from the server. Re-seeding on every
   // refetch would silently undo a selection somebody was in the middle of.
   const [chosen, setChosen] = React.useState<string[] | null>(null);
   React.useEffect(() => {
-    if (chosen === null && lineup.data) setChosen(lineup.data.map((row) => row.id));
-  }, [chosen, lineup.data]);
+    if (eventId && chosen === null && lineup.data) setChosen(lineup.data.map((row) => row.id));
+  }, [eventId, chosen, lineup.data]);
 
-  const selection = chosen ?? [];
+  // With an event the selection is local until saved; without one the DRAFT
+  // is the store, so there is no second copy to fall out of step.
+  const selection = eventId ? (chosen ?? []) : staged;
+
   const save = useMutation({
-    mutationFn: () => setEventCrew(eventId, selection),
+    mutationFn: () => setEventCrew(eventId as string, selection),
     onSuccess: (rows) => {
       setError(null);
       setChosen(rows.map((row) => row.id));
@@ -79,16 +111,18 @@ export function CrewPicker({ eventId }: { eventId: string }) {
     onError: (thrown) => setError(errorMessage(thrown)),
   });
 
-  const toggle = (id: string) =>
-    setChosen((current) => {
-      const list = current ?? [];
-      return list.includes(id) ? list.filter((value) => value !== id) : [...list, id];
-    });
+  const toggle = (id: string) => {
+    const next = selection.includes(id)
+      ? selection.filter((value) => value !== id)
+      : [...selection, id];
+    if (eventId) setChosen(next);
+    else onStaged(next);
+  };
 
   const saved = lineup.data?.map((row) => row.id).join(',') ?? '';
-  const dirty = chosen !== null && chosen.join(',') !== saved;
+  const dirty = Boolean(eventId) && chosen !== null && chosen.join(',') !== saved;
 
-  if (roster.isPending || lineup.isPending) return <Skeleton className="h-40 w-full" />;
+  if (roster.isPending || (eventId && lineup.isPending)) return <Skeleton className="h-40 w-full" />;
 
   const members = roster.data ?? [];
 
@@ -178,6 +212,27 @@ export function CrewPicker({ eventId }: { eventId: string }) {
 
       <AddInline organizationId={organizationId} onAdded={(id) => toggle(id)} />
 
+      {/* The full form, for a photo and a bio, which the inline one
+          deliberately does not ask for. A LINK rather than a second copy of
+          the roster sheet: `crew.tsx` owns that form, including the portrait
+          upload, and two forms writing one table is how the two drift.
+
+          `target="_blank"` so a half-finished event is not navigated away
+          from — the draft is autosaved, but losing your place mid-wizard to
+          add one person is the detour this whole section exists to avoid. */}
+      <p className="text-caption text-muted-foreground">
+        Need a photo or a bio for somebody?{' '}
+        <a
+          href="/dashboard/crew"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded-sm text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Open the full crew list
+        </a>
+        . It opens in a new tab, so you keep your place here.
+      </p>
+
       {error ? (
         <p
           role="alert"
@@ -188,19 +243,26 @@ export function CrewPicker({ eventId }: { eventId: string }) {
       ) : null}
 
       <div className="flex items-center gap-3">
-        <Button type="button" onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
-          {save.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-          Save lineup
-        </Button>
-        {/* Unsaved state is SAID, not implied by an enabled button. This step
-            is server-backed and does not ride the wizard's autosave, so a
-            reader has no other way to know. */}
+        {eventId ? (
+          <Button type="button" onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
+            {save.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            Save lineup
+          </Button>
+        ) : null}
+        {/* Unsaved state is SAID, not implied by an enabled button. With an
+            event this section is server-backed and does not ride the wizard's
+            autosave, so a reader has no other way to know; without one it DOES
+            ride the autosave, and the sentence says so instead. */}
         <p aria-live="polite" className="text-caption text-muted-foreground">
-          {dirty
-            ? 'Not saved yet'
+          {eventId
+            ? dirty
+              ? 'Not saved yet'
+              : selection.length === 0
+                ? 'Nobody on the lineup'
+                : `${selection.length} on the lineup`
             : selection.length === 0
-              ? 'Nobody on the lineup'
-              : `${selection.length} on the lineup`}
+              ? 'Nobody on the lineup yet'
+              : `${selection.length} chosen — added to the event when the draft first saves`}
         </p>
       </div>
     </div>
@@ -246,14 +308,19 @@ function AddInline({
 
   if (!open) {
     return (
-      <button
+      // A REAL button, not the dashed ghost pill it was. Adding somebody is
+      // the action this section exists for when the roster is empty — which
+      // is every organizer's first event — and drawing it as a dotted
+      // placeholder made it read as a disabled hint rather than the control.
+      <Button
         type="button"
+        variant="outline"
         onClick={() => setOpen(true)}
-        className="inline-flex w-fit items-center gap-1.5 rounded-full border border-dashed border-border-strong px-4 py-2 text-body-sm text-muted-foreground transition-colors duration-fast hover:border-border-strong hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        leftIcon={<Plus className="size-4" aria-hidden />}
+        className="w-full sm:w-fit"
       >
-        <Plus className="size-4" aria-hidden />
         Add crew member
-      </button>
+      </Button>
     );
   }
 

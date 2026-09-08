@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 import { ApiError } from '@/lib/api/errors';
+import { addSlot, addTimelineEntry, type TimelineKind } from '@/lib/api/event-content';
+import { setEventCrew } from '@/lib/api/crew';
 import {
   createEvent,
   createTicketType,
@@ -24,6 +26,7 @@ import {
   toCreateInput,
   toPatchInput,
   toTierInput,
+  toIso,
   draftFromEvent,
   type Draft,
   type DraftTier,
@@ -453,6 +456,67 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
         working = { ...working, version: uploaded.version, posterUrl: uploaded.poster_url };
       }
 
+      // ── THE STAGED COLLECTIONS, BEFORE THE TIERS ─────────────────────
+      //
+      // Sessions, running-order entries and the lineup typed while there was
+      // no event to hang them on. See `PendingSlot` in `model.ts` for why
+      // they are staged rather than gated behind a "save the draft first"
+      // message.
+      //
+      // BEFORE the tier loop, and that order is load-bearing: a tier can be
+      // bound to a session, so the sessions have to have ids by the time the
+      // tiers are written.
+      //
+      // Each row is attempted INDEPENDENTLY and a failure LEAVES IT STAGED
+      // rather than dropping it: the draft is the only copy, and losing four
+      // typed sessions because the fifth was refused is the outcome staging
+      // exists to prevent. The rows that did land are cleared, so a retry
+      // cannot create them twice.
+      const flushedSlots: string[] = [];
+      const flushedEntries: string[] = [];
+      let crewSynced = false;
+
+      if (working.eventId) {
+        for (const slot of working.pendingSlots) {
+          try {
+            await addSlot(working.eventId, {
+              starts_at: toIso(slot.startsAt),
+              label: slot.label.trim(),
+              ends_at: slot.endsAt ? toIso(slot.endsAt) : null,
+            });
+            flushedSlots.push(slot.tempId);
+          } catch {
+            // Left staged; the save state carries the failure.
+          }
+        }
+
+        for (const entry of working.pendingTimeline) {
+          try {
+            await addTimelineEntry(working.eventId, {
+              kind: entry.kind as TimelineKind,
+              label: entry.label.trim(),
+              description: entry.description.trim(),
+              starts_at: entry.startsAt ? toIso(entry.startsAt) : null,
+              position: 0,
+            });
+            flushedEntries.push(entry.tempId);
+          } catch {
+            // Left staged.
+          }
+        }
+
+        // A SET REPLACEMENT, so it is safe to send whole and safe to retry —
+        // which is why the lineup needs no per-row bookkeeping.
+        if (working.crewIds.length) {
+          try {
+            await setEventCrew(working.eventId, working.crewIds);
+            crewSynced = true;
+          } catch {
+            // Left staged.
+          }
+        }
+      }
+
       // Tiers, in order. Sequential rather than parallel on purpose: each one
       // is a small write, and a burst of parallel creates against the same
       // event makes the failure modes much harder to reason about for no
@@ -510,6 +574,19 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
               ? { ...tier, serverId: persisted.serverId, version: persisted.version }
               : tier;
           }),
+          // FILTERED, never replaced — the same rule the tier merge above
+          // follows. The organizer may have typed another session while the
+          // request was in flight, and assigning the pre-flush array back
+          // would eat it.
+          pendingSlots: latest.current.pendingSlots.filter(
+            (slot) => !flushedSlots.includes(slot.tempId),
+          ),
+          pendingTimeline: latest.current.pendingTimeline.filter(
+            (entry) => !flushedEntries.includes(entry.tempId),
+          ),
+          // Cleared only when the PUT actually landed. From here the picker
+          // reads the server, which is the source of truth for a lineup.
+          crewIds: crewSynced ? [] : latest.current.crewIds,
         },
         { history: false },
       );

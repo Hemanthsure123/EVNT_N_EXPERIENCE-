@@ -155,6 +155,45 @@ export type Draft = {
    */
   category: string;
   /**
+   * The organizer's OWN category, by id, when they typed one instead of
+   * picking a tile.
+   *
+   * BESIDE `category`, never instead of it. `category` is the closed browse
+   * taxonomy the landing pages and the illustration set are built from; this
+   * is a row on their organization that never reaches a browse filter.
+   *
+   * Created on the server the moment it is typed (the endpoint is idempotent
+   * on the label, so re-typing one returns the row they already have), which
+   * is why this holds an ID rather than the text: `Event.custom_category` is a
+   * foreign key, so renaming the category later follows every event carrying
+   * it.
+   */
+  customCategoryId: string;
+  /**
+   * Sessions typed before the event existed. Flushed and emptied on first
+   * save — see `PendingSlot`.
+   */
+  pendingSlots: PendingSlot[];
+  /** Running-order entries typed before the event existed. */
+  pendingTimeline: PendingTimelineEntry[];
+  /**
+   * The lineup, as an ORDERED list of roster ids.
+   *
+   * Held here only while there is no event to PUT it to. Once flushed it is
+   * emptied and the picker reads the server's own answer, which is the source
+   * of truth — keeping a second copy in the draft is how the two disagree.
+   */
+  crewIds: string[];
+  /**
+   * The label, kept beside the id PURELY so the input can render it.
+   *
+   * Not sent anywhere and not the source of truth — the row is. It exists
+   * because `custom_category` is absent from the event RESPONSE serializers,
+   * so on reopening a saved event there is nothing to rehydrate the text
+   * from; see the note on `toPatchInput`.
+   */
+  customCategoryLabel: string;
+  /**
    * Google's id for the venue, or `''` when it was typed freehand.
    *
    * Non-empty means the coordinates below are GOOGLE'S for that place. Placing
@@ -267,6 +306,53 @@ export function isDraftUntouched(draft: Draft): boolean {
   );
 }
 
+/**
+ * A session, a running-order entry or a lineup, TYPED BEFORE THE EVENT EXISTS.
+ *
+ * ── WHY THESE ARE IN THE DRAFT AT ALL ────────────────────────────────────
+ *
+ * Sessions, the running order and the lineup are server-backed COLLECTIONS:
+ * they POST to `/events/{id}/slots`, `/events/{id}/timeline` and
+ * `/events/{id}/crew`, so each one needs an event id to address. Until the
+ * draft has been saved there is no id, and those three sections used to say
+ * so — a titled card containing nothing but "unlocks once the draft is saved"
+ * and a list of the fields that would unlock it.
+ *
+ * That is accurate and it is a wall. An organizer filling a form top to
+ * bottom meets three of them in a row on one step, and the answer to all
+ * three is "go back two steps first".
+ *
+ * So the rows are STAGED HERE instead, exactly as `tiers` already are: typed
+ * locally, held in the draft (and therefore in the local-first autosave, so
+ * they survive a reload), and flushed by the save engine the moment an event
+ * id exists. `use-wizard.ts` does the flushing; see `flushCollections` there.
+ *
+ * `tempId` is a client-side handle so a staged row can be removed again
+ * before it has a server id. It is never sent.
+ */
+export type PendingSlot = {
+  tempId: string;
+  /** `datetime-local` text, converted with `toIso` at flush time. */
+  startsAt: string;
+  endsAt: string;
+  label: string;
+};
+
+export type PendingTimelineEntry = {
+  tempId: string;
+  kind: string;
+  label: string;
+  description: string;
+  startsAt: string;
+};
+
+/** Client-side only; never sent. `crypto.randomUUID` where available, because
+ *  a counter resets on reload and would collide with a restored draft. */
+export function tempId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `t-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
+}
+
 export function emptyDraft(organizationId = ''): Draft {
   return {
     eventId: null,
@@ -277,6 +363,11 @@ export function emptyDraft(organizationId = ''): Draft {
     venue: '',
     city: '',
     category: '',
+    customCategoryId: '',
+    customCategoryLabel: '',
+    pendingSlots: [],
+    pendingTimeline: [],
+    crewIds: [],
     placeId: '',
     latitude: null,
     longitude: null,
@@ -1201,6 +1292,22 @@ export function draftFromEvent(
     venue: event.venue,
     city: event.city,
     category: event.category ?? '',
+    // BLANK on purpose, and this is the one field that cannot round-trip.
+    // `custom_category` is accepted by both event WRITE serializers and is
+    // absent from the read ones, so reopening a saved event cannot know which
+    // custom category it carries. `toPatchInput` therefore never SENDS a
+    // blank one, so a save from this state cannot clear a stored value — see
+    // the note there. Exposing it on the read payload is the fix; it is a
+    // backend change and is not in this one.
+    customCategoryId: '',
+    customCategoryLabel: '',
+    // EMPTY for an event that already exists: its sessions, running order and
+    // lineup live on the server, and the editors read them from there. A
+    // staged copy would be a second source of truth for rows that already
+    // have ids.
+    pendingSlots: [],
+    pendingTimeline: [],
+    crewIds: [],
     placeId: event.place_id ?? '',
     latitude: toCoordinate(event.latitude),
     longitude: toCoordinate(event.longitude),
@@ -1316,6 +1423,12 @@ export function toCreateInput(draft: Draft): CreateEventInput {
     // would be indexed by browse and never matched — and `''` is not one of
     // the choices.
     ...(draft.category ? { category: draft.category } : {}),
+    // Guarded on non-empty for the same reason `category` is, and here the
+    // reason is DATA LOSS rather than a 400: `toPatchInput` sends the whole
+    // editable surface on every save, and `draftFromEvent` cannot rehydrate
+    // this field, so an unguarded spread would send `null` on the first
+    // autosave after reopening any event and silently detach its category.
+    ...(draft.customCategoryId ? { custom_category: draft.customCategoryId } : {}),
     starts_at: toIso(draft.startsAt),
     ends_at: draft.endsAt ? toIso(draft.endsAt) : null,
     place_id: draft.placeId,
@@ -1374,6 +1487,12 @@ export function toPatchInput(draft: Draft): UpdateEventInput {
     // not one of the choices, so sending it would turn every autosave on an
     // uncategorised draft into a 400 the organiser cannot act on.
     ...(draft.category ? { category: draft.category } : {}),
+    // Guarded on non-empty for the same reason `category` is, and here the
+    // reason is DATA LOSS rather than a 400: `toPatchInput` sends the whole
+    // editable surface on every save, and `draftFromEvent` cannot rehydrate
+    // this field, so an unguarded spread would send `null` on the first
+    // autosave after reopening any event and silently detach its category.
+    ...(draft.customCategoryId ? { custom_category: draft.customCategoryId } : {}),
     short_description: draft.shortDescription.trim(),
     duration_minutes: draft.durationMinutes ? Number(draft.durationMinutes) : null,
     language: draft.language.trim(),
@@ -1522,6 +1641,7 @@ export function patchFingerprint(draft: Draft): string {
     // choosing a category changes nothing the save engine can see and the
     // field is never sent at all. Same reason the pin is here.
     draft.category,
+    draft.customCategoryId,
     // ── `policies` WAS MISSING FROM THIS LIST ────────────────────────────
     //
     // It was in the draft, in the editor, in `toPatchInput` and in the

@@ -13,7 +13,7 @@ import {
 import { ApiError } from '@/lib/api/errors';
 import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
-import { toIso } from '@/lib/organizer/wizard/model';
+import { tempId, toIso, type PendingSlot } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -42,6 +42,23 @@ import { cn } from '@/lib/utils/cn';
  * against it, and settlements decide "finished" from it. The note below says
  * so, because a Schedule step with two start times and no explanation is how
  * an organiser concludes one of them is wrong.
+ *
+ * ── IT WORKS BEFORE THE EVENT EXISTS ──────────────────────────────────────
+ *
+ * `eventId` is nullable. This section used to render nothing but "Sessions
+ * unlock once the draft is saved" plus the three fields that would unlock it,
+ * which is accurate — every write here needs an event to address — and is a
+ * wall three sections deep on one step.
+ *
+ * With no id, rows are STAGED in the wizard draft (`draft.pendingSlots`) and
+ * the save engine POSTs them the moment the event is created. They persist in
+ * the local-first autosave meanwhile, so a reload does not lose them. See
+ * `PendingSlot` in `model.ts`.
+ *
+ * A staged row is drawn in the same list as a saved one and SAYS which it is,
+ * because the two genuinely differ: a staged row cannot be switched off or
+ * bound to a ticket tier — both are server operations on a row that does not
+ * exist yet. Removing one is a local delete, which is why that control stays.
  */
 
 const TIME_FORMAT: Intl.DateTimeFormatOptions = {
@@ -55,9 +72,14 @@ const TIME_FORMAT: Intl.DateTimeFormatOptions = {
 export function SessionsEditor({
   eventId,
   startsAtLocal,
+  pending,
+  onPending,
 }: {
-  eventId: string;
+  /** `null` until the draft has been saved — see the note above. */
+  eventId: string | null;
   startsAtLocal: string;
+  pending: PendingSlot[];
+  onPending: (next: PendingSlot[]) => void;
 }) {
   const client = useQueryClient();
   const [label, setLabel] = React.useState('');
@@ -67,7 +89,12 @@ export function SessionsEditor({
 
   const slots = useQuery({
     queryKey: ['event-slots', eventId],
-    queryFn: () => fetchOwnerSlots(eventId),
+    queryFn: () => fetchOwnerSlots(eventId as string),
+    // Nothing to fetch before the event exists. `enabled: false` leaves the
+    // query PENDING for ever, so every read below checks `eventId` first
+    // rather than trusting `isPending` — which would otherwise render a
+    // skeleton permanently on a brand new draft.
+    enabled: Boolean(eventId),
   });
 
   const invalidate = () => {
@@ -83,7 +110,7 @@ export function SessionsEditor({
 
   const create = useMutation({
     mutationFn: (input: { starts_at: string; label: string; ends_at: string | null }) =>
-      addSlot(eventId, input),
+      addSlot(eventId as string, input),
     onSuccess: () => {
       setLabel('');
       setStartsAt('');
@@ -96,7 +123,7 @@ export function SessionsEditor({
 
   const toggle = useMutation({
     mutationFn: (input: { id: string; is_active: boolean }) =>
-      updateSlot(eventId, input.id, { is_active: input.is_active }),
+      updateSlot(eventId as string, input.id, { is_active: input.is_active }),
     onSuccess: () => {
       setFailure(null);
       invalidate();
@@ -105,7 +132,7 @@ export function SessionsEditor({
   });
 
   const drop = useMutation({
-    mutationFn: (slotId: string) => removeSlot(eventId, slotId),
+    mutationFn: (slotId: string) => removeSlot(eventId as string, slotId),
     onSuccess: () => {
       setFailure(null);
       invalidate();
@@ -115,10 +142,28 @@ export function SessionsEditor({
     onError: (thrown) => fail(thrown, 'Could not remove that session.'),
   });
 
-  const rows = slots.data ?? [];
+  const rows = eventId ? (slots.data ?? []) : [];
+
+  const clearForm = () => {
+    setLabel('');
+    setStartsAt('');
+    setEndsAt('');
+    setFailure(null);
+  };
 
   const submit = () => {
     if (!startsAt || create.isPending) return;
+    // With an event, the row goes to the server now and the organizer gets
+    // its answer. Without one there is nothing to POST to, so it is staged
+    // and the save engine sends it the moment the event exists.
+    if (!eventId) {
+      onPending([
+        ...pending,
+        { tempId: tempId(), startsAt, endsAt, label: label.trim() },
+      ]);
+      clearForm();
+      return;
+    }
     create.mutate({
       starts_at: toIso(startsAt),
       label: label.trim(),
@@ -128,14 +173,14 @@ export function SessionsEditor({
 
   return (
     <div className="flex flex-col gap-stack-lg">
-      {slots.isError ? (
+      {eventId && slots.isError ? (
         <ErrorState message="Could not load the sessions." onRetry={() => void slots.refetch()} />
-      ) : slots.isPending ? (
+      ) : eventId && slots.isPending ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-14 w-full" />
           <Skeleton className="h-14 w-full" />
         </div>
-      ) : rows.length === 0 ? (
+      ) : rows.length === 0 && pending.length === 0 ? (
         <EmptyState
           icon={CalendarClock}
           title="One showing"
@@ -150,6 +195,15 @@ export function SessionsEditor({
               busy={toggle.isPending || drop.isPending}
               onToggle={() => toggle.mutate({ id: slot.id, is_active: !slot.is_active })}
               onRemove={() => drop.mutate(slot.id)}
+            />
+          ))}
+          {pending.map((slot) => (
+            <PendingSessionRow
+              key={slot.tempId}
+              slot={slot}
+              onRemove={() =>
+                onPending(pending.filter((candidate) => candidate.tempId !== slot.tempId))
+              }
             />
           ))}
         </ul>
@@ -233,7 +287,51 @@ export function SessionsEditor({
           The event&apos;s start time above follows the earliest session still selling.
         </p>
       ) : null}
+
+      {!eventId && pending.length ? (
+        <p className="text-caption text-muted-foreground">
+          {pending.length === 1 ? 'This session is' : `These ${pending.length} sessions are`} saved
+          on this device and will be added to the event as soon as it has a title, a venue and a
+          future start date.
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * A session that exists only in the draft.
+ *
+ * Deliberately NOT reusing `SessionRow`: that row offers "Stop selling" and a
+ * delete that both call the server, and neither is meaningful for a row with
+ * no id. Rendering it disabled would be three dead controls; rendering the
+ * two operations that DO exist locally — see it, remove it — is the honest
+ * shape.
+ */
+function PendingSessionRow({ slot, onRemove }: { slot: PendingSlot; onRemove: () => void }) {
+  const when = slot.startsAt ? new Date(slot.startsAt) : null;
+  return (
+    <li className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border-strong bg-sunken p-3">
+      <span className="min-w-0 flex-1">
+        <span className="block text-body-sm font-medium tabular-nums">
+          {when && !Number.isNaN(when.valueOf())
+            ? when.toLocaleString('en-IN', TIME_FORMAT)
+            : slot.startsAt}
+        </span>
+        <span className="block text-caption text-muted-foreground">
+          {slot.label || 'No name'} · saves with the draft
+        </span>
+      </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onRemove}
+        aria-label={`Remove the ${slot.label || 'session'} starting ${slot.startsAt}`}
+        className="shrink-0 hover:text-destructive"
+      >
+        <Trash2 className="size-4" aria-hidden />
+      </Button>
+    </li>
   );
 }
 

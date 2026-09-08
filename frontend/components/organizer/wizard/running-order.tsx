@@ -13,7 +13,8 @@ import {
 import { ApiError } from '@/lib/api/errors';
 import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
-import { toIso } from '@/lib/organizer/wizard/model';
+import { tempId, toIso, type PendingTimelineEntry } from '@/lib/organizer/wizard/model';
+import { cn } from '@/lib/utils/cn';
 
 /**
  * The running order.
@@ -68,7 +69,31 @@ const TIME_FORMAT: Intl.DateTimeFormatOptions = {
   minute: '2-digit',
 };
 
-export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; startsAtLocal: string }) {
+/**
+ * ── IT WORKS BEFORE THE EVENT EXISTS ──────────────────────────────────────
+ *
+ * `eventId` is nullable. With no id, entries are STAGED in the wizard draft
+ * (`draft.pendingTimeline`) and the save engine POSTs them the moment the
+ * event is created; they ride the local-first autosave meanwhile, so a reload
+ * does not lose them. See `PendingTimelineEntry` in `model.ts`.
+ *
+ * Staged and saved entries render in ONE list, in the order they will end up
+ * in, because a running order that reordered itself on save would be worse
+ * than useless. A staged one is drawn with a hollow marker and says it saves
+ * with the draft — the only operation it supports is removal, which is local.
+ */
+export function RunningOrder({
+  eventId,
+  startsAtLocal,
+  pending,
+  onPending,
+}: {
+  /** `null` until the draft has been saved — see the note above. */
+  eventId: string | null;
+  startsAtLocal: string;
+  pending: PendingTimelineEntry[];
+  onPending: (next: PendingTimelineEntry[]) => void;
+}) {
   const client = useQueryClient();
   const [kind, setKind] = React.useState<TimelineKind>('doors');
   const [label, setLabel] = React.useState('');
@@ -78,13 +103,18 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
 
   const content = useQuery({
     queryKey: ['event-content', eventId],
-    queryFn: () => fetchEventContent(eventId),
+    queryFn: () => fetchEventContent(eventId as string),
+    // Nothing to fetch before the event exists. Every read below therefore
+    // checks `eventId` rather than `isPending`, which stays true for ever
+    // while a query is disabled.
+    enabled: Boolean(eventId),
   });
 
   const invalidate = () => client.invalidateQueries({ queryKey: ['event-content', eventId] });
 
   const create = useMutation({
-    mutationFn: (input: Omit<EventTimelineEntry, 'id'>) => addTimelineEntry(eventId, input),
+    mutationFn: (input: Omit<EventTimelineEntry, 'id'>) =>
+      addTimelineEntry(eventId as string, input),
     onSuccess: () => {
       setLabel('');
       setDescription('');
@@ -97,14 +127,63 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
   });
 
   const drop = useMutation({
-    mutationFn: (entryId: string) => removeTimelineEntry(eventId, entryId),
+    mutationFn: (entryId: string) => removeTimelineEntry(eventId as string, entryId),
     onSuccess: () => void invalidate(),
   });
 
-  const timeline = content.data?.timeline ?? [];
+  const timeline = eventId ? (content.data?.timeline ?? []) : [];
+
+  /**
+   * Saved rows then staged rows, as ONE list.
+   *
+   * Normalised to a common shape so the renderer below draws both without
+   * branching per line — the alternative was two nearly identical `map`s and
+   * a second copy of the connector-line arithmetic, which is how the two
+   * quietly stop matching.
+   */
+  const entries = [
+    ...timeline.map((entry) => ({
+      key: entry.id,
+      // Typed rather than widened to `string`: `KIND_LABEL` is keyed on the
+      // union, so a widened kind loses the lookup and the row would render a
+      // raw slug instead of "Doors open".
+      kind: entry.kind,
+      label: entry.label,
+      description: entry.description,
+      startsAt: entry.starts_at,
+      staged: false,
+      remove: () => drop.mutate(entry.id),
+    })),
+    ...pending.map((entry) => ({
+      key: entry.tempId,
+      // The draft stores it as a plain string (the model must not import a
+      // client type), so it is narrowed back here at the single point where
+      // the two shapes meet.
+      kind: entry.kind as TimelineKind,
+      label: entry.label,
+      description: entry.description,
+      startsAt: entry.startsAt || null,
+      staged: true,
+      remove: () =>
+        onPending(pending.filter((candidate) => candidate.tempId !== entry.tempId)),
+    })),
+  ];
 
   const submit = () => {
     if (!label.trim() || create.isPending) return;
+    // With an event the entry goes to the server now; without one there is
+    // nothing to POST to, so it is staged for the save engine.
+    if (!eventId) {
+      onPending([
+        ...pending,
+        { tempId: tempId(), kind, label: label.trim(), description: description.trim(), startsAt },
+      ]);
+      setLabel('');
+      setDescription('');
+      setStartsAt('');
+      setFailure(null);
+      return;
+    }
     create.mutate({
       kind,
       label: label.trim(),
@@ -116,17 +195,17 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
 
   return (
     <div className="flex flex-col gap-stack-lg">
-      {content.isError ? (
+      {eventId && content.isError ? (
         <ErrorState
           message="Could not load the running order."
           onRetry={() => void content.refetch()}
         />
-      ) : content.isPending ? (
+      ) : eventId && content.isPending ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-full" />
         </div>
-      ) : timeline.length === 0 ? (
+      ) : entries.length === 0 ? (
         <EmptyState
           icon={Clock}
           title="No running order yet"
@@ -134,11 +213,19 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
         />
       ) : (
         <ol className="flex flex-col">
-          {timeline.map((entry, index) => (
-            <li key={entry.id} className="flex gap-3">
+          {entries.map((entry, index) => (
+            <li key={entry.key} className="flex gap-3">
               <span className="flex flex-col items-center" aria-hidden>
-                <span className="mt-2 size-2 shrink-0 rounded-full bg-primary" />
-                {index < timeline.length - 1 ? (
+                <span
+                  className={cn(
+                    'mt-2 size-2 shrink-0 rounded-full',
+                    // Hollow for a staged entry: the marker is the one part of
+                    // the row the eye tracks down the list, so it is where the
+                    // "not saved yet" state belongs.
+                    entry.staged ? 'border border-border-strong bg-surface' : 'bg-primary',
+                  )}
+                />
+                {index < entries.length - 1 ? (
                   <span className="w-px flex-1 bg-border-strong" />
                 ) : null}
               </span>
@@ -151,9 +238,10 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
                     </span>
                   </span>
                   <span className="block text-caption tabular-nums text-muted-foreground">
-                    {entry.starts_at
-                      ? new Date(entry.starts_at).toLocaleString('en-IN', TIME_FORMAT)
+                    {entry.startsAt
+                      ? new Date(entry.startsAt).toLocaleString('en-IN', TIME_FORMAT)
                       : 'Time to be confirmed'}
+                    {entry.staged ? ' · saves with the draft' : ''}
                   </span>
                   {entry.description ? (
                     <span className="block text-caption text-muted-foreground">
@@ -164,7 +252,7 @@ export function RunningOrder({ eventId, startsAtLocal }: { eventId: string; star
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => drop.mutate(entry.id)}
+                  onClick={entry.remove}
                   disabled={drop.isPending}
                   aria-label={`Remove ${entry.label}`}
                   className="shrink-0 hover:text-destructive"
