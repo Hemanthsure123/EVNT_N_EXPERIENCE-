@@ -99,8 +99,25 @@ def event(organization) -> Event:
 
 @pytest.fixture
 def future_event(organization) -> Event:
-    """A live event far in the future — well before its scan window opens."""
-    return _make_event(organization, starts_in=timedelta(days=30), ends_in=timedelta(days=30))
+    """A live event far in the future — well before its scan window opens.
+
+    `ends_in` is 30 days PLUS three hours, not a flat 30 days. It used to be
+    the same value as `starts_in`, which made this a zero-length event: an
+    hour with no duration, ending at the instant it began. Nothing in the
+    application can produce that — both event serializers refuse
+    `ends_at <= starts_at` — so the fixture was only reachable because it
+    writes through the repository and skips the boundary. The
+    `event_ends_after_starts` check constraint now refuses it at the database,
+    which is how it surfaced.
+
+    Three hours because that is what `live_event` above uses, and nothing in
+    these tests depends on the duration: what they exercise is a scan landing
+    far OUTSIDE the window, which the 30-day offset on the start already
+    provides.
+    """
+    return _make_event(
+        organization, starts_in=timedelta(days=30), ends_in=timedelta(days=30, hours=3)
+    )
 
 
 @pytest.fixture

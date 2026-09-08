@@ -567,6 +567,28 @@ def build_crew_service():
     )
 
 
+def build_organizer_category_service():
+    """An organization's own category labels.
+
+    Its own factory beside `build_crew_service` above, for the identical
+    reason: it is authorised by the ORGANIZATION's owner, where everything on
+    the content service is authorised by an EVENT's owner.
+
+    `storage_port()` is injected because a custom category can carry a
+    picture, and the URL written to `image_url` must be one the adapter
+    returned rather than a string a client handed us.
+    """
+    from apps.events.repositories import OrganizerCategoryRepository
+    from apps.events.services import OrganizerCategoryService
+    from apps.organizations.repositories import OrganizationRepository
+
+    return OrganizerCategoryService(
+        organizations=OrganizationRepository(),
+        categories=OrganizerCategoryRepository(),
+        storage=storage_port(),
+    )
+
+
 def build_coupon_service():
     """An organization's promotional codes — the ORGANIZER's half.
 

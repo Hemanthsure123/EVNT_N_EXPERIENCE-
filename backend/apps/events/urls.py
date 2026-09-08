@@ -55,6 +55,14 @@ urlpatterns += [
         api.EventCancelView.as_view(),
         name="event-cancel",
     ),
+    # Read after ANY session write: adding a slot re-derives the event's own
+    # window on the server without bumping `version`, so a client holding a
+    # draft copy of the schedule would otherwise write its stale value back.
+    path(
+        "organizer/events/<uuid:event_id>/schedule",
+        api.EventScheduleView.as_view(),
+        name="organizer-event-schedule",
+    ),
     path("events/<uuid:event_id>/slots", api.EventSlotView.as_view(), name="event-slots"),
     path(
         "events/<uuid:event_id>/slots/<uuid:slot_id>",
@@ -86,6 +94,36 @@ urlpatterns += [
     # ── Crew ────────────────────────────────────────────────────────────
     # The ROSTER hangs off the organization, because that is what owns it and
     # the whole point is reuse across events. The LINEUP hangs off the event.
+    # An organization's OWN category labels — the same route shape as the crew
+    # roster below and for the same reason: both are organization-owned lists
+    # picked from while building an event, so an organizer client keeps one
+    # prefix rather than learning two.
+    #
+    # `categories/picker` sits BEFORE `categories/<uuid:category_id>`, or the
+    # uuid converter would... in fact it would not match "picker" at all, since
+    # `uuid` is a strict converter. It is ordered first anyway because relying
+    # on a converter's strictness for route disambiguation is exactly how the
+    # maps module's `places/<str:place_id>` swallowed "autocomplete".
+    path(
+        "organizations/<uuid:organization_id>/categories",
+        api.OrganizerCategoryListView.as_view(),
+        name="organizer-category-list",
+    ),
+    path(
+        "organizations/<uuid:organization_id>/categories/picker",
+        api.OrganizerCategoryPickerView.as_view(),
+        name="organizer-category-picker",
+    ),
+    path(
+        "organizations/<uuid:organization_id>/categories/<uuid:category_id>",
+        api.OrganizerCategoryDetailView.as_view(),
+        name="organizer-category-detail",
+    ),
+    path(
+        "organizations/<uuid:organization_id>/categories/<uuid:category_id>/image",
+        api.OrganizerCategoryImageView.as_view(),
+        name="organizer-category-image",
+    ),
     path(
         "organizations/<uuid:organization_id>/crew",
         api.CrewRosterView.as_view(),

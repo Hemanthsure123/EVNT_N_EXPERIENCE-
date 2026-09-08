@@ -145,6 +145,11 @@ def get_homepage(
                 "slug": category.slug,
                 "label": category.label,
                 "icon": category.icon,
+                # Blank for every category that has bundled artwork, which is
+                # all of them by default — the client falls back to its own
+                # illustration for the slug. Non-blank only where an operator
+                # has deliberately overridden the tile.
+                "image_url": category.image_url,
                 "search_term": category.search_term,
             }
             for category in categories.list_public()

@@ -124,6 +124,138 @@ class MapsConfigView(APIView):
         return response
 
 
+#: The ONLY values Google's Place Autocomplete accepts in `types`, and they
+#: are MUTUALLY EXCLUSIVE — the API takes at most one member of this
+#: collection and answers `INVALID_REQUEST` for a combination.
+#:
+#: That is not a theoretical concern here. The venue picker sends
+#: `types=establishment|geocode`, which is two members joined by a pipe, so
+#: every keystroke it makes is refused by Google and surfaces as a dead
+#: search box rather than as an error anybody can read. Forwarding an
+#: arbitrary client string to a BILLED third-party API is the underlying
+#: mistake; this closes it at the boundary.
+_AUTOCOMPLETE_TYPES = frozenset({"geocode", "address", "establishment", "(regions)", "(cities)"})
+
+#: What "search for a venue" means to Google.
+_VENUE_TYPES = "establishment"
+#: ...and what "search for a city" means. The parentheses are Google's own
+#: syntax for a type COLLECTION rather than a single type, not a typo.
+_CITY_TYPES = "(cities)"
+
+
+def _checked_types(raw: str) -> str:
+    """An empty string means "no filter", which is a legitimate ask.
+
+    Anything else must be exactly one member of the collection. Refused here
+    rather than passed through, because the failure mode of passing it through
+    is a request we PAY FOR that can only ever return an error.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if value not in _AUTOCOMPLETE_TYPES:
+        raise _MapsDomainError(
+            MapsError(
+                "invalid_input",
+                "types must be exactly one of: " + ", ".join(sorted(_AUTOCOMPLETE_TYPES)),
+            )
+        )
+    return value
+
+
+class _AutocompleteResponseMixin:
+    """One shape for all three autocomplete endpoints.
+
+    The venue and city endpoints below are thin wrappers over the general one
+    rather than new capabilities, and that is the point: `MapsPort
+    .autocomplete` already carries `types` end to end, so what was missing was
+    never plumbing — it was a name. A caller asking for a CITY should not have
+    to know that Google spells it `(cities)`, and the venue picker's own bug
+    (sending two mutually-exclusive types) is exactly what happens when that
+    vocabulary leaks into a client.
+    """
+
+    @staticmethod
+    def _suggestions(request: Request, *, types: str):
+        suggestions = _guard(
+            _service().autocomplete,
+            request.query_params.get("q", ""),
+            session_token=request.query_params.get("session_token", ""),
+            country=request.query_params.get("country", ""),
+            origin=_coordinates(request),
+            types=types,
+        )
+        return Response(
+            {
+                "data": [
+                    {
+                        "place_id": s.place_id,
+                        "description": s.description,
+                        "main_text": s.main_text,
+                        "secondary_text": s.secondary_text,
+                        "types": s.types,
+                    }
+                    for s in suggestions
+                ]
+            }
+        )
+
+
+class VenueAutocompleteView(_AutocompleteResponseMixin, APIView):
+    """Venues, as an organizer types one.
+
+    `establishment` and nothing else: a venue is a business or a landmark, and
+    including `geocode` would fill the list with street addresses and postal
+    codes for a field whose label says "Search for a venue".
+
+    Authenticated and throttled for the reason the general endpoint states —
+    it fires per keystroke and every one is billed.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [MapsThrottle]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("q", str, required=True),
+            OpenApiParameter("session_token", str, description="Groups keystrokes for billing"),
+            OpenApiParameter("country", str, description="ISO 3166-1 alpha-2, e.g. `in`"),
+        ],
+        responses={200: None},
+    )
+    def get(self, request: Request) -> Response:
+        return self._suggestions(request, types=_VENUE_TYPES)
+
+
+class CityAutocompleteView(_AutocompleteResponseMixin, APIView):
+    """Cities, as an organizer types one.
+
+    THE CITY FIELD HAD NO AUTOCOMPLETE AT ALL — it was a free text box beside
+    eight hard-coded chips, so anyone outside those eight typed their city by
+    hand into a column the browse page filters on by exact match. A misspelling
+    or a variant spelling ("Bengaluru" / "Bangalore") is then an event that its
+    own city page never lists.
+
+    `(cities)` is Google's type collection for populated places, so this
+    returns cities rather than the venues, streets and postal codes a general
+    autocomplete would mix in.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [MapsThrottle]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("q", str, required=True),
+            OpenApiParameter("session_token", str, description="Groups keystrokes for billing"),
+            OpenApiParameter("country", str, description="ISO 3166-1 alpha-2, e.g. `in`"),
+        ],
+        responses={200: None},
+    )
+    def get(self, request: Request) -> Response:
+        return self._suggestions(request, types=_CITY_TYPES)
+
+
 class PlaceAutocompleteView(APIView):
     """Venue and address suggestions.
 
@@ -152,7 +284,9 @@ class PlaceAutocompleteView(APIView):
             session_token=request.query_params.get("session_token", ""),
             country=request.query_params.get("country", ""),
             origin=_coordinates(request),
-            types=request.query_params.get("types", ""),
+            # Through the allow-list: an unrecognised or COMBINED value is a
+            # request Google will refuse and we will still be billed for.
+            types=_checked_types(request.query_params.get("types", "")),
         )
         return Response(
             {

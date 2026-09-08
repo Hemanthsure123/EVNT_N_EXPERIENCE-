@@ -23,6 +23,7 @@ from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.text import slugify
 
 from apps.accounts.repositories import UserRepository
 from apps.organizations.exceptions import OrganizationNotFoundError
@@ -58,10 +59,21 @@ from .exceptions import (
     NotEventOwnerError,
     NotPlatformOperatorError,
     OrganizationNotVerifiedError,
+    OrganizerCategoryInUseError,
+    OrganizerCategoryNotFoundError,
     SlotInUseError,
     StaleEventVersionError,
 )
-from .models import CrewMember, Event, EventSlot, EventStatus, MediaKind, QuestionKind
+from .models import (
+    CrewMember,
+    Event,
+    EventCategory,
+    EventSlot,
+    EventStatus,
+    MediaKind,
+    OrganizerCategory,
+    QuestionKind,
+)
 from .publish_checks import run_publish_checks
 from .repositories import (
     CrewMemberRepository,
@@ -69,11 +81,76 @@ from .repositories import (
     EventRepository,
     EventSlotRepository,
     EventWaitlistRepository,
+    OrganizerCategoryRepository,
 )
 from .selectors import invalidate_event_caches
 from .slugs import event_slug
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_schedule_against_stored(event: Event, changes: dict) -> None:
+    """The event window, decided against the MERGED row rather than the payload.
+
+    ── WHY THE SERIALIZER CANNOT BE THE GUARANTEE ─────────────────────────
+
+    `UpdateEventRequestSerializer` compares `starts_at` and `ends_at` only
+    when BOTH are in the payload, which is all it can do — it has never seen
+    the stored row. A PATCH carrying only `ends_at` therefore passed every
+    check and wrote an end time BEFORE the start:
+
+        stored:  starts_at = 12 Mar 19:00,  ends_at = 12 Mar 23:00
+        PATCH :  {"version": 4, "ends_at": "2026-03-12T09:00:00Z"}
+        result:  an event that ends ten hours before it begins
+
+    Nothing downstream is defended against that. `ends_at` drives the
+    check-in grace window (`checkin`), the settlement's "event has finished"
+    gate and the payout date (`settlements`), and the event page's own
+    date line. An inverted window makes a settlement releasable before the
+    event and a check-in window that closes before it opens.
+
+    This is the same class of bug — and the same fix — as coupons'
+    `validate_terms` running against the merged row: a PATCH carrying one
+    half of a pair must be judged against the half already stored, never
+    against the absent other half of its own payload.
+
+    ── AND WHY "MUST BE IN THE FUTURE" IS CONDITIONAL HERE ────────────────
+
+    On a create, a start in the past is nonsense and is refused outright. On
+    an update it depends on the stored row, which is exactly why the check
+    could not stay in the serializer (see the note there):
+
+    - the event has NOT started yet -> a new start must still be in the
+      future, or an organizer could quietly move a selling event into the
+      past, hiding it from every browse query (all of which filter
+      `starts_at >= now`) while tickets stay on sale;
+    - the event HAS already started -> allow it. The start being in the past
+      is now a FACT about the event, not a mistake in the request, and
+      refusing here is what locked organizers out of editing their own live
+      and finished events.
+
+    An unchanged `starts_at` is never judged at all, so re-sending the whole
+    editable surface — which `toPatchInput` does on every save — is free.
+    """
+    if "starts_at" not in changes and "ends_at" not in changes:
+        return
+
+    starts_at = changes.get("starts_at", event.starts_at)
+    # `.get` with the stored value as the default: an EXPLICIT null in the
+    # payload ("clear the end time") still wins, because the key is present.
+    ends_at = changes.get("ends_at", event.ends_at)
+
+    if starts_at is None:
+        raise InvalidInputError("An event must have a start time.")
+    if ends_at is not None and ends_at <= starts_at:
+        raise InvalidInputError("ends_at must be after starts_at.")
+
+    if "starts_at" in changes and changes["starts_at"] != event.starts_at:
+        now = timezone.now()
+        already_started = event.starts_at is not None and event.starts_at <= now
+        if not already_started and changes["starts_at"] <= now:
+            raise InvalidInputError("starts_at must be in the future.")
+
 
 _POSTER_PROCESS_TASK = "events.process_poster"
 # Fields a client may edit, mapped straight onto the model. Status is not
@@ -87,6 +164,10 @@ _EDITABLE_FIELDS = (
     # A column the browse filters index MUST be reachable by a PATCH, or the
     # taxonomy is decoration only a data migration can populate.
     "category",
+    # The organizer's own label, BESIDE `category` rather than instead of it.
+    # In the allow-list because a column the wizard offers must be reachable by
+    # a PATCH, or it is decoration only a data migration can populate.
+    "custom_category",
     # Where the venue resolves to. Editable for the same reason the content
     # fields are: a column the event page renders must be reachable by a
     # PATCH, or the map is decoration nobody can ever populate. Written by
@@ -220,12 +301,18 @@ class EventService:
         users: UserRepository,
         storage: StoragePort,
         task_queue: TaskQueuePort,
+        categories: OrganizerCategoryRepository | None = None,
     ) -> None:
         self._events = events
         self._organizations = organizations
         self._users = users
         self._storage = storage
         self._task_queue = task_queue
+        # DEFAULTED, so every existing construction site — including the tests
+        # that build this service by hand with fake adapters — keeps working
+        # unchanged. It is only ever used to answer one question: does this
+        # custom category belong to this event's organization.
+        self._categories = categories or OrganizerCategoryRepository()
 
     # --- helpers -----------------------------------------------------------
 
@@ -291,6 +378,33 @@ class EventService:
             )
         )
 
+    def _resolved_custom_category_id(self, *, organization_id, category_id):
+        """THE CROSS-TENANT CHECK, and it is the only real security boundary
+        this field has.
+
+        `custom_category` arrives as a uuid from a browser. Without this, a
+        guessed id would put ANOTHER organization's label — and its uploaded
+        image — on your event, which is precisely the failure the crew module
+        documents for `PUT /events/{id}/crew` ("a guessed uuid puts another
+        organization's face on your public page").
+
+        `None` is a legitimate value meaning "detach", so it is passed through
+        rather than validated. Anything else must be a LIVE, ACTIVE row this
+        organization owns — a retired category cannot be attached to a new
+        event, which is what `is_active` is for.
+
+        Refused as an `InvalidInputError` rather than a 404: the id was
+        supplied as a field on somebody's own event, and the honest answer is
+        that the value is not one they may use.
+        """
+        if category_id is None:
+            return None
+        if not self._categories.owns_category(
+            organization_id=organization_id, category_id=category_id
+        ):
+            raise InvalidInputError("That category is not one of yours.")
+        return category_id
+
     # --- commands ----------------------------------------------------------
 
     def create_event(
@@ -308,6 +422,8 @@ class EventService:
         place_id: str = "",
         latitude=None,
         longitude=None,
+        category: str = "",
+        custom_category=None,
     ) -> Event:
         org = self._organizations.get_active_by_id(organization_id)
         if org is None:
@@ -315,12 +431,23 @@ class EventService:
         if str(org.owner_id) != str(actor_id):
             raise NotEventOwnerError()
 
+        # BOTH categories are settable at creation. `category` used to be
+        # neither a parameter here nor a field on the create serializer, so
+        # every event built through the wizard landed uncategorised and stayed
+        # that way until some later PATCH happened to carry it — the organiser
+        # chose a tile, the API answered 201, and the choice went nowhere.
+        custom_category_id = self._resolved_custom_category_id(
+            organization_id=org.id, category_id=custom_category
+        )
+
         event_id = uuid.uuid4()
         poster_url = self._upload_poster(event_id, poster) if poster is not None else ""
 
         with UnitOfWork() as uow:
             event = self._events.create(
                 organization_id=org.id,
+                category=category,
+                custom_category_id=custom_category_id,
                 title=title,
                 venue=venue,
                 city=city,
@@ -379,6 +506,20 @@ class EventService:
         )
 
         applied_changes = {k: v for k, v in changes.items() if k in _EDITABLE_FIELDS}
+        if "custom_category" in applied_changes:
+            # The serializer hands over a uuid; the column is a foreign key, so
+            # the write needs `custom_category_id`. Assigning a raw uuid to
+            # `custom_category` in a queryset `.update()` does not raise — it
+            # writes nothing — which is the silent no-op this codebase keeps
+            # finding, so the rename happens here where it is visible.
+            applied_changes["custom_category_id"] = self._resolved_custom_category_id(
+                organization_id=event.organization_id,
+                category_id=applied_changes.pop("custom_category"),
+            )
+        # Against the MERGED row, and BEFORE the poster upload: an inverted
+        # window must not cost an organizer a stored object nothing will ever
+        # reference.
+        _validate_schedule_against_stored(event, applied_changes)
         poster_url = self._upload_poster(event.id, poster) if poster is not None else None
         if poster_url is not None:
             applied_changes["poster_url"] = poster_url
@@ -1260,6 +1401,20 @@ class EventContentService:
             raise EventNotFoundError(str(event_id))
         return event
 
+    def get_schedule(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
+        """The event's window and lock token, for an owner who may have a stale one.
+
+        Owner-scoped and never cached (`private, no-store` at the view), for
+        the same reason the organizer's ticket-type read is not the public one:
+        `version` is an optimistic-lock token, and a token read from a shared
+        cache may be one save behind. A stale version here is not a stale
+        figure on a screen — it is a 409 the wizard answers by RELOADING, so
+        the organiser edits, saves, is reset, and never learns why.
+
+        See `EventScheduleSerializer` for why a client needs to ask this at all.
+        """
+        return self._owned(event_id=event_id, actor_id=actor_id)
+
     def _require_media_slot(self, event_id: uuid.UUID | str, kind: str) -> None:
         """Refuse when the event is already at the cap for `kind`.
 
@@ -1891,11 +2046,42 @@ class EventContentService:
         if event.starts_at != earliest:
             window["starts_at"] = earliest
         # `ends_at` is optional on a slot, so the latest end is only knowable
-        # from the slots that carry one. With none, the event's own end is left
-        # exactly as the organiser set it rather than invented from a start.
+        # from the slots that carry one.
         ends = [slot.ends_at for slot in active if slot.ends_at]
-        if ends and event.ends_at != max(ends):
-            window["ends_at"] = max(ends)
+        if ends:
+            # Always AFTER the derived start: the latest end belongs to some
+            # active slot, that slot's own end is validated to be after its
+            # own start, and its start cannot precede `earliest`. So this
+            # branch can never invert the pair.
+            if event.ends_at != max(ends):
+                window["ends_at"] = max(ends)
+        elif event.ends_at is not None and event.ends_at <= earliest:
+            # ── THE THIRD WRITE PATH, AND THE ONE THAT COULD INVERT ───────
+            #
+            # With no slot carrying an end, this used to leave the event's own
+            # `ends_at` exactly as the organiser set it — which is right in
+            # general and wrong precisely when the sessions have moved the
+            # START past that stored end:
+            #
+            #     event  10:00-12:00, then one active session is added at
+            #     20:00 with no end  ->  starts_at := 20:00, ends_at stays
+            #     12:00, and the event now ends eight hours before it begins.
+            #
+            # Reachable through the ordinary sessions editor, with no
+            # serializer anywhere in the path. It is also the one write that
+            # the new `event_ends_after_starts` constraint would turn from a
+            # silently bad row into an IntegrityError — a 500 on a save that
+            # looked reasonable — so it has to be handled here rather than
+            # left for the database to refuse.
+            #
+            # The stored end is CLEARED rather than shifted. Once an event has
+            # sessions the sessions ARE the schedule (see the docstring), so an
+            # end time that predates the first session is stale rather than
+            # merely wrong, and none of the sessions says when this one
+            # finishes. NULL is a state the column is nullable for and every
+            # consumer already handles; inventing a finish time would put a
+            # fabricated date in front of the settlement gate.
+            window["ends_at"] = None
         if window:
             self._events.set_window(event.id, **window)
             for field, value in window.items():
@@ -2033,6 +2219,52 @@ class CrewService:
             details=details,
             photo_url=photo_url,
             photo_alt_text=photo_alt_text,
+        )
+
+    def add_member_with_photo(
+        self,
+        *,
+        organization_id,
+        actor_id,
+        name: str,
+        role: str = "",
+        details: str = "",
+        upload=None,
+        content_type: str = "",
+        alt_text: str = "",
+    ) -> CrewMember:
+        """Create the person, then put their portrait on them.
+
+        CREATE FIRST, UPLOAD SECOND, and deliberately in that order: the
+        storage key is scoped by member id (`crew/{org}/{member}/...`), so
+        there is nothing to name an object after until the row exists.
+
+        A failed upload therefore leaves a member with no photo rather than no
+        member. That is the recoverable half of the two outcomes — the
+        organizer sees the person on the roster and can attach a picture from
+        the existing photo endpoint — where the reverse would leave a stored
+        object nothing references and the name they typed lost.
+
+        Not wrapped in a transaction spanning both, because the upload is a
+        network round trip and this codebase does not hold a transaction open
+        across one (the rule `attach_photo` states directly above).
+        """
+        member = self.add_member(
+            organization_id=organization_id,
+            actor_id=actor_id,
+            name=name,
+            role=role,
+            details=details,
+        )
+        if upload is None:
+            return member
+        return self.attach_photo(
+            organization_id=organization_id,
+            actor_id=actor_id,
+            member_id=member.id,
+            upload=upload,
+            content_type=content_type,
+            alt_text=alt_text,
         )
 
     def update_member(self, *, organization_id, actor_id, member_id, **changes) -> CrewMember:
@@ -2215,6 +2447,283 @@ class WaitlistNotifier(Protocol):
         dedupe_key: str,
         delay_seconds: int = 0,
     ) -> Any: ...
+
+
+class OrganizerCategoryService:
+    """An organization's own category labels, and the picker they appear in.
+
+    Its own service rather than more methods on `EventService`, for exactly
+    the reason `CrewService` gives: every method on `EventService` acts on ONE
+    EVENT and is authorised by that event's owner, while every method here
+    acts on an ORGANIZATION and is authorised by the organization's owner.
+
+    Ownership is checked HERE, not in a DRF permission, and by SCOPING THE
+    QUERY rather than fetching-then-comparing — `get_owned` and `update_owned`
+    filter on `organization_id`, so a row belonging to somebody else is never
+    loaded at all. A 404 rather than a 403, so a guessed uuid cannot be used
+    to confirm a row exists.
+    """
+
+    #: A vocabulary, not a tagging system. High enough that no real organizer
+    #: meets it, low enough that an unbounded write loop cannot fill a table.
+    #: The same reasoning and the same order of magnitude as
+    #: `CrewService.MAX_ROSTER`.
+    MAX_CATEGORIES = 50
+
+    def __init__(
+        self,
+        *,
+        organizations: OrganizationRepository,
+        categories: OrganizerCategoryRepository | None = None,
+        storage: StoragePort | None = None,
+    ) -> None:
+        self._organizations = organizations
+        self._categories = categories or OrganizerCategoryRepository()
+        self._storage = storage
+
+    # ------------------------------------------------------------- helpers
+
+    def _owned_organization(self, *, organization_id, actor_id) -> Organization:
+        organization = self._organizations.get_active_by_id(organization_id)
+        if organization is None or str(organization.owner_id) != str(actor_id):
+            raise CrewOrganizationNotFoundError("Organization not found.")
+        return organization
+
+    @staticmethod
+    def _slug_for(label: str) -> str:
+        """A slug for one organization's own list, never a public URL.
+
+        `event_slug` is not reused: it is sized for `Event.slug` (80) and this
+        column is 60, and the two are unrelated things that would then have to
+        move together. Truncation is belt-and-braces — `label` is capped at 60
+        and slugify never lengthens a string — but a `DataError` on a write
+        path is not worth saving two lines.
+        """
+        return slugify(label, allow_unicode=False)[:60].strip("-")
+
+    # ---------------------------------------------------------------- read
+
+    def list_for_organization(
+        self, *, organization_id, actor_id, active_only: bool = False
+    ) -> list[OrganizerCategory]:
+        self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        return self._categories.list_for_organization(organization_id, active_only=active_only)
+
+    def picker(self, *, organization_id, actor_id) -> dict:
+        """Everything an organizer may choose from, global and their own, at once.
+
+        ── ONE REQUEST, TWO KINDS, AND THE KINDS STAY LABELLED ───────────────
+
+        The wizard needs a single list to render, so this returns one — but
+        every row carries `source`, because the two halves are genuinely
+        different and a client that cannot tell them apart will get something
+        wrong. A global category is a browse facet: it is what
+        `event_status_category_idx` indexes, what the landing pages are built
+        from, and it writes to `Event.category`. A custom one is a private
+        label that writes to `Event.custom_category` and never reaches a
+        browse filter. Flattening them into an undifferentiated list would
+        invite a client to send "sufi-night" as `category` and get a 400 it
+        could not explain.
+
+        ── WHY GLOBAL ROWS CARRY NO `image_url` ──────────────────────────────
+
+        Their artwork is BUNDLED — one illustrated scene per slug, drawn in
+        the frontend and keyed on exactly these nine values. There is no
+        stored asset to point at, and minting URLs for pictures that already
+        ship in the bundle would add a fetch, a cache and a broken-image state
+        to a picker that currently cannot fail. `image_url` is therefore ""
+        for every global row and the client draws its own illustration by
+        `slug`, which is what it already does.
+
+        Custom rows are the opposite case and that is the whole reason the
+        column exists: nothing bundled can ever draw "Sufi night", so without
+        a stored image such a row could only ever render as text.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        globals_ = [
+            {
+                "id": None,
+                "slug": value,
+                "label": label,
+                "image_url": "",
+                "image_alt_text": "",
+                "source": "global",
+                "is_active": True,
+            }
+            for value, label in EventCategory.choices
+        ]
+        custom = [
+            {
+                "id": row.id,
+                "slug": row.slug,
+                "label": row.label,
+                "image_url": row.image_url,
+                "image_alt_text": row.image_alt_text,
+                "source": "organizer",
+                "is_active": row.is_active,
+            }
+            # ACTIVE ONLY: this is the picker for a NEW event, and a retired
+            # category is exactly the thing that should not be offered on one.
+            # The management list (`list_for_organization`) still shows it, so
+            # it can be brought back.
+            for row in self._categories.list_for_organization(organization.id, active_only=True)
+        ]
+        return {"data": globals_ + custom}
+
+    # --------------------------------------------------------------- write
+
+    def add_category(
+        self,
+        *,
+        organization_id,
+        actor_id,
+        label: str,
+        image_url: str = "",
+        image_alt_text: str = "",
+    ) -> OrganizerCategory:
+        """Save what an organizer typed, for them alone.
+
+        TYPING THE SAME WORD TWICE RETURNS THE ROW THEY ALREADY HAVE rather
+        than refusing. This is a free-text box on a wizard step somebody is
+        moving through quickly; a 409 on "Sufi night" because they created it
+        for last month's event is a dead end that teaches nothing, and the
+        outcome they wanted — a category by that name on their list — is
+        already true. The unique constraint remains the real guard against a
+        concurrent double-submit; this is the friendly path in front of it.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        label = label.strip()
+        if not label:
+            raise InvalidInputError("A category needs a name.")
+        slug = self._slug_for(label)
+        if not slug:
+            # A label that ASCII-slugifies to nothing — Devanagari, Tamil, an
+            # emoji. `event_slug` may return "" because a bare uuid URL is a
+            # fine fallback there; here the slug is the UNIQUENESS KEY within
+            # the organization, so an empty one would collide with every other
+            # non-Latin label they ever add.
+            raise InvalidInputError(
+                "A category name needs at least one letter or number that can be "
+                "written in the Latin alphabet."
+            )
+
+        existing = self._categories.get_owned_by_slug(organization_id=organization.id, slug=slug)
+        if existing is not None:
+            return existing
+
+        if self._categories.count_for_organization(organization.id) >= self.MAX_CATEGORIES:
+            raise InvalidInputError(
+                f"This organisation already has {self.MAX_CATEGORIES} custom categories."
+            )
+        try:
+            return self._categories.create_category(
+                organization_id=organization.id,
+                label=label,
+                slug=slug,
+                image_url=image_url,
+                image_alt_text=image_alt_text,
+            )
+        except IntegrityError:
+            # Lost a race with a concurrent identical submit — the double-tap
+            # the unique constraint exists for. The winner's row is the answer
+            # to the question this call asked, so return it rather than
+            # surfacing a database error for something that succeeded.
+            winner = self._categories.get_owned_by_slug(organization_id=organization.id, slug=slug)
+            if winner is None:  # pragma: no cover - the row must exist by now
+                raise
+            return winner
+
+    def update_category(
+        self, *, organization_id, actor_id, category_id, **changes
+    ) -> OrganizerCategory:
+        """Rename or retire a category.
+
+        A RENAME MOVES THE SLUG WITH IT, which is safe here and would not be
+        on `Event.slug`: nothing links to a category by slug, no email carries
+        one, and `Event.custom_category` is a foreign key to the ROW — so the
+        events already carrying it follow the rename automatically and no
+        printed or shared URL breaks. That is the opposite of the coupon rule
+        ("the terms stay editable, the CODE does not"), and for the opposite
+        reason: a coupon code is something a customer holds in their hand.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        if "label" in changes:
+            label = (changes["label"] or "").strip()
+            if not label:
+                raise InvalidInputError("A category needs a name.")
+            slug = self._slug_for(label)
+            if not slug:
+                raise InvalidInputError(
+                    "A category name needs at least one letter or number that can be "
+                    "written in the Latin alphabet."
+                )
+            clash = self._categories.get_owned_by_slug(organization_id=organization.id, slug=slug)
+            if clash is not None and str(clash.id) != str(category_id):
+                raise InvalidInputError("You already have a category with that name.")
+            changes["label"] = label
+            changes["slug"] = slug
+
+        updated = self._categories.update_owned(
+            organization_id=organization.id, category_id=category_id, **changes
+        )
+        if updated is None:
+            raise OrganizerCategoryNotFoundError("Category not found.")
+        return updated
+
+    def remove_category(self, *, organization_id, actor_id, category_id) -> None:
+        """Retire a category from the list.
+
+        REFUSED while any event carries it, with a message that names the
+        alternative — `Event.custom_category` is `PROTECT`, so the database
+        would stop this anyway, but as an IntegrityError rather than as
+        something an organizer can act on.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        category = self._categories.get_owned(
+            organization_id=organization.id, category_id=category_id
+        )
+        if category is None:
+            raise OrganizerCategoryNotFoundError("Category not found.")
+        if self._categories.is_on_any_event(category.id):
+            raise OrganizerCategoryInUseError(
+                "This category is on at least one of your events. Deactivate it "
+                "instead, which keeps those events intact and hides it from new ones."
+            )
+        self._categories.soft_delete_owned(organization_id=organization.id, category_id=category.id)
+
+    def attach_image(
+        self, *, organization_id, actor_id, category_id, upload, content_type: str, alt_text: str
+    ) -> OrganizerCategory:
+        """Store a picture and put it on the category row.
+
+        THE UPLOAD HAPPENS BEFORE ANY TRANSACTION OPENS — the rule every other
+        external call in this codebase follows. If the storage write succeeds
+        and the row update then fails, the orphaned object is harmless; a
+        transaction held open across a network round trip is not.
+
+        The URL written is the one the storage adapter returns, never a string
+        a client handed us. That is what keeps `image_url` a pointer into our
+        own bucket instead of an unvalidated remote image, which is the
+        objection `cms.Category.icon` records against URLs in the first place.
+        """
+        organization = self._owned_organization(organization_id=organization_id, actor_id=actor_id)
+        category = self._categories.get_owned(
+            organization_id=organization.id, category_id=category_id
+        )
+        if category is None:
+            raise OrganizerCategoryNotFoundError("Category not found.")
+        if self._storage is None:  # pragma: no cover - wiring guard
+            raise InvalidInputError("Image uploads are not configured.")
+
+        key = f"categories/{organization.id}/{category.id}/{uuid.uuid4().hex}"
+        url = self._storage.upload(path=key, content=upload.read(), content_type=content_type)
+        return self.update_category(
+            organization_id=organization.id,
+            actor_id=actor_id,
+            category_id=category.id,
+            image_url=url,
+            image_alt_text=alt_text,
+        )
 
 
 class WaitlistService:

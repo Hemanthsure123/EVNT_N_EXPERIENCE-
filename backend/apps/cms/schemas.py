@@ -42,6 +42,10 @@ class HomepageCategorySerializer(serializers.Serializer):
     # and the homepage both read; it stays. Same note as apps/console.
     label = serializers.CharField()  # type: ignore[assignment]
     icon = serializers.CharField(allow_blank=True)
+    #: Carried on the PUBLIC homepage payload so the browse tiles can render
+    #: an operator's picture without a second request. Blank is the normal
+    #: case and means "use the bundled illustration for this slug".
+    image_url = serializers.CharField(allow_blank=True)
     search_term = serializers.CharField(allow_blank=True)
 
 
@@ -153,6 +157,7 @@ class CategorySerializer(serializers.Serializer):
     slug = serializers.CharField()
     label = serializers.CharField()  # type: ignore[assignment]
     icon = serializers.CharField(allow_blank=True)
+    image_url = serializers.CharField(allow_blank=True)
     search_term = serializers.CharField(allow_blank=True)
     position = serializers.IntegerField()
     is_visible = serializers.BooleanField()
@@ -163,6 +168,10 @@ class WriteCategorySerializer(serializers.Serializer):
     slug = serializers.SlugField(max_length=60)
     label = serializers.CharField(max_length=60)  # type: ignore[assignment]
     icon = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
+    #: `URLField`, not `CharField`: this value is rendered as an <img src> on
+    #: the busiest page on the platform, and "javascript:..." is a string a
+    #: CharField would happily store.
+    image_url = serializers.URLField(max_length=200, required=False, allow_blank=True, default="")
     search_term = serializers.CharField(
         max_length=120, required=False, allow_blank=True, default=""
     )
@@ -173,6 +182,7 @@ class WriteCategorySerializer(serializers.Serializer):
 class PatchCategorySerializer(serializers.Serializer):
     label = serializers.CharField(max_length=60, required=False)  # type: ignore[assignment]
     icon = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    image_url = serializers.URLField(max_length=200, required=False, allow_blank=True)
     search_term = serializers.CharField(max_length=120, required=False, allow_blank=True)
     position = serializers.IntegerField(min_value=0, required=False)
     is_visible = serializers.BooleanField(required=False)

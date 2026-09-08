@@ -34,6 +34,7 @@ from .models import (
     EventTimelineEntry,
     EventWaitlist,
     MediaKind,
+    OrganizerCategory,
     SavedEvent,
 )
 
@@ -380,10 +381,18 @@ class EventRepository(BaseRepository[Event]):
         latitude=None,
         longitude=None,
         slug: str = "",
+        category: str = "",
+        custom_category_id=None,
     ) -> Event:
         return Event.objects.create(
             organization_id=organization_id,
             title=title,
+            # Named explicitly, like every other column this repository writes.
+            # `category` is the closed browse facet; `custom_category_id` is the
+            # organizer's own label, already proven to belong to them by the
+            # service before it reaches here.
+            category=category,
+            custom_category_id=custom_category_id,
             # Derived from the title by the service, never client-supplied.
             slug=slug,
             venue=venue,
@@ -1514,6 +1523,134 @@ class CrewMemberRepository(BaseRepository[CrewMember]):
         # column is a uuid and a string form of one is exactly what a URL
         # segment produces.
         return EventCrew.objects.filter(member_id=member_id).exists()  # type: ignore[misc]
+
+
+class OrganizerCategoryRepository(BaseRepository[OrganizerCategory]):
+    """One organization's own category labels.
+
+    Modelled on `CrewMemberRepository` line for line, because it is the same
+    shape of thing: a small, organizer-owned list picked from while building
+    an event. Every lookup is scoped by ORGANIZATION as well as by primary
+    key, which is what makes "restricted to their specific organizer account"
+    a property of the query rather than a rule somebody has to remember —
+    a row belonging to somebody else MISSES rather than being found and then
+    refused.
+    """
+
+    model = OrganizerCategory
+
+    _LEAN_FIELDS = (
+        "id",
+        "label",
+        "slug",
+        "image_url",
+        "image_alt_text",
+        "is_active",
+        "created_at",
+    )
+
+    def list_for_organization(
+        self, organization_id: uuid.UUID | str, *, active_only: bool = False
+    ) -> list[OrganizerCategory]:
+        """The management list, and the wizard's picker, in ONE index-backed
+        query — `organizer_category_org_idx` is exactly this filter and order.
+
+        `active_only` is the picker: a retired category stays on the
+        management screen so it can be brought back, and is absent from the
+        list an organizer can put on a NEW event.
+        """
+        rows = OrganizerCategory.objects.filter(
+            organization_id=organization_id, deleted_at__isnull=True
+        ).only(*self._LEAN_FIELDS)
+        if active_only:
+            rows = rows.filter(is_active=True)
+        return list(rows.order_by("label", "id"))
+
+    def create_category(self, **fields) -> OrganizerCategory:
+        """`BaseRepository` deliberately exposes no generic `create` — every
+        repository names the columns it writes, so a caller cannot invent one."""
+        return OrganizerCategory.objects.create(**fields)
+
+    def get_owned(
+        self, *, organization_id: uuid.UUID | str, category_id: uuid.UUID | str
+    ) -> OrganizerCategory | None:
+        return OrganizerCategory.objects.filter(
+            pk=category_id, organization_id=organization_id, deleted_at__isnull=True
+        ).first()
+
+    def get_owned_by_slug(
+        self, *, organization_id: uuid.UUID | str, slug: str
+    ) -> OrganizerCategory | None:
+        """Used to answer "you already have one of these" with the existing row.
+
+        The unique constraint is the real guard against a duplicate; this is
+        what lets the service return the row somebody already has instead of
+        refusing a second attempt to type the same word.
+        """
+        return OrganizerCategory.objects.filter(
+            organization_id=organization_id, slug=slug, deleted_at__isnull=True
+        ).first()
+
+    def count_for_organization(self, organization_id: uuid.UUID | str) -> int:
+        return OrganizerCategory.objects.filter(
+            organization_id=organization_id, deleted_at__isnull=True
+        ).count()
+
+    def update_owned(
+        self, *, organization_id: uuid.UUID | str, category_id: uuid.UUID | str, **changes
+    ) -> OrganizerCategory | None:
+        """One conditional UPDATE scoped by owner, so a row belonging to
+        somebody else changes nothing and reports nothing."""
+        updated = OrganizerCategory.objects.filter(
+            pk=category_id, organization_id=organization_id, deleted_at__isnull=True
+        ).update(updated_at=timezone.now(), **changes)
+        if updated != 1:
+            return None
+        return self.get_owned(organization_id=organization_id, category_id=category_id)
+
+    def soft_delete_owned(
+        self, *, organization_id: uuid.UUID | str, category_id: uuid.UUID | str
+    ) -> bool:
+        return (
+            OrganizerCategory.objects.filter(
+                pk=category_id, organization_id=organization_id, deleted_at__isnull=True
+            ).update(deleted_at=timezone.now())
+            == 1
+        )
+
+    def is_on_any_event(self, category_id: uuid.UUID | str) -> bool:
+        """Whether retiring this category would orphan a real event.
+
+        `Event.custom_category` is `PROTECT`, so a hard delete would raise
+        anyway; this is what lets the service answer with a 409 naming the fix
+        (deactivate) instead of surfacing a database integrity error — the
+        same arrangement `CrewMemberRepository.is_on_any_lineup` has.
+        """
+        # django-stubs types the `custom_category_id=` lookup as
+        # OrganizerCategory | UUID | None, a stub limitation rather than a real
+        # constraint — the column is a uuid and a string form of one is exactly
+        # what a URL segment produces. Same note as `is_on_any_lineup`.
+        return Event.objects.filter(custom_category_id=category_id).exists()  # type: ignore[misc]
+
+    def owns_category(
+        self, *, organization_id: uuid.UUID | str, category_id: uuid.UUID | str
+    ) -> bool:
+        """THE CROSS-TENANT CHECK, and it is the only real security boundary here.
+
+        `custom_category` arrives on a PATCH as a uuid from a browser. Without
+        this, a guessed id would put ANOTHER organization's label — and its
+        image — on your event. The crew module states the same rule for the
+        same reason; this is its category-shaped twin.
+
+        Live rows only: a retired category cannot be attached to a new event,
+        which is what `is_active` is for.
+        """
+        return OrganizerCategory.objects.filter(
+            pk=category_id,
+            organization_id=organization_id,
+            deleted_at__isnull=True,
+            is_active=True,
+        ).exists()
 
 
 class EventCrewRepository:

@@ -213,6 +213,36 @@ CREW_PORTRAIT_SPEC = ImageSpec(
 )
 
 
+#: The little picture beside a custom category's name in the organizer's picker.
+#:
+#: A fourth spec rather than reusing one of the three above, because each of
+#: them would refuse the obvious submission. `EVENT_IMAGE_SPEC` demands
+#: landscape at 1280px wide; `EVENT_PORTRAIT_SPEC` demands 2:3–3:4; and
+#: `CREW_PORTRAIT_SPEC` refuses anything wider than square. A category tile is
+#: normally a SQUARE glyph or a small landscape crop, so the band runs from
+#: just under square to 2:1. The 0.9 floor rather than a flat 1.0 is not
+#: fussiness: a 500x510 export is square to everyone except a strict
+#: comparison, and refusing it would be the gate failing on the commonest
+#: real file.
+#:
+#: The floor is the lowest of the four (200px) and that is deliberate. This
+#: image is drawn at roughly 24–48px beside a label in a dropdown, and it is
+#: chosen by an organizer in the middle of a wizard step — refusing their
+#: 256px icon to protect a 32px slot would make the field something people
+#: skip, and a category with no picture is precisely what the column was added
+#: to avoid.
+CATEGORY_TILE_SPEC = ImageSpec(
+    label="category image",
+    min_width=200,
+    min_height=200,
+    min_ratio=0.9,
+    max_ratio=2.0,
+    recommended_width=512,
+    recommended_height=512,
+    frame="it is drawn small beside the category's name, so a square reads best",
+)
+
+
 def _dimensions(upload: UploadedFile) -> tuple[int, int]:
     """The image's pixel size, without decoding the pixels.
 

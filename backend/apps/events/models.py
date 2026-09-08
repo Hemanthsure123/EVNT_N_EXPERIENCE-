@@ -129,6 +129,26 @@ class Event(models.Model):
     category = models.CharField(
         max_length=20, choices=EventCategory.choices, blank=True, default=""
     )
+    #: The organizer's OWN label for this event, if they typed one.
+    #:
+    #: BESIDE `category`, never instead of it. `category` is what the public
+    #: browse filters and indexes on, and it stays a closed set so those
+    #: queries keep working; this is the organizer's private vocabulary and it
+    #: never reaches a browse filter. An event may carry one, both or neither
+    #: — "Sufi night" is still a Concert as far as discovery is concerned, and
+    #: an organizer who says both has said two true things.
+    #:
+    #: `PROTECT`, matching `EventCrew.member`: a category in use must not be
+    #: deletable out from under the events that reference it. The service
+    #: refuses with a message naming deactivation instead, so an organizer is
+    #: never shown a raw IntegrityError.
+    custom_category = models.ForeignKey(
+        "events.OrganizerCategory",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
     short_description = models.CharField(max_length=200, blank=True, default="")
     #: Minutes. Nullable because "we do not know yet" is a real answer, and a
     #: zero would render as "0 minutes" on the event page.
@@ -303,6 +323,30 @@ class Event(models.Model):
 
     class Meta:
         db_table = "events_event"
+        constraints = [
+            # DEFENCE IN DEPTH ON THE EVENT WINDOW, in the same spirit as
+            # ticketing's `ticket_type_no_oversell`: the application already
+            # refuses an inverted window in two places (the serializer's
+            # both-fields pre-check and `_validate_schedule_against_stored`,
+            # which judges a PATCH against the merged row), and this makes it
+            # physically impossible regardless.
+            #
+            # It earns a constraint rather than being left to app code because
+            # `ends_at` is not decoration: it drives the check-in grace window,
+            # the "event has finished" gate settlements will not pay out
+            # before, and the payout date itself. An end before a start is a
+            # settlement releasable before its event has happened.
+            #
+            # `ends_at IS NULL` is explicitly allowed — an open-ended event is
+            # a real state the column is nullable for, and Postgres would
+            # otherwise evaluate `NULL > starts_at` to NULL and let the row
+            # through by accident rather than by decision.
+            models.CheckConstraint(
+                condition=models.Q(ends_at__isnull=True)
+                | models.Q(ends_at__gt=models.F("starts_at")),
+                name="event_ends_after_starts",
+            ),
+        ]
         indexes = [
             # Public browse: "upcoming published events, soonest first"
             # (WHERE status=? AND starts_at>=? ORDER BY starts_at) as a single
@@ -806,6 +850,112 @@ class EventCrew(models.Model):
 
     def __str__(self) -> str:
         return f"{self.member_id} on {self.event_id}"
+
+
+class OrganizerCategory(models.Model):
+    """A category an organizer typed for themselves, visible only to them.
+
+    ── WHY THIS IS A SECOND TABLE AND NOT A NINTH `EventCategory` ─────────
+
+    `EventCategory` is a CLOSED enum on purpose, and its docstring says why:
+    the eight slugs are the browse taxonomy, they are what the landing pages
+    and the homepage tiles are built from, `frontend/lib/discovery/
+    categories.ts` mirrors them, and the illustration set draws a scene per
+    slug. It is indexed on (`event_status_category_idx`) and combined with
+    full-text search. A taxonomy like that has to be stable enough to index
+    on and to draw artwork from.
+
+    An organizer typing "Sufi night" wants none of that. They want a label
+    for their own events on their own screens. Letting that value into the
+    shared enum would mean a browse filter with one event behind it, a
+    landing page nobody linked, artwork that falls back to a generic ticket,
+    and an `AlterField` migration for every organizer who ever typed
+    anything. So the two are different KINDS of thing and get different
+    storage — the same split `Event.city` (free text) and `MediaKind` (a
+    closed set) already make in this module.
+
+    ── AND WHY IT HANGS OFF THE ORGANIZATION ─────────────────────────────
+
+    The requirement is that a custom category is "restricted only to their
+    specific organizer account" and "must not reflect in the global category
+    list". Scoping it to a row somebody owns is the only way to enforce that
+    at the database rather than by remembering to filter — a `WHERE
+    organization_id = ?` that is impossible to forget because there is no
+    query without it.
+
+    It is the ORGANIZATION rather than the user for the same reason
+    `CrewMember` is: the whole point is reuse across that organization's
+    events, and an organization is what an event belongs to. It is modelled
+    on `CrewMember` throughout — soft delete, `is_active`, a partial index on
+    the live rows — because it is the same shape of thing: a small,
+    organizer-owned list picked from while building an event.
+
+    ── THE IMAGE IS A URL HERE AND A BUNDLED ICON NAME ON `cms.Category` ──
+
+    `cms.Category.icon` is deliberately a lucide NAME, not a URL, because the
+    icon set is bundled and an arbitrary URL would be an unvalidated remote
+    image on the busiest page on the platform. That reasoning holds for the
+    eight global categories and does NOT transfer here: there is no bundled
+    illustration for "Sufi night" and there never can be, so a custom
+    category with no image field is a row that can only ever render as text.
+
+    The column is written from the storage adapter's own upload URL (see
+    `OrganizerCategoryService.attach_image`), not from a string a client
+    hands us — same as `CrewMember.photo_url`.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.PROTECT,
+        related_name="event_categories",
+    )
+    #: What the organizer typed, shown as-is.
+    label = models.CharField(max_length=60)
+    #: Derived from `label`. Not globally unique and deliberately so — two
+    #: organizations may both have "sufi-night" and neither is the other's
+    #: business. Unique WITHIN an organization, so their own list cannot hold
+    #: the same category twice.
+    slug = models.SlugField(max_length=60)
+    image_url = models.CharField(max_length=500, blank=True, default="")
+    #: Blank at the column so a backfill survives; REQUIRED by the write API.
+    #: The `EventMedia.alt_text` rule, for the same reason.
+    image_alt_text = models.CharField(max_length=200, blank=True, default="")
+    #: Retire a category without erasing it. `Event.custom_category` is
+    #: `PROTECT`ed, so "we do not run those any more" needs an answer that is
+    #: not a delete.
+    is_active = models.BooleanField(default=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "events"
+        db_table = "events_organizer_category"
+        ordering = ("label", "id")
+        constraints = [
+            # PARTIAL on the soft-delete flag: a deleted "Sufi night" must not
+            # stop the same organizer creating it again later, which an
+            # unconditional unique index would.
+            models.UniqueConstraint(
+                fields=["organization", "slug"],
+                condition=Q(deleted_at__isnull=True),
+                name="organizer_category_unique_slug",
+            ),
+        ]
+        indexes = [
+            # The only query on the read path: one organization's live
+            # categories, in label order. Partial, because a soft-deleted row
+            # is never wanted by it.
+            models.Index(
+                fields=["organization", "label", "id"],
+                name="organizer_category_org_idx",
+                condition=Q(deleted_at__isnull=True),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.label
 
 
 class EventSlot(models.Model):

@@ -44,6 +44,61 @@ def _validate_coordinate_pair(attrs: dict) -> None:
         raise serializers.ValidationError("latitude and longitude must be provided together.")
 
 
+#: Input-only spellings of the schedule fields.
+#:
+#: The event window has been `starts_at`/`ends_at` since the first migration,
+#: and those names are not a detail of this serializer — they are the column
+#: names, the public `EventDetail` payload, the ticketing sale window, the
+#: check-in window, the settlement payout date, the browse indexes, the
+#: sitemap's `lastmod` and the `Event` JSON-LD. RENAMING THEM WOULD BE A
+#: BREAKING CHANGE ACROSS EVERY ONE OF THOSE, plus the frontend's own
+#: `draftFromEvent`/`toPatchInput` mapping, to buy nothing a caller can see.
+#:
+#: So `start_datetime`/`end_datetime` are accepted as ALIASES on the way in
+#: and nothing changes on the way out. A client may send either spelling;
+#: sending BOTH is refused rather than resolved, because picking a winner
+#: silently discards one of two times somebody meant.
+_DATETIME_ALIASES = {"start_datetime": "starts_at", "end_datetime": "ends_at"}
+
+
+class _ScheduleAliasMixin:
+    """Rewrites the alias spellings before any field validation runs.
+
+    In `to_internal_value` rather than `validate`, because the canonical
+    fields are declared `DateTimeField` and a value arriving under the alias
+    would otherwise be dropped as an unknown key BEFORE anything looked at it
+    — the silent-no-op failure mode this codebase keeps finding in its own
+    write paths.
+
+    `request.data` is a `QueryDict` on the multipart path (the poster is a
+    `FileField`), which is immutable and whose `pop` returns a LIST. Both are
+    handled explicitly; `.copy()` on a `QueryDict` returns a mutable one.
+    """
+
+    def to_internal_value(self, data):
+        present = [alias for alias in _DATETIME_ALIASES if alias in data]
+        if not present:
+            # `super()` here is `serializers.Serializer` at every real call
+            # site, but mypy sees the mixin standing alone and cannot know
+            # that. Declaring it a Serializer subclass instead would make DRF
+            # build the mixin's own (empty) field map and shadow the real one.
+            return super().to_internal_value(data)  # type: ignore[misc]
+
+        is_query_dict = hasattr(data, "getlist")
+        merged = data.copy() if is_query_dict else dict(data)
+        for alias in present:
+            canonical = _DATETIME_ALIASES[alias]
+            value = merged.pop(alias)
+            if is_query_dict and isinstance(value, list):
+                value = value[-1] if value else None
+            if merged.get(canonical) not in (None, ""):
+                raise serializers.ValidationError(
+                    {alias: f"Send either {alias} or {canonical}, not both."}
+                )
+            merged[canonical] = value
+        return super().to_internal_value(merged)  # type: ignore[misc]
+
+
 #: How many rules one event may publish. A page of them is not a policy
 #: section, it is a document nobody reads — and the event page renders them
 #: all, un-paginated, because a policy behind a "show more" is a policy an
@@ -179,7 +234,7 @@ class EventPolicySerializer(serializers.Serializer):
         return value.strip()
 
 
-class CreateEventRequestSerializer(serializers.Serializer):
+class CreateEventRequestSerializer(_ScheduleAliasMixin, serializers.Serializer):
     organization_id = serializers.UUIDField()
     title = serializers.CharField(max_length=200)
     description = serializers.CharField(required=False, allow_blank=True, default="")
@@ -188,6 +243,27 @@ class CreateEventRequestSerializer(serializers.Serializer):
     starts_at = serializers.DateTimeField()
     ends_at = serializers.DateTimeField(required=False, allow_null=True)
     poster = serializers.FileField(required=False)
+
+    # ── CATEGORY ON THE CREATE, AND ITS ABSENCE WAS A BUG ─────────────────
+    #
+    # This serializer did not declare `category` and `create_event()` did not
+    # accept one, so every event built through the wizard landed UNCATEGORISED
+    # and stayed that way until the first PATCH happened to carry it. A
+    # DRF `Serializer` drops undeclared keys silently, so the wizard sent the
+    # organiser's choice, the API answered 201, and the value went nowhere —
+    # the same shape of failure CLAUDE.md records for `category` being missing
+    # from `toPatchInput` and for tier `position` never being sent.
+    #
+    # `required=False`: a draft is allowed to be uncategorised, which is what
+    # blank means and is different from `other` ("none of these" — a real
+    # choice somebody made).
+    category = serializers.ChoiceField(
+        choices=EventCategory.choices, required=False, allow_blank=True, default=""
+    )
+    #: The organizer's own label, by id. Verified to belong to THIS event's
+    #: organization in the service before it is written — a uuid from a
+    #: browser is not evidence of ownership.
+    custom_category = serializers.UUIDField(required=False, allow_null=True)
 
     # --- Where the venue is ----------------------------------------------
     # Written together by the organizer's venue picker when a Places
@@ -227,7 +303,7 @@ class CreateEventRequestSerializer(serializers.Serializer):
         return attrs
 
 
-class UpdateEventRequestSerializer(serializers.Serializer):
+class UpdateEventRequestSerializer(_ScheduleAliasMixin, serializers.Serializer):
     # The optimistic-lock version the client last read; the write fails with
     # 409 stale_event_version if the event has changed since.
     version = serializers.IntegerField(min_value=1)
@@ -240,7 +316,22 @@ class UpdateEventRequestSerializer(serializers.Serializer):
     #: get a wider list, not a 400; an organiser SAVING a category is writing
     #: a column the browse index depends on, so an unknown value must be
     #: refused at the boundary rather than silently stored and never matched.
-    category = serializers.ChoiceField(choices=EventCategory.choices, required=False)
+    #:
+    #: `allow_blank=True`, and its absence was a bug an organizer could not
+    #: work around. The column's own docstring says blank is a legal, distinct
+    #: state — "not categorised", as opposed to `other`, which is somebody
+    #: choosing none of the eight — but a `ChoiceField` refuses `""` by
+    #: default, so the one value the model calls legal was the one value this
+    #: field rejected. Deselecting a category (the wizard's "None of these",
+    #: or pressing a chosen tile again) sent `category: ""` and got a 400 for a
+    #: perfectly ordinary edit; there was no other way to undo the choice, so a
+    #: mis-tapped tile stayed on the event permanently.
+    category = serializers.ChoiceField(
+        choices=EventCategory.choices, required=False, allow_blank=True
+    )
+    #: `allow_null` is the "remove my label" path: a client sends null to
+    #: detach, which is distinct from omitting the field (leave it alone).
+    custom_category = serializers.UUIDField(required=False, allow_null=True)
     starts_at = serializers.DateTimeField(required=False)
     ends_at = serializers.DateTimeField(required=False, allow_null=True)
     poster = serializers.FileField(required=False)
@@ -309,6 +400,7 @@ class UpdateEventRequestSerializer(serializers.Serializer):
         "venue",
         "city",
         "category",
+        "custom_category",
         "starts_at",
         "ends_at",
         "poster",
@@ -330,10 +422,26 @@ class UpdateEventRequestSerializer(serializers.Serializer):
         "tags",
     }
 
-    def validate_starts_at(self, value):
-        if value <= timezone.now():
-            raise serializers.ValidationError("starts_at must be in the future.")
-        return value
+    # ── NO `validate_starts_at` HERE, AND ITS ABSENCE IS THE FIX ──────────
+    #
+    # This serializer used to refuse any `starts_at` that was not in the
+    # future, exactly as the create serializer does. On a CREATE that is
+    # right: an event that has already happened is not a thing to publish.
+    # On an UPDATE it locked organizers out of their own events.
+    #
+    # `toPatchInput` sends the WHOLE editable surface on every save — it is
+    # deliberately not a diff, because a field it omitted would be blanked
+    # (see CLAUDE.md, "draftFromEvent is pure and tested because its failure
+    # is DATA LOSS"). So every save re-sent `starts_at`, and the moment an
+    # event's start time passed, every subsequent PATCH answered 400 with a
+    # message about a field the organizer had not touched. Fixing a typo on a
+    # running festival, correcting a venue mid-event, adding an FAQ the
+    # morning after — all refused, permanently, with no way out.
+    #
+    # The check is not dropped; it MOVES to `EventService.update_event`,
+    # which is the only layer that can see the stored row and can therefore
+    # tell "moving the start into the past" (refused) from "this event has
+    # already started and is being edited" (allowed).
 
     def validate(self, attrs: dict) -> dict:
         if not (self._EDITABLE & attrs.keys()):
@@ -343,6 +451,13 @@ class UpdateEventRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"policies": f"An event can have at most {MAX_POLICIES} policies."}
             )
+        # Kept as the CHEAP pre-check for the both-fields-present case, so an
+        # obviously inverted window is refused at the boundary without a
+        # round trip to the database. It is NOT the guarantee: a PATCH
+        # carrying only `ends_at` has nothing here to compare against, which
+        # is why the authoritative check runs against the merged row in the
+        # service. Same split, and the same reason, as coupons'
+        # `validate_terms`.
         starts_at, ends_at = attrs.get("starts_at"), attrs.get("ends_at")
         if starts_at is not None and ends_at is not None and ends_at <= starts_at:
             raise serializers.ValidationError("ends_at must be after starts_at.")
@@ -844,6 +959,111 @@ class UpdateEventSlotSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(required=False)
 
 
+class EventScheduleSerializer(serializers.Serializer):
+    """The event's AUTHORITATIVE window, plus the lock token that goes with it.
+
+    ── WHY THIS EXISTS: THE SESSIONS REVERT LOOP ─────────────────────────
+
+    Adding or editing a session re-derives the event's own window from its
+    slots (`EventService._sync_event_window`) — the sessions ARE the schedule
+    once an event has any. That write goes through `set_window`, which
+    deliberately does NOT bump `version`, so that a schedule sync cannot
+    invalidate the optimistic-lock token an organiser is holding while they
+    edit the description somewhere else.
+
+    The cost of that decision is this endpoint. The wizard holds `starts_at`
+    in its local draft and re-sends the WHOLE editable surface on every
+    autosave (it is not a diff, on purpose — a field it omitted would be
+    blanked). So after a slot write the server's window has moved, the
+    draft's has not, the stale version still matches because the sync did not
+    bump it, and the next autosave quietly writes the old time back. The
+    organiser sees their session save and their schedule revert, with no error
+    anywhere — which is exactly the "my change did not save" report.
+
+    A read rather than a change to the sync's locking: bumping `version` there
+    would trade this bug for a 409 on every unrelated edit made while a
+    session was added, and the sync's own docstring explains why it must not.
+    """
+
+    starts_at = serializers.DateTimeField()
+    ends_at = serializers.DateTimeField(allow_null=True)
+    #: The token to send on the NEXT update. Included so a client refreshing
+    #: its window after a slot write does not need a second round trip to the
+    #: full event detail to stay writable.
+    version = serializers.IntegerField()
+
+
+class OrganizerCategorySerializer(serializers.Serializer):
+    """One of an organization's own category labels, on its own screens."""
+
+    id = serializers.UUIDField(read_only=True)
+    # `label` collides with an attribute DRF's `Field` already defines, so
+    # mypy reads it as a bad override. The wire name is what the picker reads;
+    # it stays. Same note as `HomepageCategorySerializer` in apps/cms.
+    label = serializers.CharField(max_length=60)  # type: ignore[assignment]
+    #: DERIVED from `label` and never accepted from a client — see
+    #: `OrganizerCategoryService._slug_for`. A client-set slug would be a
+    #: second source of truth for the uniqueness key inside an organization.
+    slug = serializers.CharField(read_only=True)
+    image_url = serializers.CharField(read_only=True)
+    image_alt_text = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(required=False)
+    created_at = serializers.DateTimeField(read_only=True)
+
+
+class CreateOrganizerCategoryRequestSerializer(serializers.Serializer):
+    """What an organizer typed. Nothing else.
+
+    No `image_url` here on purpose: the column holds a URL our own storage
+    adapter returned, and taking one from a request body would make it an
+    arbitrary remote image on a public page — which is the objection
+    `cms.Category.icon` records against URLs in the first place. The picture
+    arrives through the upload endpoint, which validates the bytes.
+    """
+
+    label = serializers.CharField(max_length=60)  # type: ignore[assignment]
+
+
+class UpdateOrganizerCategoryRequestSerializer(serializers.Serializer):
+    label = serializers.CharField(max_length=60, required=False)  # type: ignore[assignment]
+    is_active = serializers.BooleanField(required=False)
+
+
+class OrganizerCategoryImageRequestSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    #: REQUIRED here although the column allows blank — the `EventMedia
+    #: .alt_text` split, for the same reason. The column is permissive so a
+    #: backfill survives; the API is strict so no NEW row is created without it.
+    alt_text = serializers.CharField(max_length=200)
+
+
+class CategoryPickerEntrySerializer(serializers.Serializer):
+    """One row of the organizer's category picker, global or their own.
+
+    `source` is the field that matters and it is why this is not just a list
+    of labels: a `global` row writes to `Event.category` (a closed browse
+    facet, indexed, with bundled artwork) and an `organizer` row writes to
+    `Event.custom_category` (a foreign key to a private label). A client that
+    could not tell them apart would eventually send a custom slug as
+    `category` and get a 400 it has no way to explain.
+
+    `id` is null for a global row — there is no table behind it — and
+    `image_url` is blank for one, because its illustration ships in the
+    frontend bundle keyed on `slug`. See `OrganizerCategoryService.picker`.
+    """
+
+    id = serializers.UUIDField(allow_null=True)
+    slug = serializers.CharField()
+    label = serializers.CharField()  # type: ignore[assignment]
+    image_url = serializers.CharField(allow_blank=True)
+    image_alt_text = serializers.CharField(allow_blank=True)
+    # `source` collides with an attribute DRF's `Field` already defines, so
+    # mypy reads it as a bad override — the same note `label` carries here and
+    # in apps/cms. The WIRE NAME is what the picker branches on; it stays.
+    source = serializers.ChoiceField(choices=["global", "organizer"])  # type: ignore[assignment]
+    is_active = serializers.BooleanField()
+
+
 class CrewMemberSerializer(serializers.Serializer):
     """A roster row, as the organizer's own screens see it."""
 
@@ -858,9 +1078,55 @@ class CrewMemberSerializer(serializers.Serializer):
 
 
 class CreateCrewMemberRequestSerializer(serializers.Serializer):
+    """Add somebody to the roster, with their portrait in the SAME request.
+
+    ── WHY THE PHOTO IS OPTIONAL HERE RATHER THAN UPLOAD-ONLY ────────────
+
+    The portrait endpoint (`.../crew/{id}/photo`) needs a member to attach to,
+    so a photo could only ever be a SECOND request — which is why the "Add
+    crew member" dialog says "A photo attaches to somebody who exists, so it
+    appears here the moment you save". That is an honest sentence about a
+    two-step flow, and it is still the flow for anyone who wants it: this
+    serializer changes nothing about that endpoint.
+
+    What it adds is the one-request path, because "Who's taking the stage" is
+    a carousel of FACES — a lineup card with no picture is the section's
+    weakest state, and making the picture a separate deliberate step is how it
+    ends up skipped.
+
+    NO `photo_url` FIELD, and that is deliberate. `CrewMember.photo_url` holds
+    a URL our own storage adapter returned; accepting one from a request body
+    would make it an arbitrary remote image on a public event page, bypassing
+    the size, allow-list and magic-byte checks in `core.uploads` — which exist
+    because an SVG served from our own origin is stored XSS. The bytes come
+    through `photo` and nowhere else.
+    """
+
     name = serializers.CharField(max_length=120)
     role = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
     details = serializers.CharField(required=False, allow_blank=True, default="")
+    photo = serializers.FileField(required=False)
+    photo_alt_text = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+    def validate(self, attrs: dict) -> dict:
+        """Alt text is required WITH a photo and meaningless without one.
+
+        The same rule the dedicated upload endpoint enforces, restated here
+        because this is now a second door to the same column. Making it
+        unconditionally required would refuse every text-only member; leaving
+        it optional beside a file would let a portrait onto a public page with
+        no description, which is the accessibility failure the split between
+        the permissive column and the strict API exists to prevent.
+        """
+        if attrs.get("photo") is not None and not (attrs.get("photo_alt_text") or "").strip():
+            raise serializers.ValidationError(
+                {
+                    "photo_alt_text": (
+                        "Describe the photo — it is read aloud to people who cannot see it."
+                    )
+                }
+            )
+        return attrs
 
 
 class UpdateCrewMemberRequestSerializer(serializers.Serializer):

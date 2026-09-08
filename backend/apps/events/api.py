@@ -32,7 +32,7 @@ from config.di import build_event_service, build_waitlist_service, cache_port
 from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
 from core.throttling import UploadThrottle, WriteThrottle
-from core.uploads import CREW_PORTRAIT_SPEC, validate_image
+from core.uploads import CATEGORY_TILE_SPEC, CREW_PORTRAIT_SPEC, validate_image
 
 from .exceptions import EventNotFoundError
 from .models import MediaKind
@@ -41,9 +41,11 @@ from .repositories import EventWaitlistRepository, SavedEventRepository
 from .schemas import (
     CancelEventRequestSerializer,
     CancelEventResultSerializer,
+    CategoryPickerEntrySerializer,
     CreateCrewMemberRequestSerializer,
     CreateEventRequestSerializer,
     CreateEventSlotSerializer,
+    CreateOrganizerCategoryRequestSerializer,
     CrewMemberSerializer,
     CrewPhotoAltTextRequestSerializer,
     CrewPhotoRequestSerializer,
@@ -55,10 +57,13 @@ from .schemas import (
     EventMediaListSerializer,
     EventMediaSerializer,
     EventQuestionSerializer,
+    EventScheduleSerializer,
     EventSearchQuerySerializer,
     EventSitemapEntrySerializer,
     EventSlotSerializer,
     EventTimelineSerializer,
+    OrganizerCategoryImageRequestSerializer,
+    OrganizerCategorySerializer,
     OrganizerEventSummarySerializer,
     ReorderEventMediaSerializer,
     SavedEventSerializer,
@@ -72,6 +77,7 @@ from .schemas import (
     UpdateEventRequestSerializer,
     UpdateEventSlotSerializer,
     UpdateEventTimelineSerializer,
+    UpdateOrganizerCategoryRequestSerializer,
     WaitlistEntrySerializer,
     WaitlistStateSerializer,
     WriteEventFaqSerializer,
@@ -610,6 +616,27 @@ class EventFaqDetailView(_OwnerWriteView):
         return _no_store(Response(status=status.HTTP_204_NO_CONTENT))
 
 
+class EventScheduleView(_OwnerWriteView):
+    """The event's authoritative window, for a client that may hold a stale one.
+
+    Read this AFTER any session write. Adding or editing a slot re-derives
+    `Event.starts_at`/`ends_at` from the slots on the server, and that sync
+    deliberately does not bump `version` — so a client holding a draft copy of
+    the schedule has no way to notice, and the next full-surface autosave
+    writes its old value straight back over the sync. See
+    `EventScheduleSerializer` for the full account.
+
+    `private, no-store`: it carries an optimistic-lock token, and a token from
+    a shared cache may be one save behind — the mistake CLAUDE.md records for
+    reading tier versions out of the public, edge-cached ticket-type endpoint.
+    """
+
+    @extend_schema(responses={200: EventScheduleSerializer})
+    def get(self, request: Request, event_id: str) -> Response:
+        event = self._service.get_schedule(event_id=event_id, actor_id=self._actor)
+        return _no_store(Response(EventScheduleSerializer(event).data))
+
+
 class EventSlotView(_OwnerWriteView):
     """The organiser's session list, and adding one.
 
@@ -747,6 +774,147 @@ class SavedEventDetailView(APIView):
 # lineup lives under the event, because that is what it is about.
 
 
+class _OrganizerCategoryView(APIView):
+    """Authenticated at the request layer; OWNERSHIP is proven inside
+    `OrganizerCategoryService`, which scopes every query by organization
+    rather than fetching a row and then comparing — so a row belonging to
+    somebody else is never loaded at all. Same reasoning as `_CrewView`
+    below, and the routes are deliberately the same shape."""
+
+    permission_classes: list = [IsAuthenticated]
+
+    @property
+    def _service(self):
+        from config.di import build_organizer_category_service
+
+        return build_organizer_category_service()
+
+    @property
+    def _actor(self):
+        return cast(User, self.request.user).id
+
+
+class OrganizerCategoryListView(_OrganizerCategoryView):
+    @extend_schema(responses={200: OrganizerCategorySerializer(many=True)})
+    def get(self, request: Request, organization_id: str) -> Response:
+        """This organization's own categories.
+
+        The MANAGEMENT list: `?active_only=true` narrows it to the ones that
+        may be put on a new event, while the default keeps retired rows
+        visible so they can be brought back. Exactly the crew roster's split,
+        for the same reason.
+
+        This is NOT the wizard's picker — that is `/categories/picker` below,
+        which also carries the global set.
+        """
+        active_only = request.query_params.get("active_only") == "true"
+        rows = self._service.list_for_organization(
+            organization_id=organization_id, actor_id=self._actor, active_only=active_only
+        )
+        return _no_store(Response({"data": OrganizerCategorySerializer(rows, many=True).data}))
+
+    @extend_schema(
+        request=CreateOrganizerCategoryRequestSerializer,
+        responses={201: OrganizerCategorySerializer},
+    )
+    def post(self, request: Request, organization_id: str) -> Response:
+        """Save what the organizer typed.
+
+        201 even when the row already existed. The service returns the
+        existing category rather than refusing a repeat — the outcome the
+        caller asked for is true either way, and a 409 on a free-text box in
+        the middle of a wizard is a dead end that teaches nothing.
+        """
+        payload = CreateOrganizerCategoryRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        category = self._service.add_category(
+            organization_id=organization_id, actor_id=self._actor, **payload.validated_data
+        )
+        return _no_store(
+            Response(OrganizerCategorySerializer(category).data, status=status.HTTP_201_CREATED)
+        )
+
+
+class OrganizerCategoryPickerView(_OrganizerCategoryView):
+    """THE ONE ENDPOINT THE WIZARD CALLS: global categories and this
+    organization's own, in a single request, every row carrying its `source`
+    and its image.
+
+    One request rather than two because the picker cannot render a useful
+    half: showing the eight global tiles while the organizer's own labels are
+    still in flight is a list that visibly changes under the cursor of
+    somebody who is choosing from it.
+    """
+
+    @extend_schema(responses={200: CategoryPickerEntrySerializer(many=True)})
+    def get(self, request: Request, organization_id: str) -> Response:
+        picker = self._service.picker(organization_id=organization_id, actor_id=self._actor)
+        return _no_store(
+            Response({"data": CategoryPickerEntrySerializer(picker["data"], many=True).data})
+        )
+
+
+class OrganizerCategoryDetailView(_OrganizerCategoryView):
+    @extend_schema(
+        request=UpdateOrganizerCategoryRequestSerializer,
+        responses={200: OrganizerCategorySerializer},
+    )
+    def patch(self, request: Request, organization_id: str, category_id: str) -> Response:
+        payload = UpdateOrganizerCategoryRequestSerializer(data=request.data, partial=True)
+        payload.is_valid(raise_exception=True)
+        category = self._service.update_category(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            category_id=category_id,
+            **payload.validated_data,
+        )
+        return _no_store(Response(OrganizerCategorySerializer(category).data))
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, organization_id: str, category_id: str) -> Response:
+        """Retire a category. 409 with a sentence naming the alternative if any
+        event still carries it — see `OrganizerCategoryService.remove_category`."""
+        self._service.remove_category(
+            organization_id=organization_id, actor_id=self._actor, category_id=category_id
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class OrganizerCategoryImageView(_OrganizerCategoryView):
+    """The picture beside a custom category's name.
+
+    Multipart, and `alt_text` is REQUIRED on the request though the column
+    allows blank — the `EventMedia.alt_text` split, for the same reason. The
+    bytes are validated by `core.uploads` (size, declared type against an
+    allow-list, then the leading bytes against that type; SVG excluded
+    outright because it is an XML document that can carry script), so this is
+    the only way a URL reaches `image_url` and it is always one our own
+    storage adapter produced.
+    """
+
+    parser_classes = [MultiPartParser]
+    throttle_classes = [UploadThrottle]
+
+    @extend_schema(
+        request=OrganizerCategoryImageRequestSerializer,
+        responses={200: OrganizerCategorySerializer},
+    )
+    def post(self, request: Request, organization_id: str, category_id: str) -> Response:
+        payload = OrganizerCategoryImageRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        upload = payload.validated_data["file"]
+        content_type = validate_image(upload, spec=CATEGORY_TILE_SPEC)
+        category = self._service.attach_image(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            category_id=category_id,
+            upload=upload,
+            content_type=content_type,
+            alt_text=payload.validated_data["alt_text"],
+        )
+        return _no_store(Response(OrganizerCategorySerializer(category).data))
+
+
 class _CrewView(APIView):
     """Authenticated at the request layer; OWNERSHIP is proven inside
     `CrewService`, which scopes every query by organization rather than
@@ -779,12 +947,39 @@ class CrewRosterView(_CrewView):
         )
         return _no_store(Response({"data": CrewMemberSerializer(rows, many=True).data}))
 
+    #: JSON *and* multipart, because the photo is optional. A caller sending a
+    #: name and a role pays nothing for the multipart parser; one sending a
+    #: file gets it. Set explicitly rather than relying on the project default
+    #: so this stays true if that default ever narrows.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
     @extend_schema(request=CreateCrewMemberRequestSerializer, responses={201: CrewMemberSerializer})
     def post(self, request: Request, organization_id: str) -> Response:
+        """Add somebody to the roster, optionally with their portrait.
+
+        The bytes take the SAME validation path as the dedicated photo
+        endpoint — `validate_image` against `CREW_PORTRAIT_SPEC`, which checks
+        size, then the declared type against an allow-list, then the leading
+        bytes against that type. A second door to a column must not be a
+        laxer one.
+        """
         payload = CreateCrewMemberRequestSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
-        member = self._service.add_member(
-            organization_id=organization_id, actor_id=self._actor, **payload.validated_data
+        data = dict(payload.validated_data)
+
+        upload = data.pop("photo", None)
+        alt_text = (data.pop("photo_alt_text", "") or "").strip()
+        content_type = ""
+        if upload is not None:
+            content_type = validate_image(upload, spec=CREW_PORTRAIT_SPEC)
+
+        member = self._service.add_member_with_photo(
+            organization_id=organization_id,
+            actor_id=self._actor,
+            upload=upload,
+            content_type=content_type,
+            alt_text=alt_text,
+            **data,
         )
         return _no_store(
             Response(CrewMemberSerializer(member).data, status=status.HTTP_201_CREATED)

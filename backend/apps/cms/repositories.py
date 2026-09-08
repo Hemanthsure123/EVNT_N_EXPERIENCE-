@@ -142,7 +142,12 @@ class CategoryRepository:
     def list_public(self) -> QuerySet[Category]:
         return (
             Category.objects.filter(is_visible=True, archived_at__isnull=True)
-            .only("id", "slug", "label", "icon", "search_term", "position")
+            # `image_url` is IN the lean field set. Left out, the serializer
+            # reading it would trigger a deferred re-fetch PER ROW on the
+            # homepage payload — the exact N+1 the `.only()` is here to
+            # prevent, and the same trap `settlements` documents for
+            # `provider_ref`.
+            .only("id", "slug", "label", "icon", "image_url", "search_term", "position")
             .order_by("position", "label")
         )
 

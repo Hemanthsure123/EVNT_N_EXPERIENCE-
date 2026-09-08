@@ -135,6 +135,22 @@ class Category(models.Model):
     #: icon set is bundled, so an arbitrary URL would be an unvalidated remote
     #: image on the busiest page on the platform.
     icon = models.CharField(max_length=60, blank=True, default="")
+    #: An OPERATOR-SET picture for the tile, when a bundled glyph is not
+    #: enough.
+    #:
+    #: This does not contradict the note above `icon`, it complements it.
+    #: `icon` refuses a URL because the icon set is BUNDLED — every one of the
+    #: eight categories already has artwork in the frontend, so a URL there
+    #: would be an unvalidated remote image standing in for a file that
+    #: already ships. This column is the merchandising override for the cases
+    #: that have no bundled art: a seasonal category an operator adds, or a
+    #: tile they want to run a photograph in for a month.
+    #:
+    #: A `URLField` set only by an ADMIN, exactly like `FeaturedCity
+    #: .image_url` two classes down — same audience, same handful of rows,
+    #: same reason no upload pipeline was built for it. `icon` stays the
+    #: fallback, so an empty value here is not a broken tile.
+    image_url = models.URLField(blank=True, default="")
     #: The search term pushed at the events index — categories have no column
     #: on `Event` yet (BACKLOG item 2), so this is how one resolves to results.
     search_term = models.CharField(max_length=120, blank=True, default="")

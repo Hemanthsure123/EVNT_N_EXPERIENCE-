@@ -177,3 +177,27 @@ class CrewMemberInUseError(ConflictError):
     """
 
     code = "crew_member_in_use"
+
+
+class OrganizerCategoryNotFoundError(NotFoundError):
+    """No such custom category on this organization's list.
+
+    A 404 rather than a 403 for the reason `CrewOrganizationNotFoundError`
+    states: a 403 would confirm to anyone walking uuids that the row exists
+    and belongs to somebody. The repository scopes every lookup by
+    organization, so a stranger's category is never loaded to be refused.
+    """
+
+    code = "organizer_category_not_found"
+
+
+class OrganizerCategoryInUseError(ConflictError):
+    """This category is on at least one event.
+
+    `Event.custom_category` is `PROTECT`, so the database refuses the delete
+    anyway — this exists so the refusal arrives as an actionable sentence
+    naming the alternative (deactivate) rather than as an integrity error.
+    Exactly the arrangement `CrewMemberInUseError` has.
+    """
+
+    code = "organizer_category_in_use"
