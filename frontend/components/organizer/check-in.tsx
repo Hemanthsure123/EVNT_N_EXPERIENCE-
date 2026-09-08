@@ -20,6 +20,7 @@ import { useEventRows } from '@/lib/organizer/queries';
 import { ScanSound, useCameraScanner } from '@/lib/organizer/scanner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ProgressBar } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { Gauge } from './charts';
 import { EmptyState, ErrorState, Panel, Skeleton } from './primitives';
@@ -260,11 +261,28 @@ export function CheckIn() {
         </p>
       ) : null}
 
+      {/* ── THE COLUMN ORDER FLIPS ON A PHONE ─────────────────────────────
+          At `xl` this is two columns and the DOM order is the reading order:
+          the verdict and the scanner on the left, the counts on the right.
+
+          Stacked on a phone that same order buries the attendance total under
+          the whole scan panel — a camera viewport, an event select, a gate
+          field and a token input — so "how full is the room" was a scroll
+          away from the screen an organizer is holding at the door. `order-*`
+          lifts the counts above the scanner below `xl` and changes nothing at
+          `xl`, where both columns start at the top anyway. It is done with
+          order rather than by moving the markup so the DOM keeps the
+          desktop reading order for a screen reader on a wide viewport. */}
       <div className="grid gap-stack-lg xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex flex-col gap-stack-lg">
+        <div className="order-2 flex flex-col gap-stack-lg xl:order-1">
           {/* The verdict comes FIRST on the page, above the controls. At a gate
               the answer is what you look at; the event selector is set once at
-              the start of the night. */}
+              the start of the night.
+
+              It is NOT lifted above the attendance card on a phone: a verdict
+              is only meaningful right after a scan, and the scan controls are
+              directly below it. Splitting the pair to put a count between them
+              would separate the question from its answer. */}
           <Verdict scan={latest} />
 
           <Panel
@@ -360,7 +378,7 @@ export function CheckIn() {
           </Panel>
         </div>
 
-        <div className="flex flex-col gap-stack-lg">
+        <div className="order-1 flex flex-col gap-stack-lg xl:order-2">
           <Panel title="Live attendance" subtitle="Counted from used tickets">
             <div className="p-card">
               {attendance.isError ? (
@@ -772,16 +790,64 @@ function AttendanceRing({ admitted, capacity }: { admitted: number; capacity: nu
     );
   }
 
+  const remaining = Math.max(0, capacity - admitted);
+  const percent = Math.round(ratio * 100);
+
+  // ── THE COUNT READS FIRST, THE RING SECOND ─────────────────────────────
+  //
+  // This was a centred 128px ring with the figure inside it, which put the
+  // number an organizer is watching at about 20px in the middle of a circle
+  // and spent the card's whole width on the circle's air. Reading it needed
+  // the eye to find the centre of a shape first.
+  //
+  // The count now leads at heading size on the left, the ring shrinks to a
+  // 64px glance-mark on the right, and the linear meter under both carries the
+  // progress the ring used to carry alone. Same three facts, in the order they
+  // are wanted, and the row fits a 360px card.
+  //
+  // The ring stays because it is the shape somebody catches from across a
+  // table without reading a digit — but it now shows the PERCENTAGE rather
+  // than repeating the count, so the two marks say different things.
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="relative">
-        <Gauge ratio={ratio} label={`${admitted} of ${capacity} admitted`} />
-        <span className="absolute inset-0 flex flex-col items-center justify-center" aria-hidden>
-          <span className="text-h3 tabular-nums text-foreground">{admitted}</span>
-          <span className="text-caption tabular-nums text-muted-foreground">of {capacity}</span>
-        </span>
+    <div className="flex flex-col gap-stack">
+      <div className="flex items-center justify-between gap-stack">
+        <div className="min-w-0">
+          <p className="flex items-baseline gap-1.5">
+            <span className="text-h2 tabular-nums text-foreground">{admitted}</span>
+            <span className="text-body tabular-nums text-muted-foreground">/ {capacity}</span>
+          </p>
+          <p className="text-caption text-muted-foreground">checked in across every gate</p>
+        </div>
+
+        <div className="relative shrink-0">
+          <Gauge
+            ratio={ratio}
+            label={`${admitted} of ${capacity} admitted`}
+            className="size-16"
+          />
+          <span className="absolute inset-0 flex items-center justify-center" aria-hidden>
+            <span className="text-caption font-semibold tabular-nums text-foreground">
+              {percent}%
+            </span>
+          </span>
+        </div>
       </div>
-      <p className="text-caption text-muted-foreground">Admitted across every gate</p>
+
+      <ProgressBar
+        value={ratio}
+        aria-label={`${admitted} of ${capacity} admitted`}
+        size="md"
+      />
+
+      {/* `remaining` is capacity minus admitted and nothing more — no rate, no
+          projection. The reference carries a "Velocity: 42 scans/min" beside
+          it; nothing on this platform measures a scan rate, and the session
+          counts below are a count for THIS DEVICE, which is not the same
+          quantity and must not be dressed up as one. */}
+      <p className="flex items-baseline justify-between gap-2 text-caption text-muted-foreground">
+        <span className="tabular-nums">{remaining} still to arrive</span>
+        <span className="tabular-nums">{capacity} issued</span>
+      </p>
     </div>
   );
 }

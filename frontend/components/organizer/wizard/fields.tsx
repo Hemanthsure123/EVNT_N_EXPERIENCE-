@@ -662,6 +662,61 @@ export function NeedsSavedDraft({
  * be — a text glyph picks up whatever the platform's emoji/symbol font decides,
  * which is why it rendered at a different size and baseline on every OS.
  */
+/**
+ * An always-open grouped card: an icon, a title, an optional aside, fields.
+ *
+ * ── WHY THIS EXISTS BESIDE `Section` ─────────────────────────────────────
+ *
+ * `Section` below is the same card with a `<details>` disclosure on it, and it
+ * is right for the parts of a step somebody opens occasionally — sessions, the
+ * running order, the lineup. The early steps are not like that: venue, city and
+ * the schedule are the fields the step exists to collect, and putting them
+ * behind a chevron would hide the required work of the form.
+ *
+ * They were previously ungrouped — a flat column of fields with `gap-block`
+ * between them — which on a phone reads as one long undifferentiated form
+ * where every field looks equally related to the one above it. Grouping says
+ * which questions belong together, and it is the only structural difference
+ * between the two components: SAME radius, border, shadow, header padding and
+ * `p-card` body, so the two kinds of card cannot drift apart visually.
+ *
+ * `aside` is for a group-level control that belongs with the heading rather
+ * than in the field list — a toggle over "how is this event run", say. It sits
+ * in the header so it reads as governing the group beneath it.
+ */
+export function FieldGroup({
+  title,
+  icon,
+  aside,
+  children,
+}: {
+  title: string;
+  /**
+   * A rendered element, never a component reference. These steps are client
+   * components today, but every other icon prop in this codebase takes an
+   * element for the reason `buildDisclosures` documents — a function cannot
+   * cross a server boundary, and it fails by taking the whole page down.
+   */
+  icon?: React.ReactNode;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-surface shadow-sm">
+      <header className="flex min-h-control items-center gap-2.5 px-card py-3">
+        {icon ? (
+          <span className="shrink-0 text-primary" aria-hidden>
+            {icon}
+          </span>
+        ) : null}
+        <h3 className="min-w-0 flex-1 text-body-sm font-semibold text-foreground">{title}</h3>
+        {aside ? <div className="shrink-0">{aside}</div> : null}
+      </header>
+      <div className="flex flex-col gap-stack-lg border-t border-border p-card">{children}</div>
+    </section>
+  );
+}
+
 export function Section({
   title,
   count,

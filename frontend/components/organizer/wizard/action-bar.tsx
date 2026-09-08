@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Check, CloudOff, Eye, Loader2, Save } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CloudOff, Eye, Loader2, Save } from 'lucide-react';
 import { Button } from '@/components/ui';
 import type { SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { cn } from '@/lib/utils/cn';
@@ -49,6 +49,24 @@ import { cn } from '@/lib/utils/cn';
  * or not you give them one, and because after a failure there has to be
  * something to press. It says "Save draft" rather than "Save" for that reason:
  * it does not publish, and nothing on this screen should suggest it might.
+ *
+ * ── `forward` IS IN THIS BAR ONLY ON A PHONE ──────────────────────────────
+ *
+ * The step's forward button lives in the footer nav above, beside Back, which
+ * is right on a desktop: the two directions sit together and the eye already
+ * knows where the pair is.
+ *
+ * On a phone that footer is at the bottom of a form that can run to several
+ * thousand pixels, so "continue" was a scroll away from wherever somebody was
+ * working, on every step. The bar is already pinned there — putting the
+ * forward action in it costs nothing and removes the hunt.
+ *
+ * THE ONE-FILLED-ACTION RULE ABOVE IS NOT BROKEN BY THIS, because the two are
+ * exclusive by breakpoint: this one is `sm:hidden` and the footer's is
+ * `hidden sm:*`. Exactly one near-black button is on screen at any width, so
+ * the forward path is still a fixed target rather than a thing to find. It
+ * would be broken by rendering both, which is why the footer's is hidden
+ * rather than left to wrap.
  */
 
 export type SaveSummary = {
@@ -119,6 +137,7 @@ export function WizardActionBar({
   onSaveDraft,
   onPreview,
   previewOpen,
+  forward,
   className,
 }: {
   state: SaveState;
@@ -130,6 +149,11 @@ export function WizardActionBar({
   /** Toggles the wizard's preview sheet. */
   onPreview: () => void;
   previewOpen?: boolean;
+  /**
+   * The step's forward action, rendered ONLY below `sm` — see the note above.
+   * Omitted on the last step, where there is nowhere forward to go.
+   */
+  forward?: { label: string; onClick: () => void } | null;
   className?: string;
 }) {
   const [, tick] = React.useReducer((count: number) => count + 1, 0);
@@ -177,20 +201,30 @@ export function WizardActionBar({
           <span className="truncate">{summary.label}</span>
         </p>
 
-        <div className="flex items-center gap-2">
+        {/* `w-full sm:w-auto` on the group: below `sm` the row carries the
+            forward action and has to be able to give it the remaining width,
+            which it cannot do while the group is only as wide as its
+            contents. */}
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           {/* Hidden from `xl`, where the live preview is a permanent column: a
               toggle for a sheet that is `xl:hidden` would be a control that
               does nothing on the widest screens, which is worse than one that
-              is absent. */}
+              is absent.
+
+              ICON-ONLY below `sm`. Three labelled buttons do not fit a 390px
+              bar, and of the three this is the one whose icon is unambiguous
+              on its own — an eye is preview everywhere. The accessible name is
+              unchanged either way. */}
           <Button
             variant="ghost"
             size="sm"
             onClick={onPreview}
             aria-pressed={previewOpen}
-            leftIcon={<Eye className="size-4" aria-hidden />}
+            aria-label="Preview event"
             className="xl:hidden"
           >
-            Preview event
+            <Eye className="size-4" aria-hidden />
+            <span className="hidden sm:inline">Preview event</span>
           </Button>
           <Button
             variant="outline"
@@ -203,8 +237,22 @@ export function WizardActionBar({
                 "Saved" is a button that has stopped being an action, and after
                 a failure the one control somebody needs is the one that says
                 what it will do — which is the same thing it always does. */}
-            Save draft
+            <span className="hidden sm:inline">Save draft</span>
+            <span className="sm:hidden">Save</span>
           </Button>
+          {forward ? (
+            <Button
+              size="sm"
+              onClick={forward.onClick}
+              rightIcon={<ArrowRight className="size-4" aria-hidden />}
+              // `flex-1`: the forward action takes whatever the other two
+              // leave, so it is the biggest target in the bar at every phone
+              // width without a measured value.
+              className="min-w-0 flex-1 sm:hidden"
+            >
+              <span className="truncate">{forward.label}</span>
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ExternalLink, MapPin } from 'lucide-react';
+import { CalendarDays, ExternalLink, MapPin } from 'lucide-react';
 import {
   DESCRIPTION_SOFT_MAX,
   CITY_MAX,
@@ -18,7 +18,7 @@ import {
 } from '@/lib/organizer/wizard/model';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
 import { directionsUrl } from '@/lib/api/maps';
-import { Button } from '@/components/ui';
+import { Button, SegmentedControl } from '@/components/ui';
 import { PinPicker } from '@/components/maps/pin-picker';
 import { VenueAutocomplete, type VenueSelection } from '@/components/maps/venue-autocomplete';
 import { cn } from '@/lib/utils/cn';
@@ -27,6 +27,7 @@ import {
   DateTimeField,
   TimeOnlyField,
   FieldFrame,
+  FieldGroup,
   NeedsSavedDraft,
   Section,
   SelectField,
@@ -240,48 +241,59 @@ export function VenueStep({ draft, update, issues }: StepProps) {
         title="Venue"
       />
 
-      <FieldFrame
-        id="event-venue"
-        label="Venue"
-        count={{ used: draft.venue.length, max: VENUE_MAX }}
-        error={venueError}
-      >
-        <VenueAutocomplete
+      {/* WHERE IT HAPPENS: the venue and the city are one question asked in
+          two fields, so they share a card. There is no Physical/Virtual toggle
+          in the header — the reference has one and this platform has no
+          `is_virtual` column, no streaming URL and no online-event read path,
+          so the control would set nothing. */}
+      <FieldGroup title="Location" icon={<MapPin className="size-4" />}>
+        <FieldFrame
           id="event-venue"
-          value={draft.venue}
-          city={draft.city}
-          onChange={pickVenue}
-          describedBy={fieldMessageId('event-venue', venueError)}
-          invalid={Boolean(venueError)}
-        />
-      </FieldFrame>
+          label="Venue"
+          count={{ used: draft.venue.length, max: VENUE_MAX }}
+          error={venueError}
+        >
+          <VenueAutocomplete
+            id="event-venue"
+            value={draft.venue}
+            city={draft.city}
+            onChange={pickVenue}
+            describedBy={fieldMessageId('event-venue', venueError)}
+            invalid={Boolean(venueError)}
+          />
+        </FieldFrame>
 
-      <div className="flex flex-col gap-1.5">
-        <TextField
-          id="event-city"
-          label="City"
-          value={draft.city}
-          onChange={(city) => update({ city })}
-          placeholder="Mumbai"
-          max={CITY_MAX}
-          error={errorFor(issues, 'city')}
-        />
-        <ul className="flex flex-wrap gap-1.5">
-          {POPULAR_CITIES.slice(0, 8).map((city) => (
-            <li key={city.name}>
-              <CityChip
-                name={city.name}
-                selected={draft.city === city.name}
-                onPick={() => update({ city: city.name })}
-              />
-            </li>
-          ))}
-        </ul>
-      </div>
+        <div className="flex flex-col gap-1.5">
+          <TextField
+            id="event-city"
+            label="City"
+            value={draft.city}
+            onChange={(city) => update({ city })}
+            placeholder="Mumbai"
+            max={CITY_MAX}
+            error={errorFor(issues, 'city')}
+          />
+          <ul className="flex flex-wrap gap-1.5">
+            {POPULAR_CITIES.slice(0, 8).map((city) => (
+              <li key={city.name}>
+                <CityChip
+                  name={city.name}
+                  selected={draft.city === city.name}
+                  onPick={() => update({ city: city.name })}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
+      </FieldGroup>
 
       {/* Renders nothing where this deployment has no browser Maps key — a map
           is the only way to place a pin, so the honest answer is no pin section
-          rather than Google's "didn't load correctly" watermark. */}
+          rather than Google's "didn't load correctly" watermark.
+
+          NOT wrapped in a `FieldGroup`: it draws its own titled card, and it
+          renders NOTHING without a Maps key. A group around it would leave an
+          empty titled card promising a map that is never coming. */}
       <PinPicker
         venue={draft.venue}
         city={draft.city}
@@ -449,26 +461,48 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
           field is a question whose answer is already known — and can be
           answered wrongly, which is how an event ends the day before it
           starts. */}
-      <label className="flex w-fit items-center gap-2.5 text-body-sm">
-        <input
-          type="checkbox"
-          checked={multiDay}
-          onChange={(event) => {
-            const next = event.target.checked;
-            setMultiDayOverride(next);
-            // Going to single-day COLLAPSES the end onto the start's date,
-            // keeping the time. Clearing it instead would silently drop a
-            // check-in window and a payout date the organiser had set; moving
-            // it is the reading that loses nothing.
-            if (!next && draft.startsAt && draft.endsAt) {
-              update({ endsAt: joinDateTime(dayPart(draft.startsAt), timePart(draft.endsAt)) });
-            }
-          }}
-          className="size-4 rounded border-border accent-foreground"
-        />
-        <span>This event runs across more than one day</span>
-      </label>
+      <FieldGroup
+        title="Date & schedule"
+        icon={<CalendarDays className="size-4" />}
+        aside={
+          /* ── THE BINARY CHOICE AS A PILL TOGGLE ────────────────────────
+             This was a bare checkbox labelled "This event runs across more
+             than one day". A checkbox states one option and leaves the other
+             implied, so the reader has to invert the sentence to find out what
+             unchecking it means — and the two layouts underneath are genuinely
+             different forms, not a detail being switched on.
 
+             `SegmentedControl` names both, which is what the control actually
+             is: two mutually exclusive shapes for the same question. It is
+             also already a proper radiogroup with roving tabindex, so this
+             gains arrow-key selection and an announced "1 of 2" that the
+             checkbox never had.
+
+             The value is still DERIVED from the two datetimes and still
+             overridden in component state — nothing about the storage
+             changed, and there is deliberately no `multi_day` column. */
+          <SegmentedControl
+            aria-label="How many days"
+            size="sm"
+            value={multiDay ? 'multi' : 'single'}
+            onValueChange={(value) => {
+              const next = value === 'multi';
+              setMultiDayOverride(next);
+              // Going to single-day COLLAPSES the end onto the start's date,
+              // keeping the time. Clearing it instead would silently drop a
+              // check-in window and a payout date the organiser had set;
+              // moving it is the reading that loses nothing.
+              if (!next && draft.startsAt && draft.endsAt) {
+                update({ endsAt: joinDateTime(dayPart(draft.startsAt), timePart(draft.endsAt)) });
+              }
+            }}
+            options={[
+              { value: 'single', label: 'One day' },
+              { value: 'multi', label: 'Several' },
+            ]}
+          />
+        }
+      >
       {multiDay ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <DateField
@@ -528,6 +562,7 @@ export function ScheduleStep({ draft, update, issues, save }: StepProps) {
           />
         </div>
       )}
+      </FieldGroup>
 
       {valid ? (
         <div className="flex flex-col gap-stack rounded-xl border border-border bg-surface p-card shadow-sm">

@@ -504,9 +504,14 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
                 <span />
               )}
               {next ? (
+                // `hidden sm:inline-flex`: below `sm` the forward action moves
+                // into the pinned action bar, where it is reachable without
+                // scrolling to the end of a very long form. Exactly one of the
+                // two is rendered at any width — see `action-bar.tsx`.
                 <Button
                   onClick={() => setStep(next.id)}
                   rightIcon={<ArrowRight className="size-4" aria-hidden />}
+                  className="hidden sm:inline-flex"
                 >
                   {next.label}
                 </Button>
@@ -535,6 +540,7 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
               onSaveDraft={() => void wizard.saveNow()}
               onPreview={() => setPreviewOpen((open) => !open)}
               previewOpen={previewOpen}
+              forward={next ? { label: next.label, onClick: () => setStep(next.id) } : null}
             />
           </div>
         </main>

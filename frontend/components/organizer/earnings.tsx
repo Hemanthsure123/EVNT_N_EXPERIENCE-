@@ -9,6 +9,26 @@ import type { OrganizerInsight } from '@/lib/api/organizer';
 import { ErrorState } from '@/components/organizer/primitives';
 
 /**
+ * TWO UP ON A PHONE, three across from `sm`.
+ *
+ * These used to stack one per row below `sm`, which put three cards and about
+ * 320px of vertical space above the panel an organizer actually opens this
+ * screen to read. A phone shows roughly one and a half of them; the lead panel
+ * was off screen entirely.
+ *
+ * The THIRD card spans both columns rather than sitting alone in the left one.
+ * Three items in a two-column grid always leaves an orphan, and an orphan
+ * beside a hole reads as a card that failed to load. Spanning it makes the
+ * odd one out look deliberate, which it is.
+ *
+ * There is no fourth card to square the grid off, and that is the rule this
+ * codebase holds everywhere else: a tile has to be a column or an aggregate
+ * the backend maintains. Inventing one to balance a layout is how a dashboard
+ * starts lying.
+ */
+const STRIP_GRID = 'grid grid-cols-2 gap-stack sm:grid-cols-3';
+
+/**
  * The three money questions an organizer arrives with.
  *
  * ── WHY THESE THREE, AND WHY THEY DO NOT BRING BACK THE TILE GRID ─────────
@@ -48,10 +68,10 @@ export function EarningsStrip() {
 
   if (query.isPending) {
     return (
-      <div className="grid gap-stack sm:grid-cols-3">
+      <div className={STRIP_GRID}>
         <StatCardSkeleton />
         <StatCardSkeleton />
-        <StatCardSkeleton />
+        <StatCardSkeleton className="col-span-2 sm:col-span-1" />
       </div>
     );
   }
@@ -60,11 +80,15 @@ export function EarningsStrip() {
   const days = data.comparison_days;
 
   return (
-    <div className="grid gap-stack sm:grid-cols-3">
+    <div className={STRIP_GRID}>
       <StatCard
+        // `badge`: the icon moves into a tinted square at the far right and
+        // the trend becomes a filled pill. At two-up on a phone each card is
+        // ~160px wide, and an inline icon costs the label a fifth of that.
+        emphasis="badge"
         label="Total earnings"
         value={formatMoney(data.lifetime_revenue_minor)}
-        hint={`${data.lifetime_tickets.toLocaleString('en-IN')} tickets to ${data.lifetime_attendees.toLocaleString('en-IN')} attendees`}
+        hint={`${data.lifetime_tickets.toLocaleString('en-IN')} tickets`}
         icon={<Wallet className="size-4" aria-hidden />}
         // NO trend. There is nothing to compare a lifetime total against, and
         // a tile that shows a percentage beside every number teaches the eye
@@ -72,6 +96,7 @@ export function EarningsStrip() {
       />
 
       <StatCard
+        emphasis="badge"
         label="This month"
         value={formatMoney(data.month_revenue_minor)}
         trend={
@@ -88,6 +113,8 @@ export function EarningsStrip() {
       />
 
       <StatCard
+        emphasis="badge"
+        className="col-span-2 sm:col-span-1"
         label="Revenue per attendee"
         // Null renders as an em dash via `formatMoney`, and the hint explains
         // it. Rendering ₹0 would be a claim that people bought and paid

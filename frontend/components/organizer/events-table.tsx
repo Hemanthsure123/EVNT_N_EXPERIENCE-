@@ -6,10 +6,12 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Archive,
   BarChart3,
+  CalendarDays,
   CalendarPlus,
   CopyPlus,
   ExternalLink,
   LayoutGrid,
+  MapPin,
   Pencil,
   Receipt,
   Rows3,
@@ -17,6 +19,7 @@ import {
   Ticket,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Chip, ProgressBar } from '@/components/ui';
 import { formatMoney } from '@/lib/discovery/format';
 import type { EventRow } from '@/lib/api/organizer';
 import { STATUS_FILTERS } from '@/lib/organizer/event-status';
@@ -297,6 +300,37 @@ export function EventsTable() {
         </div>
       </TableToolbar>
 
+      {/* ── THE STATUS FILTER, AS CHIPS, ON A PHONE ────────────────────
+          Above `sm` the status filter lives in `FilterCluster` as a select,
+          which is right for a toolbar with four filters in it. On a phone that
+          cluster collapses behind one button, so the single filter an organizer
+          reaches for most — "show me my drafts" — was two taps and a dropdown
+          behind a chevron.
+
+          These are the SAME URL param and the same `STATUS_FILTERS` list, so
+          the two controls cannot disagree; this is a second affordance for one
+          piece of state, not a second piece of state.
+
+          NO COUNTS on the chips. The reference has them ("Active 3", "Past 8")
+          and this list is CURSOR-paginated: the client holds one page, so any
+          count it rendered would be a count of what happens to be loaded. The
+          house rule is that such a number is shown as a floor ("24+") or not
+          at all, and a filter chip is far too small to carry the caveat. */}
+      <div className="border-b border-border sm:hidden">
+        <div className="flex gap-2 overflow-x-auto px-card py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {STATUS_FILTERS.map((option) => (
+            <Chip
+              key={option.value || 'all'}
+              selected={values.status === option.value}
+              onClick={() => set({ status: option.value })}
+              className="shrink-0"
+            >
+              {option.label}
+            </Chip>
+          ))}
+        </div>
+      </div>
+
       {chips.length ? (
         <div className="border-b border-border px-card py-2">
           <FilterChips chips={chips} onClearAll={clearAll} />
@@ -565,136 +599,165 @@ function EventCards({
   onOpen: (row: EventRow) => void;
 }) {
   return (
-    <ul className="grid gap-stack p-card sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="grid gap-stack p-card xl:grid-cols-2">
       {rows.map((row) => {
         const chosen = isSelected(row.id);
         const remaining = Math.max(0, row.capacity - row.sold);
         const sellThrough = row.capacity > 0 ? row.sold / row.capacity : null;
+        const soldOut = sellThrough !== null && row.sold >= row.capacity;
 
         return (
           <li key={row.id}>
             <div
               className={cn(
-                'group flex h-full flex-col overflow-hidden rounded-xl border transition-colors duration-fast',
+                'group flex h-full flex-col gap-stack rounded-xl border p-card transition-colors duration-fast',
                 'motion-reduce:transition-none',
-                chosen ? 'border-nav-active bg-nav-active' : 'border-border bg-surface',
+                chosen
+                  ? 'border-nav-active bg-nav-active'
+                  : 'border-border bg-surface shadow-sm',
               )}
             >
-              <div className="relative aspect-card w-full bg-muted">
-                <Poster
-                  url={row.poster_url}
-                  className="size-full object-cover"
-                  fallback={
-                    <span className="flex size-full items-center justify-center text-caption text-muted-foreground">
-                      No cover image
-                    </span>
-                  }
-                />
-
-                <label className="absolute left-2 top-2 inline-flex cursor-pointer items-center rounded-md bg-surface/90 p-1.5 backdrop-blur">
-                  <input
-                    type="checkbox"
-                    checked={chosen}
-                    onChange={() => onToggle(row.id)}
-                    aria-label={`Select ${row.title}`}
-                    className="size-5 cursor-pointer accent-primary"
+              {/* ── HEAD: a THUMBNAIL beside the meta, not a poster above it ──
+                  The poster used to be a full-width 4:3 block at the top of the
+                  card, which on a phone put roughly 290px of artwork above
+                  every title — three events to a screen, and the one fact that
+                  distinguishes them (the title) below the fold on each. A
+                  64px thumbnail is still enough to recognise a poster you
+                  chose, and it buys back the whole row. */}
+              <div className="flex gap-stack">
+                <div className="relative size-16 shrink-0 overflow-hidden rounded-lg bg-muted sm:size-20">
+                  <Poster
+                    url={row.poster_url}
+                    className="size-full object-cover"
+                    fallback={
+                      <span className="flex size-full items-center justify-center px-1 text-center text-caption leading-tight text-muted-foreground">
+                        No cover
+                      </span>
+                    }
                   />
-                </label>
 
-                <span className="absolute right-2 top-2">
-                  <StatusBadge status={row.status} capacity={row.capacity} sold={row.sold} />
-                </span>
+                  <label className="absolute left-1 top-1 inline-flex cursor-pointer items-center rounded-md bg-surface/90 p-1 backdrop-blur">
+                    <input
+                      type="checkbox"
+                      checked={chosen}
+                      onChange={() => onToggle(row.id)}
+                      aria-label={`Select ${row.title}`}
+                      className="size-4 cursor-pointer accent-primary"
+                    />
+                  </label>
+                </div>
+
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  {/* The status leads, as in the reference: it is what decides
+                      whether the rest of the card is even actionable. */}
+                  <span className="w-fit">
+                    <StatusBadge status={row.status} capacity={row.capacity} sold={row.sold} />
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpen(row)}
+                    className="rounded-sm text-left text-body-sm font-semibold underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="line-clamp-2">{row.title}</span>
+                  </button>
+
+                  {/* Date and place on one wrapping row with their own icons.
+                      `venue` is included where the old card had only `city` —
+                      two events in the same city on the same night are exactly
+                      the pair somebody is trying to tell apart here. */}
+                  <p className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <CalendarDays className="size-3.5 shrink-0" aria-hidden />
+                      <time dateTime={row.starts_at}>
+                        {new Date(row.starts_at).toLocaleString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </time>
+                    </span>
+                    <span className="inline-flex min-w-0 items-center gap-1">
+                      <MapPin className="size-3.5 shrink-0" aria-hidden />
+                      <span className="truncate">
+                        {row.venue}
+                        {row.city ? `, ${row.city}` : ''}
+                      </span>
+                    </span>
+                  </p>
+                </div>
               </div>
 
-              <div className="flex min-w-0 flex-1 flex-col gap-2 p-card">
-                <button
-                  type="button"
-                  onClick={() => onOpen(row)}
-                  className="rounded-sm text-left text-body-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <span className="line-clamp-2">{row.title}</span>
-                </button>
+              {/* ── THE MEASURE, IN A SUNKEN PANEL ───────────────────────────
+                  Sold, remaining and revenue used to be a three-column `<dl>`
+                  of label-over-value pairs, which spends three lines and two
+                  type sizes on three numbers. The reference groups them into
+                  one tinted strip with the meter, and it is a better fit for
+                  what they are: one fact about the on-sale, read together.
 
-                <p className="truncate text-caption text-muted-foreground">
-                  {new Date(row.starts_at).toLocaleDateString('en-IN', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  })}{' '}
-                  · {row.city}
+                  A card inside a card with the SAME treatment reads as a
+                  rendering fault, so this drops a step on the surface ladder
+                  (`bg-sunken`) rather than drawing a second border. */}
+              {sellThrough === null ? (
+                <p className="rounded-lg bg-sunken p-stack text-caption text-muted-foreground">
+                  No ticket types yet — add one and sales appear here.
                 </p>
-
-                {sellThrough === null ? (
-                  <p className="text-caption text-muted-foreground">No ticket types yet</p>
-                ) : (
-                  <>
-                    <span
-                      className="h-1.5 overflow-hidden rounded-full bg-muted"
-                      role="progressbar"
-                      aria-valuenow={Math.round(sellThrough * 100)}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label={`${row.sold} of ${row.capacity} sold`}
-                    >
-                      {/* Violet as a DATA mark, not a control: a meter is read,
-                          never pressed. */}
-                      <span
-                        className="block h-full rounded-full bg-primary transition-[width] duration-base ease-out motion-reduce:transition-none"
-                        style={{ width: `${Math.min(100, Math.round(sellThrough * 100))}%` }}
-                      />
+              ) : (
+                <div className="flex flex-col gap-2 rounded-lg bg-sunken p-stack">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
+                      <Ticket className="size-3.5 shrink-0" aria-hidden />
+                      <span className="truncate tabular-nums">
+                        {row.sold} / {row.capacity}
+                        {soldOut ? ' · Sold out' : ` · ${remaining} left`}
+                      </span>
                     </span>
-                    <dl className="grid grid-cols-3 gap-2 text-caption">
-                      <Stat label="Sold" value={String(row.sold)} />
-                      <Stat label="Left" value={String(remaining)} />
-                      <Stat label="Revenue" value={formatMoney(row.revenue_minor)} />
-                    </dl>
-                  </>
-                )}
-
-                <div className="mt-auto flex items-center gap-1 pt-1">
-                  {/* FIRST, because it is the only one of these that changes
-                      the event rather than reporting on it — and because until
-                      this route existed every field was reachable exactly once,
-                      while the event was being created, and never again. */}
-                  <CardAction
-                    icon={Pencil}
-                    label="Edit"
-                    href={`/dashboard/events/${row.id}/edit`}
+                    <span className="shrink-0 text-body-sm font-semibold tabular-nums text-foreground">
+                      {formatMoney(row.revenue_minor)}
+                    </span>
+                  </div>
+                  <ProgressBar
+                    value={sellThrough}
+                    aria-label={`${row.sold} of ${row.capacity} sold`}
                   />
-                  <CardAction
-                    icon={BarChart3}
-                    label="Analytics"
-                    href={`/dashboard/events/${row.id}/analytics`}
-                  />
-                  <CardAction
-                    icon={Receipt}
-                    label="Bookings"
-                    href={`/dashboard/bookings?event=${row.id}`}
-                  />
-                  {row.status === 'live' ? (
-                    <CardAction
-                      icon={ExternalLink}
-                      label="View public page"
-                      href={`/events/${row.id}`}
-                      external
-                    />
-                  ) : null}
                 </div>
+              )}
+
+              <div className="mt-auto flex items-center gap-1">
+                {/* FIRST, because it is the only one of these that changes
+                    the event rather than reporting on it — and because until
+                    this route existed every field was reachable exactly once,
+                    while the event was being created, and never again. */}
+                <CardAction
+                  icon={Pencil}
+                  label="Edit"
+                  href={`/dashboard/events/${row.id}/edit`}
+                />
+                <CardAction
+                  icon={BarChart3}
+                  label="Analytics"
+                  href={`/dashboard/events/${row.id}/analytics`}
+                />
+                <CardAction
+                  icon={Receipt}
+                  label="Bookings"
+                  href={`/dashboard/bookings?event=${row.id}`}
+                />
+                {row.status === 'live' ? (
+                  <CardAction
+                    icon={ExternalLink}
+                    label="View public page"
+                    href={`/events/${row.id}`}
+                    external
+                  />
+                ) : null}
               </div>
             </div>
           </li>
         );
       })}
     </ul>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="truncate text-muted-foreground">{label}</dt>
-      <dd className="truncate tabular-nums text-foreground">{value}</dd>
-    </div>
   );
 }
 

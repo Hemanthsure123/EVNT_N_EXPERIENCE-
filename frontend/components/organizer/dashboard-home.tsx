@@ -2,13 +2,14 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { ArrowRight, CalendarPlus, CalendarRange } from 'lucide-react';
+import { ArrowRight, CalendarDays, CalendarPlus, CalendarRange, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ProgressBar } from '@/components/ui';
 import { formatMoney } from '@/lib/discovery/format';
 import { useEventRows, useSettlements } from '@/lib/organizer/queries';
 import { owedTotal } from '@/lib/organizer/attention';
 import type { EventRow } from '@/lib/api/organizer';
-import { EmptyState, ErrorState, Panel, Poster, Skeleton } from './primitives';
+import { EmptyState, ErrorState, Panel, Poster, Skeleton, StatusPill } from './primitives';
 import { ActivityFeed } from './activity-feed';
 import { EarningsStrip, InsightsCard } from './earnings';
 import { TodayPanel } from './today-panel';
@@ -168,10 +169,15 @@ function UpcomingEvents() {
     [query.data],
   );
 
+  // The soonest event gets the hero treatment; the rest stay rows. ONE hero,
+  // never a stack of them — the point of a hero is that it is the thing to
+  // look at, and two of them is just a list with bigger pictures.
+  const [next, ...rest] = events;
+
   return (
     <section className="flex flex-col gap-stack">
       <SectionHeading
-        title="Coming up"
+        title="Happening next"
         href="/dashboard/events"
         linkLabel="All events"
       />
@@ -183,8 +189,10 @@ function UpcomingEvents() {
           className="rounded-xl border border-border bg-surface shadow-sm"
         />
       ) : query.isPending ? (
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-24 w-full rounded-xl" />
+        <div className="flex flex-col gap-stack">
+          {/* Shaped like the hero, not like a row — a skeleton that promises
+              the wrong height is the one thing a skeleton exists to prevent. */}
+          <Skeleton className="aspect-[16/10] w-full rounded-xl sm:aspect-[16/7]" />
           <Skeleton className="h-24 w-full rounded-xl" />
         </div>
       ) : events.length === 0 ? (
@@ -204,15 +212,146 @@ function UpcomingEvents() {
           />
         </div>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {events.map((event) => (
-            <li key={event.id}>
-              <UpcomingCard event={event} />
-            </li>
-          ))}
-        </ul>
+        <div className="flex flex-col gap-stack">
+          <NextEventHero event={next} />
+          {rest.length > 0 ? (
+            <ul className="flex flex-col gap-2">
+              {rest.map((event) => (
+                <li key={event.id}>
+                  <UpcomingCard event={event} />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       )}
     </section>
+  );
+}
+
+/** "In 3 days" / "Tomorrow" / "Today", from the start time. */
+function countdownLabel(startsAt: string): string {
+  const days = Math.ceil((Date.parse(startsAt) - Date.now()) / 86_400_000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  return `In ${days} days`;
+}
+
+/**
+ * The next event, at poster size.
+ *
+ * ── WHAT IS ON IT, AND WHAT IS DELIBERATELY NOT ──────────────────────────
+ *
+ * The reference layout this follows carries an "Event Readiness 92%" meter and
+ * a "Badges synced" line. Neither is here. Readiness is a WIZARD concept —
+ * `completion()` scores a draft against the fields needed to publish — and it
+ * is meaningless for an event that is already live and selling: the answer is
+ * always 100%, so the bar would be decoration that always agrees with itself.
+ * Nothing anywhere syncs a badge.
+ *
+ * What replaces them is the meter this dashboard already trusts: tickets sold
+ * against capacity, from the same two columns the row below uses. It answers
+ * the question the reference's bar was gesturing at — is this event ready to
+ * happen — with a number that is real.
+ *
+ * ── THE SCRIM IS THE HOUSE RECIPE ────────────────────────────────────────
+ *
+ * `from-overlay/85 via-overlay/25 to-transparent` with `text-white`, copied
+ * from `discovery/showcase-card.tsx` rather than re-picked: a dark foot and a
+ * clear top keeps the poster readable AND the title legible, where a flat wash
+ * over the whole image greys the artwork. It is also the only place in this
+ * layout where a colour is not a semantic token, and it is the same exception
+ * the public poster cards already make.
+ */
+function NextEventHero({ event }: { event: EventRow }) {
+  const starts = new Date(event.starts_at);
+  const sellThrough = event.capacity > 0 ? event.sold / event.capacity : null;
+  const soldOut = sellThrough !== null && event.sold >= event.capacity;
+
+  return (
+    <article className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="relative aspect-[16/10] bg-muted sm:aspect-[16/7]">
+        <Poster url={event.poster_url} className="size-full object-cover" />
+        <div
+          className="absolute inset-0 bg-gradient-to-t from-overlay/85 via-overlay/25 to-transparent"
+          aria-hidden
+        />
+
+        {/* Two pills at the top, pushed to opposite corners: WHEN on the left
+            and the event's STATE on the right. They are the two facts worth
+            reading before the title, and stacking them would put one of them
+            over the artwork's subject. */}
+        <div className="absolute inset-x-card top-card flex items-start justify-between gap-2">
+          <StatusPill tone="info">{countdownLabel(event.starts_at)}</StatusPill>
+          {soldOut ? <StatusPill tone="success">Sold out</StatusPill> : null}
+        </div>
+
+        <h3 className="absolute inset-x-card bottom-card line-clamp-2 text-body-lg font-semibold text-white">
+          {event.title}
+        </h3>
+      </div>
+
+      <div className="flex flex-col gap-stack p-card">
+        <p className="flex items-center gap-2 text-body-sm text-muted-foreground">
+          <CalendarDays className="size-4 shrink-0" aria-hidden />
+          <time dateTime={event.starts_at}>
+            {starts.toLocaleString('en-IN', {
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
+          </time>
+        </p>
+        <p className="flex items-center gap-2 text-body-sm text-muted-foreground">
+          <MapPin className="size-4 shrink-0" aria-hidden />
+          <span className="truncate">
+            {event.venue}
+            {event.city ? `, ${event.city}` : ''}
+          </span>
+        </p>
+
+        {/* A SUNKEN sub-card, not another bordered one. A card inside a card
+            with the same treatment reads as a rendering mistake; dropping a
+            step on the surface ladder says "part of the thing above" without
+            drawing a second edge. */}
+        {sellThrough === null ? (
+          <div className="rounded-lg bg-sunken p-stack">
+            <p className="text-caption text-muted-foreground">
+              No ticket types yet — add one and this fills in.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 rounded-lg bg-sunken p-stack">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-caption font-medium text-foreground">Tickets sold</span>
+              <span className="text-caption font-semibold tabular-nums text-primary">
+                {Math.round(sellThrough * 100)}%
+              </span>
+            </div>
+            <ProgressBar
+              value={sellThrough}
+              aria-label={`${event.sold} of ${event.capacity} tickets sold`}
+            />
+            <div className="flex items-baseline justify-between gap-2 text-caption text-muted-foreground">
+              <span className="tabular-nums">
+                {event.sold} / {event.capacity} issued
+              </span>
+              <span className="tabular-nums">{formatMoney(event.revenue_minor)}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Full width, because it is the only action on the card and a phone
+            gives it the whole thumb. No share button beside it: nothing in the
+            organizer surface shares an event, and a control that does nothing
+            is worse than no control. */}
+        <Button asChild size="md" className="w-full">
+          <Link href={`/dashboard/events?event=${event.id}`}>Manage event</Link>
+        </Button>
+      </div>
+    </article>
   );
 }
 
@@ -254,21 +393,11 @@ function UpcomingCard({ event }: { event: EventRow }) {
           <span className="text-caption text-muted-foreground">No ticket types yet</span>
         ) : (
           <>
-            <span
-              className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-muted"
-              role="progressbar"
-              aria-valuenow={Math.round(sellThrough * 100)}
-              aria-valuemin={0}
-              aria-valuemax={100}
+            <ProgressBar
+              value={sellThrough}
               aria-label={`${event.sold} of ${event.capacity} tickets sold`}
-            >
-              {/* Violet as a DATA MARK. It is the wayfinding accent's other
-                  legitimate job: nothing here is pressable. */}
-              <span
-                className="block h-full rounded-full bg-primary transition-[width] duration-base ease-out motion-reduce:transition-none"
-                style={{ width: `${Math.min(100, Math.round(sellThrough * 100))}%` }}
-              />
-            </span>
+              className="mt-0.5"
+            />
             <span className="text-caption tabular-nums text-muted-foreground">
               {event.sold} of {event.capacity} sold · {formatMoney(event.revenue_minor)}
             </span>
