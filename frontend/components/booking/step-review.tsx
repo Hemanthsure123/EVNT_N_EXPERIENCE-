@@ -31,6 +31,7 @@ import {
   toBookingItems,
 } from '@/lib/booking/selection';
 import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
+import { useToast } from '@/components/ui/toast';
 import { CouponCard } from './coupon-card';
 import { cn } from '@/lib/utils/cn';
 import { CTA_PILL_LG } from './cta';
@@ -95,7 +96,21 @@ export function ReviewStep() {
   const { status, user } = useAuth();
   const router = useRouter();
 
-  const [error, setError] = React.useState<{ message: string; recoverable: boolean } | null>(null);
+  /**
+   * Why a reserve did not happen.
+   *
+   * `reference` is the server's `error_id` — present only on a 500, where the
+   * message is the generic one and the id is the ONLY thing that can find the
+   * traceback in the logs. Showing it is not developer detail leaking onto a
+   * customer screen: it is the difference between a support conversation that
+   * can be resolved and one that starts with "it said an error occurred".
+   */
+  const { toast } = useToast();
+  const [error, setError] = React.useState<{
+    message: string;
+    recoverable: boolean;
+    reference?: string;
+  } | null>(null);
   const [reserving, setReserving] = React.useState(false);
   const attempted = React.useRef(false);
   /**
@@ -294,13 +309,36 @@ export function ReviewStep() {
         window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
       } catch (thrown) {
         const apiError = thrown instanceof ApiError ? thrown : null;
+        // ── EVERY FAILURE HERE IS RECOVERABLE, AND SAYING SO IS THE FIX ──
+        //
+        // `recoverable` used to mean "the customer can fix this by choosing
+        // differently", and everything else — a 500, a dropped request, a
+        // gateway blip — fell through to "We could not hold your tickets"
+        // over the server's generic sentence. That is a dead end for a
+        // condition that is usually gone by the next press, on the screen
+        // where somebody is trying to give us money.
+        //
+        // Nothing was reserved and nothing was charged in ANY of these cases,
+        // so the honest heading is the same one every time and the action is
+        // Try again. What still varies is the SENTENCE underneath: a sold-out
+        // tier says so, and a server fault says so without pretending to know
+        // more than it does.
+        const serverFault = apiError === null || apiError.status >= 500;
         setError({
-          message: apiError?.message ?? 'We could not hold these tickets. Please try again.',
-          // Anything the user can fix by choosing differently.
-          recoverable:
-            apiError?.code === 'sold_out' ||
-            apiError?.code === 'exceeds_max_per_order' ||
-            apiError?.code === 'ticket_type_not_found',
+          message: serverFault
+            ? 'Something went wrong on our side. Nothing has been charged.'
+            : apiError.message,
+          recoverable: !serverFault,
+          reference:
+            typeof apiError?.details?.error_id === 'string'
+              ? apiError.details.error_id
+              : undefined,
+        });
+        toast({
+          title: serverFault ? 'That did not go through' : 'Those tickets just went',
+          description: serverFault
+            ? 'Nothing has been charged. Try again.'
+            : (apiError?.message ?? undefined),
         });
       } finally {
         setReserving(false);
@@ -316,6 +354,7 @@ export function ReviewStep() {
     setBooking,
     setPaymentKeyId,
     setPaymentProvider,
+    toast,
   ]);
 
   // ── THE DONATION ────────────────────────────────────────────────────────
@@ -571,9 +610,17 @@ export function ReviewStep() {
           </span>
           <div className="flex flex-col gap-2">
             <h2 className="text-h3 text-foreground">
-              {error.recoverable ? 'Those tickets just went' : 'We could not hold your tickets'}
+              {error.recoverable ? 'Those tickets just went' : 'That did not go through'}
             </h2>
             <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">{error.message}</p>
+            {error.reference ? (
+              /* Quotable, and deliberately quiet. It is the only handle on the
+                 server's own traceback, and a customer who can paste it turns
+                 an unreproducible report into a log line. */
+              <p className="text-caption tabular-nums text-muted-foreground/70">
+                Reference {error.reference.slice(0, 8)}
+              </p>
+            ) : null}
           </div>
           <div className="flex w-full max-w-sm flex-col gap-2">
             {/* A SECOND ATTEMPT, which this screen did not offer.

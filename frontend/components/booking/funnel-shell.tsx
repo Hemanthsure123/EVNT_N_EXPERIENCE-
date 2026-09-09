@@ -157,6 +157,36 @@ function BackControl() {
     Boolean(booking.hold_expires_at) &&
     Date.parse(booking.hold_expires_at as string) > Date.now();
 
+  /**
+   * ── THE HARDWARE BACK BUTTON ASKS THE SAME QUESTION ─────────────────
+   *
+   * The arrow above prompts before releasing a live hold. The phone's own
+   * back button and the edge-swipe gesture did not: they are a history
+   * navigation, not a click, so they left the checkout with the hold still
+   * counting down — the customer's seats held by a booking they had walked
+   * away from, until the sweeper caught it a minute later.
+   *
+   * A SENTINEL ENTRY is the only thing that can intercept it. There is no
+   * cancellable event for a back navigation — `popstate` fires AFTER the
+   * history has already moved — so the guard pushes a throwaway entry while
+   * the hold is live, and the back press pops THAT instead of leaving. The
+   * handler immediately pushes it again and opens the drawer, so the guard
+   * survives being used and a second press asks again rather than escaping.
+   *
+   * Only while `live`. A checkout with no hold has nothing to confirm, and a
+   * guard there would trap somebody on a screen they are entitled to leave.
+   */
+  React.useEffect(() => {
+    if (!live) return;
+    window.history.pushState({ ccHoldGuard: true }, '');
+    const onPop = () => {
+      window.history.pushState({ ccHoldGuard: true }, '');
+      setAsking(true);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [live]);
+
   const leave = () => {
     setAsking(false);
     clearSelection();
@@ -171,6 +201,8 @@ function BackControl() {
       // first, which is the outcome this call wanted. Blocking the exit on it
       // would trap somebody on a checkout they have chosen to leave.
       await cancelBooking(booking.id).catch(() => undefined);
+      // `replace`, not `back`: the guard above may have left a sentinel entry
+      // on the stack, and going back would land on it rather than leaving.
       setBooking(null);
       clearSelection();
       bumpAllAttemptsForEvent(event.id);

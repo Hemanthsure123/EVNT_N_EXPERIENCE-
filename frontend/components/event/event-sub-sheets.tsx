@@ -215,7 +215,7 @@ function VenueSheet({ event, detail }: { event: EventCardData; detail: EventDeta
 
       {detail?.accessibility_notes ? (
         <section className="flex flex-col gap-2">
-          <h3 className="text-body font-semibold text-foreground">Accessibility</h3>
+          <h3 className="text-body font-bold text-foreground">Accessibility</h3>
           <AccessibilityNotes notes={detail.accessibility_notes} />
         </section>
       ) : null}
@@ -254,7 +254,7 @@ function ScheduleSheet({
 
       {timeline.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h3 className="text-body font-semibold text-foreground">Running order</h3>
+          <h3 className="text-body font-bold text-foreground">Running order</h3>
           <RunningOrder entries={timeline} />
         </section>
       ) : (

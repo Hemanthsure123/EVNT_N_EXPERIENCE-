@@ -273,20 +273,44 @@ def test_update_event_missing_event(service, owner):
 
 
 @pytest.mark.django_db
-def test_publish_event_submits_for_review_rather_than_going_live(
+def test_publish_event_takes_a_verified_organizers_event_live(
     service, make_event, owner, add_ticket_type
 ):
+    """A verified organization publishes; nobody approves.
+
+    `EVENT_PUBLISHED` is emitted HERE now rather than on an operator's
+    approval, because this IS the moment the event becomes public and
+    `notifications` schedules its attendee reminder off it.
+    """
     event = make_event(status=EventStatus.DRAFT)
     add_ticket_type(event)  # satisfy the ticketing publish gate
 
     published = service.publish_event(event_id=event.id, actor_id=owner.id)
 
+    assert published.status == EventStatus.LIVE
+    assert OutboxEvent.objects.filter(event_type="events.event_published").exists()
+    # It never entered the queue, so nothing should be waiting for a human.
+    assert not OutboxEvent.objects.filter(event_type="events.event_submitted_for_review").exists()
+
+
+@pytest.mark.django_db
+def test_the_review_queue_is_still_reachable_when_the_policy_says_so(
+    service, make_event, owner, add_ticket_type, monkeypatch
+):
+    """The flag is a real switch, not a dead branch.
+
+    Moderation is one constant away from being back, and this is what keeps
+    that path executable — an `if` nothing ever takes is an `if` that has
+    already rotted by the time somebody needs it.
+    """
+    monkeypatch.setattr(type(service), "PUBLISH_STRAIGHT_TO_LIVE", False)
+    event = make_event(status=EventStatus.DRAFT)
+    add_ticket_type(event)
+
+    published = service.publish_event(event_id=event.id, actor_id=owner.id)
+
     assert published.status == EventStatus.PENDING_REVIEW
     assert OutboxEvent.objects.filter(event_type="events.event_submitted_for_review").exists()
-    # events.event_published is emitted on APPROVAL, not on submission.
-    # `notifications` schedules its attendee reminder off that event, and
-    # scheduling one for an event that is then rejected would message ticket
-    # holders who do not exist.
     assert not OutboxEvent.objects.filter(event_type="events.event_published").exists()
 
 

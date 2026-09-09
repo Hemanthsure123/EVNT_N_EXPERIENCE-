@@ -4,7 +4,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Ticket } from 'lucide-react';
+import { Pause, Play, Ticket } from 'lucide-react';
 import { type MotionValue, motion, useMotionValue, useReducedMotion } from 'framer-motion';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
@@ -31,7 +31,8 @@ import {
 } from '@/lib/discovery/shared-poster';
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
-import { EventWidgetContent } from './event-widget-content';
+import { EventWidgetContent, sectionTabsFor } from './event-widget-content';
+import { SectionTabs } from './section-tabs';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
 
@@ -83,6 +84,16 @@ const FLIGHT_MS = 220;
 const TRANSITION_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const PAGE_TRANSITION = { duration: FLIGHT_MS / 1000, ease: TRANSITION_EASE };
 
+/**
+ * How long each hero image holds before the next one fades in.
+ *
+ * Four seconds is the codebase's existing auto-rail interval, and it is long
+ * enough that the movement reads as a slideshow rather than as a flicker.
+ */
+const HERO_SLIDE_MS = 4000;
+/** The crossfade itself — slow enough to be a dissolve, not a cut. */
+const HERO_FADE_MS = 700;
+
 /** How long the poster takes to dock into the bar, or to come back out. */
 const DOCK_MS = 320;
 
@@ -91,7 +102,12 @@ const SETTLE_MS = 340;
 const SETTLE_EASE = `cubic-bezier(${TRANSITION_EASE.join(', ')})`;
 
 /** How far a gesture must travel before it is allowed to commit to an axis. */
-const COMMIT_SLOP = 10;
+// RAISED FROM 10. The direction of a gesture is at its noisiest in the first
+// few pixels, and deciding on ten of them decides on the noise — which is the
+// "casual scrolling changes the event" report. Sixteen is still well under
+// the distance anybody would call a swipe, and it is measured on EITHER axis,
+// so an ordinary scroll is not delayed by it.
+const COMMIT_SLOP = 16;
 
 /**
  * How much more horizontal than vertical a movement must be to be a swipe.
@@ -101,7 +117,11 @@ const COMMIT_SLOP = 10;
  * two near the start; on a bare `>` that frame decides the gesture, and "I
  * scrolled and it changed the event" is the commonest way this reads as broken.
  */
-const AXIS_DOMINANCE = 1.2;
+// RAISED FROM 1.2. At 1.2 the margin is about 50 degrees off vertical, which
+// a thumb arc clears on an ordinary scroll. At 1.8 the movement has to be
+// roughly 61 degrees from vertical: still a comfortable diagonal, no longer
+// an accident.
+const AXIS_DOMINANCE = 1.8;
 
 /** Pages abut exactly — a full-screen pager has no rim to peek through. */
 const CARD_GAP = 0;
@@ -232,14 +252,14 @@ export function EventWidgetDeck() {
     return list;
   }, [content, currentEvent]);
 
-  const openPoster = React.useCallback(() => {
+  const openPoster = React.useCallback((index: number) => {
     // A swipe ends in a click. Consume it rather than opening a photograph
     // the reader was scrolling past.
     if (draggedRef.current) {
       draggedRef.current = false;
       return;
     }
-    setLightboxAt(0);
+    setLightboxAt(index);
   }, []);
 
   const gestureRef = React.useRef<{
@@ -837,6 +857,7 @@ export function EventWidgetDeck() {
                     hidePoster={flight !== null}
                     blurOpacity={blurOpacity}
                     onOpenPoster={openPoster}
+                    images={lightboxImages}
                     ctaHeight={ctaHeight}
                     scrollerRef={scrollerRef}
                     ctaRef={ctaRef}
@@ -925,6 +946,7 @@ function Poster({ event, priority }: { event: EventCardData; priority?: boolean 
  */
 function Hero({
   event,
+  images,
   docked,
   hidePoster,
   layoutId,
@@ -934,6 +956,8 @@ function Hero({
   onOpenPoster,
 }: {
   event: EventCardData;
+  /** The poster first, then the organiser's gallery. */
+  images: LightboxImage[];
   docked: boolean;
   /** True while a clone is flying, so the same photograph is never on screen twice. */
   hidePoster: boolean;
@@ -942,8 +966,41 @@ function Hero({
   boxRef: React.RefObject<HTMLDivElement>;
   /** 1 at the top of the page, 0 once the poster has scrolled its own height. */
   blurOpacity: MotionValue<number>;
-  onOpenPoster: () => void;
+  onOpenPoster: (index: number) => void;
 }) {
+  const reduceMotion = useReducedMotion();
+  const [slide, setSlide] = React.useState(0);
+  const [paused, setPaused] = React.useState(false);
+
+  const count = images.length;
+  const canSlide = count > 1 && !reduceMotion;
+
+  /**
+   * ── AUTO-ADVANCE, AND IT CAN BE STOPPED ────────────────────────────────
+   *
+   * WCAG 2.2.2 requires a pause mechanism for anything that moves
+   * automatically for more than five seconds, and this codebase's own auto-rail
+   * says the same thing in stronger terms. There are three stops here and all
+   * of them are real: a visible pause button, a pause while the reader is
+   * touching the artwork, and no movement at all under `prefers-reduced-motion`.
+   *
+   * It also stops once the poster has DOCKED. The slideshow is then off screen
+   * and every tick would be a re-render of the whole event page to change an
+   * image nobody is looking at.
+   */
+  React.useEffect(() => {
+    if (!canSlide || paused || docked) return;
+    const timer = window.setInterval(
+      () => setSlide((previous) => (previous + 1) % count),
+      HERO_SLIDE_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [canSlide, count, docked, paused]);
+
+  // A shrinking gallery must not strand the index past the end.
+  const index = count === 0 ? 0 : Math.min(slide, count - 1);
+  const backdrop = images[index]?.url ?? event.poster_url;
+
   return (
     <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
       <div
@@ -956,8 +1013,7 @@ function Hero({
         // unconditionally meant that closing while the poster was docked flew
         // the clone out of an empty container scrolled somewhere above the
         // fold. It is on the hero while the hero holds the poster, and on the
-        // thumbnail once the bar does — so the close always begins wherever the
-        // reader can actually see the artwork.
+        // thumbnail once the bar does.
         {...(docked ? {} : { [DECK_POSTER_ATTR]: '' })}
         style={{
           aspectRatio: `${HERO_ASPECT_W} / ${HERO_ASPECT_H}`,
@@ -970,35 +1026,38 @@ function Hero({
         className="relative w-full overflow-hidden bg-muted"
       >
         {/* ── THE BLURRED BACKDROP ──────────────────────────────────────
-            The poster's own colours, blown up and blurred, filling whatever
-            the artwork does not.
+            The current slide's own colours, blown up and lightly blurred,
+            filling whatever the artwork does not.
 
             It exists because the box has a FIXED shape and posters do not.
             Anything the picture leaves — a letterbox on an unusual ratio, the
             frame before it decodes, and the whole box once the poster has
             docked into the booking bar — was a flat slab of `bg-muted`, which
             on a light theme reads as a skin-toned rectangle where the event's
-            artwork should be. This gives every one of those states the
-            event's own colour instead of a default grey.
-
-            `aria-hidden` and no `priority`: it is the same file the sharp copy
-            above is already loading, so it costs no extra request, and it is
-            scenery. */}
-        {event.poster_url ? (
+            artwork should be. */}
+        {backdrop ? (
           <motion.div
             aria-hidden
             style={{ opacity: blurOpacity }}
             className="pointer-events-none absolute inset-0"
           >
             <Image
-              src={event.poster_url}
+              key={backdrop}
+              src={backdrop}
               alt=""
               fill
               sizes="100vw"
-              // `scale-125`: a blur samples past its own edges, so an unscaled
-              // copy draws a soft transparent rim down all four sides of the
-              // box. Blowing it up puts that rim outside the clip.
-              className="scale-125 object-cover blur-2xl saturate-150"
+              // ── A LIGHT BLUR, NOT A HEAVY ONE ─────────────────────────
+              //
+              // `blur-2xl` is 40px, which turned the backdrop into a wash of
+              // colour with no relationship to the picture in front of it —
+              // reported as too heavy. `blur-sm` is 4px: soft enough that
+              // nothing behind the poster competes with it, light enough that
+              // it reads as the same photograph rather than as fog.
+              //
+              // The scale exists to push the blur's soft edges outside the
+              // clip, and 4px needs far less room than 40.
+              className="scale-110 object-cover blur-sm saturate-150"
             />
           </motion.div>
         ) : null}
@@ -1012,23 +1071,107 @@ function Hero({
             transition={transition}
             className="absolute inset-0 overflow-hidden"
           >
-            <Poster event={event} priority />
+            {/* ── A CROSSFADE, NOT A SLIDE TRACK ─────────────────────────
+                Every image is mounted and stacked; only opacity moves. A
+                translating track inside the shared-layout element would be a
+                second transform on the node framer is already animating
+                between two very different boxes, and the two would fight
+                every time the poster docked mid-slideshow.
+
+                It also means each picture is decoded ONCE, on mount, rather
+                than on the tick that brings it into view — which is what
+                makes the first transition as smooth as the fifth. */}
+            {(images.length > 0 ? images : [{ url: event.poster_url ?? '', alt: event.title }]).map(
+              (image, position) =>
+                image.url ? (
+                  <span
+                    key={`${image.url}#${position}`}
+                    aria-hidden={position === index ? undefined : true}
+                    style={{ transitionDuration: `${reduceMotion ? 0 : HERO_FADE_MS}ms` }}
+                    className={cn(
+                      'absolute inset-0 transition-opacity ease-out motion-reduce:transition-none',
+                      position === index ? 'opacity-100' : 'opacity-0',
+                    )}
+                  >
+                    <Image
+                      src={image.url}
+                      alt={position === index ? image.alt : ''}
+                      fill
+                      sizes="100vw"
+                      // Only the FIRST is priority. Marking a whole gallery
+                      // high-priority makes every image compete for the same
+                      // connections and delays the one that is actually the
+                      // LCP element.
+                      priority={position === 0}
+                      className="object-cover"
+                      draggable={false}
+                    />
+                  </span>
+                ) : null,
+            )}
+            {images.length === 0 && !event.poster_url ? (
+              <span className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+                <Ticket className="size-12" aria-hidden />
+              </span>
+            ) : null}
           </motion.div>
         )}
 
-        {/* The tap target, over the artwork and under nothing. A separate
-            element rather than a `motion.button`, so the shared-layout element
-            stays a plain box: framer animates it between two very different
-            sizes, and a button's own focus ring and press states would be
-            scaled along with everything else. */}
+        {/* The tap target, over the artwork. A separate element rather than a
+            `motion.button`, so the shared-layout element stays a plain box:
+            framer animates it between two very different sizes, and a button's
+            own focus ring and press states would be scaled with it.
+
+            It opens the viewer at the slide ON SCREEN, not at the poster —
+            pressing a photograph and being shown a different one is the wrong
+            answer to the only question the press asks. */}
         {docked ? null : (
           <button
             type="button"
-            onClick={onOpenPoster}
+            onClick={() => onOpenPoster(index)}
+            // Touching the artwork holds the slideshow. Somebody looking at a
+            // picture has told you which one they want to look at.
+            onPointerDown={() => setPaused(true)}
             aria-label={`View ${event.title} poster full size`}
             className="absolute inset-0 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           />
         )}
+
+        {/* The stop. Visible, reachable and drawn only when something is
+            actually moving. */}
+        {canSlide && !docked ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setPaused((previous) => !previous)}
+              aria-label={paused ? 'Play slideshow' : 'Pause slideshow'}
+              className="absolute bottom-3 right-3 z-20 inline-flex size-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur transition-colors duration-fast hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            >
+              {paused ? (
+                <Play className="size-4" aria-hidden />
+              ) : (
+                <Pause className="size-4" aria-hidden />
+              )}
+            </button>
+            <span
+              aria-hidden
+              className="absolute bottom-3 left-3 z-20 flex items-center gap-1.5"
+            >
+              {images.map((image, position) => (
+                <span
+                  key={`${image.url}#dot#${position}`}
+                  className={cn(
+                    'h-1.5 rounded-full transition-all duration-200',
+                    position === index ? 'w-5 bg-white' : 'w-1.5 bg-white/50',
+                  )}
+                />
+              ))}
+            </span>
+            <span className="sr-only" aria-live="polite">
+              {`Image ${index + 1} of ${count}`}
+            </span>
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -1181,6 +1324,7 @@ function ActivePage({
   hidePoster,
   blurOpacity,
   onOpenPoster,
+  images,
   ctaHeight,
   scrollerRef,
   ctaRef,
@@ -1201,7 +1345,8 @@ function ActivePage({
   dockTransition: { duration: number; ease: [number, number, number, number] };
   hidePoster: boolean;
   blurOpacity: MotionValue<number>;
-  onOpenPoster: () => void;
+  onOpenPoster: (index: number) => void;
+  images: LightboxImage[];
   ctaHeight: number;
   scrollerRef: React.RefObject<HTMLDivElement>;
   ctaRef: React.RefObject<HTMLDivElement>;
@@ -1245,6 +1390,7 @@ function ActivePage({
       >
         <Hero
           event={event}
+          images={images}
           docked={docked}
           hidePoster={hidePoster}
           layoutId={layoutId}
@@ -1253,6 +1399,15 @@ function ActivePage({
           blurOpacity={blurOpacity}
           onOpenPoster={onOpenPoster}
         />
+        {/* ── THE TABS STICK, AND THEY STICK INSIDE THIS SCROLLER ────────
+            Declared between the hero and the content so `position: sticky`
+            pins them against the page's own scroll box. They cannot be
+            `fixed`: that would resolve against the deck's transformed page
+            track and land in the wrong place on every swipe — the same trap
+            the lightbox portal exists for. */}
+        <div className="px-4">
+          <SectionTabs tabs={sectionTabsFor(detail, content)} scrollerRef={scrollerRef} />
+        </div>
         <EventWidgetContent
           key={event.id}
           event={event}
@@ -1327,7 +1482,7 @@ function NeighbourPage({ event, docked }: { event: EventCardData; docked: boolea
                   alt=""
                   fill
                   sizes="100vw"
-                  className="scale-125 object-cover blur-2xl saturate-150"
+                  className="scale-110 object-cover blur-sm saturate-150"
                 />
               </span>
             ) : null}

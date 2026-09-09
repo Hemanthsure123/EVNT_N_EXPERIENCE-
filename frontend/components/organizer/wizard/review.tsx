@@ -378,11 +378,19 @@ export function ReviewStep({
             loading={publishing}
             leftIcon={<Rocket className="size-4" aria-hidden />}
           >
-            {publishing ? 'Submitting…' : 'Submit for approval'}
+            {publishing ? 'Publishing…' : 'Publish event'}
           </Button>
+          {/* ── THE COPY FOLLOWS THE POLICY ────────────────────────────────
+              This said "Submit for approval" and "puts it in the review
+              queue", which was true while every publish waited for a platform
+              operator. A verified organization's publish goes straight to live
+              now (`EventService.PUBLISH_STRAIGHT_TO_LIVE`), and a button that
+              still promised a queue would be describing a wait that no longer
+              happens — the stale-comment failure this codebase treats as a bug
+              rather than as untidiness. */}
           <p className="text-caption text-muted-foreground">
             {draft.eventId
-              ? 'Your draft is already saved. Submitting only puts it in the review queue.'
+              ? 'Your draft is already saved. Publishing puts it in front of buyers straight away.'
               : 'Fill in the required fields and the draft saves itself.'}
           </p>
         </div>

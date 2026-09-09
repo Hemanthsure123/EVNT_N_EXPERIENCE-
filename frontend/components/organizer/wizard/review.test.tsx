@@ -34,7 +34,9 @@ const props = {
   onSaveNow: vi.fn(),
 };
 
-const submitButton = () => screen.queryByRole('button', { name: /submit for approval/i });
+// The label followed the policy: a verified organization's publish goes
+// straight to live, so the control says what it does.
+const submitButton = () => screen.queryByRole('button', { name: /publish event/i });
 
 describe('ReviewStep decides whether submitting is a real action', () => {
   it('offers Submit while creating, where no status exists yet', () => {

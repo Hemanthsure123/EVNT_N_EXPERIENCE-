@@ -57,6 +57,33 @@ import type { SubSheetType } from './event-sub-sheets';
  * not a mobile fork of each.
  */
 
+/**
+ * WHICH SECTIONS THIS EVENT HAS, in the order they appear on the page.
+ *
+ * Exported from here rather than assembled by the caller, because the ids
+ * and the conditions that render them live in this file — a tab list built
+ * next door is a second copy of "does this event have photographs", and the
+ * two would drift into a tab that scrolls nowhere.
+ *
+ * Venue and Help are unconditional: every event has a venue row, and the More
+ * section (FAQs, policies) is always drawn. About and Photos are not.
+ */
+export function sectionTabsFor(
+  detail: EventDetail | null | undefined,
+  content: EventContent | null | undefined,
+): { id: string; label: string }[] {
+  const hasAbout = Boolean(
+    detail?.short_description?.trim() || detail?.description?.trim(),
+  );
+  const hasPhotos = (content?.media ?? []).some((item) => item.kind === 'gallery');
+  return [
+    ...(hasAbout ? [{ id: 'event-about', label: 'About' }] : []),
+    ...(hasPhotos ? [{ id: 'event-photos', label: 'Photos' }] : []),
+    { id: 'event-venue', label: 'Venue' },
+    { id: 'event-help', label: 'Help' },
+  ];
+}
+
 export type EventWidgetContentProps = {
   event: EventCardData;
   detail: EventDetail | null;
@@ -127,12 +154,18 @@ export function EventWidgetContent({
       </div>
 
       {/* 4. Where -------------------------------------------------------- */}
-      <DisclosureRow
-        icon={<MapPin className="size-5" aria-hidden />}
-        label={`${event.venue}, ${event.city}`}
-        hint="Venue details"
-        onClick={() => onOpenSheet('venue')}
-      />
+      {/* The `id`s here and below are the tab bar's scroll targets — see
+          `sectionTabsFor`, which decides WHICH of them exist for an event.
+          A wrapper rather than an id on the row itself, so the tab lands
+          with the section's own top edge under the sticky bar. */}
+      <div id="event-venue" className="scroll-mt-16">
+        <DisclosureRow
+          icon={<MapPin className="size-5" aria-hidden />}
+          label={`${event.venue}, ${event.city}`}
+          hint="Venue details"
+          onClick={() => onOpenSheet('venue')}
+        />
+      </div>
 
       {/* 5. Schedule. The summary states a REAL time or omits it — this row
              used to read "Starts at 8 PM" on every event on the platform. */}
@@ -200,7 +233,7 @@ export function EventWidgetContent({
 
       {/* 9. About -------------------------------------------------------- */}
       {aboutPreview ? (
-        <section className="flex flex-col gap-2">
+        <section id="event-about" className="flex scroll-mt-16 flex-col gap-2">
           <h3 className="text-body font-extrabold text-foreground">About the event</h3>
           <p className="line-clamp-3 whitespace-pre-line text-body-sm text-muted-foreground">
             {aboutPreview}
@@ -230,7 +263,7 @@ export function EventWidgetContent({
               scrolling to the end. No big duplicate of the poster: this
               screen already has one at the top. */}
       {galleryImages.length > 0 ? (
-        <section className="flex flex-col gap-3">
+        <section id="event-photos" className="flex scroll-mt-16 flex-col gap-3">
           <h3 className="text-body font-extrabold text-foreground">Gallery</h3>
           <GalleryGrid images={galleryImages} />
         </section>
@@ -263,7 +296,7 @@ export function EventWidgetContent({
 
       {/* 13. More — the two long-form documents, grouped rather than
               scattered through the page. */}
-      <section className="flex flex-col gap-3">
+      <section id="event-help" className="flex scroll-mt-16 flex-col gap-3">
         <h3 className="text-body font-extrabold text-foreground">More</h3>
         <div className="flex flex-col divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface">
           <MoreRow

@@ -72,9 +72,24 @@ export const centredRailPadding = (itemWidthVw: number): string =>
  * `snap-x snap-mandatory`: native CSS snapping, so the rail is draggable,
  * swipeable, keyboard-scrollable and works with a trackpad without a line of
  * JavaScript doing the moving.
+ *
+ * ── `touch-pan-x`, AND IT IS NOT `pan-y` ──────────────────────────────────
+ *
+ * The complaint was that casual VERTICAL scrolling over one of these rails
+ * dragged it sideways to the next event. The instinct is `touch-action:
+ * pan-y`, and it would be exactly wrong: `pan-y` declares that this element
+ * handles only VERTICAL panning, which on a horizontally scrolling rail means
+ * it can no longer be scrolled at all.
+ *
+ * `pan-x` is the one that does what was asked. It tells the browser this
+ * element handles horizontal panning and NOTHING else, so a gesture with any
+ * meaningful vertical component is passed straight to the ancestor scroller
+ * rather than being arbitrated against the rail. Sideways still works, and it
+ * now takes a deliberately sideways movement.
  */
 export const PEEK_RAIL_TRACK =
   'relative flex snap-x snap-mandatory items-center overflow-x-auto scroll-smooth py-6 ' +
+  'touch-pan-x ' +
   'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
 
 /** Centred: every item can reach the middle. Start: an ordinary row. */

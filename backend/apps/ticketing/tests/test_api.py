@@ -404,9 +404,11 @@ def test_event_can_be_submitted_once_it_has_a_ticket_type(
     resp = authed_client.post(f"/api/v1/events/{draft.id}/publish", format="json")
 
     assert resp.status_code == 200
-    # The ticketing gate is satisfied, so the submission is accepted. Going
-    # LIVE now needs an operator's approval — see the events moderation tests.
-    assert resp.json()["status"] == "pending_review"
+    # The ticketing gate is satisfied, so the publish is accepted — and a
+    # verified organization's publish goes straight to live. What this test is
+    # for is the GATE, not the destination: `test_event_cannot_be_submitted_...`
+    # above is the half that refuses without a tier.
+    assert resp.json()["status"] == "live"
 
 
 @pytest.mark.django_db

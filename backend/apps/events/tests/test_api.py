@@ -329,8 +329,10 @@ def test_publish_transitions_draft_to_live(authed_client, make_event, add_ticket
     resp = authed_client.post(f"/api/v1/events/{event.id}/publish", format="json")
 
     assert resp.status_code == 200
-    # Publishing now SUBMITS for review. Only an operator can make it live.
-    assert resp.json()["status"] == "pending_review"
+    # A VERIFIED organization publishes straight to live — see
+    # `EventService.PUBLISH_STRAIGHT_TO_LIVE`. The gate that remains is
+    # verification, which the fixture's organization has passed.
+    assert resp.json()["status"] == "live"
 
 
 @pytest.mark.django_db
@@ -359,7 +361,7 @@ def test_publish_over_http_is_refused_for_an_unverified_organization(
 
 
 @pytest.mark.django_db
-def test_publishing_does_not_make_the_event_public_until_an_operator_approves(
+def test_publishing_puts_a_verified_organizers_event_in_front_of_buyers(
     authed_client,
     api_client,
     make_event,
@@ -367,11 +369,17 @@ def test_publishing_does_not_make_the_event_public_until_an_operator_approves(
     django_capture_on_commit_callbacks,
     django_user_model,
 ):
-    """The moderation gate, end to end.
+    """Publish to public, end to end.
 
-    The single most important test of the governance change: an organizer
-    submitting an event must NOT put it in front of attendees. Only a platform
-    operator's approval does that.
+    This test used to assert the opposite, and the reversal is the point: a
+    verified organizer's publish is now the moment the event becomes public,
+    with no operator in between. What it still proves is the half that never
+    changed — that the public LIST reflects it immediately, which depends on
+    the cache generation being bumped inside the publish's `on_commit`.
+
+    Verification is still the gate, and
+    `test_publish_over_http_is_refused_for_an_unverified_organization`
+    above is the test for it.
     """
     event = make_event(title="Soon Live", status=EventStatus.DRAFT)
     add_ticket_type(event)  # ticketing publish gate
@@ -380,26 +388,26 @@ def test_publishing_does_not_make_the_event_public_until_an_operator_approves(
     with django_capture_on_commit_callbacks(execute=True):
         publish = authed_client.post(f"/api/v1/events/{event.id}/publish", format="json")
     assert publish.status_code == 200
-    assert publish.json()["status"] == "pending_review"
+    assert publish.json()["status"] == "live"
 
-    # Still invisible. The cache generation bumped, so this is a fresh read.
+    # Visible immediately. The cache generation bumped, so this is a fresh
+    # read rather than the warmed empty list from above.
     listing = api_client.get("/api/v1/events")
-    assert "Soon Live" not in [e["title"] for e in listing.json()["data"]]
+    assert "Soon Live" in [e["title"] for e in listing.json()["data"]]
 
+    # An operator's approval no longer has anything to approve: the event is
+    # already live, so the moderation endpoint answers 409 rather than moving a
+    # row twice. The queue's own behaviour is covered by `test_moderation.py`,
+    # which drives an event into `pending_review` directly.
     operator = django_user_model.objects.create_user(
         email="ops-mod@example.com", password="opspass12345", is_staff=True
     )
     staff_client = APIClient()
     staff_client.force_authenticate(user=operator)
-    with django_capture_on_commit_callbacks(execute=True):
-        decision = staff_client.post(
-            f"/api/v1/admin/events/{event.id}/moderate", {"approve": True}, format="json"
-        )
-    assert decision.status_code == 200
-    assert decision.json()["status"] == "live"
-
-    listing = api_client.get("/api/v1/events")
-    assert "Soon Live" in [e["title"] for e in listing.json()["data"]]
+    decision = staff_client.post(
+        f"/api/v1/admin/events/{event.id}/moderate", {"approve": True}, format="json"
+    )
+    assert decision.status_code == 409
 
 
 @pytest.mark.django_db

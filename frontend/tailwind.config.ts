@@ -242,7 +242,19 @@ const config: Config = {
         h1: ['40px', { lineHeight: '48px', letterSpacing: '-0.025em', fontWeight: '800' }],
         h2: ['32px', { lineHeight: '40px', letterSpacing: '-0.02em', fontWeight: '700' }],
         h3: ['24px', { lineHeight: '32px', letterSpacing: '-0.01em', fontWeight: '700' }],
-        h4: ['20px', { lineHeight: '28px', letterSpacing: '-0.005em', fontWeight: '600' }],
+        // ── 700, NOT 600 ───────────────────────────────────────────────
+        //
+        // `h4` is the rung most SECTION headings sit on — "Accessibility",
+        // "Running order", the disclosure titles, the filter groups — and at
+        // 600 it was a semibold that read as emphasised body copy rather
+        // than as a heading. Every other heading rung is 700 or 800; this
+        // was the odd one out, and the hierarchy it broke was the ladder's.
+        //
+        // Changed HERE rather than by adding `font-bold` at each call site,
+        // because the scale is the one place a heading level's weight is
+        // decided — and a rule enforced by everybody remembering to add a
+        // class is a rule that is already broken somewhere.
+        h4: ['20px', { lineHeight: '28px', letterSpacing: '-0.005em', fontWeight: '700' }],
         'body-lg': ['18px', { lineHeight: '28px' }],
         body: ['16px', { lineHeight: '24px' }],
         'body-sm': ['14px', { lineHeight: '20px' }],

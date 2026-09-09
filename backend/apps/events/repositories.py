@@ -715,6 +715,40 @@ class EventRepository(BaseRepository[Event]):
         )
         return updated == 1
 
+    def publish_if_draft(self, *, event_id: uuid.UUID | str, expected_version: int) -> bool:
+        """draft | rejected -> LIVE, under the optimistic-lock guard.
+
+        The self-serve twin of `submit_for_review_if_draft`, for an
+        organization the platform has already verified. Same source states,
+        same conditional UPDATE, same version guard — the only difference is
+        where the row lands.
+
+        `moderated_at` is stamped and `moderated_by` deliberately is NOT. The
+        pair then reads exactly as what happened: a decision was recorded at
+        this time, and no operator made it. Leaving `moderated_at` null instead
+        would make an auto-published event indistinguishable from one that has
+        never been through the gate at all, which is the thing the console's
+        queue filters on.
+        """
+        updated = (
+            self.get_queryset()
+            .filter(
+                pk=event_id,
+                version=expected_version,
+                status__in=(EventStatus.DRAFT, EventStatus.REJECTED),
+                deleted_at__isnull=True,
+            )
+            .update(
+                status=EventStatus.LIVE,
+                submitted_at=timezone.now(),
+                moderated_at=timezone.now(),
+                moderation_note="",
+                version=expected_version + 1,
+                updated_at=timezone.now(),
+            )
+        )
+        return updated == 1
+
     def create_clone(self, *, organization_id, fields: dict) -> Event:
         """Insert a copy as a fresh DRAFT.
 

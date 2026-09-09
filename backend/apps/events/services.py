@@ -595,6 +595,26 @@ class EventService:
             raise EventNotFoundError(str(event_id))
         return refreshed
 
+    #: ── A VERIFIED ORGANIZER PUBLISHES; NOBODY APPROVES ──────────────────
+    #:
+    #: Every publish used to land in `pending_review` and wait for a platform
+    #: operator — including a one-word fix to an event that had been live for a
+    #: month. An organizer correcting a missing image could not get the
+    #: correction in front of buyers, which is the report this comes from.
+    #:
+    #: The gate that REMAINS is verification, and it is the stronger of the
+    #: two: `publish_event` refuses outright unless the organization is
+    #: VERIFIED, so the platform still decides who may list — it has stopped
+    #: deciding, one event at a time, what they may list. Operators keep every
+    #: power they had, after the fact: `unpublish` takes a live event down and
+    #: the console still lists everything.
+    #:
+    #: A CONSTANT rather than a Django setting, deliberately. A setting has to
+    #: be declared in four files and read from the environment, and this is not
+    #: a per-deployment choice — it is the product's policy, and the place to
+    #: change it is here, in the open, with this note attached.
+    PUBLISH_STRAIGHT_TO_LIVE = True
+
     def publish_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         """Submit a draft for platform review.
 
@@ -667,36 +687,55 @@ class EventService:
 
         owner = self._users.get_by_id(event.organization.owner_id)
 
-        with UnitOfWork() as uow:
-            submitted = self._events.submit_for_review_if_draft(
-                event_id=event.id, expected_version=event.version
-            )
-            if not submitted:
-                # Version moved, or it is no longer draft/rejected — a
-                # concurrent change.
-                raise StaleEventVersionError()
+        payload = {
+            "event_id": str(event.id),
+            "organization_id": str(event.organization_id),
+            "owner_email": owner.email if owner else "",
+            "title": event.title,
+        }
 
-            uow.publish(
-                EVENT_SUBMITTED_FOR_REVIEW,
-                {
-                    "event_id": str(event.id),
-                    "organization_id": str(event.organization_id),
-                    "owner_email": owner.email if owner else "",
-                    "title": event.title,
-                },
-                aggregate_id=str(event.id),
-            )
-            record_audit(
-                actor_id=str(actor_id),
-                action="event.submitted_for_review",
-                target_type="event",
-                target_id=str(event.id),
-            )
+        with UnitOfWork() as uow:
+            if self.PUBLISH_STRAIGHT_TO_LIVE:
+                published = self._events.publish_if_draft(
+                    event_id=event.id, expected_version=event.version
+                )
+                if not published:
+                    raise StaleEventVersionError()
+                # The event is public from this moment, so the platform-wide
+                # `EVENT_PUBLISHED` is emitted HERE — the same place the
+                # operator's approval emits it. `notifications` schedules its
+                # attendee reminder off it.
+                uow.publish(EVENT_PUBLISHED, payload, aggregate_id=str(event.id))
+                record_audit(
+                    actor_id=str(actor_id),
+                    action="event.published",
+                    target_type="event",
+                    target_id=str(event.id),
+                )
+            else:
+                submitted = self._events.submit_for_review_if_draft(
+                    event_id=event.id, expected_version=event.version
+                )
+                if not submitted:
+                    # Version moved, or it is no longer draft/rejected — a
+                    # concurrent change.
+                    raise StaleEventVersionError()
+
+                uow.publish(EVENT_SUBMITTED_FOR_REVIEW, payload, aggregate_id=str(event.id))
+                record_audit(
+                    actor_id=str(actor_id),
+                    action="event.submitted_for_review",
+                    target_type="event",
+                    target_id=str(event.id),
+                )
             # Still invalidated: an event moving OUT of live (a resubmitted
             # rejection) has to leave the public caches immediately.
             transaction.on_commit(lambda: invalidate_event_caches(event.id))
 
-        logger.info("event_submitted_for_review", extra={"event_id": str(event.id)})
+        logger.info(
+            "event_published" if self.PUBLISH_STRAIGHT_TO_LIVE else "event_submitted_for_review",
+            extra={"event_id": str(event.id)},
+        )
         refreshed = self._events.get_active_by_id(event.id)
         if refreshed is None:  # pragma: no cover — just deleted mid-request
             raise EventNotFoundError(str(event_id))
