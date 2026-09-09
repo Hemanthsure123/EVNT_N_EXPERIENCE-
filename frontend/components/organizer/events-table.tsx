@@ -82,18 +82,19 @@ import { StatusBadge } from './status-badge';
  *
  * ── WHAT THE BULK BAR OFFERS, AND WHY NOT MORE ────────────────────────────
  *
- * Submit-for-review, Archive and Duplicate are real endpoints and are here.
- * **Delete is not**, and will not be: an event is referenced by bookings,
- * tickets and a settlement, all `PROTECT`ed at the database, so a delete would
- * either fail outright or orphan real money.
+ * Submit-for-review and Archive are real endpoints and are here. **Delete is
+ * not**, and will not be: an event is referenced by bookings, tickets and a
+ * settlement, all `PROTECT`ed at the database, so a delete would either fail
+ * outright or orphan real money.
  *
- * This paragraph used to say Duplicate was absent "because there is no
- * duplicate endpoint", while a working Duplicate button calling that very
- * endpoint sat 300 lines below it. `POST /events/{id}/duplicate` does the
- * whole copy in ONE `UnitOfWork` — precisely the transaction the old comment
- * said a client-side version would lack — and it has been there since the
- * clone slice. Duplicate is bounded to ONE row and navigates to the copy's
- * editor; see `lib/organizer/clone.ts`.
+ * CLONE IS HERE AND IS NO LONGER A WRITE. It used to call
+ * `POST /events/{id}/duplicate`, which created a row titled "Copy of ..." on
+ * the press — so exploring what the button did left a permanent draft behind,
+ * and pressing twice left two. Both the endpoint and the service behind it are
+ * gone. Clone now navigates to `/dashboard/events/new?from={id}`, where the
+ * create wizard fills a NEW draft from that event and writes nothing until the
+ * organizer saves. Still bounded to ONE row: cloning eight at once produced
+ * eight drafts with nothing to tell them apart. See `lib/organizer/clone.ts`.
  *
  * ── NOT VIRTUALIZED, DELIBERATELY ─────────────────────────────────────────
  *
@@ -452,7 +453,7 @@ export function EventsTable() {
           title={selectedRows.length > 1 ? 'Select one event to duplicate.' : CLONE_HINT}
           onClick={() => {
             const row = selectedRows[0];
-            if (row) void clone(row.id, row.title);
+            if (row) void clone(row.id);
           }}
         />
         <BulkButton

@@ -1,120 +1,87 @@
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { useToast } from '@/components/ui/toast';
-import { isApiError } from '@/lib/api/errors';
-import { duplicateEvent } from '@/lib/api/organizer-writes';
-import { useInvalidateOrganizer } from '@/lib/organizer/queries';
 
 /**
- * Copying an event, and then LANDING SOMEWHERE.
+ * Starting a new event from one that already exists.
  *
- * ── THE BUG THIS EXISTS FOR ───────────────────────────────────────────────
+ * ── WHAT THIS USED TO DO, AND WHY IT DOES NOT ANY MORE ───────────────────
  *
- * `POST /events/{id}/duplicate` has always worked and copies almost
- * everything. Both frontend callers then threw the answer away:
+ * It called `POST /events/{id}/duplicate`, which created a server row titled
+ * "Copy of ..." the instant somebody pressed the button, and then navigated to
+ * the editor for it. Two things about that were wrong.
  *
- *   · the events-table bulk bar awaited the call and navigated NOWHERE, so a
- *     press produced a row somewhere in a cursor-paginated list the organizer
- *     was not looking at. Indistinguishable from a no-op.
- *   · the event panel pushed `/dashboard/events?event={newId}`, which reopens
- *     the same read-only drawer — one press from where they started, with the
- *     copy's fields nowhere on screen.
+ * A PRESS WROTE. Anyone exploring what Clone does got a permanent draft for
+ * it, and pressing twice got two. The events list in the report that killed
+ * this held a stack of them — "Copy of Copy of Copy of AURORA MUSIC AND ..." —
+ * none of which anybody meant to keep, each needing its own archive to clear.
  *
- * Neither opened the editor, which is the only screen where a copy is worth
- * anything: the point of cloning a monthly residency is to change the DATE and
- * publish. So a copy now goes straight to `/dashboard/events/{id}/edit`, which
- * is the create wizard hydrated from the server — every field prefilled, every
- * one editable, the tiers and their sale phases already in the ticket builder.
+ * AND IT RENAMED THE EVENT. "Copy of" is scaffolding. A copy of a monthly
+ * residency IS that residency run again, and the organizer had to delete those
+ * two words every single time. The name only has to be distinct where a buyer
+ * would meet both at once, which the backend now checks at PUBLISH against the
+ * title and the venue together — so the draft keeps the real name throughout.
  *
- * ── WHY THE EDIT ROUTE AND NOT A PREFILLED CREATE WIZARD ──────────────────
+ * ── SO IT IS A ROUTE NOW, AND NOTHING ELSE ───────────────────────────────
  *
- * A prefilled `/dashboard/events/new` was the obvious alternative and it is
- * worse in three ways that matter. The copy ALREADY EXISTS as a server row the
- * moment `duplicate` returns — so a create-shaped screen would have to either
- * create a second event on first save (leaving an orphan draft behind every
- * clone) or carry a hidden id and stop being the create wizard at all. The
- * server-side copy is also the only thing that can bring across the
- * collections the draft model deliberately does not hold: FAQs, running order,
- * sessions, media and the lineup live in their own tables and are copied by
- * `copy_content_to`, where a client-side prefill could only ever carry the
- * ~20 scalar columns the draft knows about. And the edit route already
- * hydrates all of it (`draftFromEvent` + the server-backed sub-editors), so
- * this is one `router.push` rather than a second hydration path to keep in
- * step with the first.
+ * Clone navigates to the create wizard with `?from={id}`, and the wizard
+ * fetches that event and pours it into a NEW draft: details, venue, category,
+ * policies, highlights, tags, tiers with their phases and bands, sessions,
+ * running order, FAQs and the lineup. Nothing is written until the organizer
+ * saves — so a press that turns out to be a mistake costs a Back button
+ * rather than a row to clean up.
+ *
+ * ── WHY THAT IS ONLY POSSIBLE NOW ────────────────────────────────────────
+ *
+ * The argument for doing the copy server-side was real when it was written:
+ * the collections that make a copy worth having live in their own tables, and
+ * a client prefill could carry only the scalar columns the draft model held.
+ * It stopped being true when sessions, running order, FAQs and the lineup
+ * became STAGED draft state, flushed on first save exactly as tiers always
+ * were. See `PendingSlot` in `wizard/model.ts`.
+ *
+ * The one thing a client prefill still cannot carry is the GALLERY, and that
+ * was never carried: an `EventMedia` row points at a stored object, so two
+ * events sharing one key means deleting either one's gallery breaks the
+ * other's. The poster comes across, because it is a plain column.
  */
 
 /**
- * The ONE sentence describing what a copy carries, shown by every caller.
+ * The ONE sentence describing what a clone brings, shown by every caller.
  *
- * It is a function rather than a constant so a caller can name the source
- * event, and it lives here so two buttons cannot describe one operation
- * differently — which is exactly what happened before: the table's docstring
- * said there was no duplicate endpoint while a working Duplicate button sat
- * 300 lines below it, and both wrappers' docstrings claimed the copy arrives
- * with no ticket tiers. It arrives with them.
+ * A function rather than a constant so a caller can name the source event, and
+ * it lives here so two buttons cannot describe one operation differently —
+ * which is exactly what happened before, when the table's docstring said there
+ * was no duplicate endpoint while a working button called it 300 lines below.
  */
 export function describeClone(title?: string): string {
   const what = title ? `“${title}”` : 'this event';
-  return `${what} is copied as a new draft — details, venue, tickets, sessions, FAQs, running order and lineup all come across. Photos and the schedule are yours to change.`;
+  return `Opens a new event form already filled in from ${what} — details, venue, tickets, sessions, FAQs, running order and lineup. Nothing is saved until you save it.`;
 }
 
 /** The short form, for a button tooltip where the full sentence will not fit. */
-export const CLONE_HINT = 'Copy into a new draft you can edit — tickets and lineup included';
+export const CLONE_HINT = 'Start a new event pre-filled from this one — nothing is saved yet';
 
-export type CloneOutcome = { id: string; title: string };
+export type CloneOutcome = { id: string };
 
 /**
- * Clone an event and open the editor for the copy.
+ * Open the create wizard, pre-filled from an existing event.
  *
- * Returns the new event on success and `null` on failure, so a caller that
- * wants to do something extra (close a drawer, clear a selection) can tell the
- * two apart without re-deriving it from a thrown value.
- *
- * FAILURE IS SHOWN, NEVER SWALLOWED. `CloneEventButton` used to
- * `console.error` and leave the label reading "Cloning…" for ever, so a 403 on
- * somebody else's event, a 404 on a deleted one and a network drop were all
- * the same silent stall. An API error carries the server's own sentence,
- * which is more specific than anything written here; anything else is
- * network-shaped and says so.
+ * Kept as a hook with the same `{ clone, cloning }` shape the three call sites
+ * already use, so none of them had to change. `cloning` is now always false —
+ * there is no request to wait for — and it stays in the signature rather than
+ * being removed, because a button that renders a spinner for a navigation is
+ * showing a delay it invented.
  */
 export function useCloneEvent() {
   const router = useRouter();
-  const invalidate = useInvalidateOrganizer();
-  const { toast } = useToast();
-  const [cloning, setCloning] = React.useState(false);
 
   const clone = React.useCallback(
-    async (eventId: string, sourceTitle?: string): Promise<CloneOutcome | null> => {
-      setCloning(true);
-      try {
-        const copy = await duplicateEvent(eventId);
-        // Invalidate BEFORE navigating: the editor reads the organizer event
-        // list to resolve which organisation owns the draft, and a list that
-        // predates the copy resolves nothing.
-        await invalidate();
-        toast({
-          variant: 'success',
-          title: 'Copied — now edit the copy',
-          description: describeClone(sourceTitle),
-        });
-        router.push(`/dashboard/events/${encodeURIComponent(copy.id)}/edit`);
-        return { id: copy.id, title: copy.title };
-      } catch (err) {
-        toast({
-          variant: 'destructive',
-          title: 'Could not copy this event',
-          description:
-            isApiError(err)
-              ? err.message
-              : 'The copy did not go through. Check your connection and try again.',
-        });
-        return null;
-      } finally {
-        setCloning(false);
-      }
+    async (eventId: string): Promise<CloneOutcome | null> => {
+      router.push(`/dashboard/events/new?from=${encodeURIComponent(eventId)}`);
+      return { id: eventId };
     },
-    [invalidate, router, toast],
+    [router],
   );
 
-  return { clone, cloning };
+  return { clone, cloning: false };
 }

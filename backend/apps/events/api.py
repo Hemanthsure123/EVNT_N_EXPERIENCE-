@@ -323,28 +323,48 @@ class EventArchiveView(APIView):
         return _no_store(Response(EventDetailSerializer(event).data))
 
 
-class EventDuplicateView(APIView):
-    """Copy an event into a fresh draft. Organizer-only."""
+# ── `EventDuplicateView` AND `EventCloneView` WERE HERE ──────────────────
+#
+# Two routes (`/duplicate` and `/clone`), one service call, and the same
+# outcome: a server row titled "Copy of ..." created the instant somebody
+# pressed a button. See the note where `duplicate_event` used to live in
+# `services.py` for why that is gone rather than fixed.
+#
+# Cloning reads now. `OwnerEventDetailView` below is the whole backend of it:
+# the wizard fetches the source event, fills a NEW draft with it, and writes
+# nothing until the organizer saves.
+
+
+class OwnerEventDetailView(APIView):
+    """One of the caller's own events, at ANY status.
+
+    ── THE ENDPOINT WHOSE ABSENCE BROKE THE EDITOR ──────────────────────────
+
+    The organizer wizard read the PUBLIC `GET /events/{id}` to hydrate itself,
+    and that resolves only `LIVE` and `CANCELLED`. Every draft — which is what
+    a brand new event and every copy is — answered 404, so the editor rendered
+    "That event is not available" for an event the organizer owns and is
+    looking at in their own list. The same 404 made a finished event
+    impossible to clone, which is exactly the event somebody wants to run
+    again.
+
+    NO STATUS FILTER. Draft, pending review, rejected, live, paused, finished,
+    cancelled, archived — all readable by the organizer who owns them. Only a
+    soft-deleted row is gone, because that is a deletion rather than a state.
+
+    `private, no-store`, like every owner read here: it can carry an
+    unpublished draft, and it carries the optimistic-lock `version` the
+    editor's conditional writes depend on. A version read from a shared cache
+    is one save behind, which is the mistake already recorded for tier reads.
+    """
 
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(request=None, responses={201: EventDetailSerializer})
-    def post(self, request: Request, event_id: str) -> Response:
+    @extend_schema(responses={200: EventDetailSerializer})
+    def get(self, request: Request, event_id: str) -> Response:
         service = build_event_service()
-        event = service.duplicate_event(event_id=event_id, actor_id=cast(User, request.user).id)
-        return _no_store(Response(EventDetailSerializer(event).data, status=201))
-
-
-class EventCloneView(APIView):
-    """Clone an event into a fresh draft for an organizer."""
-
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(request=None, responses={201: EventDetailSerializer})
-    def post(self, request: Request, event_id: str) -> Response:
-        service = build_event_service()
-        event = service.duplicate_event(event_id=event_id, actor_id=cast(User, request.user).id)
-        return _no_store(Response(EventDetailSerializer(event).data, status=201))
+        event = service.get_owned_event(event_id=event_id, actor_id=cast(User, request.user).id)
+        return _no_store(Response(EventDetailSerializer(event).data))
 
 
 class OrganizerEventListView(APIView):

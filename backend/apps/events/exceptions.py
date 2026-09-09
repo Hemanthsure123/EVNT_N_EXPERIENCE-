@@ -201,3 +201,20 @@ class OrganizerCategoryInUseError(ConflictError):
     """
 
     code = "organizer_category_in_use"
+
+
+class DuplicateActiveEventError(ConflictError):
+    """Another ACTIVE event already has this title at this venue.
+
+    Raised only at PUBLISH, never while drafting. A copy keeps its source's
+    title on purpose — it is the same show, and forcing "Copy of ..." into the
+    title is how a dashboard fills with rows nobody meant to name that way.
+    The name only has to be distinct at the moment it would appear beside the
+    other one on a public listing.
+
+    A `ConflictError` (409) rather than an `InvalidInputError`: nothing about
+    the request is malformed, and the state it collides with can be changed by
+    the organizer — which is precisely what the message asks them to do.
+    """
+
+    code = "duplicate_active_event"

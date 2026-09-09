@@ -31,14 +31,19 @@ import { Poster } from '../primitives';
  *
  * ── IT IS NOT A PREFILL, IT IS A SERVER COPY ──────────────────────────────
  *
- * Pressing Copy calls `POST /events/{id}/duplicate` and routes to the editor
- * for the new draft. It deliberately does NOT pour the source's fields into
- * the local draft on this screen: the collections that make a copy worth
- * having — the ticket tiers and their sale phases, the sessions, the FAQs, the
- * running order, the lineup — live in their own tables and are copied
- * server-side inside one transaction. A client-side prefill could carry the
- * twenty scalar columns the draft model holds and would silently drop all six
- * collections, which is the version of this feature that looks like it worked.
+ * Pressing Copy navigates to `/dashboard/events/new?from={id}` and the wizard
+ * fills a NEW draft from that event. It writes NOTHING until the organizer
+ * saves.
+ *
+ * THIS PARAGRAPH USED TO ARGUE THE OPPOSITE, and the argument was correct when
+ * it was written: the collections that make a copy worth having — tiers and
+ * their sale phases, sessions, FAQs, the running order, the lineup — live in
+ * their own tables, and a client prefill could carry only the scalar columns
+ * the draft model held, silently dropping all of them. That was true until
+ * those collections became STAGED draft state, flushed on first save exactly
+ * as tiers always were. They all come across now, and the server-side copy
+ * that used to justify itself this way was creating a "Copy of ..." row on
+ * every press — see `lib/organizer/clone.ts`.
  *
  * ── WHAT IS LISTED ────────────────────────────────────────────────────────
  *
@@ -150,7 +155,7 @@ function ClonePanel({ className, onDismiss }: { className?: string; onDismiss: (
               <button
                 type="button"
                 disabled={cloning}
-                onClick={() => void clone(row.id, row.title)}
+                onClick={() => void clone(row.id)}
                 title={CLONE_HINT}
                 className="flex w-full items-center gap-3 rounded-md border border-border bg-background p-2 text-left transition hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
               >

@@ -11,6 +11,23 @@ export const metadata: Metadata = { title: 'Create event' };
  * component could usefully render — the draft does not exist on the server
  * until the organizer has typed enough for `POST /events` to accept it.
  */
-export default function CreateEventPage() {
-  return <EventWizard />;
+export default function CreateEventPage({
+  searchParams,
+}: {
+  searchParams?: { from?: string };
+}) {
+  /**
+   * `?from={id}` is CLONE MODE — the same create wizard, hydrated from an
+   * event that already exists instead of from an empty draft.
+   *
+   * A query parameter rather than a route of its own, because it is the same
+   * screen doing the same thing: a second route would be a second wizard
+   * mount to keep in step with this one, and the difference between them is
+   * one fetch.
+   *
+   * An unknown or unowned id is not special-cased here. The wizard's own
+   * not-available branch already answers for it, and it is the component that
+   * knows what a half-loaded editor should look like.
+   */
+  return <EventWizard cloneFrom={searchParams?.from} />;
 }

@@ -439,25 +439,6 @@ def event_service():
     )
 
 
-@pytest.mark.django_db
-def test_a_duplicated_event_carries_its_lineup(
-    content_service, event_service, owner, make_event, member
-):
-    """A copy is a NEW event and inherits nothing it earned — no moderation
-    history, no prices, no bookings. The LINEUP is different: it is the
-    retyping `duplicate_event` exists to remove, and it points at the same
-    roster rows rather than cloning people."""
-    source = make_event()
-    content_service.set_event_crew(
-        event_id=source.id, actor_id=owner.id, member_ids=[str(member.id)]
-    )
-
-    clone = event_service.duplicate_event(event_id=source.id, actor_id=owner.id)
-
-    assert [row.member_id for row in EventCrewRepository().for_event(clone.id)] == [member.id]
-    assert CrewMember.objects.count() == 1  # the person was not duplicated
-
-
 # ── The portrait's whole lifecycle ──────────────────────────────────────────
 
 

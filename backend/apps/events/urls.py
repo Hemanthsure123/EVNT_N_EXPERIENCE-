@@ -22,17 +22,16 @@ urlpatterns = [
         api.EventArchiveView.as_view(),
         name="event-archive",
     ),
-    path(
-        "events/<uuid:event_id>/duplicate",
-        api.EventDuplicateView.as_view(),
-        name="event-duplicate",
-    ),
-    path(
-        "events/<uuid:event_id>/clone",
-        api.EventCloneView.as_view(),
-        name="event-clone",
-    ),
     path("organizer/events", api.OrganizerEventListView.as_view(), name="organizer-event-list"),
+    # BEFORE any `organizer/events/<uuid>/...` sub-route below. Django resolves
+    # in order and these differ by segment count, so nothing actually shadows
+    # anything — it is placed here because this is the route the wizard hits
+    # first and reading them in that order is how the file stays legible.
+    path(
+        "organizer/events/<uuid:event_id>",
+        api.OwnerEventDetailView.as_view(),
+        name="organizer-event-detail",
+    ),
 ]
 
 # Event content: media, FAQs and running order. GET is public (it is what the

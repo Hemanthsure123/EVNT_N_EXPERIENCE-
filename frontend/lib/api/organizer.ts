@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Paginated, TicketTier } from './types';
+import type { EventDetail, Paginated, TicketTier } from './types';
 
 /**
  * The organizer dashboard's read surface (`/api/v1/organizer/*`).
@@ -499,6 +499,25 @@ export const fetchOrganizerInsights = () =>
  * wizard answers by RELOADING rather than retrying, so an organizer edits,
  * saves, is reset, and never finds out why.
  */
+/**
+ * ONE OF THE CALLER'S OWN EVENTS, AT ANY STATUS.
+ *
+ * The wizard used to hydrate itself from the PUBLIC `GET /events/{id}`, which
+ * resolves only live and cancelled events. Every draft answered 404, so
+ * opening the editor for one — which is what a brand new event and every copy
+ * is — rendered "That event is not available" about an event the organizer
+ * owns and is looking at in their own list. A finished event could not be
+ * cloned for the same reason, and a finished event is exactly the one somebody
+ * wants to run again.
+ *
+ * `private, no-store` at the server, and for the same reason as the tier read
+ * above: the payload carries the optimistic-lock `version` this editor's
+ * conditional writes depend on, and a version out of a shared cache is one
+ * save behind.
+ */
+export const fetchOwnerEventDetail = (eventId: string) =>
+  api.get<EventDetail>(`/organizer/events/${encodeURIComponent(eventId)}`);
+
 export const fetchOwnerEventTiers = (eventId: string) =>
   api
     .get<{ data: TicketTier[] }>(

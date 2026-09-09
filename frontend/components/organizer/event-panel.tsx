@@ -106,7 +106,7 @@ export function EventPanel({ row, onClose }: { row: EventRow | null; onClose: ()
                   Public page
                 </PanelAction>
               ) : null}
-              <CloneEventButton eventId={shown.id} title={shown.title} onClose={onClose} />
+              <CloneEventButton eventId={shown.id} onClose={onClose} />
               {/* Last, and quiet. It renders only for `live`/`paused` — the
                   states with somebody to tell — and it is the one control here
                   that spends money, so it is a ghost button behind a typed
@@ -420,11 +420,9 @@ function ModerationBanner({ row }: { row: EventRow }) {
  */
 function CloneEventButton({
   eventId,
-  title,
   onClose,
 }: {
   eventId: string;
-  title?: string;
   onClose: () => void;
 }) {
   const { clone, cloning } = useCloneEvent();
@@ -434,7 +432,7 @@ function CloneEventButton({
       variant="outline"
       size="sm"
       onClick={() => {
-        void clone(eventId, title).then((copy) => {
+        void clone(eventId).then((copy) => {
           if (copy) onClose();
         });
       }}

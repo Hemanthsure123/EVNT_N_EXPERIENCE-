@@ -31,8 +31,10 @@ import { SeoStep } from './seo-step';
 import { TicketBuilder } from './ticket-builder';
 import { LivePreview } from './preview';
 import { ReviewStep } from './review';
-import { fetchEventDetail } from '@/lib/api/events';
-import { fetchOwnerEventTiers } from '@/lib/api/organizer';
+
+import { fetchEventContent } from '@/lib/api/event-content';
+import { fetchEventCrew } from '@/lib/api/crew';
+import { fetchOwnerEventDetail, fetchOwnerEventTiers } from '@/lib/api/organizer';
 import { WizardActionBar, saveSummary } from './action-bar';
 
 /**
@@ -82,7 +84,10 @@ import { WizardActionBar, saveSummary } from './action-bar';
  * "Only the owning organization can manage this event." is not reachable from
  * here any more.
  */
-export function EventWizard({ eventId }: { eventId?: string } = {}) {
+export function EventWizard({
+  eventId,
+  cloneFrom,
+}: { eventId?: string; cloneFrom?: string } = {}) {
   const router = useRouter();
   const invalidate = useInvalidateOrganizer();
   // Aliased: `status` below is the per-step rail state, which is a different
@@ -116,17 +121,63 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
    * somebody else's change.
    */
   const editing = Boolean(eventId);
+  // CLONE MODE: fill a new draft from an event that already exists. Ignored
+  // when editing — one screen cannot both be a new event and an existing one,
+  // and `existing` winning is the safer of the two ways to resolve it.
+  const cloning = Boolean(cloneFrom) && !editing;
+  const sourceId = eventId ?? cloneFrom ?? null;
+  const needsSource = editing || cloning;
+
+  // ── THE OWNER ENDPOINT, NOT THE PUBLIC ONE ─────────────────────────────
+  //
+  // This read `fetchEventDetail` — the PUBLIC detail, which resolves only
+  // live and cancelled events. So every draft answered 404 and this component
+  // rendered "That event is not available" about an event the organizer owns
+  // and had just clicked in their own list. A finished event could not be
+  // cloned for the same reason, which is the one somebody most wants to run
+  // again.
+  //
+  // `GET /organizer/events/{id}` is owner-scoped and status-blind. A miss is
+  // still a 404 for both "not yours" and "does not exist", so the branch
+  // below stays correct.
   const eventQuery = useQuery({
-    queryKey: ['organizer', 'edit-event', eventId],
-    queryFn: () => fetchEventDetail(eventId as string),
-    enabled: editing,
+    queryKey: ['organizer', 'source-event', sourceId],
+    queryFn: () => fetchOwnerEventDetail(sourceId as string),
+    enabled: needsSource,
     staleTime: Infinity,
     retry: 1,
   });
   const editTiersQuery = useQuery({
-    queryKey: ['organizer', 'edit-tiers', eventId],
-    queryFn: () => fetchOwnerEventTiers(eventId as string),
-    enabled: editing,
+    queryKey: ['organizer', 'source-tiers', sourceId],
+    queryFn: () => fetchOwnerEventTiers(sourceId as string),
+    enabled: needsSource,
+    staleTime: Infinity,
+    retry: 1,
+  });
+  // The collections a clone has to carry. Only fetched when cloning: the edit
+  // path reads them through its own server-backed sub-editors, which own
+  // their invalidation.
+  const cloneContentQuery = useQuery({
+    queryKey: ['organizer', 'source-content', sourceId],
+    queryFn: () => fetchEventContent(sourceId as string),
+    enabled: cloning,
+    staleTime: Infinity,
+    retry: 1,
+  });
+  const cloneCrewQuery = useQuery({
+    queryKey: ['organizer', 'source-crew', sourceId],
+    queryFn: () => fetchEventCrew(sourceId as string),
+    enabled: cloning,
+    staleTime: Infinity,
+    retry: 1,
+  });
+  // The organizer's own slot list, which unlike the public content payload
+  // includes sessions that are switched OFF. A clone should carry a paused
+  // session too — the copy is a fresh event where nothing is paused yet.
+  const cloneSlotsQuery = useQuery({
+    queryKey: ['organizer', 'source-slots', sourceId],
+    queryFn: () => fetchOwnerSlots(sourceId as string),
+    enabled: cloning,
     staleTime: Infinity,
     retry: 1,
   });
@@ -139,6 +190,36 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
     [editing, eventQuery.data, editTiersQuery.data],
   );
 
+  const cloneSource = React.useMemo(() => {
+    if (
+      !cloning ||
+      !eventQuery.data ||
+      !editTiersQuery.data ||
+      !cloneContentQuery.data ||
+      !cloneCrewQuery.data ||
+      !cloneSlotsQuery.data
+    ) {
+      return null;
+    }
+    return {
+      event: eventQuery.data,
+      tiers: editTiersQuery.data,
+      content: {
+        faqs: cloneContentQuery.data.faqs,
+        timeline: cloneContentQuery.data.timeline,
+        slots: cloneSlotsQuery.data,
+        crewIds: cloneCrewQuery.data.map((row) => row.id),
+      },
+    };
+  }, [
+    cloning,
+    eventQuery.data,
+    editTiersQuery.data,
+    cloneContentQuery.data,
+    cloneCrewQuery.data,
+    cloneSlotsQuery.data,
+  ]);
+
   const wizard = useWizard({
     userId: user?.id ?? null,
     organizationIds,
@@ -149,8 +230,14 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
     ready:
       authStatus === 'authenticated' &&
       organizationsQuery.isSuccess &&
-      (!editing || Boolean(existing)),
+      (!editing || Boolean(existing)) &&
+      // A clone gates the same way and for the same reason: hydration commits
+      // once, so letting it run before the source has landed would seed an
+      // EMPTY draft and then never fill it — a Clone press that opens a blank
+      // form, which is indistinguishable from the feature not working.
+      (!cloning || Boolean(cloneSource)),
     existing,
+    cloneSource,
   });
   const { draft, update, setTiers } = wizard;
   // The save engine's health, handed to the steps that render a
@@ -353,7 +440,7 @@ export function EventWizard({ eventId }: { eventId?: string } = {}) {
   // used to test whether an id is real. Falling through to the wizard here
   // would render a blank create form at an edit URL and then autosave it as a
   // NEW event, which is the worst available outcome.
-  if (editing && (eventQuery.isError || editTiersQuery.isError)) {
+  if (needsSource && (eventQuery.isError || editTiersQuery.isError)) {
     return (
       <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
         <h1 className="text-h3">That event is not available</h1>

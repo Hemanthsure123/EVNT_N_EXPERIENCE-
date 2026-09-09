@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { ApiError } from '@/lib/api/errors';
-import { addSlot, addTimelineEntry, type TimelineKind } from '@/lib/api/event-content';
+import { addFaq, addSlot, addTimelineEntry, type TimelineKind } from '@/lib/api/event-content';
 import { setEventCrew } from '@/lib/api/crew';
 import {
   createEvent,
@@ -27,6 +27,7 @@ import {
   toPatchInput,
   toTierInput,
   toIso,
+  cloneDraftFrom,
   draftFromEvent,
   type Draft,
   type DraftTier,
@@ -117,9 +118,22 @@ export type WizardInput = {
    * Absent or null means the create flow, which is unchanged.
    */
   existing?: { event: EventDetail; tiers: readonly TicketTier[] } | null;
+  /**
+   * CLONE MODE: an existing event to fill a NEW draft from.
+   *
+   * Mutually exclusive with `existing` — one says "edit this row", the other
+   * says "start a new one that looks like this row". Passing both is a
+   * programming error and `existing` wins, because editing the wrong event is
+   * the more destructive of the two mistakes.
+   */
+  cloneSource?: {
+    event: EventDetail;
+    tiers: readonly TicketTier[];
+    content: Parameters<typeof cloneDraftFrom>[2];
+  } | null;
 };
 
-export function useWizard({ userId, organizationIds, ready, existing }: WizardInput) {
+export function useWizard({ userId, organizationIds, ready, existing, cloneSource }: WizardInput) {
   const [draft, setDraftState] = React.useState<Draft>(() => emptyDraft());
   const [state, setState] = React.useState<SaveState>('local');
   const [error, setError] = React.useState<string | null>(null);
@@ -168,6 +182,8 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
    *  a refetch hands back an identical event. */
   const existingRef = React.useRef(existing);
   existingRef.current = existing;
+  const cloneRef = React.useRef(cloneSource);
+  cloneRef.current = cloneSource;
   /** Set once this draft is done with (published, submitted, or reset), so the
    *  persist effect stops re-creating what `clearStored` just removed. */
   const finished = React.useRef(false);
@@ -207,6 +223,38 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
     // silently reverting the newer edit. The server wins, and the local copy
     // is dropped rather than merged: a half-and-half draft is the one outcome
     // nobody could reason about afterwards.
+    // ── CLONE MODE ─────────────────────────────────────────────────────
+    //
+    // A clone is a NEW draft filled from an event that already exists, so it
+    // takes neither branch below: there is no server row to be the source of
+    // truth, and a stored draft from some earlier unrelated session must not
+    // be poured over it. Pressing Clone is an explicit instruction about what
+    // this form should contain, and it wins.
+    //
+    // `savedEvent`/`savedTiers` are left EMPTY on purpose. They mean "what the
+    // server has already confirmed", and for a clone that is nothing — seeding
+    // them from the source would fingerprint the copy as already-saved and the
+    // engine would skip the create that makes it exist.
+    const cloneSource = cloneRef.current;
+    if (cloneSource && !existingRef.current) {
+      const seeded = cloneDraftFrom(
+        cloneSource.event,
+        cloneSource.tiers,
+        cloneSource.content,
+        organizationIds,
+      );
+      past.current = [];
+      future.current = [];
+      savedTiers.current = {};
+      posterFile.current = null;
+      savedEvent.current = '';
+      latest.current = seeded;
+      setDraftState(seeded);
+      setState('local');
+      setHydrated(true);
+      return;
+    }
+
     const source = existingRef.current;
     const server = source ? draftFromEvent(source.event, source.tiers, organizationIds) : null;
     const usableStored =
@@ -474,6 +522,7 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
       // cannot create them twice.
       const flushedSlots: string[] = [];
       const flushedEntries: string[] = [];
+      const flushedFaqs: string[] = [];
       let crewSynced = false;
 
       if (working.eventId) {
@@ -500,6 +549,19 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
               position: 0,
             });
             flushedEntries.push(entry.tempId);
+          } catch {
+            // Left staged.
+          }
+        }
+
+        for (const faq of working.pendingFaqs) {
+          try {
+            await addFaq(working.eventId, {
+              question: faq.question.trim(),
+              answer: faq.answer.trim(),
+              position: 0,
+            });
+            flushedFaqs.push(faq.tempId);
           } catch {
             // Left staged.
           }
@@ -583,6 +645,9 @@ export function useWizard({ userId, organizationIds, ready, existing }: WizardIn
           ),
           pendingTimeline: latest.current.pendingTimeline.filter(
             (entry) => !flushedEntries.includes(entry.tempId),
+          ),
+          pendingFaqs: latest.current.pendingFaqs.filter(
+            (faq) => !flushedFaqs.includes(faq.tempId),
           ),
           // Cleared only when the PUT actually landed. From here the picker
           // reads the server, which is the source of truth for a lineup.

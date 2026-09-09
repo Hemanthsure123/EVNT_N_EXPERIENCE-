@@ -177,6 +177,15 @@ export type Draft = {
   /** Running-order entries typed before the event existed. */
   pendingTimeline: PendingTimelineEntry[];
   /**
+   * FAQs typed before the event existed, or carried in from a clone.
+   *
+   * Staged for the same reason as the two above — `POST /events/{id}/faqs`
+   * needs an id — and it is what lets a CLONE bring the source's FAQs with it
+   * without a server-side copy. A prefill that dropped them would be the
+   * version of cloning that looks like it worked.
+   */
+  pendingFaqs: PendingFaq[];
+  /**
    * The lineup, as an ORDERED list of roster ids.
    *
    * Held here only while there is no event to PUT it to. Once flushed it is
@@ -346,6 +355,12 @@ export type PendingTimelineEntry = {
   startsAt: string;
 };
 
+export type PendingFaq = {
+  tempId: string;
+  question: string;
+  answer: string;
+};
+
 /** Client-side only; never sent. `crypto.randomUUID` where available, because
  *  a counter resets on reload and would collide with a restored draft. */
 export function tempId(): string {
@@ -367,6 +382,7 @@ export function emptyDraft(organizationId = ''): Draft {
     customCategoryLabel: '',
     pendingSlots: [],
     pendingTimeline: [],
+    pendingFaqs: [],
     crewIds: [],
     placeId: '',
     latitude: null,
@@ -1171,6 +1187,91 @@ export function completion(draft: Draft): number {
 
 /** `datetime-local` has no zone; the browser's own offset is the honest
  *  interpretation of what the organizer typed. */
+/**
+ * A NEW draft, filled from an event that already exists.
+ *
+ * ── WHY THIS REPLACED A SERVER-SIDE COPY ─────────────────────────────────
+ *
+ * `POST /events/{id}/duplicate` used to create a row titled "Copy of ..." the
+ * instant somebody pressed a button, and both halves of that were wrong: a
+ * press should not write, and a copy of a monthly residency IS that residency
+ * rather than something called "Copy of" it. The events list in the report
+ * that killed it held five stacked "Copy of Copy of ..." drafts nobody meant
+ * to keep.
+ *
+ * The argument FOR the server copy was real at the time and is worth stating,
+ * because it is why this could not have been written earlier: the collections
+ * that make a copy worth having — tiers, sessions, running order, lineup,
+ * FAQs — live in their own tables, and a client prefill could only carry the
+ * scalar columns the draft model held. That stopped being true when those
+ * collections became STAGED draft state (`PendingSlot` and friends), flushed
+ * on first save. All of them come across now, and nothing is written until
+ * the organizer decides to save.
+ *
+ * ── WHAT IS STRIPPED, AND WHY EACH ONE ───────────────────────────────────
+ *
+ * `eventId` and `version`, so the save engine takes the CREATE path. Leaving
+ * them would make the first autosave PATCH the source event — the clone would
+ * silently overwrite the thing it was copied from.
+ *
+ * Every tier's `serverId` and `version`, for the same reason one level down:
+ * a tier carrying the source's id would be an UPDATE of the source's tier,
+ * so cloning an event would repriceit.
+ *
+ * The POSTER stays as a URL. It is a plain column and the copy points at the
+ * same stored object, which is safe because nothing here deletes a poster
+ * object — but the gallery does NOT come across: an `EventMedia` row points at
+ * a stored key, and two events sharing one key means deleting either one's
+ * gallery breaks the other's. That is the same reason the old server-side copy
+ * skipped media, and it has not changed.
+ *
+ * THE TITLE IS KEPT EXACTLY. No "Copy of" prefix. It is the same show, and
+ * the only place the name has to be distinct is where a buyer would meet both
+ * at once — which the backend checks at publish, against the title AND the
+ * venue together.
+ */
+export function cloneDraftFrom(
+  event: EventDetail,
+  tiers: readonly TicketTier[],
+  content: {
+    faqs?: readonly { question: string; answer: string }[];
+    timeline?: readonly { kind: string; label: string; description: string; starts_at: string | null }[];
+    slots?: readonly { starts_at: string; ends_at: string | null; label: string }[];
+    crewIds?: readonly string[];
+  },
+  organizationIds: readonly string[],
+): Draft {
+  const base = draftFromEvent(event, tiers, organizationIds);
+  return {
+    ...base,
+    eventId: '',
+    version: 0,
+    tiers: base.tiers.map((tier) => ({ ...tier, serverId: undefined, version: undefined })),
+    pendingSlots: (content.slots ?? []).map((slot) => ({
+      tempId: tempId(),
+      startsAt: toLocalInput(slot.starts_at),
+      endsAt: slot.ends_at ? toLocalInput(slot.ends_at) : '',
+      label: slot.label ?? '',
+    })),
+    pendingTimeline: (content.timeline ?? []).map((entry) => ({
+      tempId: tempId(),
+      kind: entry.kind,
+      label: entry.label,
+      description: entry.description ?? '',
+      startsAt: entry.starts_at ? toLocalInput(entry.starts_at) : '',
+    })),
+    pendingFaqs: (content.faqs ?? []).map((faq) => ({
+      tempId: tempId(),
+      question: faq.question,
+      answer: faq.answer,
+    })),
+    // The lineup points at the SAME roster rows. Copying the people would
+    // leave an organizer editing one face in four places -- the roster hangs
+    // off the organization precisely so it is shared.
+    crewIds: [...(content.crewIds ?? [])],
+  };
+}
+
 export function toIso(local: string): string {
   return local ? new Date(local).toISOString() : '';
 }
@@ -1307,6 +1408,7 @@ export function draftFromEvent(
     // have ids.
     pendingSlots: [],
     pendingTimeline: [],
+    pendingFaqs: [],
     crewIds: [],
     placeId: event.place_id ?? '',
     latitude: toCoordinate(event.latitude),

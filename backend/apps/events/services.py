@@ -51,6 +51,7 @@ from .exceptions import (
     CrewMemberInUseError,
     CrewMemberNotFoundError,
     CrewOrganizationNotFoundError,
+    DuplicateActiveEventError,
     DuplicateSlotError,
     EventNotFoundError,
     EventNotLiveError,
@@ -370,6 +371,27 @@ class EventService:
             raise NotEventOwnerError()
         return event
 
+    def get_owned_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
+        """One of the caller's own events, at ANY status.
+
+        This is what the organizer wizard reads to open the editor, and what
+        the clone flow reads to fill a new draft from an existing event.
+
+        Before it existed both went through the PUBLIC detail endpoint, which
+        resolves only `LIVE` and `CANCELLED` — so opening the editor for a
+        draft, a finished event or a rejected one answered 404 and the wizard
+        said "That event is not available" about an event the organizer owns.
+        Cloning a past event was impossible for the same reason, which is
+        precisely the event somebody most wants to run again.
+
+        The miss is a 404 for BOTH "not yours" and "does not exist", so a
+        guessed uuid cannot be used to test whether an id is real.
+        """
+        event = self._events.get_owned_by_id(event_id, actor_id)
+        if event is None:
+            raise EventNotFoundError(str(event_id))
+        return event
+
     def _enqueue_poster_processing(self, event_id: uuid.UUID | str, poster_url: str) -> None:
         transaction.on_commit(
             lambda: self._task_queue.enqueue(
@@ -610,6 +632,35 @@ class EventService:
                 status=str(event.status),
             )
 
+        # ── ONE ACTIVE EVENT PER TITLE, PER VENUE ────────────────────────
+        #
+        # Checked HERE and nowhere earlier. A draft may carry any title it
+        # likes, including one identical to a live event's — that is what a
+        # clone of a monthly residency IS, and forcing "Copy of ..." into the
+        # name to avoid a collision that may never happen is how a dashboard
+        # fills with rows nobody meant to name that way.
+        #
+        # The collision only becomes real at the moment this event would
+        # appear beside the other one, which is submission. TITLE AND VENUE
+        # TOGETHER: the same night run in two cities is two events a buyer can
+        # tell apart and both should be listed, so venue is what makes the
+        # name ambiguous rather than merely repeated.
+        #
+        # Before `run_publish_checks`, so an organizer who has to rename is
+        # told that first rather than after fixing three unrelated readiness
+        # complaints — and because a rename is the one refusal here they can
+        # act on without leaving the screen.
+        clash = self._events.find_active_title_clash(
+            title=event.title, venue=event.venue, exclude_id=event.id
+        )
+        if clash is not None:
+            raise DuplicateActiveEventError(
+                f"Another event called “{clash.title}” is already running at {clash.venue}. "
+                "Give this one a different title — two live events with the same name at "
+                "the same venue are indistinguishable to somebody buying a ticket.",
+                conflicting_event_id=str(clash.id),
+            )
+
         # Extensible readiness gate — core checks now, ticketing's "has a
         # ticket type" check later, all without editing this method.
         run_publish_checks(event)
@@ -791,113 +842,34 @@ class EventService:
         "tags",
     )
 
-    def duplicate_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
-        """Copy an event into a fresh DRAFT the organizer can edit.
-
-        Running the same show monthly meant retyping the venue, the policies,
-        the age limit and the running order every time. This copies all of it
-        and hands back a draft.
-
-        ── WHAT IT DOES NOT COPY, AND WHY ────────────────────────────────────
-
-        A clone is a NEW event, not a continuation, so nothing that was earned
-        by the original comes with it:
-
-          - It is always a DRAFT, whatever the source was. A copy of a live
-            event that arrived already live would be an event published
-            without anyone deciding to publish it.
-          - Moderation history does not transfer. A previous approval was for
-            a specific event on a specific date.
-          - No bookings, tickets, scans or settlement — those belong to the
-            original and are `PROTECT`ed to it.
-          - No gallery MEDIA rows. An `EventMedia` row points at one stored
-            object, so two events sharing a storage key means deleting either
-            one's gallery breaks the other's. Copying it safely needs a real
-            object copy in the storage adapter.
-
-        TICKET TYPES **ARE** COPIED, with their sale phases, `sold`/`reserved`
-        zeroed and each tier re-pointed at the copied session via `slot_map`.
-        This docstring used to say the opposite — that tiers were left behind
-        because reaching across to `ticketing` would invert the dependency
-        rule, and that a copy therefore could not be published until a tier was
-        added. That was true when clone shipped. The dependency rule is still
-        intact: `events` does not import a ticketing MODEL, it calls a
-        repository method through the same seam the publish check already uses.
-
-        The consequence is the opposite of what the old text said and matters
-        to every caller: **a copy can be published immediately.** Any UI copy
-        telling an organizer to add a tier first is wrong.
-
-        The content collections this module OWNS — FAQs, the running order and
-        the sessions — are copied too, because they are the retyping this
-        exists to remove, and so is the lineup (pointing at the SAME roster
-        rows; a person is one person).
-        """
-        source = self._load_owned_for_write(event_id=event_id, actor_id=actor_id)
-
-        fields = {name: getattr(source, name) for name in self._CLONED_FIELDS}
-        # EVERY list column is copied BY VALUE. `getattr` hands back the same
-        # python list object the source instance holds, so without this the
-        # clone and the original share it and editing one edits the other for
-        # the life of the process. One line per column, and a new list column
-        # added to `_CLONED_FIELDS` needs one here too — `_LIST_FIELDS` makes
-        # that a single place to update rather than five lines to remember.
-        for name in self._LIST_FIELDS:
-            fields[name] = list(fields.get(name) or [])
-        title = f"Copy of {source.title}"[: Event._meta.get_field("title").max_length]
-
-        with UnitOfWork() as uow:
-            clone = self._events.create_clone(
-                organization_id=source.organization_id,
-                fields={**fields, "title": title, "slug": event_slug(title)},
-            )
-            slot_map = self._events.copy_content_to(source_id=source.id, target_id=clone.id)
-
-            # THE LINEUP COMES ACROSS, and it is exactly the retyping this
-            # method exists to remove — a monthly residency has the same
-            # residents. It points at the SAME `CrewMember` rows rather than
-            # copying them: a person is one person, and duplicating the roster
-            # would leave an organizer editing the same face in four places.
-            EventCrewRepository().copy_to_event(source_event_id=source.id, target_event_id=clone.id)
-
-            from apps.ticketing.repositories import TicketTypeRepository
-
-            tt_repo = TicketTypeRepository()
-            tt_repo.copy_ticket_types_to(
-                source_event_id=source.id,
-                target_event_id=clone.id,
-                slot_map=slot_map,
-            )
-
-            agg = tt_repo.aggregate_event_availability(clone.id)
-            self._events.set_ticketing_fields(
-                event_id=clone.id,
-                from_price_minor=agg["from_price_minor"],
-                tickets_available=agg["tickets_available"],
-            )
-
-            uow.publish(
-                EVENT_CREATED,
-                {
-                    "event_id": str(clone.id),
-                    "organization_id": str(clone.organization_id),
-                    "cloned_from": str(source.id),
-                },
-                aggregate_id=str(clone.id),
-            )
-            record_audit(
-                actor_id=str(actor_id),
-                action="event.duplicated",
-                target_type="event",
-                target_id=str(clone.id),
-                metadata={"cloned_from": str(source.id)},
-            )
-
-        logger.info(
-            "event_duplicated",
-            extra={"event_id": str(clone.id), "cloned_from": str(source.id)},
-        )
-        return clone
+    # ── `duplicate_event` WAS HERE, AND IT IS GONE ──────────────────────
+    #
+    # It copied an event into a fresh server-side DRAFT titled "Copy of ...",
+    # and both things it did were wrong for what cloning is actually for.
+    #
+    # It CREATED A ROW ON A PRESS. An organizer exploring what clone does got a
+    # permanent draft for it, and pressing twice got two. The events list in
+    # the report that killed this had five of them — "Copy of Copy of Copy of
+    # AURORA MUSIC AND ..." — none of which anybody meant to keep, all of them
+    # needing individual archiving to clear.
+    #
+    # And it RENAMED THE EVENT. "Copy of" is scaffolding: the copy of a monthly
+    # residency IS that residency, run again, and the organizer has to delete
+    # those two words every single time. The name only has to be distinct where
+    # a buyer would meet both at once, which is now checked at PUBLISH against
+    # the title and the venue together — see `publish_event`.
+    #
+    # Cloning is a FRONTEND hydration now: the wizard opens as a new draft with
+    # every field of the source poured into it, and nothing is written until
+    # the organizer saves. That is only possible because the collections a
+    # server copy existed to carry — sessions, running order, lineup, FAQs —
+    # are staged in the draft and flushed on first save, exactly as tiers
+    # always were. See `PendingSlot` in the frontend's `wizard/model.ts`.
+    #
+    # `EventRepository.copy_content_to` and
+    # `TicketTypeRepository.copy_ticket_types_to` are left in place: they are
+    # correct, tested, transaction-safe primitives, and the day a bulk
+    # server-side copy is genuinely wanted they are what it should be built on.
 
     def archive_event(self, *, event_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Event:
         """Retire an event the organizer is finished with.

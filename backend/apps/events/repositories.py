@@ -218,6 +218,96 @@ class EventRepository(BaseRepository[Event]):
             .first()
         )
 
+    def get_owned_by_id(self, event_id: uuid.UUID | str, owner_id: uuid.UUID | str):
+        """One of the caller's OWN events, at ANY status, detail-shaped.
+
+        ── WHY THIS EXISTS ────────────────────────────────────────────────
+
+        The organizer wizard's edit route was reading the PUBLIC detail
+        endpoint, which resolves only `LIVE` and `CANCELLED`. So opening the
+        editor for a DRAFT — which is what every new event and every copy is —
+        answered 404, and the wizard rendered "That event is not available".
+        The event was there and belonged to them; nothing was allowed to say
+        so.
+
+        NO STATUS FILTER, on purpose and as the point of the method. An
+        organizer may open any event they own: a finished one to clone it, a
+        rejected one to fix it, a paused or archived one to look at what it
+        said. `deleted_at` is still honoured, because a soft-deleted row is
+        gone rather than merely hidden.
+
+        Scoped by OWNER in the query rather than fetched-then-compared, so a
+        stranger's event is never loaded at all — the same rule the crew and
+        category repositories state. The caller turns a miss into a 404 for
+        both "not yours" and "does not exist", so a guessed uuid cannot be
+        used to test whether an id is real.
+        """
+        return (
+            self.get_queryset()
+            .select_related("organization")
+            .filter(  # type: ignore[misc]
+                pk=event_id,
+                organization__owner_id=owner_id,
+                deleted_at__isnull=True,
+            )
+            .only(*_DETAIL_FIELDS)
+            .first()
+        )
+
+    #: What "already on the home screen" means for the publish-time title
+    #: check below.
+    #:
+    #: `PENDING_REVIEW` is in here and that is deliberate. The rule an
+    #: organizer is given is "no two ACTIVE events share a name at one venue",
+    #: and an event awaiting a decision is one approval away from being active
+    #: — so admitting a second identical submission would simply move the
+    #: collision to the moderator, who has no way to see it.
+    ACTIVE_TITLE_STATUSES = (EventStatus.LIVE, EventStatus.PENDING_REVIEW)
+
+    def find_active_title_clash(
+        self,
+        *,
+        title: str,
+        venue: str,
+        exclude_id: uuid.UUID | str,
+    ):
+        """Another ACTIVE event with this exact title at this exact venue.
+
+        ── TITLE **AND** VENUE, NEVER TITLE ALONE ─────────────────────────
+
+        A promoter running "Open Mic Night" in Bengaluru and in Pune is
+        running two different events that should both be listed, and refusing
+        the second would make the rule punish exactly the organizer this
+        platform is for. The collision only matters where a buyer cannot tell
+        them apart, which is the same name in the same place.
+
+        Both comparisons are case- and whitespace-insensitive: "open mic
+        night" and "Open Mic Night " are the same name to a reader, and a
+        check a space defeats is not a check.
+
+        NO INDEX FOR THIS, and that is a considered exception to the
+        performance checklist rather than an oversight. It runs once per
+        PUBLISH — a handful of times a day across the platform, on a path that
+        already loads the event, verifies the organization and runs every
+        readiness check — and a case-insensitive match would need an
+        expression index (`Upper(title)`, `Upper(venue)`) which would be the
+        first in this codebase. The status filter alone narrows the scan to
+        the live and pending rows. Revisit it if publishing ever becomes a
+        bulk operation.
+        """
+        return (
+            self.get_queryset()
+            .filter(
+                status__in=self.ACTIVE_TITLE_STATUSES,
+                deleted_at__isnull=True,
+                title__iexact=title.strip(),
+                venue__iexact=venue.strip(),
+            )
+            .exclude(pk=exclude_id)
+            .only("id", "title", "venue", "city", "status")
+            .first()
+        )
+
     def list_published(
         self,
         *,
