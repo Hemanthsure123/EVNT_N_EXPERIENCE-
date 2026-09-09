@@ -23,7 +23,8 @@ import { cn } from '@/lib/utils/cn';
 import type { TicketTier } from '@/lib/api/types';
 import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
-import { HeroGallery, type GalleryImage } from './hero-gallery';
+import { type GalleryImage } from './hero-gallery';
+import { GalleryGrid } from './gallery-grid';
 import { ShareMenu } from './share-menu';
 import type { SubSheetType } from './event-sub-sheets';
 
@@ -222,13 +223,16 @@ export function EventWidgetContent({
               the organiser has not named anybody. */}
       <LineupRail crew={content?.crew ?? []} />
 
-      {/* 11. Gallery. Thumbnails only — `hideMainImage` keeps the big
-              duplicate copy of the poster off a screen that already has one,
-              and taps open the page's own lightbox rather than a second. */}
+      {/* 11. Gallery — a masonry GRID, not a strip of equal thumbnails.
+              One large picture with smaller ones packed beside it shows the
+              SHAPE of the collection at a glance, where a horizontal strip
+              ran off the edge and made the count unknowable without
+              scrolling to the end. No big duplicate of the poster: this
+              screen already has one at the top. */}
       {galleryImages.length > 0 ? (
         <section className="flex flex-col gap-3">
           <h3 className="text-body font-extrabold text-foreground">Gallery</h3>
-          <HeroGallery images={galleryImages} priority={false} hideMainImage />
+          <GalleryGrid images={galleryImages} />
         </section>
       ) : null}
 

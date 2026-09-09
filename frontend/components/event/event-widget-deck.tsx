@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Ticket } from 'lucide-react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { type MotionValue, motion, useMotionValue, useReducedMotion } from 'framer-motion';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
 import { useScrollLock } from '@/lib/discovery/use-scroll-lock';
@@ -32,6 +32,7 @@ import {
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
 import { EventWidgetContent } from './event-widget-content';
+import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
 
 /**
@@ -169,6 +170,29 @@ export function EventWidgetDeck() {
   const [docked, setDocked] = React.useState(false);
   const dockedRef = React.useRef(false);
   /**
+   * How opaque the hero's blurred backdrop is, 1 at the top and 0 once the
+   * poster has scrolled its own height away.
+   *
+   * A MotionValue, NOT state. This is written on every scroll event; as
+   * state it would re-render the whole event page — content, lineup rail,
+   * gallery and all — dozens of times a second on the one code path where
+   * the finger is already on the glass. A MotionValue writes straight to the
+   * node's style and re-renders nothing.
+   */
+  const blurOpacity = useMotionValue(1);
+  /**
+   * True when the gesture that just ended actually moved.
+   *
+   * The hero is a tap target now (it opens the lightbox), and a horizontal
+   * swipe that begins on the poster ends with a `click` on release. Without
+   * this, swiping to the next event opens a full-screen photograph on the way
+   * past — the same class of bug the old gesture plate had, arriving from the
+   * other direction.
+   */
+  const draggedRef = React.useRef(false);
+  /** Which photograph the full-screen viewer is showing, or null. */
+  const [lightboxAt, setLightboxAt] = React.useState<number | null>(null);
+  /**
    * The scroll offset carried from page to page.
    *
    * ── THIS REVERSES A DECISION, AND THE REASON IS THE BRIEF ─────────────
@@ -188,6 +212,35 @@ export function EventWidgetDeck() {
    * is never seen at the wrong offset.
    */
   const scrollTopRef = React.useRef(0);
+
+  /**
+   * THE POSTER FIRST, THEN THE GALLERY.
+   *
+   * One list, because the brief is that clicking ANY image opens the same
+   * viewer — so the poster and the gallery have to be positions in a single
+   * sequence, or arrowing right from the poster would land nowhere.
+   */
+  const lightboxImages = React.useMemo<LightboxImage[]>(() => {
+    const list: LightboxImage[] = [];
+    if (currentEvent?.poster_url) {
+      list.push({ url: currentEvent.poster_url, alt: currentEvent.title });
+    }
+    for (const item of content?.media ?? []) {
+      if (item.kind !== 'gallery') continue;
+      list.push({ url: item.url, alt: item.alt_text || currentEvent?.title || '' });
+    }
+    return list;
+  }, [content, currentEvent]);
+
+  const openPoster = React.useCallback(() => {
+    // A swipe ends in a click. Consume it rather than opening a photograph
+    // the reader was scrolling past.
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    setLightboxAt(0);
+  }, []);
 
   const gestureRef = React.useRef<{
     x: number;
@@ -346,11 +399,13 @@ export function EventWidgetDeck() {
     scrollTopRef.current = 0;
     dockedRef.current = false;
     setDocked(false);
+    setLightboxAt(null);
+    blurOpacity.set(1);
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
-  }, [isOpen]);
+  }, [isOpen, blurOpacity]);
 
   // Keep the active page on screen when the index changes — a swipe, or a tap
   // on a card in the similar-events rail.
@@ -389,11 +444,21 @@ export function EventWidgetDeck() {
     const node = scrollerRef.current;
     if (!node) return;
     scrollTopRef.current = node.scrollTop;
-    const next = shouldDock(node.scrollTop, heroRef.current?.offsetHeight ?? 0, dockedRef.current);
+    // ── THE BACKDROP FADES AS THE POSTER LEAVES ─────────────────────
+    //
+    // Linear against the hero's own height, so it is gone exactly when the
+    // artwork is. Fading it on a fixed pixel count would leave a blurred
+    // wash behind the first paragraph on a tall phone and clear it before
+    // the poster had moved on a short one.
+    const heroHeight = heroRef.current?.offsetHeight ?? 0;
+    blurOpacity.set(
+      heroHeight > 0 ? 1 - Math.min(Math.max(node.scrollTop / heroHeight, 0), 1) : 1,
+    );
+    const next = shouldDock(node.scrollTop, heroHeight, dockedRef.current);
     if (next === dockedRef.current) return;
     dockedRef.current = next;
     setDocked(next);
-  }, []);
+  }, [blurOpacity]);
 
   /**
    * ── CLAIM THE HORIZONTAL GESTURE BEFORE THE BROWSER DOES ───────────────
@@ -647,6 +712,7 @@ export function EventWidgetDeck() {
   );
 
   const onPointerDown = React.useCallback((event: React.PointerEvent) => {
+    draggedRef.current = false;
     gestureRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -668,6 +734,10 @@ export function EventWidgetDeck() {
       const dy = event.clientY - gesture.y;
       if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
       gesture.committed = true;
+      // Committing IS proof of travel — `COMMIT_SLOP` px of it — so the tap
+      // guard is raised here rather than from the drag's own `pointermove`,
+      // which needs a move AFTER the commit and so misses a short flick.
+      draggedRef.current = true;
       if (Math.abs(dx) > Math.abs(dy) * AXIS_DOMINANCE) beginSwipe(event);
     },
     [beginSwipe],
@@ -765,6 +835,8 @@ export function EventWidgetDeck() {
                     docked={docked}
                     dockTransition={dockTransition}
                     hidePoster={flight !== null}
+                    blurOpacity={blurOpacity}
+                    onOpenPoster={openPoster}
                     ctaHeight={ctaHeight}
                     scrollerRef={scrollerRef}
                     ctaRef={ctaRef}
@@ -787,6 +859,17 @@ export function EventWidgetDeck() {
           })}
         </div>
       </motion.div>
+
+      {/* Rendered here rather than inside the page, and it portals out of the
+          overlay entirely — see `lightbox.tsx`. */}
+      {lightboxAt !== null && lightboxImages.length > 0 ? (
+        <Lightbox
+          images={lightboxImages}
+          index={lightboxAt}
+          onIndexChange={setLightboxAt}
+          onClose={() => setLightboxAt(null)}
+        />
+      ) : null}
 
       <EventSubSheets
         sheetType={activeSubSheet}
@@ -847,6 +930,8 @@ function Hero({
   layoutId,
   transition,
   boxRef,
+  blurOpacity,
+  onOpenPoster,
 }: {
   event: EventCardData;
   docked: boolean;
@@ -855,6 +940,9 @@ function Hero({
   layoutId: string;
   transition: { duration: number; ease: [number, number, number, number] };
   boxRef: React.RefObject<HTMLDivElement>;
+  /** 1 at the top of the page, 0 once the poster has scrolled its own height. */
+  blurOpacity: MotionValue<number>;
+  onOpenPoster: () => void;
 }) {
   return (
     <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
@@ -881,6 +969,40 @@ function Hero({
         }}
         className="relative w-full overflow-hidden bg-muted"
       >
+        {/* ── THE BLURRED BACKDROP ──────────────────────────────────────
+            The poster's own colours, blown up and blurred, filling whatever
+            the artwork does not.
+
+            It exists because the box has a FIXED shape and posters do not.
+            Anything the picture leaves — a letterbox on an unusual ratio, the
+            frame before it decodes, and the whole box once the poster has
+            docked into the booking bar — was a flat slab of `bg-muted`, which
+            on a light theme reads as a skin-toned rectangle where the event's
+            artwork should be. This gives every one of those states the
+            event's own colour instead of a default grey.
+
+            `aria-hidden` and no `priority`: it is the same file the sharp copy
+            above is already loading, so it costs no extra request, and it is
+            scenery. */}
+        {event.poster_url ? (
+          <motion.div
+            aria-hidden
+            style={{ opacity: blurOpacity }}
+            className="pointer-events-none absolute inset-0"
+          >
+            <Image
+              src={event.poster_url}
+              alt=""
+              fill
+              sizes="100vw"
+              // `scale-125`: a blur samples past its own edges, so an unscaled
+              // copy draws a soft transparent rim down all four sides of the
+              // box. Blowing it up puts that rim outside the clip.
+              className="scale-125 object-cover blur-2xl saturate-150"
+            />
+          </motion.div>
+        ) : null}
+
         {docked ? null : (
           <motion.div
             layoutId={layoutId}
@@ -892,6 +1014,20 @@ function Hero({
           >
             <Poster event={event} priority />
           </motion.div>
+        )}
+
+        {/* The tap target, over the artwork and under nothing. A separate
+            element rather than a `motion.button`, so the shared-layout element
+            stays a plain box: framer animates it between two very different
+            sizes, and a button's own focus ring and press states would be
+            scaled along with everything else. */}
+        {docked ? null : (
+          <button
+            type="button"
+            onClick={onOpenPoster}
+            aria-label={`View ${event.title} poster full size`}
+            className="absolute inset-0 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          />
         )}
       </div>
     </div>
@@ -938,10 +1074,24 @@ function BookingBar({
   const label = saleState === null ? 'Book tickets' : bookingCtaLabel(saleState);
 
   return (
-    <div
+    /* ── A FLOATING CARD, NOT A DOCKED BAR ───────────────────────────────
+       It was `inset-x-0 bottom-0` with a top border: a full-width strip welded
+       to the bottom edge, which reads as browser chrome rather than as part of
+       the page. Inset on all four sides with a 24px radius and a real shadow,
+       it reads as the last CARD in a page of cards — and the gap underneath is
+       what lets the content scroll visibly past it rather than under a lid.
+
+       The entrance is a spring, and it is deliberately the only spring on this
+       surface: everything else here moves on the house cubic-bezier. This one
+       control appears after the page rather than with it, and a small overshoot
+       is what makes that read as arriving rather than as a late render. */
+    <motion.div
       ref={barRef}
-      className="absolute inset-x-0 bottom-0 z-30 border-t border-border bg-background px-4 pt-3"
-      style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+      initial={{ y: 32, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 32, mass: 0.9 }}
+      className="absolute inset-x-4 bottom-4 z-30 rounded-3xl border border-border bg-background px-4 py-3 shadow-xl"
+      style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
     >
       {/* NO EMI banner. This platform has no EMI arrangement and no column
           saying whether one applies — a claim about somebody's money, on the
@@ -1016,7 +1166,7 @@ function BookingBar({
           </Link>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -1029,6 +1179,8 @@ function ActivePage({
   docked,
   dockTransition,
   hidePoster,
+  blurOpacity,
+  onOpenPoster,
   ctaHeight,
   scrollerRef,
   ctaRef,
@@ -1048,6 +1200,8 @@ function ActivePage({
   docked: boolean;
   dockTransition: { duration: number; ease: [number, number, number, number] };
   hidePoster: boolean;
+  blurOpacity: MotionValue<number>;
+  onOpenPoster: () => void;
   ctaHeight: number;
   scrollerRef: React.RefObject<HTMLDivElement>;
   ctaRef: React.RefObject<HTMLDivElement>;
@@ -1084,8 +1238,10 @@ function ActivePage({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         className="flex-1 overflow-y-auto overscroll-contain"
-        // The bar's measured height, so the last section clears it exactly.
-        style={{ paddingBottom: `${(ctaHeight || 96) + 16}px` }}
+        // The bar's measured height PLUS the gap it now floats above, so the
+        // last section clears it exactly. A hard-coded `pb-28` is either a void
+        // or a clipped final row on some device.
+        style={{ paddingBottom: `${(ctaHeight || 96) + 32}px` }}
       >
         <Hero
           event={event}
@@ -1094,6 +1250,8 @@ function ActivePage({
           layoutId={layoutId}
           transition={dockTransition}
           boxRef={heroRef}
+          blurOpacity={blurOpacity}
+          onOpenPoster={onOpenPoster}
         />
         <EventWidgetContent
           key={event.id}
@@ -1162,6 +1320,17 @@ function NeighbourPage({ event, docked }: { event: EventCardData; docked: boolea
             }}
             className="relative w-full overflow-hidden bg-muted"
           >
+            {event.poster_url ? (
+              <span aria-hidden className="pointer-events-none absolute inset-0">
+                <Image
+                  src={event.poster_url}
+                  alt=""
+                  fill
+                  sizes="100vw"
+                  className="scale-125 object-cover blur-2xl saturate-150"
+                />
+              </span>
+            ) : null}
             <Poster event={event} />
           </div>
         </div>

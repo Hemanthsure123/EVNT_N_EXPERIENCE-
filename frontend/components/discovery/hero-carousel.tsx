@@ -13,12 +13,14 @@ import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import {
-  PEEK_RAIL_ITEM,
   PEEK_RAIL_SURFACE,
   PEEK_RAIL_TRACK,
+  centredRailPadding,
+  loopedIndex,
+  peekRailItem,
   peekRailItemState,
   peekRailSurfaceState,
-  useCenteredIndex,
+  useSnapRail,
 } from '@/lib/discovery/peek-rail';
 import { DateBadge } from './date-badge';
 import { categoryTint } from './category-tint';
@@ -245,16 +247,31 @@ function PriceLine({ event }: { event: EventCardModel }) {
   );
 }
 
-function MobileFeaturedCarousel({ events, label }: { events: EventCardModel[]; label: string }) {
-  // ── THE MOTION MOVED OUT, THE RAIL DID NOT CHANGE ─────────────────────
-  //
-  // The scale/lift/opacity/elevation classes and the closest-to-centre index
-  // used to be written out here. They are `lib/discovery/peek-rail` now,
-  // because the event page's lineup rail uses the same motion — and two
-  // hand-written copies of a transition are two things that drift the first
-  // time somebody tunes one of them. Behaviour here is unchanged; the classes
-  // are the same strings, from one place.
-  const { ref, activeIndex, scrollable } = useCenteredIndex<HTMLUListElement>(events.length);
+/** The featured card's share of the viewport. */
+const FEATURED_ITEM_VW = 68;
+
+function MobileFeaturedCarousel({
+  events,
+  label,
+}: {
+  events: EventCardModel[];
+  label: string;
+}) {
+  /**
+   * ── THE MOTION AND THE LAYOUT RULE BOTH LIVE ELSEWHERE ────────────────
+   *
+   * The scale/lift/opacity/elevation classes, the closest-to-centre index, the
+   * wrap-around and the three-item threshold are all
+   * `lib/discovery/peek-rail`, because the event page's lineup rail uses the
+   * identical thing. Two hand-written copies of a transition are two things
+   * that drift the first time somebody tunes one of them.
+   */
+  const { ref, activeIndex, mode, looping, scrollable } = useSnapRail<HTMLUListElement>(
+    events.length,
+    { loop: true },
+  );
+  const { domCount, realFor } = loopedIndex(events.length, looping);
+  const centred = mode === 'centred';
 
   return (
     <div className="overflow-x-hidden sm:hidden">
@@ -264,29 +281,58 @@ function MobileFeaturedCarousel({ events, label }: { events: EventCardModel[]; l
       <ul
         ref={ref}
         aria-label={label}
+        style={
+          centred
+            ? {
+                // 16vw either side + a 68vw card = exactly 100vw, so the FIRST
+                // and LAST cards can reach the centre like every other one.
+                // Both numbers are the same unit on purpose: a vw padding
+                // against a px-capped card stopped agreeing as the phone
+                // widened, and card one sat ~12px left of centre at 390px.
+                paddingLeft: centredRailPadding(FEATURED_ITEM_VW),
+                paddingRight: centredRailPadding(FEATURED_ITEM_VW),
+              }
+            : undefined
+        }
         className={cn(
           PEEK_RAIL_TRACK,
           'gap-3.5',
-          // 16vw each side + a 68vw card = exactly 100vw, so the FIRST and LAST
-          // cards can reach the centre like every other one. It was `px-[14vw]`
-          // against a card capped at `max-w-64`: a vw padding and a px cap stop
-          // agreeing as the phone widens, so card one sat ~12px left of centre
-          // at 390px and ~27px off on a Pro Max. The cap is gone and both
-          // numbers are now the same unit.
-          'px-[16vw]',
+          // ONE OR TWO FEATURED EVENTS IS A ROW, NOT A CAROUSEL. Centring a
+          // single card leaves a void either side of it; centring the first of
+          // two pushes half the second off the screen on arrival. Both read as
+          // a layout that failed rather than as a design. See `railModeFor`.
+          centred ? null : 'px-4',
         )}
       >
-        {events.map((event, i) => {
+        {Array.from({ length: domCount }, (_, domIndex) => {
+          const index = realFor(domIndex);
+          const event = events[index];
+          if (!event) return null;
+          // A clone exists so the rail can wrap; it is never announced.
+          const isClone = looping && (domIndex === 0 || domIndex === domCount - 1);
           // A single featured event does not scroll, and dimming the only card
           // on screen would be prominence with nothing to be prominent over.
-          const isActive = !scrollable || i === activeIndex;
+          const isActive = !scrollable || index === activeIndex;
           return (
             <li
-              key={event.id}
-              className={cn('w-[68vw]', PEEK_RAIL_ITEM, peekRailItemState(isActive))}
+              key={isClone ? `clone-${domIndex}` : event.id}
+              aria-hidden={isClone || undefined}
+              style={{ width: `${FEATURED_ITEM_VW}vw` }}
+              className={cn(peekRailItem(mode), peekRailItemState(isActive, mode))}
             >
-              <div className={cn('rounded-2xl', PEEK_RAIL_SURFACE, peekRailSurfaceState(isActive))}>
-                <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
+              <div
+                className={cn(
+                  'rounded-2xl',
+                  PEEK_RAIL_SURFACE,
+                  peekRailSurfaceState(isActive, mode),
+                )}
+              >
+                <HeroPosterTile
+                  event={event}
+                  priority={domIndex === 1 || (!looping && domIndex === 0)}
+                  allEvents={events}
+                  index={index}
+                />
               </div>
             </li>
           );

@@ -19,7 +19,7 @@ from collections.abc import Callable
 from django.utils import timezone
 
 from .exceptions import EventNotPublishableError
-from .models import Event
+from .models import Event, MediaKind
 from .taxonomy import MIN_TAGS_TO_PUBLISH
 
 PublishCheck = Callable[[Event], None]
@@ -69,6 +69,38 @@ def _require_tags(event: Event) -> None:
 
 
 # The core checks every event must pass. Modules append to this list via
+def _require_gallery_size(event: Event) -> None:
+    """A gallery is either absent or a GALLERY — never one lonely photograph.
+
+    ── WHY THE FLOOR IS HERE AND THE CEILING IS NOT ───────────────────────
+
+    The maximum (`MEDIA_LIMITS[GALLERY]`) is an upload-time refusal, because
+    the eleventh image is a request that can be answered on its own terms:
+    there is no room, and nothing about the event's other state changes that.
+
+    The minimum cannot work that way. Images arrive one at a time, so a
+    save-time floor would refuse the first upload for being the first, and a
+    removal-time floor would refuse an organizer replacing both of their
+    photographs unless they added before subtracting. Completeness belongs
+    where completeness is already decided — beside "has enough tags", which
+    carries the same argument in its own docstring.
+
+    ZERO IS NOT A FAILURE. Most events on this platform publish no gallery,
+    the section is absent rather than empty when they do, and a gate
+    demanding two photographs of a club night would refuse to publish it.
+    The rule is about a gallery that EXISTS being worth the name.
+    """
+    from .repositories import MIN_GALLERY_IMAGES, EventContentRepository
+
+    count = EventContentRepository().count_media(event.id, MediaKind.GALLERY)
+    if count == 0 or count >= MIN_GALLERY_IMAGES:
+        return
+    raise EventNotPublishableError(
+        f"A gallery needs at least {MIN_GALLERY_IMAGES} photos. "
+        "Add another, or remove the one you have."
+    )
+
+
 # register_publish_check(); order is preserved (checks run first-registered
 # first), and the first failure raises.
 _PUBLISH_CHECKS: list[PublishCheck] = [
@@ -76,6 +108,7 @@ _PUBLISH_CHECKS: list[PublishCheck] = [
     _require_venue,
     _require_future_start,
     _require_tags,
+    _require_gallery_size,
 ]
 
 

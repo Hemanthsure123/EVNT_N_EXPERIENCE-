@@ -1356,6 +1356,22 @@ MEDIA_LIMITS = {
     MediaKind.MOBILE: 1,
 }
 
+#: The other half of the gallery's bounds, and it is enforced somewhere
+#: ELSE — at PUBLISH, never at upload.
+#:
+#: A minimum cannot be an upload-time rule: images arrive one request at a
+#: time, so the first one would always be refused for being the first one.
+#: Nor can it be a removal-time rule without trapping an organizer who wants
+#: to replace both of their photographs — they would have to add before they
+#: could subtract, in an order nobody would guess.
+#:
+#: So it is a readiness gate, next to "has a title" and "has enough tags":
+#: a gallery of exactly one photograph is not a gallery, it is a picture that
+#: reads on the event page as an upload that failed halfway. NONE is fine and
+#: stays fine — most events have no gallery at all, and the section is absent
+#: rather than empty, which is this codebase's rule everywhere else.
+MIN_GALLERY_IMAGES = 2
+
 #: What SHAPE each kind has to be, beside the table saying how many.
 #:
 #: Every image used to go through `EVENT_IMAGE_SPEC`, so every slot was

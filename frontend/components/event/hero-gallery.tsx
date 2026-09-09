@@ -2,10 +2,10 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import { ChevronLeft, ChevronRight, Expand, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Expand } from 'lucide-react';
 import { ClayIcon } from '@/components/illustrations/clay';
 import { cn } from '@/lib/utils/cn';
-import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
+import { Lightbox } from './lightbox';
 
 /**
  * The event's photographs, and a lightbox for looking at them properly.
@@ -69,11 +69,15 @@ import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
  * makes every one of them compete for the same connections and delays the LCP
  * element they were meant to help.
  *
- * The lightbox is NOT a Radix dialog. It's ~20 lines with the same three
- * behaviours (Escape, outside click, focus trap via the shared helper) and
- * without modal mode's document-wide style invalidation, which cost this app a
- * second of INP everywhere it was used. It also mounts nothing until opened, so
- * it costs the page zero until someone asks for it.
+ * THE VIEWER IS `components/event/lightbox.tsx`, AND IT IS A PORTAL. It used
+ * to be declared inline here as `fixed inset-0`, which is correct almost
+ * everywhere and completely wrong inside the mobile event deck: `position:
+ * fixed` resolves against the nearest ancestor with a `transform`, and the
+ * deck's page track carries one. So a tap on a photograph opened the viewer
+ * INSIDE the page — offset and clipped by the scroller, which is the "images
+ * open awkwardly at the bottom" this was reported for. Only a portal out of
+ * that subtree restores what `fixed` means. It still mounts nothing until
+ * opened, so it costs the page zero until somebody asks for it.
  */
 
 export type GalleryImage = {
@@ -118,9 +122,6 @@ export function HeroGallery({
 }) {
   const [index, setIndex] = React.useState(0);
   const [open, setOpen] = React.useState(false);
-  const panelRef = React.useRef<HTMLDivElement>(null);
-  const openerRef = React.useRef<HTMLButtonElement>(null);
-  useBackgroundInert(open);
 
   // Clamped rather than trusted: the list can shrink between renders (a
   // revalidation that drops a deleted image), and an out-of-range index would
@@ -134,26 +135,8 @@ export function HeroGallery({
     [images.length],
   );
 
-  React.useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-      // Arrow keys move through the gallery while the lightbox is open — what
-      // every image viewer does, and what a keyboard user will try first.
-      if (event.key === 'ArrowRight') step(1);
-      if (event.key === 'ArrowLeft') step(-1);
-    };
-    document.addEventListener('keydown', onKey);
-    // Focus moves in on open and returns to the trigger on close. The opener is
-    // captured now, not read in the cleanup — by then the ref may point
-    // somewhere else, and focus would land on the wrong control or nowhere.
-    const opener = openerRef.current;
-    panelRef.current?.focus({ preventScroll: true });
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      opener?.focus({ preventScroll: true });
-    };
-  }, [open, step]);
+  // Escape, arrow keys, the focus trap and focus RETURN all belong to
+  // `Lightbox` now — one implementation, for every surface that opens it.
 
   return (
     <>
@@ -211,7 +194,6 @@ export function HeroGallery({
 
             {current ? (
               <button
-                ref={openerRef}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -274,66 +256,12 @@ export function HeroGallery({
       </div>
 
       {open && current ? (
-        <div
-          className="fixed inset-0 z-modal flex items-center justify-center bg-overlay/90 p-4 animate-in fade-in-0"
-          onClick={() => setOpen(false)}
-        >
-          <div
-            ref={panelRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label={current.alt}
-            tabIndex={-1}
-            onKeyDown={(event) => trapTab(event, panelRef.current)}
-            onClick={(event) => event.stopPropagation()}
-            className="relative flex max-h-full w-full max-w-4xl flex-col gap-3 outline-none"
-          >
-            {/* `contain` HERE, and cover on the page — the two are doing
-                different jobs. The page frame is a layout that has to be one
-                shape on every event; the lightbox is somebody asking to see
-                the picture, so it shows all of it, including the parts a
-                pre-gate image loses to the frame's crop. */}
-            <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-overlay">
-              <Image
-                src={current.url}
-                alt={current.alt}
-                fill
-                sizes="(min-width: 1024px) 900px, 100vw"
-                className="object-contain"
-                priority
-              />
-              {images.length > 1 ? (
-                <>
-                  <LightboxArrow side="left" onClick={() => step(-1)} />
-                  <LightboxArrow side="right" onClick={() => step(1)} />
-                </>
-              ) : null}
-            </div>
-
-            <div className="flex flex-col items-center gap-2">
-              {/* The organiser's alt text, shown rather than hidden: it is the
-                  closest thing to a caption the API stores, and a sighted
-                  visitor looking at a crowd shot benefits from "the main stage
-                  at dusk" too. */}
-              {current.alt ? (
-                <p className="max-w-2xl text-center text-body-sm text-on-gradient">{current.alt}</p>
-              ) : null}
-              {images.length > 1 ? (
-                <p aria-live="polite" className="text-caption tabular-nums text-on-gradient">
-                  {safeIndex + 1} of {images.length}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="glass-media inline-flex h-control w-fit items-center gap-2 rounded-full border px-pill text-label text-on-gradient focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <X className="size-4" aria-hidden />
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <Lightbox
+          images={images}
+          index={safeIndex}
+          onIndexChange={setIndex}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </>
   );
