@@ -7,11 +7,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft } from 'lucide-react';
 import { api } from '@/lib/api/client';
 import type { Paginated } from '@/lib/api/types';
-import {
-  PERFORMER_TYPE_LABELS,
-  createPerformer,
-  type PerformerType,
-} from '@/lib/api/performers';
+import { PERFORMER_TYPE_LABELS, createPerformer, type PerformerType } from '@/lib/api/performers';
 import { ApiError } from '@/lib/api/errors';
 import { useInvalidatePerformer } from '@/lib/performer/studio';
 import { Skeleton } from '@/components/organizer/primitives';
@@ -88,8 +84,8 @@ export function CreateAct() {
       <div className="mx-auto flex max-w-lg flex-col items-center gap-stack-lg py-section text-center">
         <h1 className="text-h3">You need an organisation first</h1>
         <p className="text-body-sm text-muted-foreground">
-          An act belongs to an organisation — the same entity that gets verified and paid. It is
-          how a customer knows who they are dealing with.
+          An act belongs to an organisation — the same entity that gets verified and paid. It is how
+          a customer knows who they are dealing with.
         </p>
         <Button asChild variant="outline">
           <Link href="/dashboard">Back to the dashboard</Link>
@@ -102,7 +98,7 @@ export function CreateAct() {
 
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col gap-block py-block">
-      <Button asChild variant="ghost" size="sm" className="w-fit -ml-2">
+      <Button asChild variant="ghost" size="sm" className="-ml-2 w-fit">
         <Link href="/studio">
           <ArrowLeft className="size-3.5" aria-hidden />
           Studio
@@ -193,7 +189,7 @@ export function CreateAct() {
         </Field>
 
         {error ? (
-          <p role="alert" className="text-body-sm text-destructive">
+          <p role="alert" className="text-body-sm text-muted-foreground">
             {error}
           </p>
         ) : null}
@@ -201,11 +197,7 @@ export function CreateAct() {
         {/* `disabled` is passed explicitly as well as `loading`: Button reads
             `disabled ?? loading`, so an explicit `false` would keep a busy
             button clickable and let a double-submit through. */}
-        <Button
-          type="submit"
-          disabled={!ready || create.isPending}
-          loading={create.isPending}
-        >
+        <Button type="submit" disabled={!ready || create.isPending} loading={create.isPending}>
           Create the listing
         </Button>
       </form>

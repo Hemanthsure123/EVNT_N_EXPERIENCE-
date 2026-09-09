@@ -131,9 +131,9 @@ export function CancelEventButton({ row }: { row: EventRow }) {
             <div className="flex flex-col gap-stack-lg">
               <DrawerTitle className="text-h4">Cancel {row.title}?</DrawerTitle>
               <DrawerDescription className="text-body-sm text-muted-foreground">
-                Everyone who booked is refunded and emailed, and unpaid holds are released.
-                This cannot be undone. To stop selling without cancelling, take the event
-                off sale instead.
+                Everyone who booked is refunded and emailed, and unpaid holds are released. This
+                cannot be undone. To stop selling without cancelling, take the event off sale
+                instead.
               </DrawerDescription>
 
               <div className="flex flex-col gap-1.5">
@@ -173,7 +173,7 @@ export function CancelEventButton({ row }: { row: EventRow }) {
               {error ? (
                 <p
                   role="alert"
-                  className="flex items-start gap-2 text-caption text-destructive-subtle-foreground"
+                  className="flex items-start gap-2 text-caption text-muted-foreground"
                 >
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                   {error}

@@ -465,7 +465,7 @@ function MemberSheet({
             {error ? (
               <p
                 role="alert"
-                className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+                className="rounded-lg border border-border bg-muted px-3 py-2 text-body-sm text-foreground"
               >
                 {error}
               </p>
@@ -696,7 +696,7 @@ function NewMemberPhotoField({
           )}
 
           {error ? (
-            <p role="alert" className="text-caption text-destructive">
+            <p role="alert" className="text-caption text-muted-foreground">
               {error}
             </p>
           ) : null}
@@ -920,7 +920,7 @@ function PhotoField({
           ) : null}
 
           {error ? (
-            <p role="alert" className="text-caption text-destructive">
+            <p role="alert" className="text-caption text-muted-foreground">
               {error}
             </p>
           ) : null}

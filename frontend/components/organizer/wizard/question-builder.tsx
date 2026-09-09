@@ -103,10 +103,7 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
   if (query.isPending) return <Skeleton className="h-40 w-full" />;
   if (query.isError) {
     return (
-      <ErrorState
-        message="Could not load your questions."
-        onRetry={() => void query.refetch()}
-      />
+      <ErrorState message="Could not load your questions." onRetry={() => void query.refetch()} />
     );
   }
 
@@ -144,7 +141,7 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
       )}
 
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : null}
@@ -204,9 +201,7 @@ function QuestionRow({
           {kind?.label ?? question.kind}
         </span>
         {question.choices.length ? (
-          <span className="text-caption text-muted-foreground">
-            {question.choices.join(' · ')}
-          </span>
+          <span className="text-caption text-muted-foreground">{question.choices.join(' · ')}</span>
         ) : null}
         <label className="ml-auto flex items-center gap-2 text-caption">
           <input

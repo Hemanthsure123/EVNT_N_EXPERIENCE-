@@ -65,13 +65,13 @@ export function WaitingList() {
       <header className="flex flex-col gap-stack">
         <h1 className="text-h3 md:text-h2">Waiting for tickets</h1>
         <p className="max-w-prose text-body text-muted-foreground">
-          Events you asked to be told about. We email you once if tickets come back — they go
-          first come, first served, and nothing is held for you.
+          Events you asked to be told about. We email you once if tickets come back — they go first
+          come, first served, and nothing is held for you.
         </p>
       </header>
 
       {error ? (
-        <p role="alert" className="text-body-sm text-destructive">
+        <p role="alert" className="text-body-sm text-muted-foreground">
           {error}
         </p>
       ) : null}
@@ -91,7 +91,7 @@ export function WaitingList() {
             action={
               <Link
                 href="/events"
-                className="inline-flex h-control items-center rounded-full bg-cta px-pill text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="inline-flex h-control items-center rounded-full bg-cta px-pill text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:bg-cta-active"
               >
                 Browse events
               </Link>

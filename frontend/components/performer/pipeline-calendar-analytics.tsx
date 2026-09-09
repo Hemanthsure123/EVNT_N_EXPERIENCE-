@@ -102,7 +102,7 @@ export function BookingPipeline({ performerId }: { performerId: string }) {
       </header>
 
       {error ? (
-        <p role="alert" className="text-body-sm text-destructive">
+        <p role="alert" className="text-body-sm text-muted-foreground">
           {error}
         </p>
       ) : null}

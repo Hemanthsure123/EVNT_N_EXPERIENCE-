@@ -18,6 +18,7 @@ import {
   snapPixels,
 } from '@/lib/discovery/sheet-snap';
 import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
+import { bookingCtaLabel, canStartBooking, summariseTiers } from '@/lib/discovery/tiers';
 import type { EventCard as EventCardData } from '@/lib/api/types';
 import {
   DECK_POSTER_ATTR,
@@ -470,7 +471,8 @@ export function EventWidgetDeck() {
   const writeSheetY = React.useCallback(
     (value: number, settle: boolean) => {
       sheetYRef.current = value;
-      const transition = settle && !reduceMotion ? `transform ${FLIGHT_MS}ms ${SETTLE_EASE}` : 'none';
+      const transition =
+        settle && !reduceMotion ? `transform ${FLIGHT_MS}ms ${SETTLE_EASE}` : 'none';
       // ── BOTH PROPERTIES, ON BOTH NODES, EVERY TIME ──────────────────────
       //
       // There was a "only write `transition` when the string changes" guard
@@ -691,7 +693,8 @@ export function EventWidgetDeck() {
    */
   const applyTrack = React.useCallback(
     (offset: number, settle: boolean) => {
-      const transition = settle && !reduceMotion ? `transform ${SETTLE_MS}ms ${SETTLE_EASE}` : 'none';
+      const transition =
+        settle && !reduceMotion ? `transform ${SETTLE_MS}ms ${SETTLE_EASE}` : 'none';
       const transform = `translate3d(${offset}px, 0, 0)`;
       for (const node of [trackRef.current, posterTrackRef.current]) {
         if (!node) continue;
@@ -1136,9 +1139,7 @@ export function EventWidgetDeck() {
     const target = leaving?.poster_url ? readCardPoster(leaving.id) : null;
     const source = readDeckPoster();
     const canFly =
-      target !== null &&
-      source !== null &&
-      isUsableSource(target, viewport.height, viewport.width);
+      target !== null && source !== null && isUsableSource(target, viewport.height, viewport.width);
 
     if (canFly && leaving) {
       setFlight({
@@ -1376,23 +1377,20 @@ export function EventWidgetDeck() {
    * During a CSS transition the computed transform is the INTERPOLATED value,
    * which is exactly the number wanted and the only place it exists.
    */
-  const readTrackX = React.useCallback(
-    (fallback: number) => {
-      const node = trackRef.current;
-      if (!node || typeof window === 'undefined') return fallback;
-      try {
-        const transform = window.getComputedStyle(node).transform;
-        if (!transform || transform === 'none') return fallback;
-        const matrix = new DOMMatrixReadOnly(transform);
-        return Number.isFinite(matrix.m41) ? matrix.m41 : fallback;
-      } catch {
-        // DOMMatrix is missing in some test environments, and a browser that
-        // hands back something unparseable is not worth a thrown gesture.
-        return fallback;
-      }
-    },
-    [],
-  );
+  const readTrackX = React.useCallback((fallback: number) => {
+    const node = trackRef.current;
+    if (!node || typeof window === 'undefined') return fallback;
+    try {
+      const transform = window.getComputedStyle(node).transform;
+      if (!transform || transform === 'none') return fallback;
+      const matrix = new DOMMatrixReadOnly(transform);
+      return Number.isFinite(matrix.m41) ? matrix.m41 : fallback;
+    } catch {
+      // DOMMatrix is missing in some test environments, and a browser that
+      // hands back something unparseable is not worth a thrown gesture.
+      return fallback;
+    }
+  }, []);
 
   const beginSwipe = React.useCallback(
     (event: React.PointerEvent) => {
@@ -1698,7 +1696,10 @@ export function EventWidgetDeck() {
            and the clone. `opacity` is one of the properties framer hands to
            the compositor, so this stays off the main thread like the rest. */
         animate={{ opacity: leaving ? 0 : 1 }}
-        transition={{ duration: reduceMotion ? 0 : PAGE_TRANSITION.duration, ease: TRANSITION_EASE }}
+        transition={{
+          duration: reduceMotion ? 0 : PAGE_TRANSITION.duration,
+          ease: TRANSITION_EASE,
+        }}
         // Decoration only. Its tap-to-close moved to the gesture plate below,
         // where it can be guarded against the click that follows a drag.
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/80 via-black/70 to-black/85 backdrop-blur-md"
@@ -2052,9 +2053,7 @@ function NeighbourCard({
           {event.title}
         </p>
         {when ? <p className="text-body-sm font-semibold text-primary">{when}</p> : null}
-        {where ? (
-          <p className="line-clamp-1 text-body-sm text-muted-foreground">{where}</p>
-        ) : null}
+        {where ? <p className="line-clamp-1 text-body-sm text-muted-foreground">{where}</p> : null}
       </div>
       {/* The same bar the active page carries, so the swap on release does not
           make a control appear. Not a link and not focusable: this page is
@@ -2191,6 +2190,11 @@ function ActiveCard({
   onLeave: () => void;
   onHandleTap: () => void;
 }) {
+  // Whether this event can be entered at all. The deck is the mobile event
+  // PAGE, so this bar is the phone's only Book control — and it was a live
+  // link straight into a reserve that a tier whose window has not opened
+  // refuses under its row lock. See `canStartBooking`.
+  const saleState = summariseTiers(tiers).state;
   return (
     <>
       {/* ── THE HANDLE IS A CONTROL, NOT A DECORATION ────────────────────
@@ -2286,18 +2290,27 @@ function ActiveCard({
             ) : null}
           </div>
           {/* Straight to the ticket screen. Never back through the old
-              standalone event page. */}
-          <Link
-            href={`/booking/${event.id}`}
-            // `onLeave`, not `onDismiss`: dismiss animates and closes the deck
-            // in the animation's completion callback, and this component
-            // unmounts the moment the route changes — so the callback never
-            // ran and the deck was still "open" when you came back.
-            onClick={onLeave}
-            className="inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-cta px-7 text-body-sm font-extrabold text-cta-foreground shadow-lg transition-transform active:scale-95"
-          >
-            Book tickets
-          </Link>
+              standalone event page — and not at all before the sale opens. */}
+          {!canStartBooking(saleState) ? (
+            <span
+              aria-disabled="true"
+              className="inline-flex h-12 shrink-0 cursor-not-allowed items-center justify-center rounded-full border border-border bg-sunken px-7 text-body-sm font-extrabold text-muted-foreground"
+            >
+              {bookingCtaLabel(saleState)}
+            </span>
+          ) : (
+            <Link
+              href={`/booking/${event.id}`}
+              // `onLeave`, not `onDismiss`: dismiss animates and closes the deck
+              // in the animation's completion callback, and this component
+              // unmounts the moment the route changes — so the callback never
+              // ran and the deck was still "open" when you came back.
+              onClick={onLeave}
+              className="inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-cta px-7 text-body-sm font-extrabold text-cta-foreground shadow-lg transition-transform active:scale-95"
+            >
+              Book tickets
+            </Link>
+          )}
         </div>
       </div>
     </>

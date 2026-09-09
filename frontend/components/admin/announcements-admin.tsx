@@ -132,7 +132,7 @@ export function AnnouncementsAdmin() {
       {error ? (
         <p
           role="alert"
-          className="rounded-xl border border-destructive-subtle bg-destructive-subtle px-card py-2 text-body-sm text-destructive-subtle-foreground"
+          className="rounded-xl border border-border bg-muted px-card py-2 text-body-sm text-foreground"
         >
           {error}
         </p>
@@ -403,8 +403,8 @@ function Composer({
         {kind === 'emergency' ? (
           <p className="flex items-start gap-2 rounded-xl border border-warning-subtle bg-warning-subtle px-card py-2 text-caption text-warning-subtle-foreground">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            An emergency notice cannot be dismissed by the reader. Use it only when
-            everybody needs to see it.
+            An emergency notice cannot be dismissed by the reader. Use it only when everybody needs
+            to see it.
           </p>
         ) : null}
 

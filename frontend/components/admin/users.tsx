@@ -165,9 +165,7 @@ export function UsersConsole() {
           },
         });
       } catch (thrown) {
-        setError(
-          thrown instanceof ApiError ? thrown.message : 'That change did not go through.',
-        );
+        setError(thrown instanceof ApiError ? thrown.message : 'That change did not go through.');
       } finally {
         setBusyId(null);
       }
@@ -261,7 +259,7 @@ export function UsersConsole() {
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-lg bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+          className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-body-sm text-foreground"
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           {error}
@@ -292,7 +290,8 @@ export function UsersConsole() {
 
           <div className="mt-stack-lg flex flex-col gap-1.5">
             <Label htmlFor="revoke-reason">
-              Reason <span className="font-normal text-muted-foreground">— for the audit trail</span>
+              Reason{' '}
+              <span className="font-normal text-muted-foreground">— for the audit trail</span>
             </Label>
             <Input
               id="revoke-reason"

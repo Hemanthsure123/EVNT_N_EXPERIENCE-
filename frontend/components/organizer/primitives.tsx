@@ -82,10 +82,10 @@ export function ErrorState({
 }) {
   return (
     <div role="alert" className={cn('flex flex-col items-start gap-stack p-card', className)}>
-      {/* `text-destructive`, not the subtle-tint pairing: this sits on a plain
-          surface, and the subtle foreground is calibrated against its own
-          tint. 4.83:1 on white, 6.09:1 on the dark surface rung. */}
-      <p className="flex items-start gap-2 text-body-sm text-destructive">
+      {/* Neutral: a request that failed is reported in words and with a Try
+          again beside it, not in red. See the sweep note in `ui/notice.tsx`
+          for why failure messaging on this platform is not coloured. */}
+      <p className="flex items-start gap-2 text-body-sm text-muted-foreground">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
         {/* Says the request failed — never renders as "0", which would be a
             claim about the business rather than about the network. */}

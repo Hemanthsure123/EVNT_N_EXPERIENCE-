@@ -173,7 +173,10 @@ function SectionRail({ active }: { active: SettingsSectionId }) {
     // account shell already puts one chip strip at the top of this page, and a
     // second one under it is two rows of tabs with no way to tell which level
     // you are moving within.
-    <nav aria-label="Settings sections" className="hidden min-w-0 lg:block lg:sticky lg:top-sticky-top-lg lg:self-start">
+    <nav
+      aria-label="Settings sections"
+      className="hidden min-w-0 lg:sticky lg:top-sticky-top-lg lg:block lg:self-start"
+    >
       <ul className="flex flex-col gap-1">
         {SETTINGS_SECTIONS.map((section) => {
           const current = section.id === active;
@@ -304,7 +307,8 @@ function AppearanceSection() {
     <SettingsCard id="appearance" title={section.label} description={section.description}>
       <SettingsRow label="Theme" stacked>
         <Segmented<Theme> label="Colour theme" options={THEMES} value={theme} onChange={setTheme} />
-      </SettingsRow>    </SettingsCard>
+      </SettingsRow>{' '}
+    </SettingsCard>
   );
 }
 
@@ -396,7 +400,7 @@ function PushRow() {
       )}
 
       {error ? (
-        <p role="alert" className="w-full text-caption text-destructive sm:text-right">
+        <p role="alert" className="w-full text-caption text-muted-foreground sm:text-right">
           {error}
         </p>
       ) : null}
@@ -427,10 +431,7 @@ function PrivacySection() {
 
   return (
     <SettingsCard id="privacy" title={section.label} description={section.description}>
-      <SettingsRow
-        label="Analytics and marketing storage"
-        stacked
-      >
+      <SettingsRow label="Analytics and marketing storage" stacked>
         <Segmented<ConsentPreference>
           label="Cookie and storage choice"
           options={CONSENT_OPTIONS}
@@ -442,9 +443,7 @@ function PrivacySection() {
         />
       </SettingsRow>
 
-      <SettingsRow
-        label="Saved events"
-      >
+      <SettingsRow label="Saved events">
         <Link
           href="/account/saved"
           className="inline-flex min-h-control items-center gap-1.5 text-label text-foreground underline underline-offset-2 transition-colors duration-fast hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
@@ -492,10 +491,7 @@ function AccountSection() {
   return (
     <>
       <SettingsCard id="account" title={section.label} description={section.description}>
-        <SettingsRow
-          label="Sign out"
-          hint="Signs you out on this device."
-        >
+        <SettingsRow label="Sign out" hint="Signs you out on this device.">
           {/* Deliberately the QUIET pill. Leaving is not this page's primary
               action, and a near-black "Sign out" would be the loudest thing on
               a screen whose job is preferences. */}
@@ -508,7 +504,6 @@ function AccountSection() {
             Sign out
           </Button>
         </SettingsRow>
-
       </SettingsCard>
 
       {/* AFTER the card, for two reasons. Its heading is an `h3`, so putting it

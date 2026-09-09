@@ -167,7 +167,12 @@ export function TextArea({
         onChange={(event) => onChange(event.target.value)}
         className="resize-y"
       />
-      <Messages id={id} hint={over ? (overHint ?? hint) : hint} error={error} tone={over ? 'warning' : undefined} />
+      <Messages
+        id={id}
+        hint={over ? (overHint ?? hint) : hint}
+        error={error}
+        tone={over ? 'warning' : undefined}
+      />
     </div>
   );
 }
@@ -505,7 +510,7 @@ function Messages({
       className={cn(
         'min-h-4 text-caption',
         error
-          ? 'text-destructive'
+          ? 'text-foreground'
           : tone === 'warning'
             ? 'text-warning-subtle-foreground'
             : 'text-muted-foreground',
@@ -637,7 +642,7 @@ export function NeedsSavedDraft({
           ))}
         </ul>
       ) : save?.state === 'error' ? (
-        <p className="text-caption text-destructive" role="alert">
+        <p className="text-caption text-muted-foreground" role="alert">
           {save.error ?? 'The last save failed.'} Your work is safe on this device.
         </p>
       ) : save?.state === 'offline' ? (
@@ -729,7 +734,10 @@ export function Section({
   defaultOpen?: boolean;
 }) {
   return (
-    <details open={defaultOpen} className="group rounded-xl border border-border bg-surface shadow-sm">
+    <details
+      open={defaultOpen}
+      className="group rounded-xl border border-border bg-surface shadow-sm"
+    >
       <summary className="flex min-h-control cursor-pointer list-none items-center gap-3 rounded-xl px-card py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <span className="min-w-0 flex-1">
           <span className="block text-body-sm font-semibold">{title}</span>

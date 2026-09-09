@@ -140,7 +140,7 @@ export function FeaturedManager() {
         {error ? (
           <p
             role="alert"
-            className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-card py-2 text-body-sm text-destructive-subtle-foreground"
+            className="rounded-lg border border-border bg-muted px-card py-2 text-body-sm text-foreground"
           >
             {error}
           </p>

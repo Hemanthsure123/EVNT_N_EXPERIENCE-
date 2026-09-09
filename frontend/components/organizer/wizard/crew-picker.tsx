@@ -122,21 +122,22 @@ export function CrewPicker({
   const saved = lineup.data?.map((row) => row.id).join(',') ?? '';
   const dirty = Boolean(eventId) && chosen !== null && chosen.join(',') !== saved;
 
-  if (roster.isPending || (eventId && lineup.isPending)) return <Skeleton className="h-40 w-full" />;
+  if (roster.isPending || (eventId && lineup.isPending))
+    return <Skeleton className="h-40 w-full" />;
 
   const members = roster.data ?? [];
 
   return (
     <div className="flex flex-col gap-stack-lg">
       <p className="text-body-sm text-muted-foreground">
-        Pick from your crew list. They appear on the event page under &ldquo;Who&rsquo;s taking
-        the stage&rdquo;, in the order you choose them.
+        Pick from your crew list. They appear on the event page under &ldquo;Who&rsquo;s taking the
+        stage&rdquo;, in the order you choose them.
       </p>
 
       {members.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-card py-4 text-body-sm text-muted-foreground">
-          Your crew list is empty. Add somebody below and they stay available for every event
-          you run.
+          Your crew list is empty. Add somebody below and they stay available for every event you
+          run.
         </p>
       ) : (
         /* A SCROLLER with a fixed maximum height, not a growing list: a
@@ -236,7 +237,7 @@ export function CrewPicker({
       {error ? (
         <p
           role="alert"
-          className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+          className="rounded-lg border border-border bg-muted px-3 py-2 text-body-sm text-foreground"
         >
           {error}
         </p>
@@ -291,8 +292,7 @@ function AddInline({
   const [error, setError] = React.useState<string | null>(null);
 
   const add = useMutation({
-    mutationFn: () =>
-      createCrewMember(organizationId!, { name: name.trim(), role: role.trim() }),
+    mutationFn: () => createCrewMember(organizationId!, { name: name.trim(), role: role.trim() }),
     onSuccess: async (member) => {
       setName('');
       setRole('');
@@ -352,7 +352,7 @@ function AddInline({
         </div>
       </div>
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : null}

@@ -1,7 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowLeft, ChevronDown, Eye, EyeOff, Info, Mail, Phone, TriangleAlert } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Info,
+  Mail,
+  Phone,
+  TriangleAlert,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { DEFAULT_DIAL_CODE, DIAL_CODES, toE164 } from '@/lib/auth/dial-codes';
 import { Button } from '@/components/ui/button';
@@ -590,13 +599,7 @@ export function AuthPanel({
 
             <Messages error={error} notice={notice} />
 
-            <Button
-              type="submit"
-              size="lg"
-              loading={busy}
-              disabled={!e164}
-              className="mt-1 w-full"
-            >
+            <Button type="submit" size="lg" loading={busy} disabled={!e164} className="mt-1 w-full">
               Send code
             </Button>
           </form>
@@ -660,7 +663,7 @@ function Messages({ error, notice }: { error: string | null; notice: string | nu
     return (
       <p
         role="alert"
-        className="flex items-start gap-2.5 rounded-lg border border-destructive-subtle bg-destructive-subtle px-4 py-3 text-body-sm text-destructive-subtle-foreground"
+        className="flex items-start gap-2.5 rounded-lg border border-border bg-muted px-4 py-3 text-body-sm text-foreground"
       >
         <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
         <span>{error}</span>

@@ -227,7 +227,7 @@ export function ReviewStep({
 
       {issues.length ? (
         <section className="flex flex-col gap-stack" aria-label="Problems to fix">
-          <h2 className="flex items-center gap-2 text-body-sm font-semibold text-destructive">
+          <h2 className="flex items-center gap-2 text-body-sm font-semibold text-foreground">
             <AlertTriangle className="size-4" aria-hidden />
             {issues.length} thing{issues.length === 1 ? '' : 's'} to fix
           </h2>
@@ -239,7 +239,7 @@ export function ReviewStep({
                 <button
                   type="button"
                   onClick={() => onJump(issue.step)}
-                  className="flex min-h-control w-full items-center gap-2 rounded-xl border border-destructive/30 bg-destructive-subtle px-card py-2 text-left text-body-sm text-destructive-subtle-foreground transition-colors duration-fast hover:border-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  className="flex min-h-control w-full items-center gap-2 rounded-xl border border-border bg-muted px-card py-2 text-left text-body-sm text-foreground transition-colors duration-fast hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
                   <span className="min-w-0 flex-1">
                     {issue.message}
@@ -327,7 +327,7 @@ export function ReviewStep({
             'flex flex-wrap items-center gap-stack rounded-xl border px-card py-stack text-body-sm',
             publishFailure.tone === 'warning'
               ? 'border-warning/40 bg-warning-subtle text-warning-subtle-foreground'
-              : 'border-destructive/30 bg-destructive-subtle text-destructive-subtle-foreground',
+              : 'border-border bg-muted text-foreground',
           )}
         >
           <span className="min-w-0 flex-1">{publishFailure.message}</span>

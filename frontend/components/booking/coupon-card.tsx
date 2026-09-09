@@ -10,6 +10,17 @@ import { cn } from '@/lib/utils/cn';
 import { RuleHeading } from './donation-card';
 
 /**
+ * Mirrors `MIN_CODE_LENGTH` / `MAX_CODE_LENGTH` in `apps/coupons/services.py`.
+ *
+ * Not a security boundary and never to be mistaken for one — the server
+ * validates every code it is sent. This is here so the field can refuse to
+ * submit something that cannot succeed, which is a better answer than a
+ * round trip that comes back with a validation dict.
+ */
+const MIN_CODE_LENGTH = 3;
+const MAX_CODE_LENGTH = 32;
+
+/**
  * The promo-code field on the review screen.
  *
  * ── THIS USED TO BE DELIBERATELY ABSENT ───────────────────────────────────
@@ -27,6 +38,28 @@ import { RuleHeading } from './donation-card';
  * order — and each sends somebody somewhere different. Collapsing them into
  * "Invalid code" sends them nowhere, which is the state this whole control
  * exists to avoid.
+ *
+ * It is rendered as NEUTRAL helper text, not in red. That is the platform
+ * rule now (see `ui/notice.tsx`) and it costs this control nothing: the
+ * sentence was always doing the work, and the colour was only ever adding
+ * alarm to it on the screen where somebody is about to pay.
+ *
+ * ── A CODE TOO SHORT TO BE A CODE NEVER LEAVES THE BROWSER ────────────────
+ *
+ * `CouponApplySerializer.code` is `min_length=3, max_length=32`, and a
+ * two-character entry failed DRF's own field validation rather than the
+ * coupon service — so the envelope carried the serializer's error dict and
+ * the field printed it verbatim:
+ *
+ *     {'code': [ErrorDetail(string='Ensure this field has at least 3
+ *      characters.', code='min_length')]}
+ *
+ * A Python repr, in red, under a promo box, on the checkout. Apply is now
+ * disabled until the draft could plausibly BE a code, which is the brief's
+ * own remedy — "disable the submit button until the input is valid" — and
+ * removes the round trip rather than dressing up its answer. The bounds are
+ * mirrored from `apps/coupons/services.py`; the server still enforces them,
+ * and this copy only stops the UI sending something it knows is refusable.
  *
  * ── APPLYING IS THE PREVIEW ───────────────────────────────────────────────
  *
@@ -70,11 +103,19 @@ export function CouponCard({
   className?: string;
 }) {
   const [draft, setDraft] = React.useState('');
+  const code = draft.trim();
+  // Long enough to be a code, short enough to be one. Both bounds, because
+  // the serializer refuses either end and the field should not offer a press
+  // that can only come back refused.
+  const couldBeACode = code.length >= MIN_CODE_LENGTH && code.length <= MAX_CODE_LENGTH;
+  // Only while somebody is mid-word. An empty box is not a mistake, so it
+  // says nothing at all — the hint appears once there is something typed
+  // that is not yet long enough.
+  const tooShort = code.length > 0 && code.length < MIN_CODE_LENGTH;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    const code = draft.trim();
-    if (!code || pending || disabled) return;
+    if (!couldBeACode || pending || disabled) return;
     onApply(code);
   };
 
@@ -89,12 +130,7 @@ export function CouponCard({
 
       <div className="overflow-hidden rounded-2xl border border-border bg-surface">
         {appliedCode ? (
-          <AppliedRow
-            code={appliedCode}
-            discount={discount}
-            pending={pending}
-            onClear={onClear}
-          />
+          <AppliedRow code={appliedCode} discount={discount} pending={pending} onClear={onClear} />
         ) : (
           <form onSubmit={submit} className="flex flex-col gap-2 px-card py-card">
             <label htmlFor="coupon-code" className="text-body-sm text-foreground">
@@ -114,15 +150,19 @@ export function CouponCard({
                 autoComplete="off"
                 autoCapitalize="characters"
                 spellCheck={false}
+                // The upper bound is enforced by the field itself: there is no
+                // reason to let somebody type a 40-character code and then be
+                // told it is too long.
+                maxLength={MAX_CODE_LENGTH}
                 invalid={Boolean(error)}
-                aria-describedby={error ? 'coupon-error' : undefined}
+                aria-describedby={error || tooShort ? 'coupon-note' : undefined}
                 disabled={pending || disabled}
                 className="flex-1 font-medium tracking-wide"
               />
               <Button
                 type="submit"
                 variant="outline"
-                disabled={!draft.trim() || pending || disabled}
+                disabled={!couldBeACode || pending || disabled}
                 className="shrink-0"
               >
                 {pending ? (
@@ -136,12 +176,22 @@ export function CouponCard({
               </Button>
             </div>
 
+            {/* ONE note slot, so a hint and a refusal cannot both be on screen
+                saying different things about the same box, and so the card does
+                not change height as one replaces the other.
+
+                `role="alert"` only for the server's refusal: that is the
+                answer to a press, and without it somebody using a screen reader
+                presses Apply and is told nothing at all. The length hint is
+                merely describing the field, so it is a plain description —
+                announcing it on every keystroke would interrupt typing. */}
             {error ? (
-              /* The SERVER's sentence. `role="alert"` because the field looks
-                 identical either way — without it, somebody using a screen
-                 reader presses Apply and is told nothing at all. */
-              <p id="coupon-error" role="alert" className="text-caption text-destructive">
+              <p id="coupon-note" role="alert" className="text-caption text-muted-foreground">
                 {error}
+              </p>
+            ) : tooShort ? (
+              <p id="coupon-note" className="text-caption text-muted-foreground">
+                {`Promo codes are at least ${MIN_CODE_LENGTH} characters.`}
               </p>
             ) : null}
           </form>
@@ -233,9 +283,7 @@ function OfferList({
                 <BadgePercent className="size-4" />
               </span>
               <div className="flex min-w-0 flex-1 flex-col">
-                <p className="truncate text-body-sm font-semibold text-foreground">
-                  {offer.code}
-                </p>
+                <p className="truncate text-body-sm font-semibold text-foreground">{offer.code}</p>
                 <p className="text-caption text-muted-foreground">{offerTerms(offer)}</p>
               </div>
               <Button

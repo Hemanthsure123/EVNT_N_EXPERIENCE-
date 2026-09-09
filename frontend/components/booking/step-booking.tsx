@@ -193,9 +193,28 @@ export function BookingStep() {
           <Rise index={2}>
             <p
               role="alert"
-              className="rounded-xl border border-destructive-subtle bg-destructive-subtle p-card text-body-sm text-destructive-subtle-foreground"
+              className="rounded-xl border border-border bg-muted p-card text-body-sm text-foreground"
             >
               Some tiers no longer have that many left — adjust the quantities to continue.
+            </p>
+          </Rise>
+        ) : null}
+
+        {/* ── A BASKET THE SALE WINDOW HAS NOT OPENED FOR ───────────────
+            Reachable only by URL — the picker draws these rows disabled —
+            and by URL is exactly how it happened: the event page's panel
+            writes `?tickets=<tier>:<qty>`, and that link outlives the day
+            it was made. Blocking here is what keeps the reserve from
+            answering `sale_not_started` on the screen after this one, which
+            has no picker on it to fix anything with. */}
+        {totals.notOnSale ? (
+          <Rise index={2}>
+            <p
+              role="alert"
+              className="rounded-xl border border-border bg-muted p-card text-body-sm text-foreground"
+            >
+              Those tickets are not on sale yet. Clear them to continue, or come back when booking
+              opens.
             </p>
           </Rise>
         ) : null}
@@ -209,10 +228,10 @@ export function BookingStep() {
           <Rise index={2}>
             <p
               role="alert"
-              className="rounded-xl border border-destructive-subtle bg-destructive-subtle p-card text-body-sm text-destructive-subtle-foreground"
+              className="rounded-xl border border-border bg-muted p-card text-body-sm text-foreground"
             >
-              Those tickets are for different showtimes. Pick one session — a single booking
-              admits you to one show.
+              Those tickets are for different showtimes. Pick one session — a single booking admits
+              you to one show.
             </p>
           </Rise>
         ) : null}
@@ -244,7 +263,7 @@ export function BookingStep() {
         <Button
           size="lg"
           onClick={advance}
-          disabled={!chosen || totals.overAvailable || totals.crossSession}
+          disabled={!chosen || totals.overAvailable || totals.crossSession || totals.notOnSale}
           className={cn(CTA_PILL_LG, 'shrink-0')}
         >
           Checkout

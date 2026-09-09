@@ -565,7 +565,7 @@ export function ReviewStep() {
         >
           <span
             aria-hidden
-            className="inline-flex size-16 items-center justify-center rounded-full bg-destructive-subtle text-destructive"
+            className="inline-flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground"
           >
             <AlertTriangle className="size-7" />
           </span>
@@ -623,7 +623,7 @@ export function ReviewStep() {
         >
           <span
             aria-hidden
-            className="inline-flex size-16 items-center justify-center rounded-full bg-destructive-subtle text-destructive"
+            className="inline-flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground"
           >
             <TimerOff className="size-7" />
           </span>
@@ -823,9 +823,7 @@ export function ReviewStep() {
                   wondering which of the three codes they were sent worked. */}
               {discount > 0 ? (
                 <SummaryRow
-                  label={
-                    booking?.coupon_code ? `Discount (${booking.coupon_code})` : 'Discount'
-                  }
+                  label={booking?.coupon_code ? `Discount (${booking.coupon_code})` : 'Discount'}
                   value={discount}
                   credit
                 />

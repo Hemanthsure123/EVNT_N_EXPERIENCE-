@@ -158,7 +158,7 @@ export function PerformerModeration() {
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-lg bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+          className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-body-sm text-foreground"
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           {error}
@@ -244,10 +244,7 @@ function PerformerRow({
 
   const pending = performer.status === 'pending_review';
   const waiting = performer.submitted_at
-    ? Math.max(
-        0,
-        Math.round((Date.now() - new Date(performer.submitted_at).getTime()) / 3_600_000),
-      )
+    ? Math.max(0, Math.round((Date.now() - new Date(performer.submitted_at).getTime()) / 3_600_000))
     : null;
 
   return (
@@ -372,8 +369,8 @@ function PerformerRow({
               </Button>
               {!note.trim() ? (
                 <p className="flex items-center gap-1.5 text-caption text-muted-foreground">
-                  <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
-                  A reason is required — the server refuses a rejection without one.
+                  <AlertTriangle className="size-3.5 shrink-0" aria-hidden />A reason is required —
+                  the server refuses a rejection without one.
                 </p>
               ) : null}
             </div>

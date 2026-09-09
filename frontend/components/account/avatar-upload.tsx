@@ -158,8 +158,7 @@ export function AvatarUpload() {
       aria-busy={busy || undefined}
     >
       <h2 className="text-body-sm font-semibold">Profile picture</h2>
-      <p className="mt-0.5 text-caption text-muted-foreground">
-      </p>
+      <p className="mt-0.5 text-caption text-muted-foreground"></p>
 
       <div className="mt-stack-lg flex items-start gap-4">
         <div className="relative shrink-0">
@@ -187,7 +186,9 @@ export function AvatarUpload() {
             )}
           >
             <Camera className="size-4" aria-hidden />
-            <span className="sr-only">{url ? 'Change profile picture' : 'Add a profile picture'}</span>
+            <span className="sr-only">
+              {url ? 'Change profile picture' : 'Add a profile picture'}
+            </span>
           </button>
         </div>
 
@@ -256,7 +257,7 @@ export function AvatarUpload() {
           {error ? (
             <p
               role="alert"
-              className="mt-2 flex items-start gap-2 rounded-lg border border-destructive-subtle bg-destructive-subtle px-3 py-2 text-caption text-destructive-subtle-foreground"
+              className="mt-2 flex items-start gap-2 rounded-lg border border-border bg-muted px-3 py-2 text-caption text-foreground"
             >
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
               {error}

@@ -617,7 +617,7 @@ export function BriefForm() {
         )}
 
         {error ? (
-          <p role="alert" className="pt-4 text-body-sm text-destructive">
+          <p role="alert" className="pt-4 text-body-sm text-muted-foreground">
             {error}
           </p>
         ) : null}
@@ -896,7 +896,7 @@ function BudgetRange({
         ))}
       </div>
       {invalid ? (
-        <p role="alert" className="text-caption text-destructive-subtle-foreground">
+        <p role="alert" className="text-caption text-muted-foreground">
           The maximum is below the minimum.
         </p>
       ) : null}

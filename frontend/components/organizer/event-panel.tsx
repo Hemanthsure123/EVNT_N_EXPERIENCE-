@@ -2,7 +2,16 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { AlertTriangle, BarChart3, Clock, CopyPlus, ExternalLink, Loader2, Receipt, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  BarChart3,
+  Clock,
+  CopyPlus,
+  ExternalLink,
+  Loader2,
+  Receipt,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent } from '@/components/ui/drawer';
 import { formatMoney } from '@/lib/discovery/format';
@@ -364,8 +373,8 @@ function ModerationBanner({ row }: { row: EventRow }) {
   }
 
   return (
-    <div className="flex flex-col gap-stack border-b border-border bg-destructive-subtle px-card py-stack">
-      <p className="flex items-start gap-2.5 text-body-sm text-destructive-subtle-foreground">
+    <div className="flex flex-col gap-stack border-b border-border bg-muted px-card py-stack">
+      <p className="flex items-start gap-2.5 text-body-sm text-foreground">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
         <span>
           <span className="font-medium">Changes requested.</span>{' '}
@@ -377,14 +386,17 @@ function ModerationBanner({ row }: { row: EventRow }) {
           used to offer Resubmit unconditionally — on an event that had, say, no
           ticket type, that button could only ever produce an error. */}
       {blockers.length ? (
-        <ul className="flex flex-col gap-1 text-caption text-destructive-subtle-foreground">
+        <ul className="flex flex-col gap-1 text-caption text-muted-foreground">
           {blockers.map((blocker) => (
             <li key={blocker}>• {blocker}</li>
           ))}
         </ul>
       ) : null}
       {failure ? (
-        <p role="alert" className="flex flex-wrap items-center gap-2 text-caption text-destructive">
+        <p
+          role="alert"
+          className="flex flex-wrap items-center gap-2 text-caption text-muted-foreground"
+        >
           <span>{failure.message}</span>
           {failure.action?.href ? (
             <Link href={failure.action.href} className="underline underline-offset-2">
@@ -418,13 +430,7 @@ function ModerationBanner({ row }: { row: EventRow }) {
  * organizer exactly where they were, looking at the event they tried to copy,
  * with the toast saying why.
  */
-function CloneEventButton({
-  eventId,
-  onClose,
-}: {
-  eventId: string;
-  onClose: () => void;
-}) {
+function CloneEventButton({ eventId, onClose }: { eventId: string; onClose: () => void }) {
   const { clone, cloning } = useCloneEvent();
 
   return (

@@ -221,7 +221,7 @@ export function HomepageCms({
         {error ? (
           <p
             role="alert"
-            className="rounded-xl border border-destructive-subtle bg-destructive-subtle px-card py-2 text-body-sm text-destructive-subtle-foreground"
+            className="rounded-xl border border-border bg-muted px-card py-2 text-body-sm text-foreground"
           >
             {error}
           </p>

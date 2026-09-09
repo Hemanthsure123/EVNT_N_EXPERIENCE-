@@ -119,7 +119,7 @@ export function saveSummary(
     case 'error':
       return {
         label: error ?? 'Could not save',
-        tone: 'text-destructive',
+        tone: 'text-muted-foreground',
         icon: <AlertTriangle className="size-3.5" aria-hidden />,
       };
     case 'dirty':

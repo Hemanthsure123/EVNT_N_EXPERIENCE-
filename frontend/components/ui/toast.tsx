@@ -26,8 +26,10 @@ const toastVariants = cva(
         default: 'border-border bg-elevated text-foreground',
         success: 'border-success/30 bg-success-subtle text-success-subtle-foreground',
         warning: 'border-warning/30 bg-warning-subtle text-warning-subtle-foreground',
-        destructive:
-          'border-destructive/30 bg-destructive-subtle text-destructive-subtle-foreground',
+        // Neutral on purpose: this variant is only ever raised for a failed
+        // action, and the platform does not report failure in red. The icon
+        // (XCircle) and the words are what distinguish it.
+        destructive: 'border-border bg-sunken text-foreground',
         info: 'border-info/30 bg-info-subtle text-info-subtle-foreground',
       },
     },

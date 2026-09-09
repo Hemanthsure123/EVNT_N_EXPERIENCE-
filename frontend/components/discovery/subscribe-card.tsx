@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {BellOff, Loader2 } from 'lucide-react';
+import { BellOff, Loader2 } from 'lucide-react';
 import { SpotSubscribe } from '@/components/illustrations/spots';
 import { Button } from '@/components/ui/button';
 import { usePush } from '@/lib/push/use-push';
@@ -141,8 +141,8 @@ export function SubscribeCard({
           </p>
         ) : state === 'blocked' ? (
           <p className="text-caption text-muted-foreground">
-            Notifications are blocked for this site. Allow them in your browser settings to
-            switch this back on.
+            Notifications are blocked for this site. Allow them in your browser settings to switch
+            this back on.
           </p>
         ) : (
           /* No `state === 'on'` branch: the card returns null in that state
@@ -161,7 +161,7 @@ export function SubscribeCard({
         )}
 
         {error ? (
-          <p role="alert" className="text-caption text-destructive">
+          <p role="alert" className="text-caption text-muted-foreground">
             {error}
           </p>
         ) : null}

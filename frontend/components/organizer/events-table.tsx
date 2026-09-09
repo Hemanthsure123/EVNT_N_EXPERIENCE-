@@ -213,7 +213,8 @@ export function EventsTable() {
     values.q && { key: 'q', label: `“${values.q}”`, onClear: () => set({ q: '' }) },
     values.status && {
       key: 'status',
-      label: STATUS_FILTERS.find((option) => option.value === values.status)?.label ?? values.status,
+      label:
+        STATUS_FILTERS.find((option) => option.value === values.status)?.label ?? values.status,
       onClear: () => set({ status: '' }),
     },
     values.city && { key: 'city', label: values.city, onClear: () => set({ city: '' }) },
@@ -339,7 +340,10 @@ export function EventsTable() {
       ) : null}
 
       {failure ? (
-        <p role="alert" className="border-b border-border px-card py-2 text-caption text-destructive">
+        <p
+          role="alert"
+          className="border-b border-border px-card py-2 text-caption text-muted-foreground"
+        >
           {failure}
         </p>
       ) : null}
@@ -613,9 +617,7 @@ function EventCards({
               className={cn(
                 'group flex h-full flex-col gap-stack rounded-xl border p-card transition-colors duration-fast',
                 'motion-reduce:transition-none',
-                chosen
-                  ? 'border-nav-active bg-nav-active'
-                  : 'border-border bg-surface shadow-sm',
+                chosen ? 'border-nav-active bg-nav-active' : 'border-border bg-surface shadow-sm',
               )}
             >
               {/* ── HEAD: a THUMBNAIL beside the meta, not a poster above it ──
@@ -730,11 +732,7 @@ function EventCards({
                     the event rather than reporting on it — and because until
                     this route existed every field was reachable exactly once,
                     while the event was being created, and never again. */}
-                <CardAction
-                  icon={Pencil}
-                  label="Edit"
-                  href={`/dashboard/events/${row.id}/edit`}
-                />
+                <CardAction icon={Pencil} label="Edit" href={`/dashboard/events/${row.id}/edit`} />
                 <CardAction
                   icon={BarChart3}
                   label="Analytics"

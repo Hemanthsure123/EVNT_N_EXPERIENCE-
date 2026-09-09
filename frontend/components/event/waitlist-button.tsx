@@ -152,7 +152,7 @@ export function WaitlistButton({
       ) : null}
 
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : null}

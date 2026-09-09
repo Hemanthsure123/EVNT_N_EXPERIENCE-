@@ -162,7 +162,7 @@ export function CuratedListEditor<T extends CuratedRow>({
       {error ? (
         <p
           role="alert"
-          className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-card py-2 text-body-sm text-destructive-subtle-foreground"
+          className="rounded-lg border border-border bg-muted px-card py-2 text-body-sm text-foreground"
         >
           {error}
         </p>
@@ -226,7 +226,11 @@ export function CuratedListEditor<T extends CuratedRow>({
                 <IconButton
                   // Hiding is REVERSIBLE and deleting is not, so hiding is the
                   // control an operator reaches for first.
-                  label={row.is_visible ? `Hide ${String(row[primaryField])}` : `Show ${String(row[primaryField])}`}
+                  label={
+                    row.is_visible
+                      ? `Hide ${String(row[primaryField])}`
+                      : `Show ${String(row[primaryField])}`
+                  }
                   onClick={() =>
                     updateRow.mutate({ id: row.id, input: { is_visible: !row.is_visible } })
                   }

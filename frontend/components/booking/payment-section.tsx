@@ -229,7 +229,7 @@ export function PaymentSection({
   const errorBlock = error ? (
     <p
       role="alert"
-      className="rounded-xl border border-destructive-subtle bg-destructive-subtle p-card text-body-sm text-destructive-subtle-foreground"
+      className="rounded-xl border border-border bg-muted p-card text-body-sm text-foreground"
     >
       {error}
     </p>

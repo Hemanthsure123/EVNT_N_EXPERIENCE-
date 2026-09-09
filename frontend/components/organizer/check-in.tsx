@@ -572,7 +572,7 @@ function CameraPanel({
       </div>
 
       {camera.message ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {camera.message}
         </p>
       ) : null}
@@ -583,17 +583,12 @@ function CameraPanel({
         className={cn(
           'overflow-hidden bg-muted',
           camera.state !== 'running' && 'hidden',
-          expanded
-            ? 'fixed inset-0 z-modal rounded-none bg-black'
-            : 'relative rounded-xl',
+          expanded ? 'fixed inset-0 z-modal rounded-none bg-black' : 'relative rounded-xl',
         )}
       >
         <video
           ref={camera.videoRef}
-          className={cn(
-            'object-cover',
-            expanded ? 'size-full' : 'aspect-video w-full',
-          )}
+          className={cn('object-cover', expanded ? 'size-full' : 'aspect-video w-full')}
           muted
           playsInline
         />
@@ -820,11 +815,7 @@ function AttendanceRing({ admitted, capacity }: { admitted: number; capacity: nu
         </div>
 
         <div className="relative shrink-0">
-          <Gauge
-            ratio={ratio}
-            label={`${admitted} of ${capacity} admitted`}
-            className="size-16"
-          />
+          <Gauge ratio={ratio} label={`${admitted} of ${capacity} admitted`} className="size-16" />
           <span className="absolute inset-0 flex items-center justify-center" aria-hidden>
             <span className="text-caption font-semibold tabular-nums text-foreground">
               {percent}%
@@ -833,11 +824,7 @@ function AttendanceRing({ admitted, capacity }: { admitted: number; capacity: nu
         </div>
       </div>
 
-      <ProgressBar
-        value={ratio}
-        aria-label={`${admitted} of ${capacity} admitted`}
-        size="md"
-      />
+      <ProgressBar value={ratio} aria-label={`${admitted} of ${capacity} admitted`} size="md" />
 
       {/* `remaining` is capacity minus admitted and nothing more — no rate, no
           projection. The reference carries a "Velocity: 42 scans/min" beside

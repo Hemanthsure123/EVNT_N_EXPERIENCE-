@@ -669,7 +669,7 @@ function Panel({
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="flex flex-col items-start gap-3">
-      <p className="inline-flex items-center gap-2 text-body-sm text-destructive-subtle-foreground">
+      <p className="inline-flex items-center gap-2 text-body-sm text-muted-foreground">
         <AlertTriangle className="size-4 shrink-0" aria-hidden />
         {message}
       </p>

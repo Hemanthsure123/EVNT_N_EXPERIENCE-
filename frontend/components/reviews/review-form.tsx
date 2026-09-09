@@ -81,9 +81,7 @@ export function ReviewForm({
           <CheckCircle2 className="size-5 text-success" aria-hidden />
           Thanks — that helps.
         </p>
-        <p className="text-body-sm text-muted-foreground">
-          Your review is on the event page now.
-        </p>
+        <p className="text-body-sm text-muted-foreground">Your review is on the event page now.</p>
       </div>
     );
   }
@@ -121,14 +119,14 @@ export function ReviewForm({
         {/* Only near the limit. A counter from character one is a word budget
             nobody asked for. */}
         {body.length > BODY_MAX - 200 ? (
-          <p className={cn('text-caption', tooLong ? 'text-destructive' : 'text-muted-foreground')}>
+          <p className={cn('text-caption', tooLong ? 'text-foreground' : 'text-muted-foreground')}>
             {BODY_MAX - body.length} characters left
           </p>
         ) : null}
       </div>
 
       {save.isError ? (
-        <p role="alert" className="text-body-sm text-destructive">
+        <p role="alert" className="text-body-sm text-muted-foreground">
           {errorMessage(save.error)}
         </p>
       ) : null}
@@ -140,7 +138,7 @@ export function ReviewForm({
           onClick={() => save.mutate()}
           className={cn(
             'inline-flex h-control items-center gap-2 rounded-full bg-cta px-pill text-label text-cta-foreground',
-            'transition-opacity disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
           )}
         >
           {save.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}

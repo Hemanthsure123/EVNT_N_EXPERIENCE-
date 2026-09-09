@@ -100,12 +100,10 @@ export function DonationCard({
             <PawPrint className="size-5" />
           </span>
           <div className="flex min-w-0 flex-col">
-            <p className="text-body font-semibold text-foreground">
-              Add a meal for a street dog
-            </p>
+            <p className="text-body font-semibold text-foreground">Add a meal for a street dog</p>
             <p className="text-caption text-muted-foreground">
-              {formatFromPrice(MEAL_MINOR)} feeds one dog for a day. Added to this order and
-              passed on by us.
+              {formatFromPrice(MEAL_MINOR)} feeds one dog for a day. Added to this order and passed
+              on by us.
             </p>
           </div>
         </div>
@@ -179,7 +177,7 @@ export function DonationCard({
           {error ? (
             <p
               role="status"
-              className="rounded-lg border border-destructive-subtle bg-destructive-subtle px-3 py-2 text-caption text-destructive-subtle-foreground"
+              className="rounded-lg border border-border bg-muted px-3 py-2 text-caption text-foreground"
             >
               {error}
             </p>
@@ -187,8 +185,8 @@ export function DonationCard({
 
           {/* Said before the press, not after. */}
           <p className="text-caption text-muted-foreground">
-            A donation is not refunded if you cancel — unless the booking never
-            issues a ticket, in which case everything comes back.
+            A donation is not refunded if you cancel — unless the booking never issues a ticket, in
+            which case everything comes back.
           </p>
         </div>
       </div>

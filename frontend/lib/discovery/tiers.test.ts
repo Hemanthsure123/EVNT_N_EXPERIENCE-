@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { TicketTier } from '@/lib/api/types';
-import { eligibleBands, groupBandAt, nextGroupBand, unitPriceAt, unitPriceFor } from './tiers';
+import {
+  availabilityLabel,
+  bookingCtaLabel,
+  canStartBooking,
+  eligibleBands,
+  groupBandAt,
+  nextGroupBand,
+  summariseTiers,
+  unitPriceAt,
+  unitPriceFor,
+} from './tiers';
 
 /**
  * The group-pricing resolver — a DISPLAY mirror of a money rule.
@@ -224,5 +234,108 @@ describe('eligibleBands', () => {
     });
     eligibleBands(withBands);
     expect(withBands.group_bands?.map((band) => band.min_quantity)).toEqual([6, 2]);
+  });
+});
+
+/**
+ * ── THE SALE WINDOW, AND THE ERROR SCREEN IT USED TO PRODUCE ─────────────
+ *
+ * A future-dated event reached the same black "Book tickets" pill as one
+ * selling now. Pressing it opened a picker of disabled rows; a URL carrying
+ * `?tickets=<id>:2` skipped even that and reserved, which `reserve` refuses
+ * under the tier's row lock with `sale_not_started` — surfacing as "We could
+ * not hold your tickets. An unexpected error occurred." on the review screen.
+ *
+ * These cases pin the gate that makes that unreachable, and the sentence that
+ * replaces it. Every one of them is pure: the state comes off `is_on_sale`,
+ * which the SERVER decides, so nothing here depends on the clock.
+ */
+describe('the sale window', () => {
+  const soon = '2026-10-02T13:30:00Z';
+  const later = '2026-11-20T05:00:00Z';
+
+  it('reports not_on_sale with the soonest opening date', () => {
+    const state = summariseTiers([
+      tier({ id: 'b', is_on_sale: false, sale_start: later }),
+      tier({ id: 'a', is_on_sale: false, sale_start: soon }),
+    ]).state;
+    expect(state).toEqual({ kind: 'not_on_sale', opensAt: soon });
+  });
+
+  it('ignores a sold-out tier when choosing that date', () => {
+    // Nobody is waiting for a window that opens onto no tickets, and naming it
+    // would advertise a sale that cannot happen.
+    const state = summariseTiers([
+      tier({ id: 'gone', is_on_sale: false, sale_start: soon, available: 0, sold: 100 }),
+      tier({ id: 'real', is_on_sale: false, sale_start: later }),
+    ]).state;
+    expect(state).toEqual({ kind: 'not_on_sale', opensAt: later });
+  });
+
+  it('compares instants, not strings', () => {
+    // `+05:30` sorts after `Z` lexically and lands earlier in real time. A
+    // string sort here would name the wrong date on the button.
+    const ist = '2026-10-02T14:00:00+05:30'; // 08:30Z — earlier than `soon`
+    const state = summariseTiers([
+      tier({ id: 'z', is_on_sale: false, sale_start: soon }),
+      tier({ id: 'i', is_on_sale: false, sale_start: ist }),
+    ]).state;
+    expect(state).toEqual({ kind: 'not_on_sale', opensAt: ist });
+  });
+
+  it('carries a null date rather than inventing one', () => {
+    // A tier can be off sale because its window CLOSED. There is no opening
+    // date in that case and the label must not make one up.
+    const state = summariseTiers([tier({ is_on_sale: false, sale_start: null })]).state;
+    expect(state).toEqual({ kind: 'not_on_sale', opensAt: null });
+  });
+
+  describe('canStartBooking', () => {
+    it('refuses a window that has not opened', () => {
+      expect(canStartBooking({ kind: 'not_on_sale', opensAt: soon })).toBe(false);
+    });
+
+    it('refuses a sold-out event', () => {
+      expect(canStartBooking({ kind: 'sold_out' })).toBe(false);
+    });
+
+    it('ALLOWS unknown, on purpose', () => {
+      // No tiers means ticketing has not set the event up, or the fetch
+      // blipped. Refusing here would make a sellable event unbookable because
+      // one request failed — worse than a picker that says there is nothing to
+      // pick. `unknown` and `sold_out` must never be confused.
+      expect(canStartBooking({ kind: 'unknown' })).toBe(true);
+    });
+
+    it('allows every buyable state', () => {
+      expect(canStartBooking({ kind: 'available', left: 40 })).toBe(true);
+      expect(canStartBooking({ kind: 'few_left', left: 3 })).toBe(true);
+      expect(canStartBooking({ kind: 'selling_fast', left: 20 })).toBe(true);
+    });
+  });
+
+  describe('what the controls say', () => {
+    it('names the opening date on the button', () => {
+      expect(bookingCtaLabel({ kind: 'not_on_sale', opensAt: soon })).toBe(
+        'Booking opens Fri, 2 Oct',
+      );
+    });
+
+    it('says only that it is closed when there is no date', () => {
+      expect(bookingCtaLabel({ kind: 'not_on_sale', opensAt: null })).toBe('Booking not open yet');
+    });
+
+    it('keeps the ordinary label for a bookable event', () => {
+      expect(bookingCtaLabel({ kind: 'few_left', left: 2 })).toBe('Book tickets');
+      expect(bookingCtaLabel({ kind: 'sold_out' })).toBe('Sold out');
+    });
+
+    it('gives the availability line the TIME as well', () => {
+      // The button has room for a date; the line beside it answers "when
+      // exactly", which is the question somebody actually has.
+      expect(availabilityLabel({ kind: 'not_on_sale', opensAt: soon })).toBe(
+        'Sales open Fri, 2 Oct · 7:00 pm',
+      );
+    });
   });
 });

@@ -30,12 +30,7 @@ import {
 } from '@/lib/booking/payment-failure';
 import type { CheckoutFailure } from '@/lib/booking/razorpay';
 import { BillLines, bookingBill } from '@/components/ticketing/bill-lines';
-import {
-  InsetPanel,
-  MetaRow,
-  PosterThumb,
-  SurfaceCard,
-} from '@/components/ticketing/primitives';
+import { InsetPanel, MetaRow, PosterThumb, SurfaceCard } from '@/components/ticketing/primitives';
 import { PaymentSection, PayUsing } from './payment-section';
 import { StickyActionBar } from './sticky-action-bar';
 import { useBooking } from './booking-context';
@@ -149,26 +144,28 @@ export function PaymentFailedStep() {
       </div>
 
       {/* ── THE VERDICT ───────────────────────────────────────────────── */}
-      <div className="rounded-2xl bg-destructive-subtle p-4">
+      {/* NEUTRAL, not red. A payment that did not complete is bad news and
+          the words say so; painting the panel red on top of them adds alarm
+          rather than information, on the screen where somebody is already
+          worried about money. The icon and the copy carry the meaning. */}
+      <div className="rounded-2xl border border-border bg-muted p-4">
         <div className="flex gap-3">
           <span
             aria-hidden
-            className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
+            className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground text-background"
           >
             <CircleAlert className="size-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-caption font-bold uppercase tracking-wider text-destructive-subtle-foreground">
+            <p className="text-caption font-bold uppercase tracking-wider text-muted-foreground">
               Payment incomplete
             </p>
-            <h1 className="mt-0.5 text-h4 font-bold text-destructive-subtle-foreground">
-              {copy.title}
-            </h1>
+            <h1 className="mt-0.5 text-h4 font-bold text-foreground">{copy.title}</h1>
             {/* ONE sentence here, and the SPECIFIC advice lower down in the
                 diagnostics block. Both said the reversal line and a screen that
                 prints the same reassurance twice in two registers reads as a
                 system that is not sure. */}
-            <p className="mt-1.5 text-body-sm text-destructive-subtle-foreground">
+            <p className="mt-1.5 text-body-sm text-muted-foreground">
               Nothing has been charged for this booking.
             </p>
           </div>
@@ -257,7 +254,7 @@ export function PaymentFailedStep() {
       {failure && (failure.code || failure.reason || failure.paymentId || copy.providerMessage) ? (
         <SurfaceCard className="p-4">
           <p className="flex items-center gap-2 text-body-sm font-semibold text-foreground">
-            <Info className="size-4 shrink-0 text-destructive" aria-hidden />
+            <Info className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             Gateway diagnostics
           </p>
 

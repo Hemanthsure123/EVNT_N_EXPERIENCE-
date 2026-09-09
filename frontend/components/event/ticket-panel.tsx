@@ -15,6 +15,8 @@ import { formatFromPrice } from '@/lib/discovery/format';
 import {
   type AvailabilityState,
   availabilityLabel,
+  bookingCtaLabel,
+  canStartBooking,
   isUrgent,
   sellableTiers,
   summariseTiers,
@@ -372,14 +374,19 @@ export function TicketPanel({
             >
               Book tickets
             </Button>
-          ) : state.kind === 'sold_out' || !selected ? (
+          ) : !canStartBooking(state) || !selected ? (
+            // `canStartBooking`, not `sold_out` alone: a sale window that has
+            // not opened is equally unbuyable, and letting it through here
+            // produced a live link to a reserve the row lock refuses. The
+            // label names the opening date rather than repeating the word
+            // on a control nobody can press.
             <Button
               size="lg"
               variant="outline"
               disabled
               className="h-control-lg w-full rounded-full px-pill-lg"
             >
-              {state.kind === 'sold_out' ? 'Sold out' : 'Book tickets'}
+              {bookingCtaLabel(state)}
             </Button>
           ) : (
             // The black pill, spelled out here rather than inherited: `--cta` is

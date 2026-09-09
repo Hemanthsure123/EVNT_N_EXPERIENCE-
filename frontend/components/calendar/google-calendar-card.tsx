@@ -4,11 +4,7 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { AlertTriangle, CalendarCheck, CalendarPlus, Check } from 'lucide-react';
-import {
-  disconnectCalendar,
-  fetchCalendarStatus,
-  startCalendarConnect,
-} from '@/lib/api/calendar';
+import { disconnectCalendar, fetchCalendarStatus, startCalendarConnect } from '@/lib/api/calendar';
 import { ApiError } from '@/lib/api/errors';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
@@ -83,9 +79,7 @@ export function GoogleCalendarCard({ className }: { className?: string }) {
       setBanner({
         tone: 'error',
         text:
-          thrown instanceof ApiError
-            ? thrown.message
-            : 'Could not start the Google connection.',
+          thrown instanceof ApiError ? thrown.message : 'Could not start the Google connection.',
       }),
   });
 
@@ -200,7 +194,7 @@ export function GoogleCalendarCard({ className }: { className?: string }) {
           role={banner.tone === 'error' ? 'alert' : 'status'}
           className={cn(
             'text-caption',
-            banner.tone === 'error' ? 'text-destructive' : 'text-success-subtle-foreground',
+            banner.tone === 'error' ? 'text-muted-foreground' : 'text-success-subtle-foreground',
           )}
         >
           {banner.text}

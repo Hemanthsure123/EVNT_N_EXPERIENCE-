@@ -1,9 +1,15 @@
 import * as React from 'react';
 import Link from 'next/link';
-import { Ticket } from 'lucide-react';
+import { CalendarClock, Ticket } from 'lucide-react';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
-import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
+import {
+  availabilityLabel,
+  bookingCtaLabel,
+  canStartBooking,
+  isUrgent,
+  summariseTiers,
+} from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { WaitlistButton } from './waitlist-button';
 
@@ -33,6 +39,19 @@ import { WaitlistButton } from './waitlist-button';
  * Sold out, few left and not-on-sale all reach the button, because sending
  * somebody to a picker to discover there is nothing to pick is worse than
  * saying so here.
+ *
+ * ── AND NOT-ON-SALE NO LONGER OFFERS A WAY IN ─────────────────────────────
+ *
+ * It used to render the live black pill. The picker behind it draws every
+ * row disabled, and a `?tickets=` URL skipped even that and reserved — which
+ * `reserve` refuses under the tier's row lock with `sale_not_started`, and
+ * the customer met as a full-screen "We could not hold your tickets" on the
+ * review screen. Nothing had gone wrong; the flow was enterable when it
+ * should not have been.
+ *
+ * The control now names the DATE instead. A disabled button that only says
+ * it is disabled reads as a broken page; one that says when it opens is the
+ * difference between somebody coming back and somebody leaving.
  *
  * ── AND SOLD OUT IS NO LONGER A DEAD END ──────────────────────────────────
  *
@@ -71,6 +90,7 @@ export function BookingCta({
   const price = formatFromPrice(summary.fromPrice);
   const label = availabilityLabel(summary.state);
   const soldOut = summary.state.kind === 'sold_out';
+  const bookable = canStartBooking(summary.state);
 
   return (
     <section
@@ -117,6 +137,18 @@ export function BookingCta({
         </span>
       ) : soldOut ? (
         <WaitlistButton eventId={eventId} returnTo={`/events/${eventId}`} />
+      ) : !bookable ? (
+        // A span, not a disabled <button>: there is nothing to submit and
+        // nowhere to go. Keeping the control's SIZE and POSITION is the point
+        // — the page must not reflow when a sale opens — and the sentence
+        // carries the date the line above states to the minute.
+        <span
+          aria-disabled="true"
+          className="inline-flex h-control cursor-not-allowed items-center justify-center gap-2 rounded-full border border-border bg-sunken px-pill text-label text-muted-foreground"
+        >
+          <CalendarClock className="size-4" aria-hidden />
+          {bookingCtaLabel(summary.state)}
+        </span>
       ) : (
         <Link
           href={`/booking/${eventId}`}

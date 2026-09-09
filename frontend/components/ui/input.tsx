@@ -20,7 +20,15 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
         'placeholder:text-muted-foreground',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:cursor-not-allowed disabled:opacity-60',
-        'aria-[invalid=true]:border-destructive aria-[invalid=true]:focus-visible:ring-destructive',
+        // ── AN INVALID FIELD IS MARKED, NOT ALARMED ────────────────────
+        //
+        // This was `border-destructive` with a matching red focus ring. The
+        // platform does not report failure in red any more (see the sweep note
+        // in `ui/notice.tsx`), and a red box around a control is the loudest
+        // version of exactly that. A heavier neutral border still marks the
+        // field — `aria-invalid` is what actually carries the state to anybody
+        // not looking at the colour, and it is unchanged.
+        'aria-[invalid=true]:border-border-strong',
         className,
       )}
       {...props}

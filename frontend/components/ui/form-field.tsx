@@ -41,7 +41,7 @@ export function FormField({
         <label htmlFor={htmlFor} className="text-label text-foreground">
           {label}
           {required ? (
-            <span className="text-destructive-subtle-foreground" aria-hidden>
+            <span className="text-muted-foreground" aria-hidden>
               {' '}
               *
             </span>
@@ -69,7 +69,7 @@ export function FormField({
         <p
           id={htmlFor ? `${htmlFor}-error` : undefined}
           role="alert"
-          className="text-caption text-destructive-subtle-foreground"
+          className="text-caption text-muted-foreground"
         >
           {error}
         </p>

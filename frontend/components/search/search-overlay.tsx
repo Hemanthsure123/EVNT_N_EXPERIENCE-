@@ -362,7 +362,10 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           it read as a modal and hide the very context the user is searching
           within. Clicking outside still closes it either way (Radix). */}
       {open && !anchored ? (
-        <div className="fixed inset-0 z-modal bg-overlay/70 backdrop-blur-sm animate-in fade-in-0" aria-hidden />
+        <div
+          className="fixed inset-0 z-modal bg-overlay/70 backdrop-blur-sm animate-in fade-in-0"
+          aria-hidden
+        />
       ) : null}
       {/* NO `onPointerDownOutside` GUARD, deliberately.
           One lived here, suppressing the dismissal when a press landed on the
@@ -423,8 +426,8 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
                 // Out is FASTER than in (`duration-fast` vs `duration-base`):
                 // an exit that takes as long as an entrance reads as the UI
                 // hesitating about whether to go.
-                'origin-top zoom-in-[0.98] duration-base ease-out slide-in-from-top-1',
-                'data-[state=closed]:zoom-out-[0.98] data-[state=closed]:duration-fast',
+                'origin-top duration-base ease-out zoom-in-[0.98] slide-in-from-top-1',
+                'data-[state=closed]:duration-fast data-[state=closed]:zoom-out-[0.98]',
                 'data-[state=closed]:ease-in data-[state=closed]:slide-out-to-top-1',
               )
             : // TRUE vertical centring, at every breakpoint.
@@ -664,7 +667,7 @@ export function SearchOverlay({ open, initialQuery, anchor, onOpenChange }: Sear
           ) : null}
 
           {suggestions.isError ? (
-            <p role="status" className="px-3 py-6 text-center text-body-sm text-destructive">
+            <p role="status" className="px-3 py-6 text-center text-body-sm text-muted-foreground">
               Search is unavailable right now. Check your connection and try again.
             </p>
           ) : null}

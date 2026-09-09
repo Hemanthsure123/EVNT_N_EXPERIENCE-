@@ -72,7 +72,7 @@ export function StartFromEvent({ className }: { className?: string }) {
     return (
       <div
         className={cn(
-          'flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border bg-subtle px-4 py-3',
+          'bg-subtle flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3',
           className,
         )}
       >
@@ -103,7 +103,10 @@ function ClonePanel({ className, onDismiss }: { className?: string; onDismiss: (
   return (
     <section
       aria-label="Copy a previous event"
-      className={cn('flex flex-col gap-stack rounded-lg border border-border bg-subtle p-4', className)}
+      className={cn(
+        'bg-subtle flex flex-col gap-stack rounded-lg border border-border p-4',
+        className,
+      )}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
@@ -133,7 +136,7 @@ function ClonePanel({ className, onDismiss }: { className?: string; onDismiss: (
       {query.isPending ? (
         <p className="text-body-sm text-muted-foreground">Loading your events…</p>
       ) : query.isError ? (
-        <p className="text-body-sm text-destructive">
+        <p className="text-body-sm text-muted-foreground">
           Could not load your events.{' '}
           <button type="button" className="underline" onClick={() => void query.refetch()}>
             Try again

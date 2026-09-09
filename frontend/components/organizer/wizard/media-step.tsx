@@ -933,7 +933,7 @@ function CoverUploader({
       </div>
 
       {problem ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {problem}
         </p>
       ) : null}
@@ -955,13 +955,13 @@ function PendingTile({
     <div
       className={cn(
         'flex h-full flex-col gap-stack rounded-xl border p-card shadow-sm',
-        failed ? 'border-destructive bg-destructive-subtle' : 'border-border bg-surface',
+        failed ? 'border-border bg-muted' : 'border-border bg-surface',
       )}
     >
       <p className="flex items-center gap-2 truncate text-body-sm font-medium">
         {failed ? (
           <AlertTriangle
-            className="size-4 shrink-0 text-destructive-subtle-foreground"
+            className="size-4 shrink-0 text-muted-foreground"
             aria-hidden
           />
         ) : (
@@ -971,7 +971,7 @@ function PendingTile({
       </p>
 
       {failed ? (
-        <p className="text-caption text-destructive-subtle-foreground">{row.error}</p>
+        <p className="text-caption text-muted-foreground">{row.error}</p>
       ) : (
         <>
           <div
@@ -1292,7 +1292,7 @@ function VideoLink({ eventId, media }: { eventId: string; media: EventMedia[] })
         />
       </div>
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : null}

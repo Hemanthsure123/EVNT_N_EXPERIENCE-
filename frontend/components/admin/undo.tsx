@@ -73,7 +73,9 @@ export function UndoProvider({ children }: { children: React.ReactNode }) {
       () =>
         // Only auto-dismiss an untouched toast. One mid-undo, or one showing a
         // failure, must stay until the operator has seen the outcome.
-        setToasts((current) => current.filter((toast) => toast.id !== id || toast.state !== 'idle')),
+        setToasts((current) =>
+          current.filter((toast) => toast.id !== id || toast.state !== 'idle'),
+        ),
       DISMISS_AFTER_MS,
     );
   }, []);
@@ -136,9 +138,9 @@ export function UndoProvider({ children }: { children: React.ReactNode }) {
             key={toast.id}
             className={cn(
               'pointer-events-auto flex w-full max-w-md items-center gap-stack rounded-xl border py-2 pl-card pr-2 shadow-lg',
-              'animate-in slide-in-from-bottom-2 fade-in-0 motion-reduce:animate-none',
+              'animate-in fade-in-0 slide-in-from-bottom-2 motion-reduce:animate-none',
               toast.state === 'failed'
-                ? 'border-destructive-subtle bg-destructive-subtle text-destructive-subtle-foreground'
+                ? 'border-border bg-sunken text-foreground'
                 : 'border-border bg-surface text-foreground',
             )}
           >

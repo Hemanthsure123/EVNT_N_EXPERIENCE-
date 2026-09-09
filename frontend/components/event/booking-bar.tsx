@@ -5,7 +5,13 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchEventTiers } from '@/lib/api/events';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
-import { availabilityLabel, isUrgent, summariseTiers } from '@/lib/discovery/tiers';
+import {
+  availabilityLabel,
+  bookingCtaLabel,
+  canStartBooking,
+  isUrgent,
+  summariseTiers,
+} from '@/lib/discovery/tiers';
 import { cn } from '@/lib/utils/cn';
 import { WaitlistButton } from './waitlist-button';
 
@@ -81,6 +87,10 @@ export function BookingBar({
   const price = formatFromPrice(fromPrice);
   const label = availabilityLabel(state);
   const soldOut = state.kind === 'sold_out';
+  // The same gate the rail applies, from the same helper. Two copies of
+  // "may this event be booked" is how one of them keeps letting people
+  // through to a reserve that cannot succeed.
+  const bookable = canStartBooking(state);
 
   return (
     <div
@@ -125,11 +135,14 @@ export function BookingBar({
             promise is stated in full on the page above and in the email. */}
         {soldOut ? (
           <span className="ml-auto">
-            <WaitlistButton
-              eventId={eventId}
-              returnTo={`/events/${eventId}`}
-              variant="inline"
-            />
+            <WaitlistButton eventId={eventId} returnTo={`/events/${eventId}`} variant="inline" />
+          </span>
+        ) : !bookable ? (
+          <span
+            aria-disabled="true"
+            className="ml-auto inline-flex h-control shrink-0 cursor-not-allowed items-center justify-center rounded-full border border-border bg-sunken px-pill text-label text-muted-foreground"
+          >
+            {bookingCtaLabel(state)}
           </span>
         ) : (
           <a

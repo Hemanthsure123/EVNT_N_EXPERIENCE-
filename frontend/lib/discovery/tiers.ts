@@ -1,4 +1,5 @@
 import type { TicketTier } from '@/lib/api/types';
+import { formatEventDate, formatEventDateTime } from './format';
 
 /**
  * What the ticket tiers add up to.
@@ -89,9 +90,7 @@ export function groupBandAt(
 }
 
 /** Every band that could honestly apply, smallest group first. */
-export function eligibleBands(
-  tier: TicketTier,
-): { min_quantity: number; price_minor: number }[] {
+export function eligibleBands(tier: TicketTier): { min_quantity: number; price_minor: number }[] {
   return (tier.group_bands ?? [])
     .filter((band) => band.min_quantity > 1 && band.price_minor <= tier.price)
     .slice()
@@ -125,7 +124,17 @@ export const SELLING_FAST = 50;
 
 export type AvailabilityState =
   | { kind: 'unknown' }
-  | { kind: 'not_on_sale' }
+  /**
+   * Nothing is buyable YET — every tier's window opens in the future.
+   *
+   * `opensAt` is the soonest of those windows, carried on the state rather
+   * than re-derived by each caller, because three surfaces render it and a
+   * fourth (the funnel) refuses on it. It is null when the tiers carry no
+   * `sale_start` at all, which is a real case: a tier can be off sale
+   * because its window CLOSED, and inventing an opening date for that
+   * would be the fabrication this codebase refuses everywhere else.
+   */
+  | { kind: 'not_on_sale'; opensAt: string | null }
   | { kind: 'sold_out' }
   | { kind: 'few_left'; left: number }
   | { kind: 'selling_fast'; left: number }
@@ -214,7 +223,9 @@ function availabilityState(tiers: TicketTier[]): AvailabilityState {
 
   const left = tiers.reduce((sum, tier) => sum + Math.max(tier.available, 0), 0);
   if (left <= 0) return { kind: 'sold_out' };
-  if (!tiers.some((tier) => tier.is_on_sale)) return { kind: 'not_on_sale' };
+  if (!tiers.some((tier) => tier.is_on_sale)) {
+    return { kind: 'not_on_sale', opensAt: earliestSaleStart(tiers) };
+  }
   if (left <= FEW_LEFT) return { kind: 'few_left', left };
   if (left <= SELLING_FAST) return { kind: 'selling_fast', left };
   // Healthy stock says so plainly. Manufacturing pressure here is the whole
@@ -233,7 +244,12 @@ export function availabilityLabel(state: AvailabilityState): string | null {
     case 'available':
       return 'Tickets available';
     case 'not_on_sale':
-      return 'Sales not open yet';
+      // The TIME as well as the date: this line is the precise answer to
+      // "when can I buy", where the button beside it only has room to say
+      // that you cannot yet.
+      return state.opensAt
+        ? `Sales open ${formatEventDateTime(state.opensAt)}`
+        : 'Sales not open yet';
     default:
       return null;
   }
@@ -242,6 +258,80 @@ export function availabilityLabel(state: AvailabilityState): string | null {
 /** Whether a state should be styled as pressure rather than as information. */
 export const isUrgent = (state: AvailabilityState) =>
   state.kind === 'few_left' || state.kind === 'selling_fast';
+
+/**
+ * The soonest moment any of these tiers goes on sale, or null.
+ *
+ * Only tiers that are BOTH off sale and still have stock count. A sold-out
+ * tier with a future window is not something anybody is waiting for, and
+ * letting it win the minimum would advertise an opening date for tickets
+ * that will not exist.
+ *
+ * Compared through `Date.parse`, never by sorting the strings: the backend
+ * emits ISO-8601 with an offset, and `+05:30` and `Z` do not sort into the
+ * order they actually occur in.
+ */
+export function earliestSaleStart(tiers: TicketTier[]): string | null {
+  let winner: string | null = null;
+  let winnerMs = Infinity;
+  for (const tier of tiers) {
+    if (tier.is_on_sale || Math.max(tier.available, 0) <= 0) continue;
+    if (!tier.sale_start) continue;
+    const ms = Date.parse(tier.sale_start);
+    if (Number.isNaN(ms) || ms >= winnerMs) continue;
+    winnerMs = ms;
+    winner = tier.sale_start;
+  }
+  return winner;
+}
+
+/**
+ * MAY THE BOOKING FLOW BE ENTERED AT ALL.
+ *
+ * ── THE BUG THIS EXISTS TO MAKE IMPOSSIBLE ────────────────────────────
+ *
+ * `not_on_sale` used to reach the same black "Book tickets" pill as an
+ * event selling normally. Pressing it opened the picker, where every row is
+ * disabled — honest, and already a dead screen — and a URL carrying a
+ * `?tickets=` selection skipped even that: the funnel reserved, the tier's
+ * window had not opened, `reserve` refused under the row lock with
+ * `sale_not_started`, and the customer landed on "We could not hold your
+ * tickets. An unexpected error occurred." for an event that is simply not
+ * on sale yet.
+ *
+ * Nothing had failed. The flow should never have been enterable.
+ *
+ * ── `unknown` IS DELIBERATELY ALLOWED THROUGH ─────────────────────────
+ *
+ * It means there are no tiers to reason about — ticketing has not set the
+ * event up, or the tiers fetch blipped. Refusing on it would make a
+ * perfectly sellable event unbookable because one request failed, which is
+ * a worse outcome than the picker saying there is nothing to pick. The two
+ * must never be confused, exactly as the waiting list already insists.
+ */
+export const canStartBooking = (state: AvailabilityState): boolean =>
+  state.kind !== 'sold_out' && state.kind !== 'not_on_sale';
+
+/**
+ * What the one button on the event page should SAY.
+ *
+ * A disabled control has to explain itself or it reads as broken, and
+ * "Book tickets", greyed, is indistinguishable from a page that failed to
+ * load. The date is the whole answer — somebody who knows when it opens can
+ * come back, where somebody told only "unavailable" cannot.
+ *
+ * The DATE only, not the time: this is a pill beside a price, and the line
+ * above it already carries the exact moment via `availabilityLabel`.
+ */
+export function bookingCtaLabel(state: AvailabilityState): string {
+  if (state.kind === 'sold_out') return 'Sold out';
+  if (state.kind === 'not_on_sale') {
+    return state.opensAt
+      ? `Booking opens ${formatEventDate(state.opensAt)}`
+      : 'Booking not open yet';
+  }
+  return 'Book tickets';
+}
 
 /**
  * A tier's standing relative to its siblings, for the "each tier should feel

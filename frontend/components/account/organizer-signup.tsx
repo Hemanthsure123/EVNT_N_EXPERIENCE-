@@ -140,7 +140,7 @@ function CreateForm() {
       {error ? (
         <p
           role="alert"
-          className="rounded-lg bg-destructive-subtle px-card py-3 text-body-sm text-destructive-subtle-foreground"
+          className="rounded-lg bg-muted px-card py-3 text-body-sm text-foreground"
         >
           {error}
         </p>
@@ -306,7 +306,7 @@ function OrganizationCard({ organization }: { organization: Organization }) {
       {error ? (
         <p
           role="alert"
-          className="rounded-lg bg-destructive-subtle px-card py-3 text-body-sm text-destructive-subtle-foreground"
+          className="rounded-lg bg-muted px-card py-3 text-body-sm text-foreground"
         >
           {error}
         </p>
@@ -392,16 +392,16 @@ function VerificationForm({
   return (
     <div className="flex flex-col gap-block rounded-xl border border-border bg-sunken p-card">
       {rejection ? (
-        <div className="flex gap-3 rounded-lg bg-destructive-subtle p-card">
+        <div className="flex gap-3 rounded-lg border border-border bg-muted p-card">
           <ShieldAlert
-            className="mt-0.5 size-4 shrink-0 text-destructive-subtle-foreground"
+            className="mt-0.5 size-4 shrink-0 text-muted-foreground"
             aria-hidden
           />
           <div className="flex flex-col gap-1">
-            <p className="text-label text-destructive-subtle-foreground">
+            <p className="text-label text-foreground">
               Your last application was not approved
             </p>
-            <p className="text-body-sm text-destructive-subtle-foreground">{rejection}</p>
+            <p className="text-body-sm text-muted-foreground">{rejection}</p>
           </div>
         </div>
       ) : null}

@@ -125,6 +125,23 @@ export type SelectionTotals = {
    * ever sees tier ids.
    */
   crossSession: boolean;
+  /**
+   * A line holds a tier whose sale window is not open.
+   *
+   * Blocks Checkout, like the two above it, and it is the LAST place a
+   * future-dated event can be stopped before the money path. The picker
+   * already draws such a tier disabled, so this is unreachable by pressing
+   * things — and entirely reachable by a URL, because `?tickets=<id>:2` is
+   * written by the event page's own panel, survives in histories and in
+   * links people send each other, and `parseSelection` will happily carry a
+   * tier the picker would never have let anybody choose.
+   *
+   * Without it the reserve runs, `SaleNotStartedError` comes back from under
+   * the tier's row lock, and the customer reads "We could not hold your
+   * tickets. An unexpected error occurred." — for an event that has simply
+   * not gone on sale.
+   */
+  notOnSale: boolean;
 };
 
 /**
@@ -202,6 +219,7 @@ export function totalsFor(selection: Selection, tiers: TicketTier[]): SelectionT
     grandTotal: total + platformFee,
     overAvailable: lines.some((line) => line.quantity > line.tier.available),
     crossSession: spansTwoSessions(lines),
+    notOnSale: lines.some((line) => !line.tier.is_on_sale),
   };
 }
 
@@ -263,11 +281,7 @@ export const toBookingItems = (selection: Selection) =>
  * The user id is deliberately absent: the backend already scopes the key to the
  * authenticated user, so including it here would only make the key longer.
  */
-export function idempotencyKeyFor(
-  eventId: string,
-  selection: Selection,
-  attempt = 1,
-): string {
+export function idempotencyKeyFor(eventId: string, selection: Selection, attempt = 1): string {
   return `book:${eventId}:${selectionSignature(selection)}:a${attempt}`;
 }
 

@@ -294,10 +294,10 @@ export function VenueAutocomplete({
             answers `available: true`, because the key IS configured. Silent
             emptiness would send somebody hunting through their key settings
             for a fault that is in the API VERSION. */
-        suggestions.isError && debounced.trim().length >= 2 ? (
-        <p role="alert" className="text-caption text-destructive">
-          Venue search was refused by the maps provider. Type the venue and city
-          instead — everything else on this step works.
+      suggestions.isError && debounced.trim().length >= 2 ? (
+        <p role="alert" className="text-caption text-muted-foreground">
+          Venue search was refused by the maps provider. Type the venue and city instead —
+          everything else on this step works.
         </p>
       ) : !mapsAvailable && !config.isPending ? (
         <p className="text-caption text-muted-foreground">
@@ -315,7 +315,7 @@ export function VenueAutocomplete({
       ) : null}
 
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : null}

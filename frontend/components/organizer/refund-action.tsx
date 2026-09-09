@@ -111,7 +111,7 @@ export function RefundAction({ booking }: { booking: OrganizerBooking }) {
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2.5 rounded-lg border border-destructive-subtle bg-destructive-subtle px-4 py-3 text-body-sm text-destructive-subtle-foreground"
+          className="flex items-start gap-2.5 rounded-lg border border-border bg-muted px-4 py-3 text-body-sm text-foreground"
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
           {/* The server's own sentence. It knows whether the payment was

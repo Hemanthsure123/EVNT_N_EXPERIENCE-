@@ -323,7 +323,7 @@ export function ProfileEditor({ performerId }: { performerId: string }) {
       ) : null}
 
       {error ? (
-        <p role="alert" className="text-body-sm text-destructive">
+        <p role="alert" className="text-body-sm text-muted-foreground">
           {error}
         </p>
       ) : null}
@@ -611,7 +611,7 @@ function SaveBadge({ state }: { state: SaveState }) {
     },
     error: {
       label: 'Could not save',
-      tone: 'text-destructive',
+      tone: 'text-muted-foreground',
       icon: <CloudOff className="size-3.5" aria-hidden />,
     },
   };

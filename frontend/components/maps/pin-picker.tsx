@@ -326,7 +326,7 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
       </p>
 
       {state === 'error' ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           The map script did not load, so a pin cannot be placed here. Everything else on this step
           still saves.
         </p>
@@ -420,7 +420,7 @@ export function PinPicker({ venue, city, latitude, longitude, onPick, onClear, c
           <p
             id="event-pin-coordinates-error"
             role="alert"
-            className="text-caption text-destructive"
+            className="text-caption text-muted-foreground"
           >
             {typedError}
           </p>

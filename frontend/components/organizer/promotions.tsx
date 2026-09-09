@@ -544,14 +544,14 @@ function CouponSheet({
             {issues.length ? (
               <ul className="flex flex-col gap-1">
                 {issues.map((issue) => (
-                  <li key={issue} className="text-caption text-destructive">
+                  <li key={issue} className="text-caption text-muted-foreground">
                     {issue}
                   </li>
                 ))}
               </ul>
             ) : null}
             {error ? (
-              <p role="alert" className="text-caption text-destructive">
+              <p role="alert" className="text-caption text-muted-foreground">
                 {error}
               </p>
             ) : null}

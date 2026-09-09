@@ -242,7 +242,7 @@ export function ModerationQueue() {
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-lg bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+          className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-body-sm text-foreground"
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           {error}
@@ -279,10 +279,12 @@ export function ModerationQueue() {
 
       {search || dates.label ? (
         <FilterChips
-          chips={[
-            search ? { key: 'q', label: `“${search}”`, onClear: () => setTerm('') } : null,
-            dates.label ? { key: 'date', label: dates.label, onClear: dates.clear } : null,
-          ].filter(Boolean) as { key: string; label: string; onClear: () => void }[]}
+          chips={
+            [
+              search ? { key: 'q', label: `“${search}”`, onClear: () => setTerm('') } : null,
+              dates.label ? { key: 'date', label: dates.label, onClear: dates.clear } : null,
+            ].filter(Boolean) as { key: string; label: string; onClear: () => void }[]
+          }
           onClearAll={() => {
             setTerm('');
             dates.clear();

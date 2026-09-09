@@ -159,9 +159,7 @@ export function RequestDetail({ requestId }: { requestId: string }) {
             label="Budget"
             value={`${formatMoney(brief.budget_min_minor)} – ${formatMoney(brief.budget_max_minor)}`}
           />
-          {brief.guests ? (
-            <Fact icon={Users} label="Guests" value={String(brief.guests)} />
-          ) : null}
+          {brief.guests ? <Fact icon={Users} label="Guests" value={String(brief.guests)} /> : null}
         </dl>
 
         {brief.notes ? (
@@ -172,7 +170,7 @@ export function RequestDetail({ requestId }: { requestId: string }) {
       </header>
 
       {error ? (
-        <p role="alert" className="text-body-sm text-destructive">
+        <p role="alert" className="text-body-sm text-muted-foreground">
           {error}
         </p>
       ) : null}
@@ -233,15 +231,7 @@ export function RequestDetail({ requestId }: { requestId: string }) {
   );
 }
 
-function Fact({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof MapPin;
-  label: string;
-  value: string;
-}) {
+function Fact({ icon: Icon, label, value }: { icon: typeof MapPin; label: string; value: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-xl border border-border bg-surface p-3 sm:p-4">
       <dt className="flex items-center gap-1.5 text-caption uppercase tracking-wide text-muted-foreground">
@@ -322,9 +312,7 @@ function QuoteRow({
           Booked. They have your brief and the date is theirs.
         </p>
       ) : quote.status === 'declined' ? (
-        <p className="text-caption text-muted-foreground">
-          Declined when you booked another act.
-        </p>
+        <p className="text-caption text-muted-foreground">Declined when you booked another act.</p>
       ) : quote.status === 'withdrawn' ? (
         <p className="text-caption text-muted-foreground">Withdrawn by the performer.</p>
       ) : !briefOpen ? null : confirming ? (
@@ -344,7 +332,7 @@ function QuoteRow({
               type="button"
               disabled={busy}
               onClick={onAccept}
-              className="inline-flex h-control items-center justify-center rounded-lg bg-success px-4 text-label text-success-foreground transition-opacity hover:opacity-90 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-10"
+              className="inline-flex h-control items-center justify-center rounded-lg bg-success px-4 text-label text-success-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 sm:h-10"
             >
               {busy ? 'Booking…' : 'Yes, book them'}
             </button>

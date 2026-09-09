@@ -107,7 +107,10 @@ export function ShareReceiptDialog({
     // press Enter first is the most annoying possible way to fail.
     const pending = draft.trim();
     if (pending && !commit(pending)) return;
-    const all = pending && !emails.includes(pending.toLowerCase()) ? [...emails, pending.toLowerCase()] : emails;
+    const all =
+      pending && !emails.includes(pending.toLowerCase())
+        ? [...emails, pending.toLowerCase()]
+        : emails;
     if (all.length === 0) {
       setProblem('Add at least one email address.');
       return;
@@ -125,7 +128,8 @@ export function ShareReceiptDialog({
             <div>
               <h2 className="text-h4">Share the receipt</h2>
               <p className="text-body-sm text-muted-foreground">
-                {target.eventTitle} · {target.ticketCount === 1 ? '1 ticket' : `${target.ticketCount} tickets`}
+                {target.eventTitle} ·{' '}
+                {target.ticketCount === 1 ? '1 ticket' : `${target.ticketCount} tickets`}
               </p>
             </div>
 
@@ -216,7 +220,7 @@ export function ShareReceiptDialog({
                 </div>
 
                 {problem || send.isError ? (
-                  <p role="alert" className="text-body-sm text-destructive">
+                  <p role="alert" className="text-body-sm text-muted-foreground">
                     {problem ?? errorMessage(send.error)}
                   </p>
                 ) : null}
@@ -228,7 +232,7 @@ export function ShareReceiptDialog({
                     disabled={send.isPending}
                     className={cn(
                       'inline-flex h-control items-center gap-2 rounded-full bg-cta px-pill text-label text-cta-foreground',
-                      'disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60',
                     )}
                   >
                     {send.isPending ? (

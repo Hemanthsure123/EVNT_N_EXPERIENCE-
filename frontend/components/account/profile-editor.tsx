@@ -219,7 +219,7 @@ export function ProfileEditor() {
         </Group>
 
         {error ? (
-          <p role="alert" className="text-caption text-destructive">
+          <p role="alert" className="text-caption text-muted-foreground">
             {error}
           </p>
         ) : null}
@@ -401,7 +401,7 @@ function FieldRow({
       </label>
       {children}
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : hint ? (

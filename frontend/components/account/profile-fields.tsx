@@ -60,7 +60,6 @@ export function GenderField({
       <legend className="text-body-sm font-medium">
         Gender <span className="font-normal text-muted-foreground">— optional</span>
       </legend>
-
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {GENDER_OPTIONS.map((option) => {
           const selected = value === option.value;
@@ -72,7 +71,7 @@ export function GenderField({
                 'text-body-sm transition-colors duration-fast',
                 'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background',
                 selected
-                  ? 'border-primary bg-primary-subtle text-primary-subtle-foreground'
+                  ? 'bg-primary-subtle text-primary-subtle-foreground border-primary'
                   : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground',
                 // "Prefer not to say" spans the row: it is not a fifth option
                 // among four, it is the way out of the question, and pairing it
@@ -93,7 +92,6 @@ export function GenderField({
           );
         })}
       </div>
-
       {value === 'self_described' ? (
         <div className="flex flex-col gap-1.5 pt-1">
           <label htmlFor={selfId} className="sr-only">
@@ -108,13 +106,12 @@ export function GenderField({
             placeholder="In your own words"
           />
           {error ? (
-            <p role="alert" className="text-caption text-destructive">
+            <p role="alert" className="text-caption text-muted-foreground">
               {error}
             </p>
           ) : null}
         </div>
       ) : null}
-
       {value ? (
         <button
           type="button"
@@ -123,6 +120,7 @@ export function GenderField({
         >
           Clear this answer
         </button>
-      ) : null}    </fieldset>
+      ) : null}{' '}
+    </fieldset>
   );
 }

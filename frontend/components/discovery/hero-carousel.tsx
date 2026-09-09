@@ -12,6 +12,14 @@ import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discove
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
+import {
+  PEEK_RAIL_ITEM,
+  PEEK_RAIL_SURFACE,
+  PEEK_RAIL_TRACK,
+  peekRailItemState,
+  peekRailSurfaceState,
+  useCenteredIndex,
+} from '@/lib/discovery/peek-rail';
 import { DateBadge } from './date-badge';
 import { categoryTint } from './category-tint';
 
@@ -237,46 +245,16 @@ function PriceLine({ event }: { event: EventCardModel }) {
   );
 }
 
-function MobileFeaturedCarousel({
-  events,
-  label,
-}: {
-  events: EventCardModel[];
-  label: string;
-}) {
-  const containerRef = React.useRef<HTMLUListElement>(null);
-  const [activeIndex, setActiveIndex] = React.useState(0);
-
-  const handleScroll = React.useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const children = Array.from(el.children) as HTMLElement[];
-    if (children.length === 0) return;
-
-    const containerCenter = el.scrollLeft + el.clientWidth / 2;
-    let closestIndex = 0;
-    let minDistance = Infinity;
-
-    children.forEach((child, idx) => {
-      const childCenter = child.offsetLeft + child.clientWidth / 2;
-      const distance = Math.abs(containerCenter - childCenter);
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestIndex = idx;
-      }
-    });
-
-    setActiveIndex(closestIndex);
-  }, []);
-
-  React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
-    return () => el.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
+function MobileFeaturedCarousel({ events, label }: { events: EventCardModel[]; label: string }) {
+  // ── THE MOTION MOVED OUT, THE RAIL DID NOT CHANGE ─────────────────────
+  //
+  // The scale/lift/opacity/elevation classes and the closest-to-centre index
+  // used to be written out here. They are `lib/discovery/peek-rail` now,
+  // because the event page's lineup rail uses the same motion — and two
+  // hand-written copies of a transition are two things that drift the first
+  // time somebody tunes one of them. Behaviour here is unchanged; the classes
+  // are the same strings, from one place.
+  const { ref, activeIndex, scrollable } = useCenteredIndex<HTMLUListElement>(events.length);
 
   return (
     <div className="overflow-x-hidden sm:hidden">
@@ -284,15 +262,11 @@ function MobileFeaturedCarousel({
         <h2 className="text-body font-bold tracking-tight text-foreground">{label}</h2>
       </Container>
       <ul
-        ref={containerRef}
+        ref={ref}
         aria-label={label}
         className={cn(
-          // `relative`, because `handleScroll` compares `child.offsetLeft`
-          // against this element's `scrollLeft`. `offsetLeft` is measured from
-          // the nearest POSITIONED ancestor, so without this the two are in
-          // different coordinate spaces and the active card is only correct by
-          // the accident of this rail sitting at page-x 0.
-          'relative flex snap-x snap-mandatory items-center gap-3.5 overflow-x-auto scroll-smooth',
+          PEEK_RAIL_TRACK,
+          'gap-3.5',
           // 16vw each side + a 68vw card = exactly 100vw, so the FIRST and LAST
           // cards can reach the centre like every other one. It was `px-[14vw]`
           // against a card capped at `max-w-64`: a vw padding and a px cap stop
@@ -300,47 +274,18 @@ function MobileFeaturedCarousel({
           // at 390px and ~27px off on a Pro Max. The cap is gone and both
           // numbers are now the same unit.
           'px-[16vw]',
-          // py-6, not py-4: the active card is scaled 5% and lifted 6px, which
-          // is ~9px of ink above its box, and `overflow-x-auto` also clips
-          // vertically — so `shadow-xl` and the ring were being cut off and the
-          // elevation read flatter than it was drawn.
-          'py-6',
-          'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
         )}
       >
         {events.map((event, i) => {
-          const isActive = i === activeIndex;
+          // A single featured event does not scroll, and dimming the only card
+          // on screen would be prominence with nothing to be prominent over.
+          const isActive = !scrollable || i === activeIndex;
           return (
             <li
               key={event.id}
-              className={cn(
-                'w-[68vw] shrink-0 snap-center transition-all duration-300 ease-out',
-                // Every other animated surface in this repo pairs its
-                // transition with this guard; the largest moving element on the
-                // mobile home page was the one place that did not.
-                'motion-reduce:transition-none motion-reduce:transform-none',
-                isActive
-                  ? 'scale-105 -translate-y-1.5 opacity-100 z-10'
-                  : 'scale-95 translate-y-1 opacity-75 z-0',
-              )}
+              className={cn('w-[68vw]', PEEK_RAIL_ITEM, peekRailItemState(isActive))}
             >
-              {/* ── NO RING ON THE ACTIVE CARD ───────────────────────────
-                  It carried `ring-2 ring-primary/40`, which drew a violet
-                  outline around the whole card — so the centre event read as a
-                  UI component in a selected state rather than as a poster. A
-                  discovery card is a thing you look AT; an outline is the
-                  language of a control you have focused.
-
-                  Position, scale and elevation already say which one is
-                  active, and they say it the way a deck of cards does. The
-                  focus ring is still there for the keyboard, on the button
-                  itself, where a focus ring belongs. */}
-              <div
-                className={cn(
-                  'rounded-2xl transition-shadow duration-300 motion-reduce:transition-none',
-                  isActive ? 'shadow-xl' : 'shadow-sm',
-                )}
-              >
+              <div className={cn('rounded-2xl', PEEK_RAIL_SURFACE, peekRailSurfaceState(isActive))}>
                 <HeroPosterTile event={event} priority={i === 0} allEvents={events} index={i} />
               </div>
             </li>
@@ -376,7 +321,7 @@ function HeroPosterTile({
       // on a surface with its own padding, which is what gives the title and
       // the price somewhere to live instead of floating on the page — and what
       // makes the rail read as a row of cards rather than a row of pictures.
-      className="group/tile flex h-full w-full flex-col overflow-hidden rounded-2xl bg-surface p-2 text-left transition-transform duration-fast active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none motion-reduce:active:scale-100"
+      className="group/tile flex h-full w-full flex-col overflow-hidden rounded-2xl bg-surface p-2 text-left transition-transform duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
     >
       {/* `aspect-poster` (4/5), not `aspect-portrait` (3/4). The token was added
           for exactly this carousel and was orphaned — nothing referenced it —

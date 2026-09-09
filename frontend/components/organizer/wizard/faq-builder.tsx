@@ -206,7 +206,7 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
         </div>
 
         {failure ? (
-          <p role="alert" className="text-caption text-destructive">
+          <p role="alert" className="text-caption text-muted-foreground">
             {failure}
           </p>
         ) : null}

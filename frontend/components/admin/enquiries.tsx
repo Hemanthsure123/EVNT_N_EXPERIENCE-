@@ -113,8 +113,8 @@ export function EnquiryDesk() {
       <header className="flex flex-col gap-1">
         <h1 className="text-h3">Hire enquiries</h1>
         <p className="max-w-prose text-body-sm text-muted-foreground">
-          People asking about a band, a DJ or a performer. They hear back when somebody here
-          gets in touch.
+          People asking about a band, a DJ or a performer. They hear back when somebody here gets in
+          touch.
         </p>
       </header>
 
@@ -151,7 +151,7 @@ export function EnquiryDesk() {
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-lg bg-destructive-subtle px-3 py-2 text-body-sm text-destructive-subtle-foreground"
+          className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-body-sm text-foreground"
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           {error}
@@ -223,7 +223,8 @@ function EnquiryCard({
             {row.performer_type_display} in {row.city}
           </p>
           <p className="text-caption text-muted-foreground">
-            {row.occasion_display} · {new Date(row.event_date).toLocaleDateString('en-IN', {
+            {row.occasion_display} ·{' '}
+            {new Date(row.event_date).toLocaleDateString('en-IN', {
               weekday: 'short',
               day: 'numeric',
               month: 'long',

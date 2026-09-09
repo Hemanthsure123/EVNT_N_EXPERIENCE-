@@ -164,8 +164,7 @@ export function RunningOrder({
       description: entry.description,
       startsAt: entry.startsAt || null,
       staged: true,
-      remove: () =>
-        onPending(pending.filter((candidate) => candidate.tempId !== entry.tempId)),
+      remove: () => onPending(pending.filter((candidate) => candidate.tempId !== entry.tempId)),
     })),
   ];
 
@@ -320,8 +319,7 @@ export function RunningOrder({
             </button>
           ) : null}
           <p className="text-caption text-muted-foreground">
-            Leave blank if you know the order but not the times — those entries sit at the
-            end.
+            Leave blank if you know the order but not the times — those entries sit at the end.
           </p>
         </div>
 
@@ -339,7 +337,7 @@ export function RunningOrder({
         </div>
 
         {failure ? (
-          <p role="alert" className="text-caption text-destructive">
+          <p role="alert" className="text-caption text-muted-foreground">
             {failure}
           </p>
         ) : null}

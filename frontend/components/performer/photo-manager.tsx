@@ -319,8 +319,8 @@ export function PhotoManager({ performerId }: { performerId: string }) {
         <div className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface px-card py-section text-center shadow-sm">
           <p className="text-body font-medium">No photos yet</p>
           <p className="max-w-sm text-body-sm text-muted-foreground">
-            An act nobody can see is an act nobody hires. One good photo is the difference between
-            a profile people open and one they scroll past.
+            An act nobody can see is an act nobody hires. One good photo is the difference between a
+            profile people open and one they scroll past.
           </p>
         </div>
       ) : (
@@ -372,14 +372,12 @@ function PendingTile({
     <div
       className={cn(
         'flex h-full flex-col gap-2 rounded-xl border p-stack-lg',
-        failed
-          ? 'border-destructive-subtle bg-destructive-subtle'
-          : 'border-border bg-surface shadow-sm',
+        failed ? 'border-border bg-muted' : 'border-border bg-surface shadow-sm',
       )}
     >
       <p className="flex items-center gap-2 truncate text-body-sm font-medium">
         {failed ? (
-          <AlertTriangle className="size-4 shrink-0 text-destructive" aria-hidden />
+          <AlertTriangle className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
           <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
         )}
@@ -387,7 +385,7 @@ function PendingTile({
       </p>
 
       {failed ? (
-        <p className="text-caption text-destructive-subtle-foreground">{row.error}</p>
+        <p className="text-caption text-muted-foreground">{row.error}</p>
       ) : (
         <>
           <div

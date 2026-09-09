@@ -521,7 +521,7 @@ function CategoryPicker({
           </div>
 
           {failure ? (
-            <p role="alert" className="text-caption text-destructive">
+            <p role="alert" className="text-caption text-muted-foreground">
               {failure}
             </p>
           ) : (

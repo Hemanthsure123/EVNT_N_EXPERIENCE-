@@ -210,7 +210,10 @@ export function TicketBuilder({
                   screen in ONE line, and a 28px trash icon on the money path is
                   the wrong thing to trade away. Above `sm` it is one line. */}
               <div className="flex flex-wrap items-center gap-1 p-stack">
-                <span className="cursor-grab text-foreground-subtle active:cursor-grabbing" aria-hidden>
+                <span
+                  className="cursor-grab text-foreground-subtle active:cursor-grabbing"
+                  aria-hidden
+                >
                   <GripVertical className="size-4" />
                 </span>
 
@@ -363,7 +366,6 @@ export function TicketBuilder({
                     />
                   </div>
 
-
                   <PhaseEditor tier={tier} onChange={(phases) => patch(tier.key, { phases })} />
                   <GroupBandEditor
                     tier={tier}
@@ -373,7 +375,7 @@ export function TicketBuilder({
                   {problems.length ? (
                     <ul className="mt-stack-lg flex flex-col gap-1" role="alert">
                       {problems.map((problem) => (
-                        <li key={problem} className="text-caption text-destructive">
+                        <li key={problem} className="text-caption text-muted-foreground">
                           {problem}
                         </li>
                       ))}
@@ -407,9 +409,7 @@ export function TicketBuilder({
             nothing. It was wrong in both directions once `position` started
             being saved: the order here IS the order buyers get, and saying
             otherwise would train an organiser not to bother arranging it. */}
-        <p className="text-caption text-muted-foreground">
-          Buyers see tiers in this order.
-        </p>
+        <p className="text-caption text-muted-foreground">Buyers see tiers in this order.</p>
       </div>
     </div>
   );
@@ -533,7 +533,6 @@ function GroupBandEditor({
     </section>
   );
 }
-
 
 function PhaseEditor({
   tier,
@@ -663,8 +662,8 @@ function PhaseEditor({
           means in practice. */}
       <div className="flex flex-col gap-1 text-caption text-muted-foreground">
         <p>
-          Caps are <strong className="font-medium text-foreground">cumulative</strong> — the first
-          N seats sold or held, not N seats at this price. An order crossing a cap pays the next
+          Caps are <strong className="font-medium text-foreground">cumulative</strong> — the first N
+          seats sold or held, not N seats at this price. An order crossing a cap pays the next
           phase&apos;s price in full.
         </p>
         {atLimit ? <p>That is the limit of {MAX_PHASES} phases.</p> : null}
@@ -815,8 +814,8 @@ function SessionField({
             {chosen ? sessionLabel(chosen) : 'Every session'}
           </p>
           <p className="text-caption text-muted-foreground">
-            Fixed once the tier is created — tickets are issued against it. Add a new tier to sell
-            a different session.
+            Fixed once the tier is created — tickets are issued against it. Add a new tier to sell a
+            different session.
           </p>
         </>
       ) : (
@@ -835,9 +834,7 @@ function SessionField({
               </option>
             ))}
           </select>
-          <p className="text-caption text-muted-foreground">
-            Stock is counted per session.
-          </p>
+          <p className="text-caption text-muted-foreground">Stock is counted per session.</p>
         </>
       )}
     </div>

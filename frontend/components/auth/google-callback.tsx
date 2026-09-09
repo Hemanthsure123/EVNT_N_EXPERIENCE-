@@ -54,7 +54,10 @@ export function GoogleCallbackPending() {
       {/* `role=status` so a screen reader announces the wait rather than
           landing on a page that appears empty. */}
       <div role="status" className="flex flex-col items-center gap-stack">
-        <Loader2 className="size-8 animate-spin text-primary motion-reduce:animate-none" aria-hidden />
+        <Loader2
+          className="size-8 animate-spin text-primary motion-reduce:animate-none"
+          aria-hidden
+        />
         <p className="text-body text-muted-foreground">Signing you in…</p>
       </div>
     </Shell>
@@ -106,7 +109,7 @@ export function GoogleCallback() {
     <Shell>
       <div className="flex flex-col items-center gap-stack">
         <span
-          className="inline-flex size-12 items-center justify-center rounded-full bg-destructive-subtle text-destructive-subtle-foreground"
+          className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground"
           aria-hidden
         >
           <AlertCircle className="size-6" />

@@ -112,7 +112,8 @@ function OnboardingDialog({ onClose }: { onClose: () => void }) {
   const errors = validateProfile(form);
   const index = STEPS.indexOf(step);
 
-  const patch = (changes: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...changes }));
+  const patch = (changes: Partial<ProfileForm>) =>
+    setForm((current) => ({ ...current, ...changes }));
 
   /** Save what this step collected, then move. A failure keeps the person
    *  where they are with a sentence, rather than losing what they typed. */
@@ -222,19 +223,13 @@ function OnboardingDialog({ onClose }: { onClose: () => void }) {
               </Field>
             </Body>
           ) : step === 'photo' ? (
-            <Body
-              title="Add a photo"
-              blurb="Optional — without one you get your initials."
-            >
+            <Body title="Add a photo" blurb="Optional — without one you get your initials.">
               <div className="flex justify-center py-2">
                 <AvatarUpload />
               </div>
             </Body>
           ) : step === 'about' ? (
-            <Body
-              title="A little about you"
-              blurb="Both optional, and both easy to change later."
-            >
+            <Body title="A little about you" blurb="Both optional, and both easy to change later.">
               <Field
                 label="Date of birth"
                 id="onb-dob"
@@ -266,7 +261,7 @@ function OnboardingDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {error ? (
-            <p role="alert" className="mt-4 text-caption text-destructive">
+            <p role="alert" className="mt-4 text-caption text-muted-foreground">
               {error}
             </p>
           ) : null}
@@ -358,7 +353,7 @@ function Field({
       </label>
       {children}
       {error ? (
-        <p role="alert" className="text-caption text-destructive">
+        <p role="alert" className="text-caption text-muted-foreground">
           {error}
         </p>
       ) : hint ? (

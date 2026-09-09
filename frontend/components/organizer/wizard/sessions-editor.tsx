@@ -157,10 +157,7 @@ export function SessionsEditor({
     // its answer. Without one there is nothing to POST to, so it is staged
     // and the save engine sends it the moment the event exists.
     if (!eventId) {
-      onPending([
-        ...pending,
-        { tempId: tempId(), startsAt, endsAt, label: label.trim() },
-      ]);
+      onPending([...pending, { tempId: tempId(), startsAt, endsAt, label: label.trim() }]);
       clearForm();
       return;
     }
@@ -265,7 +262,7 @@ export function SessionsEditor({
         </div>
 
         {failure ? (
-          <p role="alert" className="text-caption text-destructive">
+          <p role="alert" className="text-caption text-muted-foreground">
             {failure}
           </p>
         ) : null}

@@ -227,7 +227,11 @@ export function VerifyEmailStep({
 
         {/* `role=alert` so the failure is announced, not just recoloured. */}
         {error ? (
-          <p id="verify-error" role="alert" className="text-center text-body-sm text-destructive">
+          <p
+            id="verify-error"
+            role="alert"
+            className="text-center text-body-sm text-muted-foreground"
+          >
             {error}
           </p>
         ) : null}
@@ -255,7 +259,7 @@ export function VerifyEmailStep({
           type="button"
           onClick={() => void resend()}
           disabled={busy || cooldown > 0}
-          className="inline-flex min-h-control items-center rounded-full px-3 text-primary underline-offset-4 transition-colors hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="inline-flex min-h-control items-center rounded-full px-3 text-primary underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
         >
           {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Send a new code'}
         </button>

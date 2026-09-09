@@ -55,7 +55,7 @@ export function Questionnaire({ showErrors }: { showErrors: boolean }) {
               <label htmlFor={id} className="text-body-sm font-medium text-foreground">
                 {question.prompt}
                 {question.is_required ? (
-                  <span className="text-destructive" aria-hidden>
+                  <span className="text-muted-foreground" aria-hidden>
                     {' '}
                     *
                   </span>
@@ -149,7 +149,7 @@ export function Questionnaire({ showErrors }: { showErrors: boolean }) {
               )}
 
               {wrong ? (
-                <p role="alert" className="text-caption text-destructive">
+                <p role="alert" className="text-caption text-muted-foreground">
                   This one is needed before you can book.
                 </p>
               ) : null}
