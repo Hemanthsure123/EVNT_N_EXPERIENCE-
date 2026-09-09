@@ -2332,39 +2332,72 @@ one frame after the finger turns around.
 close and never inside a gesture, and the flight is 300ms — a booking app has
 to say WHICH event was selected and then get out of the way.
 
-## The widget sheet stops at the poster, and one gesture drives both
+## The mobile event page scrolls, and the poster docks into the bar
 
-Two rules for the mobile event widget, and both came from the same complaint —
-"it only maximises when I drag the handle".
+This surface was a draggable bottom sheet over an anchored poster for a long
+time, and everything about it is now gone: `sheet-snap.ts` and its snap ladder,
+`beginVerticalDrag` and the travel it handed back and forth with the content
+scroller, the full-screen gesture plate, the grab handle, the pager dots, and
+the per-frame transform on the sheet with the ticket bar counter-translated to
+stay on screen. The section that used to be here described all of it.
 
-**1. The ceiling is half the poster.** `SHEET_SNAP_FRACTIONS` used to open with
-`0`, meaning the sheet could cover the screen completely. (The stop later moved
-from 0.31 to 0.34 — a slightly shorter card — by raising `POSTER_FRACTION` to
-0.68, never by editing the ceiling directly: it is DERIVED from the poster so the
-two cannot drift, and `sheet-snap.test.ts` pins that derivation.) Covering the artwork
-is the one thing this layout exists not to do: the poster IS the event and it is
-why the card was opened. Worse, the widget changed identity mid-gesture — square
-corners, full-bleed, no neighbours — so a swipe that started on a card ended on
-something that no longer looked like one. The top snap is derived from
-`POSTER_FRACTION / 2`, so changing the poster's height moves the ceiling with it,
-and `MIN_CARD_FRACTION` (0.6) is the floor below which the card stops being the
-thing you are reading and becomes a caption under a picture. Expanding now
-WIDENS the card rather than transforming it; the neighbours stay in frame.
+**It is an ordinary vertical scroller now.** Each page in the deck is
+`overflow-y-auto`, the poster is IN the flow rather than behind it, and the
+browser owns every vertical gesture with nothing intercepting it. One axis is
+still claimed — horizontal, for the deck — and only when a movement beats
+`AXIS_DOMINANCE`, because a thumb pivots from a knuckle and a vertical swipe
+over a large poster crosses 45 degrees for a frame or two near the start.
 
-**2. The sheet and the scroller are one gesture.** `beginVerticalDrag` used to
-be `applySheet(base + travelled)` and nothing else, so a drag begun on the
-content owned the whole gesture: it raised the sheet to its ceiling and then sat
-there resisting while the article underneath never moved. You had to lift and
-swipe a second time to read — which is why the handle felt like the only thing
-that worked, since raising the sheet is all the handle ever does.
+**The hero is INSET and ROUNDED**, which is a consequence rather than a
+decoration: a radius on a full-width element pinned to the top of the display is
+two wedges of background in the top corners of the screen, which is exactly why
+the old full-bleed poster deliberately had none. Inset by
+`DECK_EDGE_PADDING_PX`, it can round, and the artwork reads as an object on a
+page instead of as the page's background.
 
-Travel is now spent in order, on DELTAS rather than an offset from the gesture's
-start (the two consumers hand travel back and forth, so an absolute offset stops
-describing either after the first handoff): upward fills the sheet to its
-ceiling and then scrolls the content; downward unwinds the scroll before the
-sheet begins to close. **Downward is only CLAIMED from a content top**, so
-ordinary reverse scrolling keeps its native momentum and collapsing takes a
-second, deliberate gesture — the same trade every native bottom sheet makes.
+**Scrolling past it docks the poster into the booking bar** as a circular
+thumbnail on the far left, before the price; scrolling back to the top returns
+it. Four things about that are load-bearing:
+
+- **It is ONE element in two places** — a framer `layoutId` handoff — never two
+  copies cross-faded. Two copies is what lets the bar and the hero disagree
+  about which event is on screen.
+- **The pair lives INSIDE the active page.** The page track carries an
+  imperative `translate3d` that framer knows nothing about, so measuring one end
+  of the handoff inside that transform and the other outside it puts a whole
+  page-width into the delta. Both ends share the ancestor, so it cancels.
+- **The shared id is scoped to the EVENT** (`deck-poster-{id}`). A constant would
+  make every page change a match, and framer would fly the poster a screen-width
+  sideways mid-swipe; per event, a swipe is an unmount and a separate mount with
+  nothing in common, which is the instant picture swap the docked thumbnail is
+  supposed to do.
+- **`borderRadius` arrives through `style`, not a class.** A layout animation
+  scales the element and framer only corrects a radius it owns — a 24px corner
+  drawn at 0.12 scale is a 200px corner for the length of the transition.
+
+**The threshold is a fraction of the MEASURED hero, with hysteresis**
+(`lib/discovery/deck-metrics.ts`, and it is tested). A fraction rather than a
+pixel count because the trigger is "the poster is mostly gone", which is a fact
+about the poster and not about the phone; slightly past half rather than past
+all of it because framer animates from where the element WAS, and a hero that
+has left the viewport flies in from above the fold instead of shrinking out of
+the page. The hysteresis band is what stops an inertial scroll resting on the
+threshold from strobing the poster between the two places, each flip being a
+layout animation.
+
+**The scroll offset is CARRIED across a swipe, and that reverses a decision.**
+There was an effect resetting the incoming page to the top, justified as "a new
+event starts at the top of its own content". It loses to the docking behaviour:
+swiping while the thumbnail is docked has to keep it docked and swap its
+picture, not throw the reader back to the top and re-expand a poster they had
+deliberately scrolled past. It is written in a LAYOUT effect, so the incoming
+page is never painted at the wrong offset — as a passive one, every swipe made
+while scrolled showed one frame of the new hero at full size.
+
+**What went with the sheet, and is worth knowing rather than discovering:** the
+deck no longer closes on a tap on the artwork or a downward drag, because
+neither surface exists. Escape and browser/hardware back are the exits (see
+below), and a visible close control is the one-line place to add another.
 
 ## The deck is the mobile event page — including on ARRIVAL
 
@@ -2388,17 +2421,16 @@ Three things about it are load-bearing:
   only open once JS has run; the few hundred milliseconds before that were the
   desktop page. `DeckShell` (`components/event/deck-skeleton.tsx`) paints the
   deck's opening frame — same artwork, same geometry — and comes off in the same
-  commit that opens the deck. Its geometry is IMPORTED from `sheet-snap`
-  (`EXPANDED_CARD_FRACTION` moved there for exactly this), never copied: a cover
-  with the poster height written out as a literal is correct until the next time
-  that constant moves, and then it jumps at precisely the instant the handover is
-  meant to be invisible. `<noscript>` removes it, so a JS-off phone gets the
-  working route page.
-- **`y` is placed in a LAYOUT effect, not a passive one.** `useMotionValue(0)`
-  plus a sheet styled `height: calc(100dvh - var(--deck-y))` means the frame
-  before the passive enter effect is a full-screen card at the resting position
-  of nothing. Invisible from the feed — a previous close had left `y` off-screen
-  — and the FIRST thing a shared link would have shown.
+  commit that opens the deck. Its geometry is IMPORTED from
+  `lib/discovery/deck-metrics`, never copied: a cover with the poster's inset and
+  radius written out as literals is correct until either constant moves, and then
+  it jumps at precisely the instant the handover is meant to be invisible.
+  `<noscript>` removes it, so a JS-off phone gets the working route page.
+- **The track is positioned in a LAYOUT effect, not a passive one.** A passive
+  effect runs after the browser has painted, so the first painted frame of an
+  open showed the deck at `translate: none` — the FIRST event of the list rather
+  than the one that was tapped, and the first thing a shared link would have
+  shown.
 
 **Closing has to GO somewhere,** and it lives in `dismiss`, never in a watcher on
 `isOpen`: "Book tickets" calls `closeDeck` on its way to checkout, so a watcher
@@ -2409,43 +2441,26 @@ never get past the event they arrived on. A feed-origin open pushes ONE history
 entry so hardware back closes the deck instead of navigating the feed away
 underneath it, and the dismiss pops it again.
 
-**A mis-tap must not eject a shared link.** The overlay's tap-to-close is
-feed-only; from a URL somebody was sent, leaving takes Escape, a downward drag or
-browser back.
+**A mis-tap must not eject a shared link.** This was a rule about the overlay's
+tap-to-close, which was feed-only for exactly that reason. The tap went with the
+gesture plate, so it is moot: from a URL somebody was sent — and from the feed —
+leaving takes Escape or browser back, neither of which a mis-tap can trigger.
 
-### The gesture plate: an upward swipe belongs to the whole screen
+### The gesture plate, and why it is gone
 
-Only the handle and the content scroller could start a vertical drag. Everything
-above the sheet — the artwork, the scrim, the space either side — was a
-`pointer-events-none` poster layer over a scrim whose only handler was
-`onClick={dismiss}`. So a swipe up on the picture did nothing while the finger
-moved and then, on release, fired the click and CLOSED the deck: not ignored, the
-opposite of what was asked.
+A full-screen `touch-none` plate sat between the artwork and the sheet so that a
+swipe beginning on the poster moved the sheet rather than doing nothing and then
+firing a click that closed the deck. Four rules came out of wiring it: one
+commit rule with two origins, `ownsScroller`, a dominance MARGIN rather than a
+bare `>`, and a click guard covering both axes.
 
-A plate sits between the poster and the sheet in DOM order, so it is below the
-sheet, the handle, the scroller, the CTA and every sub-sheet — each keeps its own
-touches — and above the artwork. Four rules came out of wiring it:
-
-- **One commit rule, two origins.** `gestureRef` records where the finger LANDED.
-  From the content the `atTop`/`isExpanded` gates still apply, because there is a
-  scroller under the finger whose turn it might be. From the overlay there is
-  not, so every vertical movement is the sheet's and the drag handler's existing
-  ceiling resistance is the honest answer to "it will not go further up".
-- **`ownsScroller`.** `beginVerticalDrag` writes `scroller.scrollTop`; a finger on
-  the artwork would have spun an article it is nowhere near.
-- **A dominance MARGIN, not a bare `>`.** A thumb pivots from a knuckle, so an
-  upward swipe over a large empty poster crosses 45° for a frame or two near the
-  start. On a bare comparison that frame decides the gesture — "I swiped up and
-  it changed the event" is how this reads as broken.
-- **The click guard covers BOTH axes.** `draggedRef` was written only by the
-  vertical drag, so a horizontal swipe on the plate ended in a click the plate
-  read as "dismiss" — swiping to the next event closed the deck.
-
-And two the plate exposed rather than caused: the commit slop is now CARRIED into
-the drag (starting from the commit point left the sheet ten pixels behind the
-finger for the rest of the gesture, on the content path only), and both drags
-filter on `pointerId`, since their listeners are on `window` and a second finger
-was driving one gesture from two sources.
+The plate was removed with the sheet, and it had to be: `touch-none` across the
+whole screen is precisely what a natively scrolling page cannot have. Two of its
+four rules survive in the horizontal-only commit that replaced it — the
+dominance margin, for the same knuckle-pivot reason, and the `pointerId` filter,
+since the swipe's listeners are on `window` and a second finger would otherwise
+drive one gesture from two sources. The other two described an arbitration with
+a vertical drag that no longer exists.
 
 ### Removals, and what replaces the one that was an exit
 
@@ -2455,9 +2470,10 @@ knowing rather than discovering:
 
 - **The arrow was the only visible exit and the only keyboard-reachable one.**
   The deck is a hand-rolled `role="dialog"`, not Radix, so nothing gave it
-  Escape. It has Escape now, plus browser/hardware back, plus the tap and the
-  downward drag it always had. Removing the arrow without those would have made
-  an `aria-modal` dialog inescapable for keyboard, screen-reader and switch
+  Escape. It has Escape now, plus browser/hardware back. (It also had a
+  tap-on-the-artwork and a downward drag; both went with the bottom sheet, so
+  those two are now the whole set.) Removing the arrow without them would have
+  made an `aria-modal` dialog inescapable for keyboard, screen-reader and switch
   users.
 - **Saving is no longer offered on the mobile event surface.** The heart was the
   only one there; the card-level hearts across the feed are untouched, so the
@@ -2499,7 +2515,9 @@ list can have re-rendered in between.
   the live value exists.
 - **`resolveSnap` was handed `y.get() + (endEvent.clientY - startY) * 0`.** The
   term was multiplied by zero, so it described nothing and only made the line
-  look like it accounted for travel.
+  look like it accounted for travel. (Both `resolveSnap` and the drag that
+  called it went with the bottom sheet; the first bullet still stands, and
+  `beginSwipe` still takes that one computed read per gesture.)
 
 ## Ticket selection is a screen again — and the rule is ASK ONCE
 
