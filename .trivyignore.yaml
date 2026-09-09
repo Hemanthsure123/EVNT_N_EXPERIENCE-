@@ -93,3 +93,57 @@ vulnerabilities:
       next 14.2.35: DoS with Server Components. No 14.x fix exists.
       Remediation is the tracked Next 15 + React 19 migration.
     expired_at: 2026-10-31
+
+  # ── AUGUST 2026 SECURITY RELEASE: THE TWO CRITICALS ────────────────────
+  #
+  # Added 2026-09-09, when a Trivy DB refresh turned `security / filesystem`
+  # red on a commit that touched no dependency. Both are CRITICAL and neither
+  # has a 14.x fix, so the remediation is the same Next 15 migration the
+  # entries above are already waiting on. They are carried on DIFFERENT
+  # grounds and the difference is the point — one is not applicable here, the
+  # other is applicable and has been MITIGATED IN THIS REPOSITORY.
+
+  # NOT APPLICABLE. Trivy's own title says it: "Unauthenticated Remote Code
+  # Execution on windows-hosted servers". It is a path traversal that works
+  # because a percent-encoded backslash resolves as a directory separator on
+  # a Windows filesystem; the advisory states Linux and macOS are unaffected.
+  # This application is built into a Linux container image and runs under
+  # Docker on Linux EC2 (see docker-compose.yml, deploy/deploy.sh) — there is
+  # no Windows filesystem anywhere in the deployment.
+  - id: CVE-2026-75604
+    statement: >-
+      next 14.2.35: unauthenticated RCE via path traversal, WINDOWS ONLY —
+      the advisory states Linux and macOS are unaffected, and this app runs in
+      a Linux container on Linux EC2. Not applicable rather than unfixed. No
+      14.x fix exists; remediation is the tracked Next 15 + React 19
+      migration.
+    expired_at: 2026-10-31
+
+  # APPLICABLE, AND MITIGATED IN CODE — not waved through.
+  #
+  # RCE in the Image Optimization API reached by optimizing an AVIF file
+  # (libheif, under sharp). It is NOT internet-wide here, because
+  # `next.config.mjs` pins `remotePatterns` to our own API and storage host —
+  # so `/_next/image` only ever optimizes a file already in our bucket. The
+  # real exposure was therefore an authenticated organizer uploading a crafted
+  # poster, which is still critical.
+  #
+  # Two changes close that path, both in the same commit as this entry:
+  # `images.formats` no longer produces AVIF (Next's own interim measure
+  # upstream), and `core.uploads.ALLOWED_IMAGE_TYPES` no longer ACCEPTS it, so
+  # no new AVIF can enter the bucket the optimizer is allowed to read from.
+  #
+  # RESIDUAL RISK, STATED RATHER THAN HIDDEN: an AVIF uploaded BEFORE this
+  # change is still in the bucket and would still be optimized if requested.
+  # The bucket should be swept for `.avif` objects, and that is a data task
+  # rather than a code one — it is why this entry expires with the others
+  # rather than being treated as closed.
+  - id: GHSA-2xp9-vwfh-vxw4
+    statement: >-
+      next 14.2.35: RCE in the Image Optimization API when AVIF files are
+      optimized. No 14.x fix exists. MITIGATED HERE: AVIF removed from
+      images.formats and from the upload allow-list, and remotePatterns
+      already restricts sources to our own hosts. Residual risk is
+      pre-existing AVIF objects in the bucket. Remediation is the tracked
+      Next 15 + React 19 migration.
+    expired_at: 2026-10-31

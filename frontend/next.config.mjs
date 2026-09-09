@@ -79,8 +79,21 @@ const nextConfig = {
     optimizePackageImports: ['lucide-react', 'framer-motion'],
   },
   images: {
-    // Modern formats first — smaller payloads, better LCP.
-    formats: ['image/avif', 'image/webp'],
+    // ── AVIF REMOVED: GHSA-2xp9-vwfh-vxw4 ────────────────────────────
+    //
+    // A CVSS 9.5 RCE in the Image Optimization API, reached by optimizing an
+    // AVIF file. Fixed in Next 15.5.24; there is no 14.x fix. Next's own
+    // interim measure upstream was to disable AVIF optimization, and this is
+    // the same measure applied here.
+    //
+    // WebP alone costs very little: it is ~30% smaller than JPEG and every
+    // browser this product targets supports it. AVIF's extra ~15% is not
+    // worth an unpatched remote-code-execution path on the server that
+    // renders every public page.
+    //
+    // This comes back with the Next 15 upgrade, together with the AVIF
+    // upload type — see backend/core/uploads.py.
+    formats: ['image/webp'],
     // Derived from the environment rather than hard-coded.
     //
     // This used to be `localhost:8000` plus a Google Cloud Storage wildcard.

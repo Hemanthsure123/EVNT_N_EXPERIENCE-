@@ -95,7 +95,6 @@ export const CREW_PHOTO_TYPES = [
   'image/jpg',
   'image/png',
   'image/webp',
-  'image/avif',
   'image/gif',
   'image/bmp',
   'image/vnd.microsoft.icon',

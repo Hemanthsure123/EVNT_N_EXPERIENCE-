@@ -57,12 +57,30 @@ MAX_CREW_PHOTO_BYTES = 5 * 1024 * 1024
 #: happily and then draw a BROKEN IMAGE on the event page, which is
 #: worse than refusing it with a message naming what to do instead.
 #: They belong here the day a transcode step exists, not before.
+#: ── AVIF IS WITHDRAWN, AND IT IS A SECURITY MITIGATION ──────────────────
+#:
+#: GHSA-2xp9-vwfh-vxw4 (CVSS 9.5) is a remote code execution flaw in Next.js's
+#: Image Optimization API reached by OPTIMIZING AN AVIF FILE — the decode
+#: happens in libheif under sharp. Every Next.js before 15.5.24 is affected and
+#: there is no 14.x fix, so this deployment cannot patch it by upgrading a
+#: patch release.
+#:
+#: What makes it reachable HERE is this allow-list. `next.config.mjs` pins
+#: `remotePatterns` to our own API and storage host, so `/_next/image` will
+#: only ever optimize a file that is already in OUR bucket — and the only way
+#: a file gets there is through this function. Accepting AVIF therefore turned
+#: "unauthenticated internet-wide RCE" into "any organizer who can upload a
+#: poster can run code on the frontend server", which is still critical.
+#:
+#: Withdrawing the type closes the path at the door. It is a real cost — AVIF
+#: is a good format and this list had just been widened — and it is worth
+#: paying until the Next 15 upgrade lands, at which point this entry comes
+#: back. Nothing else on the list decodes through libheif.
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg": (b"\xff\xd8\xff",),
     "image/jpg": (b"\xff\xd8\xff",),
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/webp": (b"RIFF",),
-    "image/avif": (b"\x00\x00\x00",),  # ftyp box; the brand is checked below
     "image/gif": (b"GIF87a", b"GIF89a"),
     "image/bmp": (b"BM",),
     # Windows icon, and the legacy alias browsers still send for it.
@@ -73,7 +91,7 @@ ALLOWED_IMAGE_TYPES = {
 #: What a refusal lists. Derived from the rule rather than written beside
 #: it: the two were separate strings and the message was already a format
 #: out of date.
-_ALLOWED_LABEL = "JPEG, PNG, WebP, AVIF, GIF, BMP or ICO"
+_ALLOWED_LABEL = "JPEG, PNG, WebP, GIF, BMP or ICO"
 
 #: How many leading bytes to inspect. Every signature above fits comfortably.
 _SNIFF_BYTES = 16

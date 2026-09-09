@@ -209,7 +209,9 @@ export const removeMedia = (eventId: string, mediaId: string) =>
 
 /** Mirrors `core.uploads` so the browser refuses what the server would. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-export const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'];
+// AVIF is withdrawn while GHSA-2xp9-vwfh-vxw4 is unpatched on Next 14 —
+// see the note on `ALLOWED_IMAGE_TYPES` in backend/core/uploads.py.
+export const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 export type UploadHandle = {
   promise: Promise<EventMedia>;

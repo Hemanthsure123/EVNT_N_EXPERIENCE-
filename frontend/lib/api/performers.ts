@@ -495,7 +495,6 @@ export const ACCEPTED_PHOTO_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
-  'image/avif',
   'image/gif',
 ];
 
