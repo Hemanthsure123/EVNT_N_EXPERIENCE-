@@ -4,7 +4,7 @@ import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Pause, Play, Ticket } from 'lucide-react';
+import { Ticket } from 'lucide-react';
 import { type MotionValue, motion, useMotionValue, useReducedMotion } from 'framer-motion';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
@@ -88,16 +88,6 @@ const FLIGHT_MS = 220;
 /** The house curve: fast out, long settle. */
 const TRANSITION_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const PAGE_TRANSITION = { duration: FLIGHT_MS / 1000, ease: TRANSITION_EASE };
-
-/**
- * How long each hero image holds before the next one fades in.
- *
- * Four seconds is the codebase's existing auto-rail interval, and it is long
- * enough that the movement reads as a slideshow rather than as a flicker.
- */
-const HERO_SLIDE_MS = 4000;
-/** The crossfade itself — slow enough to be a dissolve, not a cut. */
-const HERO_FADE_MS = 700;
 
 /** How long the poster takes to dock into the bar, or to come back out. */
 const DOCK_MS = 320;
@@ -514,6 +504,11 @@ export function EventWidgetDeck() {
     const onMove = (event: TouchEvent) => {
       const touch = event.touches[0];
       if (!touch) return;
+      // The hero gallery is a scroller of its own. Calling `preventDefault` on
+      // its touches would claim them for the deck and the gallery would not
+      // move at all — the same exclusion as `onPointerDown`, in the half that
+      // talks to the browser rather than to React.
+      if ((event.target as Element | null)?.closest?.('[data-hero-gallery]')) return;
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
       if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
@@ -738,6 +733,17 @@ export function EventWidgetDeck() {
 
   const onPointerDown = React.useCallback((event: React.PointerEvent) => {
     draggedRef.current = false;
+    // ── THE HERO GALLERY OWNS ITS OWN SIDEWAYS ──────────────────────────
+    //
+    // A horizontal swipe on the page changes EVENT; inside the hero it changes
+    // PICTURE. Both cannot claim the same finger, so a gesture that begins in
+    // the gallery is left entirely to the browser's native scrolling — the
+    // record is cleared rather than armed, and `onPointerMove` bails on the
+    // pointer id it does not recognise.
+    if ((event.target as Element | null)?.closest?.('[data-hero-gallery]')) {
+      gestureRef.current = { x: 0, y: 0, committed: false, pointerId: -1 };
+      return;
+    }
     gestureRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -961,7 +967,7 @@ function Hero({
   onOpenPoster,
 }: {
   event: EventCardData;
-  /** The poster first, then the organiser's gallery. */
+  /** The poster FIRST, then the organiser's gallery. */
   images: LightboxImage[];
   docked: boolean;
   /** True while a clone is flying, so the same photograph is never on screen twice. */
@@ -973,38 +979,62 @@ function Hero({
   blurOpacity: MotionValue<number>;
   onOpenPoster: (index: number) => void;
 }) {
-  const reduceMotion = useReducedMotion();
+  const railRef = React.useRef<HTMLDivElement>(null);
   const [slide, setSlide] = React.useState(0);
-  const [paused, setPaused] = React.useState(false);
 
-  const count = images.length;
-  const canSlide = count > 1 && !reduceMotion;
+  const slides: LightboxImage[] =
+    images.length > 0
+      ? images
+      : event.poster_url
+        ? [{ url: event.poster_url, alt: event.title }]
+        : [];
 
   /**
-   * ── AUTO-ADVANCE, AND IT CAN BE STOPPED ────────────────────────────────
+   * ── MANUAL, AND NOTHING ELSE ───────────────────────────────────────────
    *
-   * WCAG 2.2.2 requires a pause mechanism for anything that moves
-   * automatically for more than five seconds, and this codebase's own auto-rail
-   * says the same thing in stronger terms. There are three stops here and all
-   * of them are real: a visible pause button, a pause while the reader is
-   * touching the artwork, and no movement at all under `prefers-reduced-motion`.
+   * This was a four-second crossfade with a pause button and pagination dots.
+   * All three are gone: the timer, the `paused` state and the two controls
+   * that existed to stop it. What is left is an ordinary horizontal scroller
+   * with CSS scroll-snap, which is what a gallery on a phone should have been
+   * — the browser owns the gesture, the momentum, the rubber-band at the ends
+   * and the snap, and none of it costs a render.
    *
-   * It also stops once the poster has DOCKED. The slideshow is then off screen
-   * and every tick would be a re-render of the whole event page to change an
-   * image nobody is looking at.
+   * The index is still tracked, but only ONE thing reads it now: the blurred
+   * backdrop, which has to be the colours of the picture actually on screen.
+   * Derived from `scrollLeft` rather than from an observer, because every
+   * slide is exactly the track's width and division is cheaper and exact.
    */
-  React.useEffect(() => {
-    if (!canSlide || paused || docked) return;
-    const timer = window.setInterval(
-      () => setSlide((previous) => (previous + 1) % count),
-      HERO_SLIDE_MS,
-    );
-    return () => window.clearInterval(timer);
-  }, [canSlide, count, docked, paused]);
+  const onRailScroll = React.useCallback(() => {
+    const node = railRef.current;
+    if (!node || node.clientWidth === 0) return;
+    const next = Math.round(node.scrollLeft / node.clientWidth);
+    setSlide((previous) => (previous === next ? previous : next));
+  }, []);
 
-  // A shrinking gallery must not strand the index past the end.
-  const index = count === 0 ? 0 : Math.min(slide, count - 1);
-  const backdrop = images[index]?.url ?? event.poster_url;
+  /**
+   * A drag ends in a `click`, and every slide is a button.
+   *
+   * Without this, swiping to the next photograph opens the full-screen viewer
+   * on release — the same class of bug the deck's own `draggedRef` exists for,
+   * one level down. The threshold is the distance nobody's thumb moves while
+   * tapping.
+   */
+  const dragRef = React.useRef({ x: 0, moved: false });
+  const onSlidePointerDown = (pointer: React.PointerEvent) => {
+    dragRef.current = { x: pointer.clientX, moved: false };
+  };
+  const onSlidePointerMove = (pointer: React.PointerEvent) => {
+    if (Math.abs(pointer.clientX - dragRef.current.x) > 8) dragRef.current.moved = true;
+  };
+  const openSlide = (index: number) => {
+    if (dragRef.current.moved) {
+      dragRef.current.moved = false;
+      return;
+    }
+    onOpenPoster(index);
+  };
+
+  const backdrop = slides[Math.min(slide, Math.max(slides.length - 1, 0))]?.url ?? null;
 
   return (
     <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
@@ -1052,16 +1082,11 @@ function Hero({
               alt=""
               fill
               sizes="100vw"
-              // ── A LIGHT BLUR, NOT A HEAVY ONE ─────────────────────────
-              //
-              // `blur-2xl` is 40px, which turned the backdrop into a wash of
-              // colour with no relationship to the picture in front of it —
-              // reported as too heavy. `blur-sm` is 4px: soft enough that
+              // `blur-sm` (4px), not `blur-2xl` (40px): soft enough that
               // nothing behind the poster competes with it, light enough that
-              // it reads as the same photograph rather than as fog.
-              //
-              // The scale exists to push the blur's soft edges outside the
-              // clip, and 4px needs far less room than 40.
+              // it reads as the same photograph rather than as fog. The scale
+              // exists only to push the blur's soft edge outside the clip, and
+              // 4px needs far less room than 40.
               className="scale-110 object-cover blur-sm saturate-150"
             />
           </motion.div>
@@ -1076,111 +1101,59 @@ function Hero({
             transition={transition}
             className="absolute inset-0 overflow-hidden"
           >
-            {/* ── A CROSSFADE, NOT A SLIDE TRACK ─────────────────────────
-                Every image is mounted and stacked; only opacity moves. A
-                translating track inside the shared-layout element would be a
-                second transform on the node framer is already animating
-                between two very different boxes, and the two would fight
-                every time the poster docked mid-slideshow.
-
-                It also means each picture is decoded ONCE, on mount, rather
-                than on the tick that brings it into view — which is what
-                makes the first transition as smooth as the fifth. */}
-            {(images.length > 0 ? images : [{ url: event.poster_url ?? '', alt: event.title }]).map(
-              (image, position) =>
-                image.url ? (
-                  <span
-                    key={`${image.url}#${position}`}
-                    aria-hidden={position === index ? undefined : true}
-                    style={{ transitionDuration: `${reduceMotion ? 0 : HERO_FADE_MS}ms` }}
-                    className={cn(
-                      'absolute inset-0 transition-opacity ease-out motion-reduce:transition-none',
-                      position === index ? 'opacity-100' : 'opacity-0',
-                    )}
+            {slides.length > 0 ? (
+              <div
+                ref={railRef}
+                // Read by the deck, which must NOT claim a gesture that starts
+                // in here: its horizontal swipe changes EVENT, and inside this
+                // rail a horizontal swipe changes PICTURE. See `onPointerDown`.
+                data-hero-gallery
+                onScroll={onRailScroll}
+                className={cn(
+                  'flex h-full w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden',
+                  // `touch-pan-x`: this element handles sideways and nothing
+                  // else, so a vertical drag over the artwork scrolls the PAGE
+                  // instead of being arbitrated against the gallery.
+                  'touch-pan-x overscroll-x-contain',
+                  'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                )}
+              >
+                {slides.map((image, index) => (
+                  <button
+                    key={`${image.url}#${index}`}
+                    type="button"
+                    onPointerDown={onSlidePointerDown}
+                    onPointerMove={onSlidePointerMove}
+                    onClick={() => openSlide(index)}
+                    aria-label={
+                      index === 0
+                        ? `View ${event.title} poster full size`
+                        : image.alt || `View photo ${index + 1} full size`
+                    }
+                    className="relative h-full w-full shrink-0 snap-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                   >
                     <Image
                       src={image.url}
-                      alt={position === index ? image.alt : ''}
+                      alt=""
                       fill
                       sizes="100vw"
                       // Only the FIRST is priority. Marking a whole gallery
                       // high-priority makes every image compete for the same
-                      // connections and delays the one that is actually the
-                      // LCP element.
-                      priority={position === 0}
+                      // connections and delays the one that IS the LCP element.
+                      priority={index === 0}
                       className="object-cover"
                       draggable={false}
                     />
-                  </span>
-                ) : null,
-            )}
-            {images.length === 0 && !event.poster_url ? (
+                  </button>
+                ))}
+              </div>
+            ) : (
               <span className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
                 <Ticket className="size-12" aria-hidden />
               </span>
-            ) : null}
+            )}
           </motion.div>
         )}
-
-        {/* The tap target, over the artwork. A separate element rather than a
-            `motion.button`, so the shared-layout element stays a plain box:
-            framer animates it between two very different sizes, and a button's
-            own focus ring and press states would be scaled with it.
-
-            It opens the viewer at the slide ON SCREEN, not at the poster —
-            pressing a photograph and being shown a different one is the wrong
-            answer to the only question the press asks. */}
-        {docked ? null : (
-          <button
-            type="button"
-            onClick={() => onOpenPoster(index)}
-            // Touching the artwork holds the slideshow. Somebody looking at a
-            // picture has told you which one they want to look at.
-            onPointerDown={() => setPaused(true)}
-            aria-label={`View ${event.title} poster full size`}
-            className="absolute inset-0 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          />
-        )}
-
-        {/* The stop. Visible, reachable and drawn only when something is
-            actually moving. */}
-        {canSlide && !docked ? (
-          <>
-            <button
-              type="button"
-              onClick={() => setPaused((previous) => !previous)}
-              aria-label={paused ? 'Play slideshow' : 'Pause slideshow'}
-              className="absolute bottom-3 right-3 z-20 inline-flex size-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur transition-colors duration-fast hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-            >
-              {paused ? (
-                <Play className="size-4" aria-hidden />
-              ) : (
-                <Pause className="size-4" aria-hidden />
-              )}
-            </button>
-            <span
-              aria-hidden
-              // CENTRED under the artwork rather than tucked in a corner:
-              // pagination is about the whole picture, and a corner reads as
-              // a badge attached to whatever is nearest it. The pause control
-              // keeps the right-hand corner, where a control belongs.
-              className="absolute inset-x-0 bottom-3 z-20 flex items-center justify-center gap-1.5"
-            >
-              {images.map((image, position) => (
-                <span
-                  key={`${image.url}#dot#${position}`}
-                  className={cn(
-                    'h-1.5 rounded-full transition-all duration-200',
-                    position === index ? 'w-5 bg-white' : 'w-1.5 bg-white/50',
-                  )}
-                />
-              ))}
-            </span>
-            <span className="sr-only" aria-live="polite">
-              {`Image ${index + 1} of ${count}`}
-            </span>
-          </>
-        ) : null}
       </div>
     </div>
   );
@@ -1455,7 +1428,7 @@ function ActivePage({
             `fixed`: that would resolve against the deck's transformed page
             track and land in the wrong place on every swipe — the same trap
             the lightbox portal exists for. */}
-        <div className="px-4 pt-5">
+        <div className="px-4">
           <SectionTabs tabs={sectionTabsFor(detail, content)} scrollerRef={scrollerRef} />
         </div>
         <EventWidgetContent
