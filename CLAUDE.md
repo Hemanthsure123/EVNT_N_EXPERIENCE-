@@ -980,6 +980,14 @@ The rules that carry weight:
   DISCOUNTED subtotal, so both places that recover a ticket subtotal that way
   add the discount back. Without that term each understates the tickets by
   exactly the discount and stops summing to the total printed under it.
+- **Choosing a code happens on its own screen.** The review screen carries one
+  row ("Apply coupon & offers") that opens APPLY COUPON — a full-screen Radix
+  dialog with the code field and every advertised code drawn as a
+  `CouponTicket`. The "Save ₹X on this order!" line on each is
+  `lib/booking/coupons.ts`, a DISPLAY mirror of `discount_on` tested case for
+  case against the Python; the charge never reads it. The reference said "Bank
+  Offers" and this does not: there are none, and Razorpay picks the instrument
+  inside its own modal, so nothing here could honour one.
 
 ## The waiting list: a sweeper decides, and nobody is told twice
 
@@ -2211,6 +2219,54 @@ fixture all four 404'd and were swallowed. No cancel had ever worked in local
 dev. A fixture must be exactly as generous as the contract and no more; one that
 is silently LESS generous hides the behaviour it was built to exercise.
 
+## A payment order that cannot be created must not strand the hold
+
+The report was "That did not go through — something went wrong on our side",
+on every press of Try again, on recently published events. Three defects made
+that shape, and all three are fixed:
+
+1. **`RazorpayPaymentAdapter.create_order` had no error handling**, so any
+   refusal reached DRF's last-resort handler as a 500 with "An unexpected error
+   occurred" and a log line saying nothing about what Razorpay objected to. It
+   now logs `razorpay.order_create_failed` (with the provider's reason and
+   whether a Route split was attached) and raises the PORT's own exceptions:
+   `PaymentOrderRejected` for a definite 4xx, `PaymentProviderUnavailable` for
+   anything else. The SDK class is matched by NAME, so the lazy import stays
+   lazy.
+2. **The seats are committed before the order call**, so a failed order left a
+   `reserved` booking with no order, holding inventory for ten minutes.
+3. **Try again replayed that same booking** by its idempotency key straight back
+   into the same refused call. A deterministic loop.
+
+**`_ensure_payment_order(booking, *, release_hold_on_failure)` — required, not
+defaulted.** On the CREATE path (and the create replay) a failure cancels the
+hold (`_release_unstartable`: booking lock, then tiers, coupon released,
+`BOOKING_CANCELLED` with reason `payment_order_failed`) and raises
+`PaymentOrderFailedError` — a 502 with its own code, never a 500. That is what
+makes the next press a fresh reserve rather than a replay. On the RE-ISSUE
+paths (`set_donation`, `set_coupon`, `clear_coupon`) the hold predates the call
+and the customer is reading a screen about it, so it is KEPT, with an empty
+order id; cancelling it over a ₹15 chip pressed during a provider blip is the
+exact harm `set_donation` exists to prevent. `set_donation` with an UNCHANGED
+amount now falls through to `_ensure_payment_order` instead of returning early —
+that makes "set the donation to what it already is" the repair, and the pay
+button uses it when it finds a hold with no order.
+
+**`ROUTE_TRANSFER_FALLBACK` (True).** The Route transfer is the one order input
+that varies by ORGANIZER, which is why one organizer's new events failed while
+older ones sold. When Razorpay refuses an order that carried a split (a linked
+account not activated, not in this key's mode, closed), the order is retried
+WITHOUT the split — the same order the platform already creates for an
+organizer with no linked account. It is loud on purpose: a
+`booking.route_transfer_refused` WARNING names the event and the reason, because
+that organizer's share has become a settlement concern instead of a Route hold
+and somebody has to fix the account. Set it to False to refuse the sale instead.
+
+**The review screen never shows a failure as a page of its own.** A failed
+reserve renders the order from the selection with `ReserveFailedNotice` at the
+top and Try again where Pay would be. A transient failure (5xx, or no response)
+is retried ONCE silently, with the SAME key, before anything is shown.
+
 ## The account's money-path screens share one vocabulary (`components/ticketing/`)
 
 Buying a ticket spans five surfaces — choose, review, pay, confirm, then live
@@ -2317,7 +2373,9 @@ rather than on the one it was built against.
   clears its own `flight` when it closes instead; the state belongs to the thing
   that owns the transition, not to a layer that is only scenery.
 
-**Prominence is interpolated, not switched.** The deck's neighbours carried a
+**Prominence is interpolated, not switched.** (Historical: the deck no longer
+mounts neighbours — see "The mobile event page scrolls" below. The rule it
+records is live in the hero gallery's per-slide depth.) The deck's neighbours carried a
 static `scale-[0.97] opacity-70` class with a 300ms transition, so an incoming
 card sat dimmed for the whole swipe and cross-faded only after the index
 flipped — the `drag -> wait -> change -> animate` shape, where the visual state
@@ -2341,12 +2399,36 @@ scroller, the full-screen gesture plate, the grab handle, the pager dots, and
 the per-frame transform on the sheet with the ticket bar counter-translated to
 stay on screen. The section that used to be here described all of it.
 
-**It is an ordinary vertical scroller now.** Each page in the deck is
-`overflow-y-auto`, the poster is IN the flow rather than behind it, and the
-browser owns every vertical gesture with nothing intercepting it. One axis is
-still claimed — horizontal, for the deck — and only when a movement beats
-`AXIS_DOMINANCE`, because a thumb pivots from a knuckle and a vertical swipe
-over a large poster crosses 45 degrees for a frame or two near the start.
+**It is an ordinary vertical scroller now.** The page is `overflow-y-auto`,
+the poster is IN the flow rather than behind it, and the browser owns every
+gesture with nothing intercepting it.
+
+**There is no sideways swipe between events any more** — removed at the
+owner's instruction, and with it `beginSwipe`, the `AXIS_DOMINANCE` commit, the
+non-passive `touchmove` claim, the page TRACK and the neighbour pages drawn for
+the length of a swipe. The deck mounts ONE page, keyed by the event. The only
+horizontal gesture left on the surface is the hero gallery's, which is a native
+scroll-snap strip of its own, so a sideways movement means exactly one thing
+wherever it starts. `events` is still a list because the similar-events rail
+switches events IN PLACE; that is a press, and it remounts the page at the top
+with the poster undocked (reset in the same render as the index, or framer
+would fly the thumbnail up into the new hero on arrival).
+
+**The gallery moves like one object** (`Hero` in `event-widget-deck.tsx`):
+`snap-always` stops a flick at the next photograph instead of wherever momentum
+ran out; each slide takes a little depth from its distance to the centre
+(`SLIDE_DEPTH_SCALE` / `SLIDE_DEPTH_FADE`), written to the node from a
+`requestAnimationFrame` so it tracks the finger with no React render; the
+blurred backdrop cross-fades rather than swapping at the midpoint; slides after
+the first fade in on load. The snap itself stays the BROWSER's — a JavaScript
+tween over a native scroller is how a gallery ends up fighting the finger.
+
+**The branding row is sticky** (`components/event/deck-brand-header.tsx`),
+`sticky top-0 z-50` with a solid background, INSIDE the page's own scroller —
+the deck is a fixed overlay over a scroll-locked document, so nothing waiting
+on the window would ever pin, and `fixed` would put it over the scrim. It is its
+own non-client file because `DeckShell` draws it too: the cover drew no header,
+so every shared-link arrival moved the poster down by that row at the handover.
 
 **The hero is INSET and ROUNDED**, which is a consequence rather than a
 decoration: a radius on a full-width element pinned to the top of the display is
@@ -2362,15 +2444,14 @@ it. Four things about that are load-bearing:
 - **It is ONE element in two places** — a framer `layoutId` handoff — never two
   copies cross-faded. Two copies is what lets the bar and the hero disagree
   about which event is on screen.
-- **The pair lives INSIDE the active page.** The page track carries an
-  imperative `translate3d` that framer knows nothing about, so measuring one end
-  of the handoff inside that transform and the other outside it puts a whole
-  page-width into the delta. Both ends share the ancestor, so it cancels.
+- **The pair lives INSIDE the page.** It was placed there because the old page
+  track carried an imperative `translate3d` framer knew nothing about; the
+  track is gone, and keeping both ends under one ancestor is still what keeps a
+  stray offset out of the delta.
 - **The shared id is scoped to the EVENT** (`deck-poster-{id}`). A constant would
-  make every page change a match, and framer would fly the poster a screen-width
-  sideways mid-swipe; per event, a swipe is an unmount and a separate mount with
-  nothing in common, which is the instant picture swap the docked thumbnail is
-  supposed to do.
+  make every switch between events a match, and framer would fly the old poster
+  into the new page; per event, a switch is an unmount and a separate mount with
+  nothing in common.
 - **`borderRadius` arrives through `style`, not a class.** A layout animation
   scales the element and framer only corrects a radius it owns — a 24px corner
   drawn at 0.12 scale is a 200px corner for the length of the transition.
@@ -2385,14 +2466,13 @@ the page. The hysteresis band is what stops an inertial scroll resting on the
 threshold from strobing the poster between the two places, each flip being a
 layout animation.
 
-**The scroll offset is CARRIED across a swipe, and that reverses a decision.**
-There was an effect resetting the incoming page to the top, justified as "a new
-event starts at the top of its own content". It loses to the docking behaviour:
-swiping while the thumbnail is docked has to keep it docked and swap its
-picture, not throw the reader back to the top and re-expand a poster they had
-deliberately scrolled past. It is written in a LAYOUT effect, so the incoming
-page is never painted at the wrong offset — as a passive one, every swipe made
-while scrolled showed one frame of the new hero at full size.
+**A new event starts at the top again — the decision has now gone both ways.**
+The scroll offset used to be CARRIED onto the incoming page, because swiping
+while the thumbnail was docked had to keep it docked. The swipe is gone, so the
+only way to reach another event is to PRESS one in the similar-events rail, and
+landing halfway down an event nobody has seen yet is landing somewhere they
+have not been. The page is keyed by the event and remounts at the top; there is
+no carry and no layout effect for it.
 
 **What went with the sheet, and is worth knowing rather than discovering:** the
 deck no longer closes on a tap on the artwork or a downward drag, because
@@ -2456,11 +2536,11 @@ bare `>`, and a click guard covering both axes.
 
 The plate was removed with the sheet, and it had to be: `touch-none` across the
 whole screen is precisely what a natively scrolling page cannot have. Two of its
-four rules survive in the horizontal-only commit that replaced it — the
-dominance margin, for the same knuckle-pivot reason, and the `pointerId` filter,
-since the swipe's listeners are on `window` and a second finger would otherwise
-drive one gesture from two sources. The other two described an arbitration with
-a vertical drag that no longer exists.
+four rules survived for a while in the horizontal-only commit that replaced it;
+that commit is gone too, with the sideways swipe between events, so none of the
+four describes live code. If a custom gesture is ever added back here, those
+rules — one commit rule, a dominance MARGIN, a click guard on both axes, a
+`pointerId` filter — are where to start.
 
 ### Removals, and what replaces the one that was an exit
 
@@ -2515,9 +2595,8 @@ list can have re-rendered in between.
   the live value exists.
 - **`resolveSnap` was handed `y.get() + (endEvent.clientY - startY) * 0`.** The
   term was multiplied by zero, so it described nothing and only made the line
-  look like it accounted for travel. (Both `resolveSnap` and the drag that
-  called it went with the bottom sheet; the first bullet still stands, and
-  `beginSwipe` still takes that one computed read per gesture.)
+  look like it accounted for travel. (Both are history now: `resolveSnap` went
+  with the bottom sheet and `beginSwipe` with the sideways swipe.)
 
 ## Ticket selection is a screen again — and the rule is ASK ONCE
 

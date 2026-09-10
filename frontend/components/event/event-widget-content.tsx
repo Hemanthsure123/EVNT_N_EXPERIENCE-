@@ -6,6 +6,8 @@ import Link from 'next/link';
 import {
   CalendarClock,
   ChevronRight,
+  FileText,
+  HelpCircle,
   MapPin,
   Ticket,
 } from 'lucide-react';
@@ -23,7 +25,6 @@ import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
 import { type GalleryImage } from './hero-gallery';
 import { GalleryGrid } from './gallery-grid';
-import { HelpSection } from './help-section';
 import { ShareMenu } from './share-menu';
 import type { SubSheetType } from './event-sub-sheets';
 
@@ -56,33 +57,6 @@ import type { SubSheetType } from './event-sub-sheets';
  * not a mobile fork of each.
  */
 
-/**
- * WHICH SECTIONS THIS EVENT HAS, in the order they appear on the page.
- *
- * Exported from here rather than assembled by the caller, because the ids
- * and the conditions that render them live in this file — a tab list built
- * next door is a second copy of "does this event have photographs", and the
- * two would drift into a tab that scrolls nowhere.
- *
- * Venue and Help are unconditional: every event has a venue row, and the More
- * section (FAQs, policies) is always drawn. About and Photos are not.
- */
-export function sectionTabsFor(
-  detail: EventDetail | null | undefined,
-  content: EventContent | null | undefined,
-): { id: string; label: string }[] {
-  const hasAbout = Boolean(
-    detail?.short_description?.trim() || detail?.description?.trim(),
-  );
-  const hasPhotos = (content?.media ?? []).some((item) => item.kind === 'gallery');
-  return [
-    ...(hasAbout ? [{ id: 'event-about', label: 'About' }] : []),
-    ...(hasPhotos ? [{ id: 'event-photos', label: 'Photos' }] : []),
-    { id: 'event-venue', label: 'Venue' },
-    { id: 'event-help', label: 'Help' },
-  ];
-}
-
 export type EventWidgetContentProps = {
   event: EventCardData;
   detail: EventDetail | null;
@@ -96,16 +70,13 @@ export type EventWidgetContentProps = {
 };
 
 /**
- * WHAT THE EVENT IS, ABOVE THE TABS.
+ * WHAT THE EVENT IS — the title, the date and the two info cards.
  *
- * Split out of `EventWidgetContent` so the page can put the sticky tab bar
- * BETWEEN them: the title, the date and the two info cards are the answer to
- * "what am I looking at", and they belong above a control that navigates
- * within it. Everything the tabs point AT is in the component below.
- *
- * It is not a second copy of anything — the rows are the same `DisclosureRow`
- * the rest of the page uses, and the decision about which tabs exist still
- * lives in `sectionTabsFor` in this same file.
+ * A separate export from `EventWidgetContent` because the page renders the
+ * hero between the branding and these, and everything below them in one run.
+ * It was split to make room for a sticky tab bar; the tab bar is gone and the
+ * split stays, because it costs nothing and the two halves answer different
+ * questions — "what am I looking at" and "tell me more".
  */
 export function EventWidgetSummary({
   event,
@@ -258,7 +229,7 @@ export function EventWidgetContent({
 
       {/* 9. About -------------------------------------------------------- */}
       {aboutPreview ? (
-        <section id="event-about" className="flex scroll-mt-16 flex-col gap-2">
+        <section className="flex flex-col gap-2">
           <h3 className="text-h4 text-foreground">About the event</h3>
           <p className="line-clamp-3 whitespace-pre-line text-body-sm text-muted-foreground">
             {aboutPreview}
@@ -288,24 +259,11 @@ export function EventWidgetContent({
               scrolling to the end. No big duplicate of the poster: this
               screen already has one at the top. */}
       {galleryImages.length > 0 ? (
-        <section id="event-photos" className="flex scroll-mt-16 flex-col gap-3">
+        <section className="flex flex-col gap-3">
           <h3 className="text-h4 text-foreground">Gallery</h3>
           <GalleryGrid images={galleryImages} />
         </section>
       ) : null}
-
-      {/* Venue — the tab target, and a real section rather than the card
-              above it. The card answers "where"; this answers "what is it
-              like getting in", which is what the sheet behind it carries. */}
-      <section id="event-venue" className="flex scroll-mt-16 flex-col gap-3">
-        <h3 className="text-h4 text-foreground">Venue &amp; seating</h3>
-        <DisclosureRow
-          icon={<MapPin className="size-5" aria-hidden />}
-          label={`${event.venue}, ${event.city}`}
-          hint="Directions, seating and access"
-          onClick={() => onOpenSheet('venue')}
-        />
-      </section>
 
       {/* Organiser --------------------------------------------------- */}
       <section className="flex flex-col gap-3">
@@ -332,6 +290,25 @@ export function EventWidgetContent({
         </button>
       </section>
 
+      {/* 13. More — the two long-form documents, grouped rather than
+              scattered through the page. Restored as it was: the Help
+              accordion that replaced it has been withdrawn. */}
+      <section className="flex flex-col gap-3">
+        <h3 className="text-h4 text-foreground">More</h3>
+        <div className="flex flex-col divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface">
+          <MoreRow
+            icon={<HelpCircle className="size-5" aria-hidden />}
+            label="Frequently asked questions"
+            onClick={() => onOpenSheet('faq')}
+          />
+          <MoreRow
+            icon={<FileText className="size-5" aria-hidden />}
+            label="Terms and conditions"
+            onClick={() => onOpenSheet('terms')}
+          />
+        </div>
+      </section>
+
       {/* 14. Similar events ---------------------------------------------- */}
       {similar.length > 0 ? (
         <section className="flex flex-col gap-3">
@@ -349,13 +326,6 @@ export function EventWidgetContent({
           </ul>
         </section>
       ) : null}
-
-      {/* Help — LAST, and last on purpose. The tab bar reads About, Photos,
-              Venue, Help, and an `IntersectionObserver` marks whichever
-              section is nearest the top: a tab whose target sits ABOVE the
-              one before it makes the bar highlight backwards as you scroll.
-              The DOM order here IS the tab order. */}
-      <HelpSection faqs={content?.faqs ?? []} onOpenPolicies={() => onOpenSheet('terms')} />
     </div>
   );
 }
@@ -401,6 +371,38 @@ function DisclosureRow({
   );
 }
 
+function MoreRow({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-control items-center gap-3.5 p-3.5 text-left transition-colors active:bg-muted"
+    >
+      <span className="shrink-0 text-muted-foreground">{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-body-sm font-semibold text-foreground">
+        {label}
+      </span>
+      <ChevronRight className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+    </button>
+  );
+}
+
+/**
+ * A card in the similar-events rail.
+ *
+ * When the deck can switch to it in place (`onSelectEvent`) it is a BUTTON and
+ * stays inside the widget, which is the whole architecture — the widget is the
+ * mobile event page, so moving between events must not leave it. It falls back
+ * to a real link when it cannot, so the row is never a dead end.
+ */
 function SimilarCard({
   event,
   onSelect,

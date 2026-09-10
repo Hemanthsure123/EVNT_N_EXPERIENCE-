@@ -9,6 +9,17 @@ from core.errors import (
 )
 
 
+class PaymentOrderFailedError(DomainError):
+    """We could not start the payment. Nothing was held and nothing was charged."""
+
+    # 502, and deliberately not 500. This is not our code crashing — it is an
+    # upstream the booking depends on declining to start a payment — and a
+    # distinct status and code is what lets the checkout say something true
+    # instead of "an unexpected error occurred".
+    code = "payment_order_failed"
+    status_code = 502
+
+
 class BookingNotFoundError(NotFoundError):
     """No booking exists with this id."""
 

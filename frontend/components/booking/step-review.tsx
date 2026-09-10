@@ -11,6 +11,7 @@ import {
   cancelBooking,
   clearBookingCoupon,
   createBooking,
+  fetchBooking,
   setBookingDonation,
 } from '@/lib/api/bookings';
 import { fetchEventOffersSafe } from '@/lib/api/events';
@@ -61,8 +62,9 @@ import { YourDetailsSheet } from './your-details-sheet';
  * second set of tickets. The backend dedupes on `(user, key)` and returns the
  * original booking, so every one of those paths converges on one reservation.
  *
- * If the reserve FAILS — a tier sold out while the account was being created —
- * that is said plainly, with a route back to the picker.
+ * If the reserve FAILS it is said IN THE PAGE — the order, the summary and a
+ * Try again where Pay would be — never as a screen of its own. See
+ * `ReserveFailedNotice` for why, and for the one silent retry before it shows.
  *
  * ── AND IT IS THE LAST SCREEN ─────────────────────────────────────────────
  *
@@ -82,6 +84,15 @@ import { YourDetailsSheet } from './your-details-sheet';
  * the donation sits AFTER the total rather than inside it, because an amount
  * nobody has agreed to has no business moving the number they are checking.
  */
+/**
+ * How long the one silent retry waits after a transient failure.
+ *
+ * Long enough that a provider which blinked has come back, short enough that
+ * it reads as the hold simply taking a moment — the loader never leaves the
+ * screen in between.
+ */
+const AUTO_RETRY_DELAY_MS = 700;
+
 export function ReviewStep() {
   const {
     event,
@@ -99,6 +110,11 @@ export function ReviewStep() {
   /**
    * Why a reserve did not happen.
    *
+   * `transient` separates the two things that can go wrong. A server fault or
+   * a request that never came back says nothing about the ORDER, and trying
+   * again is the answer; a refusal (a tier sold out, a per-order limit) is the
+   * server saying something true about these tickets, in its own sentence.
+   *
    * `reference` is the server's `error_id` — present only on a 500, where the
    * message is the generic one and the id is the ONLY thing that can find the
    * traceback in the logs. Showing it is not developer detail leaking onto a
@@ -108,9 +124,18 @@ export function ReviewStep() {
   const { toast } = useToast();
   const [error, setError] = React.useState<{
     message: string;
-    recoverable: boolean;
+    transient: boolean;
     reference?: string;
   } | null>(null);
+  /** Whether this press has already spent its one silent retry. */
+  const autoRetried = React.useRef(false);
+  const autoRetryTimer = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (autoRetryTimer.current !== null) window.clearTimeout(autoRetryTimer.current);
+    },
+    [],
+  );
   const [reserving, setReserving] = React.useState(false);
   const attempted = React.useRef(false);
   /**
@@ -283,8 +308,8 @@ export function ReviewStep() {
             return;
           }
           setError({
-            message: 'We could not hold these tickets. Please choose them again.',
-            recoverable: true,
+            message: 'We could not hold these tickets just now. Nothing has been charged.',
+            transient: true,
           });
           return;
         }
@@ -311,32 +336,47 @@ export function ReviewStep() {
         const apiError = thrown instanceof ApiError ? thrown : null;
         // ── EVERY FAILURE HERE IS RECOVERABLE, AND SAYING SO IS THE FIX ──
         //
-        // `recoverable` used to mean "the customer can fix this by choosing
-        // differently", and everything else — a 500, a dropped request, a
-        // gateway blip — fell through to "We could not hold your tickets"
-        // over the server's generic sentence. That is a dead end for a
-        // condition that is usually gone by the next press, on the screen
-        // where somebody is trying to give us money.
+        // Nothing was charged in ANY of these cases. What varies is whether
+        // the failure was about the order at all: a 5xx or a request that
+        // never came back is not (`transient`), a 4xx is the server saying
+        // something true about these tickets and gets its own sentence.
         //
-        // Nothing was reserved and nothing was charged in ANY of these cases,
-        // so the honest heading is the same one every time and the action is
-        // Try again. What still varies is the SENTENCE underneath: a sold-out
-        // tier says so, and a server fault says so without pretending to know
-        // more than it does.
-        const serverFault = apiError === null || apiError.status >= 500;
+        // `payment_order_failed` (502) is transient by this rule, and it is
+        // the case the backend now makes safe to retry: it CANCELS the hold
+        // it could not start a payment for, so the next reserve is a fresh
+        // one rather than a replay of the booking that just failed.
+        const transient = apiError === null || apiError.status >= 500;
+
+        // ── ONE SILENT RETRY, BEFORE ANYTHING IS SHOWN ──────────────────
+        //
+        // A provider that blinked is usually back inside a second, and the
+        // cheapest error message is the one nobody has to read. Same key,
+        // deliberately: the server either replays a live hold or makes a
+        // fresh one, so a retry can never take a second set of seats. ONCE —
+        // the loader stays up for it, and a second failure is reported.
+        if (transient && !autoRetried.current) {
+          autoRetried.current = true;
+          autoRetryTimer.current = window.setTimeout(() => {
+            autoRetryTimer.current = null;
+            attempted.current = false;
+            setReserveNonce((n) => n + 1);
+          }, AUTO_RETRY_DELAY_MS);
+          return;
+        }
+
         setError({
-          message: serverFault
+          message: transient
             ? 'Something went wrong on our side. Nothing has been charged.'
             : apiError.message,
-          recoverable: !serverFault,
+          transient,
           reference:
             typeof apiError?.details?.error_id === 'string'
               ? apiError.details.error_id
               : undefined,
         });
         toast({
-          title: serverFault ? 'That did not go through' : 'Those tickets just went',
-          description: serverFault
+          title: transient ? 'We could not hold your tickets' : 'Those tickets just went',
+          description: transient
             ? 'Nothing has been charged. Try again.'
             : (apiError?.message ?? undefined),
         });
@@ -427,6 +467,8 @@ export function ReviewStep() {
   const retryHold = React.useCallback(() => {
     const dead = booking;
     setRetrying(true);
+    // A deliberate press is a new attempt, and gets its own silent retry.
+    autoRetried.current = false;
     bumpAttempt(event.id, selection);
     void (async () => {
       if (dead) await cancelBooking(dead.id).catch(() => undefined);
@@ -439,6 +481,22 @@ export function ReviewStep() {
       setRetrying(false);
     })();
   }, [booking, event.id, selection, setBooking]);
+  /**
+   * Re-read the booking after a write that half-happened.
+   *
+   * A donation or a code is written under the row lock and COMMITTED before
+   * the payment order is re-issued, so a provider failure at that second step
+   * leaves the booking changed and without an order. Showing the screen as it
+   * was before the press would put one total on the page and another on the
+   * row — the pay path then repairs the order before it opens the provider.
+   */
+  const resyncBooking = async (bookingId: string) => {
+    try {
+      setBooking(await fetchBooking(bookingId), reservedFor);
+    } catch {
+      // Best effort: the pay path re-checks the order at the press anyway.
+    }
+  };
   const [donationPending, setDonationPending] = React.useState(false);
   const [donationError, setDonationError] = React.useState<string | null>(null);
   const [optimisticDonation, setOptimisticDonation] = React.useState<number | null>(null);
@@ -446,7 +504,11 @@ export function ReviewStep() {
   const donation = optimisticDonation ?? serverDonation;
 
   const changeDonation = (minor: number) => {
-    if (!booking || minor === donation || donationPending) return;
+    // An unchanged amount is still allowed through when the booking has NO
+    // order: the server treats it as "make sure there is one", which is the
+    // repair after a re-issue that failed (see `set_donation`).
+    if (!booking || donationPending) return;
+    if (minor === donation && booking.payment_order_id) return;
     const previous = donation;
     setOptimisticDonation(minor);
     setDonationError(null);
@@ -466,6 +528,11 @@ export function ReviewStep() {
             ? thrown.message
             : 'We could not add that just now. Nothing has changed.',
         );
+        // The amount WAS written and only the payment order failed to follow,
+        // so the screen re-reads the booking rather than assume nothing moved.
+        if (thrown instanceof ApiError && thrown.code === 'payment_order_failed') {
+          await resyncBooking(booking.id);
+        }
       } finally {
         setDonationPending(false);
       }
@@ -520,6 +587,9 @@ export function ReviewStep() {
             ? thrown.message
             : 'We could not apply that just now. Nothing has changed.',
         );
+        if (thrown instanceof ApiError && thrown.code === 'payment_order_failed') {
+          await resyncBooking(booking.id);
+        }
       } finally {
         setCouponPending(false);
       }
@@ -533,8 +603,13 @@ export function ReviewStep() {
     void (async () => {
       try {
         setBooking(await clearBookingCoupon(booking.id), reservedFor);
-      } catch {
-        setCouponError('We could not remove that just now. Nothing has changed.');
+      } catch (thrown) {
+        if (thrown instanceof ApiError && thrown.code === 'payment_order_failed') {
+          setCouponError(thrown.message);
+          await resyncBooking(booking.id);
+        } else {
+          setCouponError('We could not remove that just now. Nothing has changed.');
+        }
       } finally {
         setCouponPending(false);
       }
@@ -591,63 +666,6 @@ export function ReviewStep() {
     : lines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
   const ticketCount = lines.reduce((sum, line) => sum + line.quantity, 0);
 
-  if (error) {
-    return (
-      <FunnelScreen title="Review your booking">
-        {/* Drawn like the expired state next door — centred, the alarm colour
-            confined to the icon — because a full-bleed red slab at the top of
-            an empty screen reads as a crash rather than as a tier selling out
-            while somebody was deciding. */}
-        <StepTransition
-          stepKey="review-error"
-          className="flex flex-1 flex-col items-center justify-center gap-stack-lg px-2 py-10 text-center"
-        >
-          <span
-            aria-hidden
-            className="inline-flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground"
-          >
-            <AlertTriangle className="size-7" />
-          </span>
-          <div className="flex flex-col gap-2">
-            <h2 className="text-h3 text-foreground">
-              {error.recoverable ? 'Those tickets just went' : 'That did not go through'}
-            </h2>
-            <p className="mx-auto max-w-sm text-body-sm text-muted-foreground">{error.message}</p>
-            {error.reference ? (
-              /* Quotable, and deliberately quiet. It is the only handle on the
-                 server's own traceback, and a customer who can paste it turns
-                 an unreproducible report into a log line. */
-              <p className="text-caption tabular-nums text-muted-foreground/70">
-                Reference {error.reference.slice(0, 8)}
-              </p>
-            ) : null}
-          </div>
-          <div className="flex w-full max-w-sm flex-col gap-2">
-            {/* A SECOND ATTEMPT, which this screen did not offer.
-                Every reason it can fail is transient — a tier that was
-                momentarily oversubscribed, a request that did not land — and
-                sending somebody back to the picker to re-choose what they had
-                already chosen is a worse answer to "try again" than a button
-                that tries again. */}
-            <Button size="lg" className={CTA_PILL_LG} onClick={retryHold} disabled={retrying}>
-              {retrying ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" aria-hidden />
-                  Trying again
-                </>
-              ) : (
-                'Try again'
-              )}
-            </Button>
-            <Button asChild variant="ghost" size="lg" className="w-full">
-              <Link href={pickerHref}>Choose different tickets</Link>
-            </Button>
-          </div>
-        </StepTransition>
-      </FunnelScreen>
-    );
-  }
-
   if (holdExpired) {
     return (
       <FunnelScreen title="Review your booking">
@@ -703,7 +721,9 @@ export function ReviewStep() {
     );
   }
 
-  if (reserving || !booking) {
+  // The loader, unless a failure is being REPORTED — then the page renders
+  // from the selection with the failure said at the top of it.
+  if (!error && (reserving || !booking)) {
     return (
       <FunnelScreen title="Review your booking">
         <StepTransition stepKey="review-loading" className="flex flex-col gap-4">
@@ -746,7 +766,7 @@ export function ReviewStep() {
         // counting down over issued tickets and then announcing they had been
         // released would be the most alarming sentence on the least
         // appropriate screen.
-        booking.hold_expires_at && booking.status !== 'paid' ? (
+        booking?.hold_expires_at && booking.status !== 'paid' ? (
           <HoldTimer
             /* KEYED ON THE DEADLINE. `HoldTimer` re-arms on a changed `target`,
                but the surrounding component keeps its `firedRef` across a
@@ -763,6 +783,17 @@ export function ReviewStep() {
       }
     >
       <StepTransition stepKey="review" className="flex flex-col gap-4">
+        {error ? (
+          <Rise>
+            <ReserveFailedNotice
+              transient={error.transient}
+              message={error.message}
+              reference={error.reference}
+              pickerHref={pickerHref}
+            />
+          </Rise>
+        ) : null}
+
         {/* ── THE EVENT, ONCE ─────────────────────────────────────────────
             A thumbnail and two lines. The full card — organiser, View event,
             Directions — was here AND in the summary card above it, so the same
@@ -903,6 +934,8 @@ export function ReviewStep() {
             appliedCode={booking?.coupon_code ?? null}
             discount={discount}
             offers={offers}
+            subtotal={orderAmount}
+            donation={donation}
             pending={couponPending}
             error={couponError}
             onApply={applyCoupon}
@@ -916,7 +949,9 @@ export function ReviewStep() {
           <DonationCard
             value={donation}
             onChange={changeDonation}
-            disabled={donationPending}
+            // No hold, nothing to attach a donation to — the failure state
+            // draws the row so the page keeps its shape, and it waits.
+            disabled={donationPending || !booking}
             maxMinor={DONATION_MAX_MINOR}
             error={donationError}
           />
@@ -962,17 +997,108 @@ export function ReviewStep() {
             room to read it. Rendering only the bar left a deployment with no
             provider showing a button labelled "Simulate" and nothing at all
             saying why — the exact thing `payment-section` exists to prevent. */}
-        <Rise index={5}>
-          <PaymentSection event={event} active={booking} layout="notice" />
-        </Rise>
+        {booking ? (
+          <Rise index={5}>
+            <PaymentSection event={event} active={booking} layout="notice" />
+          </Rise>
+        ) : null}
       </StepTransition>
 
-      <StickyActionBar total={total} caption="Total" leading={<PayUsing />}>
-        <PaymentSection event={event} active={booking} layout="compact" pending={donationPending} />
+      {/* The action is where the thumb is in BOTH states: Pay over a live hold,
+          and Try again — in the same place, the same size — over a failed one.
+          A failure that moves the button is a failure that hides it. */}
+      <StickyActionBar total={total} caption="Total" leading={booking ? <PayUsing /> : undefined}>
+        {booking ? (
+          <PaymentSection
+            event={event}
+            active={booking}
+            layout="compact"
+            pending={donationPending || couponPending}
+          />
+        ) : (
+          <Button size="lg" className={CTA_PILL_LG} onClick={retryHold} disabled={retrying}>
+            {retrying ? (
+              <>
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+                Trying again
+              </>
+            ) : (
+              'Try again'
+            )}
+          </Button>
+        )}
       </StickyActionBar>
 
       <YourDetailsSheet open={detailsOpen} onOpenChange={setDetailsOpen} />
     </FunnelScreen>
+  );
+}
+
+/**
+ * A reserve that did not go through, said at the TOP OF THE PAGE it was for.
+ *
+ * ── THIS REPLACED A SCREEN, AND THAT IS THE FIX ──────────────────────────
+ *
+ * It used to be a centred, full-screen state — "That did not go through" over
+ * an empty page — and it was the default for anything that went wrong, so the
+ * one thing somebody on the money path saw of a provider blip was a page that
+ * looked like the product had crashed. Everything they had chosen was gone
+ * from the screen, and the only way to see it again was to press something.
+ *
+ * Now the page stays: the event, the tickets and the summary render from the
+ * selection, this notice sits above them, and Try again sits exactly where
+ * Pay would be. Nothing on it is red — the icon carries the state, the words
+ * sit on the ordinary surface — because nothing about it is the reader's
+ * fault, and it is usually one press from fixed.
+ *
+ * It is also rarer than it was. The reserve retries ONCE on its own before
+ * this is ever drawn, and the backend no longer strands a hold it could not
+ * start a payment for, so a retry is a fresh attempt rather than a replay of
+ * the one that failed.
+ */
+function ReserveFailedNotice({
+  transient,
+  message,
+  reference,
+  pickerHref,
+}: {
+  transient: boolean;
+  message: string;
+  reference?: string;
+  pickerHref: string;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-3 rounded-2xl border border-border bg-surface p-card"
+    >
+      <span
+        aria-hidden
+        className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+      >
+        <AlertTriangle className="size-5" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <p className="text-body font-semibold text-foreground">
+          {transient ? 'We could not hold your tickets yet' : 'Those tickets just went'}
+        </p>
+        <p className="text-body-sm text-muted-foreground">{message}</p>
+        {reference ? (
+          /* Quotable, and deliberately quiet. It is the only handle on the
+             server's own traceback, and a customer who can paste it turns an
+             unreproducible report into a log line. */
+          <p className="text-caption tabular-nums text-foreground-subtle">
+            Reference {reference.slice(0, 8)}
+          </p>
+        ) : null}
+        <Link
+          href={pickerHref}
+          className="mt-1 self-start text-body-sm font-semibold text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Choose different tickets
+        </Link>
+      </div>
+    </div>
   );
 }
 

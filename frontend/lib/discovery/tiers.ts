@@ -223,14 +223,26 @@ function availabilityState(tiers: TicketTier[]): AvailabilityState {
 
   const left = tiers.reduce((sum, tier) => sum + Math.max(tier.available, 0), 0);
   if (left <= 0) return { kind: 'sold_out' };
-  if (!tiers.some((tier) => tier.is_on_sale)) {
+  // ── WHAT CAN BE BOUGHT NOW, NOT WHAT EXISTS ────────────────────────────
+  //
+  // This asked whether ANY tier was on sale, and counted stock across ALL of
+  // them. So an event whose on-sale tier had sold out, beside a tier whose
+  // window opens next week, read as `available` — and its Book button was
+  // live, onto a picker where every row is disabled. Nothing had failed; the
+  // flow should never have been enterable. Only stock in a tier on sale NOW
+  // makes the event buyable, and only that stock is worth counting down.
+  const buyable = tiers.reduce(
+    (sum, tier) => sum + (tier.is_on_sale ? Math.max(tier.available, 0) : 0),
+    0,
+  );
+  if (buyable <= 0) {
     return { kind: 'not_on_sale', opensAt: earliestSaleStart(tiers) };
   }
-  if (left <= FEW_LEFT) return { kind: 'few_left', left };
-  if (left <= SELLING_FAST) return { kind: 'selling_fast', left };
+  if (buyable <= FEW_LEFT) return { kind: 'few_left', left: buyable };
+  if (buyable <= SELLING_FAST) return { kind: 'selling_fast', left: buyable };
   // Healthy stock says so plainly. Manufacturing pressure here is the whole
   // thing the brief rules out, and it's the fastest way to stop being believed.
-  return { kind: 'available', left };
+  return { kind: 'available', left: buyable };
 }
 
 export function availabilityLabel(state: AvailabilityState): string | null {

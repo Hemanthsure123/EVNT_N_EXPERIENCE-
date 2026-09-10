@@ -6,6 +6,7 @@ import {
   HERO_ASPECT_W,
   HERO_RADIUS_PX,
 } from '@/lib/discovery/deck-metrics';
+import { DeckBrandHeader } from './deck-brand-header';
 
 /**
  * The deck's opening frame, as static markup.
@@ -71,6 +72,10 @@ export function DeckShell({
         // thing it stands in for never shows.
         className="fixed inset-0 z-modal bg-background sm:hidden"
       >
+        {/* The same branding row the page opens with — the one, shared
+            definition, so the poster below it is exactly where the real
+            page's is at the moment of the swap. */}
+        <DeckBrandHeader />
         <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
           <div style={heroStyle} className="relative w-full overflow-hidden bg-muted">
             {posterUrl ? (

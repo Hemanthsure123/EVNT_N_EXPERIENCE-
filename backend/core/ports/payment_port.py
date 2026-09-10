@@ -13,6 +13,36 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
+class PaymentOrderRejected(Exception):
+    """The provider REFUSED to create the order — a definite 4xx.
+
+    Nothing was created at the provider, so retrying the same request will be
+    refused the same way; something about the request has to change first.
+    `had_transfers` is carried because the Route split is the one input to an
+    order that varies by ORGANIZER rather than by booking, which makes it the
+    first thing to suspect when one organizer's events fail and another's do
+    not.
+    """
+
+    def __init__(self, reason: str, *, had_transfers: bool) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.had_transfers = had_transfers
+
+
+class PaymentProviderUnavailable(Exception):
+    """The provider could not be reached, or failed on its own side.
+
+    Unlike a rejection this says nothing about the request — the same call may
+    well succeed a moment later — and it does not even prove nothing was
+    created, since a timeout can land after the provider committed.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class OrderTransfer:
     """One Route transfer attached to an order: the organizer's share to their

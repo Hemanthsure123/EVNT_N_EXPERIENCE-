@@ -5,7 +5,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Ticket } from 'lucide-react';
-import { type MotionValue, motion, useMotionValue, useReducedMotion } from 'framer-motion';
+import {
+  AnimatePresence,
+  type MotionValue,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+} from 'framer-motion';
 import { useEventDeck } from '@/lib/discovery/event-deck-context';
 import { useEventWidgetData } from '@/lib/discovery/use-event-widget-data';
 import { useScrollLock } from '@/lib/discovery/use-scroll-lock';
@@ -18,7 +24,7 @@ import {
   THUMB_SIZE_PX,
   shouldDock,
 } from '@/lib/discovery/deck-metrics';
-import { formatEventDate, formatEventTime, formatFromPrice } from '@/lib/discovery/format';
+import { formatFromPrice } from '@/lib/discovery/format';
 import { bookingCtaLabel, canStartBooking, summariseTiers } from '@/lib/discovery/tiers';
 import type { EventCard as EventCardData, TicketTier } from '@/lib/api/types';
 import {
@@ -31,24 +37,35 @@ import {
 } from '@/lib/discovery/shared-poster';
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
-import {
-  EventWidgetContent,
-  EventWidgetSummary,
-  sectionTabsFor,
-} from './event-widget-content';
-import { SectionTabs } from './section-tabs';
-import { BrandMark } from '@/components/shell/brand-mark';
+import { EventWidgetContent, EventWidgetSummary } from './event-widget-content';
+import { DeckBrandHeader } from './deck-brand-header';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
 
 /**
  * THE MOBILE EVENT PAGE.
  *
- * A horizontal deck of events. Tapping a card anywhere on the site opens this
- * over the page; `/events/{slug}-{uuid}` opens it too, so a link somebody was
- * SENT lands on the same surface a link somebody tapped does.
+ * Tapping a card anywhere on the site opens this over the page;
+ * `/events/{slug}-{uuid}` opens it too, so a link somebody was SENT lands on
+ * the same surface a link somebody tapped does.
  *
- * ── IT IS A SCROLLING PAGE NOW, NOT A BOTTOM SHEET ────────────────────────
+ * ── ONE EVENT AT A TIME, AND NO SIDEWAYS SWIPE BETWEEN THEM ───────────────
+ *
+ * This was a horizontal DECK: every event in the list mounted side by side on
+ * a track, and a sideways swipe anywhere on the page moved to the previous or
+ * next one. It is gone at the owner's instruction, and with it the gesture
+ * code, the track and the neighbour pages drawn for the length of a swipe.
+ * The one horizontal gesture left on this surface is the hero GALLERY's, which
+ * is a native scroller of its own — so a sideways movement means exactly one
+ * thing wherever it starts.
+ *
+ * `events` is still a list, because the similar-events rail switches to
+ * another event in place rather than navigating away. That is a PRESS, and it
+ * swaps the page and starts it at the top — the reader chose a different
+ * event, and landing halfway down it would be landing somewhere they have not
+ * been.
+ *
+ * ── IT IS A SCROLLING PAGE, NOT A BOTTOM SHEET ────────────────────────────
  *
  * This used to be a draggable sheet over an anchored poster: a snap ladder
  * (`sheet-snap.ts`), a vertical drag that handed travel back and forth with the
@@ -56,11 +73,10 @@ import { SharedPoster } from './shared-poster';
  * grab handle, and a transform written to the sheet node every frame with the
  * ticket bar counter-translated to stay on screen.
  *
- * All of it is gone. Each page is an ordinary vertical scroller: the poster is
+ * All of it is gone. The page is an ordinary vertical scroller: the poster is
  * IN the flow rather than behind it, so scrolling moves the artwork away like
- * any other page, and the browser owns every vertical gesture with nothing
- * intercepting it. What is left of the gesture code is one axis — horizontal,
- * for the deck — and it commits only when a movement is decisively sideways.
+ * any other page, and the browser owns every gesture with nothing intercepting
+ * it.
  *
  * ── AND THE POSTER DOCKS INSTEAD OF LEAVING ───────────────────────────────
  *
@@ -68,12 +84,9 @@ import { SharedPoster } from './shared-poster';
  * thumbnail, and scrolling back to the top returns it. It is ONE element in two
  * places — a framer `layoutId` handoff — never a second copy cross-faded
  * against the first, which is what would let the two disagree about which event
- * is on screen.
- *
- * The pair lives INSIDE the active page on purpose. The page track carries an
- * imperative `translate3d` that framer knows nothing about; measuring one end
- * of the handoff inside that transform and the other outside it puts a whole
- * page-width into the delta. Both ends share the ancestor, so it cancels.
+ * is on screen. Both ends live inside the page, so they are measured against
+ * the same ancestor and nothing outside it can put a stray offset into the
+ * delta.
  */
 
 /**
@@ -92,58 +105,31 @@ const PAGE_TRANSITION = { duration: FLIGHT_MS / 1000, ease: TRANSITION_EASE };
 /** How long the poster takes to dock into the bar, or to come back out. */
 const DOCK_MS = 320;
 
-/** How long the track takes to settle onto a page after a release. */
-const SETTLE_MS = 340;
-const SETTLE_EASE = `cubic-bezier(${TRANSITION_EASE.join(', ')})`;
-
-/** How far a gesture must travel before it is allowed to commit to an axis. */
-// RAISED FROM 10. The direction of a gesture is at its noisiest in the first
-// few pixels, and deciding on ten of them decides on the noise — which is the
-// "casual scrolling changes the event" report. Sixteen is still well under
-// the distance anybody would call a swipe, and it is measured on EITHER axis,
-// so an ordinary scroll is not delayed by it.
-const COMMIT_SLOP = 16;
-
 /**
- * How much more horizontal than vertical a movement must be to be a swipe.
+ * THE HERO GALLERY'S DEPTH, as a slide leaves the centre.
  *
- * A MARGIN, not a bare comparison. A thumb pivots from a knuckle, so a vertical
- * swipe over a large poster draws an arc that crosses 45 degrees for a frame or
- * two near the start; on a bare `>` that frame decides the gesture, and "I
- * scrolled and it changed the event" is the commonest way this reads as broken.
+ * Applied in proportion to how far the slide is from resting — never as a
+ * switch — so the picture under the finger follows it exactly and a reversed
+ * swipe reverses the effect in the same frame. Small on purpose: enough that
+ * the outgoing photograph visibly steps back as the next one arrives, not so
+ * much that a poster's own edges shrink away from the frame it is shown in.
  */
-// RAISED FROM 1.2. At 1.2 the margin is about 50 degrees off vertical, which
-// a thumb arc clears on an ordinary scroll. At 1.8 the movement has to be
-// roughly 61 degrees from vertical: still a comfortable diagonal, no longer
-// an accident.
-const AXIS_DOMINANCE = 1.8;
+const SLIDE_DEPTH_SCALE = 0.06;
+const SLIDE_DEPTH_FADE = 0.3;
 
-/** Pages abut exactly — a full-screen pager has no rim to peek through. */
-const CARD_GAP = 0;
-
-/** How far a slow drag must travel, as a fraction of a page, to advance. */
-const ADVANCE_FRACTION = 0.25;
-/** A flick faster than this advances even if the finger barely moved. px/s. */
-const ADVANCE_VELOCITY = 350;
-/** A finger that has been still for longer than this has no velocity left. */
-const VELOCITY_STALE_MS = 90;
-
-/** The release velocity, unless the finger had already come to rest. */
-function liveVelocity(velocity: number, lastAt: number, now: number): number {
-  return now - lastAt > VELOCITY_STALE_MS ? 0 : velocity;
-}
+/** How long the gallery's blurred backdrop takes to cross-fade to a new slide. */
+const BACKDROP_FADE_MS = 450;
 
 export function EventWidgetDeck() {
   const { isOpen, events, currentIndex, closeDeck, setCurrentIndex, openOptions } = useEventDeck();
   const router = useRouter();
   const pathname = usePathname();
-  // Mirrors, so callbacks read the latest values without re-binding on every
-  // render — the gesture handlers are captured by window listeners for the
-  // life of a drag and must not go stale mid-gesture.
   const openOptionsRef = React.useRef(openOptions);
   openOptionsRef.current = openOptions;
   const isOpenRef = React.useRef(isOpen);
   isOpenRef.current = isOpen;
+  // (Mirrors because the history and keyboard listeners below are bound once
+  // per open and must read the live values, not the ones from that render.)
   /** Set once a FEED open has pushed a history entry, so back can close it. */
   const pushedHistoryRef = React.useRef(false);
   /** The URL the deck was opened on, so a route-origin close knows it has left. */
@@ -178,9 +164,9 @@ export function EventWidgetDeck() {
   /**
    * IS THE POSTER DOCKED IN THE BOOKING BAR.
    *
-   * Deck-level rather than per page, and that is what makes a swipe while
-   * scrolled behave: the incoming page mounts already docked instead of
-   * flashing its hero for the frame before its own scroll listener has run.
+   * Deck-level rather than inside the page because the CLOSE reads it too: the
+   * poster flies back to its card from wherever it currently is, and the
+   * attribute that marks it follows this flag.
    */
   const [docked, setDocked] = React.useState(false);
   const dockedRef = React.useRef(false);
@@ -195,38 +181,8 @@ export function EventWidgetDeck() {
    * node's style and re-renders nothing.
    */
   const blurOpacity = useMotionValue(1);
-  /**
-   * True when the gesture that just ended actually moved.
-   *
-   * The hero is a tap target now (it opens the lightbox), and a horizontal
-   * swipe that begins on the poster ends with a `click` on release. Without
-   * this, swiping to the next event opens a full-screen photograph on the way
-   * past — the same class of bug the old gesture plate had, arriving from the
-   * other direction.
-   */
-  const draggedRef = React.useRef(false);
   /** Which photograph the full-screen viewer is showing, or null. */
   const [lightboxAt, setLightboxAt] = React.useState<number | null>(null);
-  /**
-   * The scroll offset carried from page to page.
-   *
-   * ── THIS REVERSES A DECISION, AND THE REASON IS THE BRIEF ─────────────
-   *
-   * There was an effect here doing `scrollerRef.current?.scrollTo({ top: 0 })`
-   * on every event change, justified as "a new event starts at the top of its
-   * own content — carrying the previous event's scroll offset into it lands you
-   * halfway down a page you have not seen".
-   *
-   * That is a real objection and it loses to an explicit requirement: swiping
-   * while the thumbnail is docked has to keep it docked and swap its picture,
-   * not throw the reader back to the top and re-expand a poster they had
-   * deliberately scrolled past. It is also less arbitrary than it was — every
-   * page here has the identical structure, hero then the same section order, so
-   * the same offset lands on the same KIND of thing rather than somewhere
-   * random. Written before paint (see the layout effect), so the incoming page
-   * is never seen at the wrong offset.
-   */
-  const scrollTopRef = React.useRef(0);
 
   /**
    * THE POSTER FIRST, THEN THE GALLERY.
@@ -247,39 +203,11 @@ export function EventWidgetDeck() {
     return list;
   }, [content, currentEvent]);
 
-  const openPoster = React.useCallback((index: number) => {
-    // A swipe ends in a click. Consume it rather than opening a photograph
-    // the reader was scrolling past.
-    if (draggedRef.current) {
-      draggedRef.current = false;
-      return;
-    }
-    setLightboxAt(index);
-  }, []);
-
-  const gestureRef = React.useRef<{
-    x: number;
-    y: number;
-    committed: boolean;
-    pointerId: number;
-  }>({ x: 0, y: 0, committed: false, pointerId: -1 });
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const ctaRef = React.useRef<HTMLDivElement>(null);
   const heroRef = React.useRef<HTMLDivElement>(null);
-  const trackRef = React.useRef<HTMLDivElement>(null);
-  /** True for the first positioning pass of an open, so the deck does not
-   *  slide sideways into place while it is arriving. */
-  const justOpenedRef = React.useRef(true);
   /** True once this open has been placed and its entrance played. */
   const enteredRef = React.useRef(false);
-  /** The live horizontal drag, or null. A ref, so moving costs no render. */
-  const swipeRef = React.useRef<{
-    startX: number;
-    base: number;
-    lastX: number;
-    lastAt: number;
-    velocity: number;
-  } | null>(null);
 
   // Measured, never assumed: a phone's viewport changes when the URL bar
   // collapses or it is rotated.
@@ -289,28 +217,6 @@ export function EventWidgetDeck() {
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
-
-  /**
-   * ── ONE WIDTH, AND IT IS THE VIEWPORT ──────────────────────────────────
-   *
-   * A page is the whole screen with no gap, so the stride is a constant for the
-   * life of an open and the horizontal track never has to be re-derived.
-   */
-  const cardWidth = viewport.width;
-  const gap = CARD_GAP;
-  const stride = cardWidth + gap;
-  const restingX = React.useCallback((index: number) => -index * stride, [stride]);
-
-  const applyTrack = React.useCallback(
-    (offset: number, settle: boolean) => {
-      const node = trackRef.current;
-      if (!node) return;
-      node.style.transition =
-        settle && !reduceMotion ? `transform ${SETTLE_MS}ms ${SETTLE_EASE}` : 'none';
-      node.style.transform = `translate3d(${offset}px, 0, 0)`;
-    },
-    [reduceMotion],
-  );
 
   // The bottom padding under the content is the REAL height of the sticky bar
   // plus the safe area, so the last section clears it exactly. A hard-coded
@@ -322,9 +228,9 @@ export function EventWidgetDeck() {
     observer.observe(node);
     setCtaHeight(node.offsetHeight);
     return () => observer.disconnect();
-    // `currentEvent?.id` because a swipe replaces the bar with the incoming
-    // page's, and the observer would otherwise be watching a node that has
-    // left the screen.
+    // `currentEvent?.id` because switching events remounts the page, bar and
+    // all, and the observer would otherwise be watching a node that has left
+    // the screen.
   }, [isOpen, currentEvent?.id]);
 
   /**
@@ -347,16 +253,6 @@ export function EventWidgetDeck() {
   } | null>(null);
   const flightIdRef = React.useRef(0);
 
-  // A LAYOUT effect, so the track is positioned in the first frame the deck
-  // paints rather than sliding into place after it.
-  React.useLayoutEffect(() => {
-    if (!isOpen || viewport.width === 0) return;
-    applyTrack(restingX(currentIndex), false);
-    // Only on open and on a viewport change. `currentIndex` is handled by the
-    // centring effect below, which also knows whether to settle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, viewport.width]);
-
   /**
    * The ENTRANCE, and it is a LAYOUT effect for a measured reason.
    *
@@ -373,7 +269,6 @@ export function EventWidgetDeck() {
     }
     if (viewport.height === 0 || enteredRef.current) return;
     enteredRef.current = true;
-    justOpenedRef.current = true;
     // A deep link has no card on the page to fly from; the page's own fade is
     // the whole arrival.
     if (openOptionsRef.current.expanded || reduceMotion) return;
@@ -410,8 +305,7 @@ export function EventWidgetDeck() {
     // The flight belongs to the deck, not to the layer that draws it. Clearing
     // it here is what lets `SharedPoster`'s cleanup be a plain cancel.
     setFlight(null);
-    // A fresh open starts at the top of the first event, undocked.
-    scrollTopRef.current = 0;
+    // A fresh open starts at the top of the event, undocked.
     dockedRef.current = false;
     setDocked(false);
     setLightboxAt(null);
@@ -422,43 +316,15 @@ export function EventWidgetDeck() {
     }
   }, [isOpen, blurOpacity]);
 
-  // Keep the active page on screen when the index changes — a swipe, or a tap
-  // on a card in the similar-events rail.
-  React.useEffect(() => {
-    if (!isOpen || viewport.width === 0) return;
-    // `settle: false` on the very first frame of an open, so the tapped event
-    // is ALREADY in place rather than sliding in from the side afterwards.
-    applyTrack(restingX(currentIndex), swipeRef.current === null && !justOpenedRef.current);
-    justOpenedRef.current = false;
-  }, [isOpen, currentIndex, restingX, viewport.width, applyTrack]);
-
-  /**
-   * Carry the scroll offset onto the incoming page BEFORE it is painted.
-   *
-   * A page change mounts a fresh scroller at zero. As a passive effect this
-   * correction would land after paint, so every swipe made while scrolled would
-   * show one frame of the new event's hero at full size with the thumbnail
-   * gone — a flash of exactly the state the docking animation exists to move
-   * away from, on the surface that sells a ticket.
-   */
-  React.useLayoutEffect(() => {
-    if (!isOpen) return;
-    const node = scrollerRef.current;
-    if (node) node.scrollTop = scrollTopRef.current;
-  }, [isOpen, currentEvent?.id]);
-
   /**
    * THE SCROLL LISTENER, and it watches the page's own scroller.
    *
    * Not `window.scrollY`: the deck is a fixed overlay and the document behind
-   * it is scroll-locked, so the window never moves. The offset that matters is
-   * the active page's, which is also the one that has to be carried across a
-   * swipe.
+   * it is scroll-locked, so the window never moves.
    */
   const onScroll = React.useCallback(() => {
     const node = scrollerRef.current;
     if (!node) return;
-    scrollTopRef.current = node.scrollTop;
     // ── THE BACKDROP FADES AS THE POSTER LEAVES ─────────────────────
     //
     // Linear against the hero's own height, so it is gone exactly when the
@@ -476,61 +342,24 @@ export function EventWidgetDeck() {
   }, [blurOpacity]);
 
   /**
-   * ── CLAIM THE HORIZONTAL GESTURE BEFORE THE BROWSER DOES ───────────────
+   * Switch to another event in the list — a press on the similar-events rail.
    *
-   * `touch-action` is not inherited and the scroller computes to `auto`, so the
-   * browser decides on the first `touchmove` that the gesture is its own
-   * panning, fires `pointercancel`, and stops delivering pointer events. The
-   * symptom is a swipe that moves nothing at all.
-   *
-   * Deliberately narrow: ONLY a decisively horizontal movement is claimed.
-   * Vertical is the browser's, natively, with nothing intercepting it — which
-   * is the whole point of the page no longer being a sheet.
+   * The page is keyed by the event, so the switch is a fresh mount with its
+   * scroller at the top. The dock and the backdrop are reset in the SAME render
+   * as the index: reset afterwards, the first frame of the new page would have
+   * its poster in the bar and framer would fly it up into the hero on arrival —
+   * a transition for something nobody did.
    */
-  React.useEffect(() => {
-    const node = scrollerRef.current;
-    if (!node || !isOpen) return;
-
-    let startX = 0;
-    let startY = 0;
-
-    const onStart = (event: TouchEvent) => {
-      const touch = event.touches[0];
-      if (!touch) return;
-      startX = touch.clientX;
-      startY = touch.clientY;
-    };
-
-    const onMove = (event: TouchEvent) => {
-      const touch = event.touches[0];
-      if (!touch) return;
-      // The hero gallery is a scroller of its own. Calling `preventDefault` on
-      // its touches would claim them for the deck and the gallery would not
-      // move at all — the same exclusion as `onPointerDown`, in the half that
-      // talks to the browser rather than to React.
-      if ((event.target as Element | null)?.closest?.('[data-hero-gallery]')) return;
-      const dx = touch.clientX - startX;
-      const dy = touch.clientY - startY;
-      if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
-      // `cancelable` guards the case where the browser has already committed to
-      // scrolling — `preventDefault` there is a no-op that warns every frame.
-      if (Math.abs(dx) > Math.abs(dy) * AXIS_DOMINANCE && event.cancelable) event.preventDefault();
-    };
-
-    node.addEventListener('touchstart', onStart, { passive: true });
-    node.addEventListener('touchmove', onMove, { passive: false });
-    return () => {
-      node.removeEventListener('touchstart', onStart);
-      node.removeEventListener('touchmove', onMove);
-    };
-  }, [isOpen, currentEvent?.id]);
-
   const goTo = React.useCallback(
     (index: number) => {
-      if (index < 0 || index >= events.length) return;
+      if (index < 0 || index >= events.length || index === currentIndex) return;
+      dockedRef.current = false;
+      setDocked(false);
+      blurOpacity.set(1);
+      setLightboxAt(null);
       setCurrentIndex(index);
     },
-    [events.length, setCurrentIndex],
+    [events.length, currentIndex, setCurrentIndex, blurOpacity],
   );
 
   /**
@@ -644,136 +473,6 @@ export function EventWidgetDeck() {
     }
   }, [isOpen, pathname, closeDeck]);
 
-  const readTrackX = React.useCallback((fallback: number) => {
-    const node = trackRef.current;
-    if (!node || typeof window === 'undefined') return fallback;
-    try {
-      const transform = window.getComputedStyle(node).transform;
-      if (!transform || transform === 'none') return fallback;
-      const matrix = new DOMMatrixReadOnly(transform);
-      return Number.isFinite(matrix.m41) ? matrix.m41 : fallback;
-    } catch {
-      // DOMMatrix is missing in some test environments, and a browser that
-      // hands back something unparseable is not worth a thrown gesture.
-      return fallback;
-    }
-  }, []);
-
-  const beginSwipe = React.useCallback(
-    (event: React.PointerEvent) => {
-      if (stride === 0) return;
-      const pointerId = event.pointerId;
-      // ONE computed read per gesture, never per frame. During a settle this is
-      // the only place the interpolated position exists — taking the resting
-      // offset instead would teleport the track on the first move.
-      swipeRef.current = {
-        startX: event.clientX,
-        base: readTrackX(restingX(currentIndex)),
-        lastX: event.clientX,
-        lastAt: event.timeStamp,
-        velocity: 0,
-      };
-
-      const move = (moveEvent: PointerEvent) => {
-        if (moveEvent.pointerId !== pointerId) return;
-        const swipe = swipeRef.current;
-        if (!swipe) return;
-        const elapsed = moveEvent.timeStamp - swipe.lastAt;
-        if (elapsed > 0) {
-          swipe.velocity = ((moveEvent.clientX - swipe.lastX) / elapsed) * 1000;
-          swipe.lastX = moveEvent.clientX;
-          swipe.lastAt = moveEvent.timeStamp;
-        }
-        // Rubber-band past both ends, so the first and last event feel like
-        // ends of a deck rather than a broken gesture.
-        let offset = swipe.base + (moveEvent.clientX - swipe.startX);
-        const min = restingX(Math.max(events.length - 1, 0));
-        if (offset > 0) offset *= 0.35;
-        else if (offset < min) offset = min + (offset - min) * 0.35;
-        applyTrack(offset, false);
-      };
-
-      const end = (endEvent: PointerEvent) => {
-        if (endEvent.pointerId !== pointerId) return;
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', end);
-        window.removeEventListener('pointercancel', end);
-        const swipe = swipeRef.current;
-        swipeRef.current = null;
-        gestureRef.current.committed = false;
-        gestureRef.current.pointerId = -1;
-        if (!swipe) return;
-
-        /**
-         * The release rule, and both halves are deliberate. A flick that has
-         * barely moved still carries; a slow drag commits once it has covered
-         * `ADVANCE_FRACTION` of a page. Either is enough, neither is required.
-         * One page at a time — a projection that skips two is the flick
-         * outrunning what a person can see.
-         */
-        const travelled = endEvent.clientX - swipe.startX;
-        const velocity = liveVelocity(swipe.velocity, swipe.lastAt, endEvent.timeStamp);
-        const farEnough = Math.abs(travelled) >= stride * ADVANCE_FRACTION;
-        const fastEnough =
-          Math.abs(velocity) >= ADVANCE_VELOCITY && Math.sign(velocity) === Math.sign(travelled);
-        const direction = travelled < 0 ? 1 : travelled > 0 ? -1 : 0;
-        const next =
-          direction !== 0 && (farEnough || fastEnough) ? currentIndex + direction : currentIndex;
-        const clamped = Math.max(0, Math.min(next, events.length - 1));
-        if (clamped === currentIndex) applyTrack(restingX(clamped), true);
-        else goTo(clamped);
-      };
-
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', end);
-      window.addEventListener('pointercancel', end);
-    },
-    [applyTrack, currentIndex, events.length, goTo, readTrackX, restingX, stride],
-  );
-
-  const onPointerDown = React.useCallback((event: React.PointerEvent) => {
-    draggedRef.current = false;
-    // ── THE HERO GALLERY OWNS ITS OWN SIDEWAYS ──────────────────────────
-    //
-    // A horizontal swipe on the page changes EVENT; inside the hero it changes
-    // PICTURE. Both cannot claim the same finger, so a gesture that begins in
-    // the gallery is left entirely to the browser's native scrolling — the
-    // record is cleared rather than armed, and `onPointerMove` bails on the
-    // pointer id it does not recognise.
-    if ((event.target as Element | null)?.closest?.('[data-hero-gallery]')) {
-      gestureRef.current = { x: 0, y: 0, committed: false, pointerId: -1 };
-      return;
-    }
-    gestureRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-      committed: false,
-      pointerId: event.pointerId,
-    };
-  }, []);
-
-  /**
-   * ONE AXIS. Horizontal belongs to the deck; everything else belongs to the
-   * browser's own scrolling, untouched.
-   */
-  const onPointerMove = React.useCallback(
-    (event: React.PointerEvent) => {
-      if (closingRef.current) return;
-      const gesture = gestureRef.current;
-      if (gesture.committed || gesture.pointerId !== event.pointerId) return;
-      const dx = event.clientX - gesture.x;
-      const dy = event.clientY - gesture.y;
-      if (Math.abs(dx) < COMMIT_SLOP && Math.abs(dy) < COMMIT_SLOP) return;
-      gesture.committed = true;
-      // Committing IS proof of travel — `COMMIT_SLOP` px of it — so the tap
-      // guard is raised here rather than from the drag's own `pointermove`,
-      // which needs a move AFTER the commit and so misses a short flick.
-      draggedRef.current = true;
-      if (Math.abs(dx) > Math.abs(dy) * AXIS_DOMINANCE) beginSwipe(event);
-    },
-    [beginSwipe],
-  );
-
   if (!isOpen || !currentEvent) return null;
 
   const dockTransition = { duration: reduceMotion ? 0 : DOCK_MS / 1000, ease: TRANSITION_EASE };
@@ -816,7 +515,7 @@ export function EventWidgetDeck() {
         />
       ) : null}
 
-      {/* The pages. A gentle rise replaces the sheet's slide — the deck has to
+      {/* The page. A gentle rise replaces the sheet's slide — the deck has to
           ARRIVE as something, and a hard cut onto a full-screen page reads as a
           navigation rather than as an opening. */}
       <motion.div
@@ -828,67 +527,36 @@ export function EventWidgetDeck() {
         }}
         className="absolute inset-0 overflow-hidden"
       >
-        {/* The TRACK. Positioned imperatively by `applyTrack`: a transform
-            written straight onto the node animates on the compositor and costs
-            no React render per frame.
-
-            NOTHING here may name `transform` or `transition`. React re-applies
-            the inline styles it owns on every render, so either would land on
-            top of whatever the gesture had just written, mid-drag. */}
-        <div
-          ref={trackRef}
-          style={{ willChange: 'transform' }}
-          className="flex h-full items-stretch"
-        >
-          {events.map((event, index) => {
-            const active = index === currentIndex;
-            return (
-              <div
-                key={event.id}
-                style={{
-                  width: cardWidth,
-                  marginRight: index === events.length - 1 ? 0 : gap,
-                  height: '100dvh',
-                  // The active page paints above its neighbours, so nothing can
-                  // cast a shadow onto the page being read.
-                  zIndex: active ? 1 : 0,
-                }}
-                className="relative shrink-0"
-                aria-hidden={active ? undefined : true}
-              >
-                {active ? (
-                  <ActivePage
-                    event={event}
-                    detail={detail}
-                    content={content}
-                    tiers={tiers}
-                    events={events}
-                    docked={docked}
-                    dockTransition={dockTransition}
-                    hidePoster={flight !== null}
-                    blurOpacity={blurOpacity}
-                    onOpenPoster={openPoster}
-                    images={lightboxImages}
-                    ctaHeight={ctaHeight}
-                    scrollerRef={scrollerRef}
-                    ctaRef={ctaRef}
-                    heroRef={heroRef}
-                    onScroll={onScroll}
-                    onPointerDown={onPointerDown}
-                    onPointerMove={onPointerMove}
-                    onOpenSheet={setActiveSubSheet}
-                    onSelectEvent={(id) => {
-                      const next = events.findIndex((candidate) => candidate.id === id);
-                      if (next >= 0) goTo(next);
-                    }}
-                    onLeave={closeDeck}
-                  />
-                ) : (
-                  <NeighbourPage event={event} docked={docked} />
-                )}
-              </div>
-            );
-          })}
+        {/* ONE PAGE, keyed by the event. A switch from the similar-events
+            rail is a fresh mount — a scroller at the top and a hero holding
+            its poster — rather than the previous event's page re-rendered
+            with new data at the old offset. */}
+        <div style={{ height: '100dvh' }} className="relative w-full">
+          <ActivePage
+            key={currentEvent.id}
+            event={currentEvent}
+            detail={detail}
+            content={content}
+            tiers={tiers}
+            events={events}
+            docked={docked}
+            dockTransition={dockTransition}
+            hidePoster={flight !== null}
+            blurOpacity={blurOpacity}
+            onOpenPoster={setLightboxAt}
+            images={lightboxImages}
+            ctaHeight={ctaHeight}
+            scrollerRef={scrollerRef}
+            ctaRef={ctaRef}
+            heroRef={heroRef}
+            onScroll={onScroll}
+            onOpenSheet={setActiveSubSheet}
+            onSelectEvent={(id) => {
+              const next = events.findIndex((candidate) => candidate.id === id);
+              if (next >= 0) goTo(next);
+            }}
+            onLeave={closeDeck}
+          />
         </div>
       </motion.div>
 
@@ -980,6 +648,9 @@ function Hero({
   onOpenPoster: (index: number) => void;
 }) {
   const railRef = React.useRef<HTMLDivElement>(null);
+  const slideRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const frameRef = React.useRef<number | null>(null);
+  const reduceMotion = useReducedMotion();
   const [slide, setSlide] = React.useState(0);
 
   const slides: LightboxImage[] =
@@ -995,28 +666,79 @@ function Hero({
    * This was a four-second crossfade with a pause button and pagination dots.
    * All three are gone: the timer, the `paused` state and the two controls
    * that existed to stop it. What is left is an ordinary horizontal scroller
-   * with CSS scroll-snap, which is what a gallery on a phone should have been
-   * — the browser owns the gesture, the momentum, the rubber-band at the ends
-   * and the snap, and none of it costs a render.
+   * with CSS scroll-snap — the browser owns the gesture, the momentum, the
+   * rubber-band at the ends and the snap, and none of it costs a render.
    *
-   * The index is still tracked, but only ONE thing reads it now: the blurred
-   * backdrop, which has to be the colours of the picture actually on screen.
-   * Derived from `scrollLeft` rather than from an observer, because every
-   * slide is exactly the track's width and division is cheaper and exact.
+   * ── AND IT MOVES LIKE ONE OBJECT, NOT A STRIP OF PICTURES ─────────────
+   *
+   * Two things made the swipe feel mechanical. A fast flick could carry past
+   * two or three photographs and stop wherever momentum ran out; `snap-always`
+   * (`scroll-snap-stop: always`) stops at the next one, every time. And every
+   * slide was drawn flat at full size for the whole journey, so the only thing
+   * moving was a seam between two rectangles. Each slide now takes a little
+   * DEPTH from its distance to the centre — slightly smaller and dimmer on its
+   * way out, back to full on arrival, with the blurred backdrop showing in the
+   * gap — written straight to the node from a `requestAnimationFrame`, so it
+   * tracks the finger in the frame the browser moved the strip and costs no
+   * React render.
+   *
+   * The snap stays the BROWSER's. Its deceleration is tuned per device, and a
+   * JavaScript tween layered over a native scroller is how a gallery ends up
+   * fighting the finger that is driving it.
+   *
+   * The index is still tracked, for one reader: the backdrop, which has to be
+   * the colours of the picture actually on screen. Derived from `scrollLeft`
+   * rather than an observer, because every slide is exactly the track's width
+   * and division is cheaper and exact.
    */
-  const onRailScroll = React.useCallback(() => {
+  const paint = React.useCallback(() => {
+    frameRef.current = null;
     const node = railRef.current;
     if (!node || node.clientWidth === 0) return;
-    const next = Math.round(node.scrollLeft / node.clientWidth);
+    const position = node.scrollLeft / node.clientWidth;
+    const next = Math.round(position);
     setSlide((previous) => (previous === next ? previous : next));
-  }, []);
+    if (reduceMotion) return;
+    slideRefs.current.forEach((element, index) => {
+      if (!element) return;
+      const distance = Math.min(Math.abs(index - position), 1);
+      // Cleared at rest rather than left at `scale(1)`, so a resting poster is
+      // laid out exactly as it would be with no effect at all.
+      if (distance < 0.001) {
+        element.style.transform = '';
+        element.style.opacity = '';
+        return;
+      }
+      element.style.transform = `scale(${1 - SLIDE_DEPTH_SCALE * distance})`;
+      element.style.opacity = String(1 - SLIDE_DEPTH_FADE * distance);
+    });
+  }, [reduceMotion]);
+
+  // One paint per frame however many scroll events the browser delivers in it.
+  const onRailScroll = React.useCallback(() => {
+    if (frameRef.current === null) frameRef.current = window.requestAnimationFrame(paint);
+  }, [paint]);
+
+  React.useEffect(
+    () => () => {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
+
+  // The rail unmounts while the poster is docked and remounts at the FIRST
+  // slide, which is also what the thumbnail flying back into it shows. The
+  // index follows, so the backdrop is never the colours of a photograph that
+  // is no longer there.
+  React.useEffect(() => {
+    if (docked) setSlide(0);
+  }, [docked]);
 
   /**
    * A drag ends in a `click`, and every slide is a button.
    *
    * Without this, swiping to the next photograph opens the full-screen viewer
-   * on release — the same class of bug the deck's own `draggedRef` exists for,
-   * one level down. The threshold is the distance nobody's thumb moves while
+   * on release. The threshold is the distance nobody's thumb moves while
    * tapping.
    */
   const dragRef = React.useRef({ x: 0, moved: false });
@@ -1066,29 +788,47 @@ function Hero({
 
             It exists because the box has a FIXED shape and posters do not.
             Anything the picture leaves — a letterbox on an unusual ratio, the
-            frame before it decodes, and the whole box once the poster has
-            docked into the booking bar — was a flat slab of `bg-muted`, which
-            on a light theme reads as a skin-toned rectangle where the event's
-            artwork should be. */}
+            frame before it decodes, the gap around a slide stepping back
+            mid-swipe, and the whole box once the poster has docked into the
+            booking bar — was a flat slab of `bg-muted`, which on a light theme
+            reads as a skin-toned rectangle where the event's artwork should
+            be.
+
+            It CROSS-FADES between slides. It used to swap in one frame at the
+            midpoint of the swipe, which is exactly when the gap around the
+            stepping-back slides shows it. */}
         {backdrop ? (
           <motion.div
             aria-hidden
             style={{ opacity: blurOpacity }}
             className="pointer-events-none absolute inset-0"
           >
-            <Image
-              key={backdrop}
-              src={backdrop}
-              alt=""
-              fill
-              sizes="100vw"
-              // `blur-sm` (4px), not `blur-2xl` (40px): soft enough that
-              // nothing behind the poster competes with it, light enough that
-              // it reads as the same photograph rather than as fog. The scale
-              // exists only to push the blur's soft edge outside the clip, and
-              // 4px needs far less room than 40.
-              className="scale-110 object-cover blur-sm saturate-150"
-            />
+            <AnimatePresence initial={false}>
+              <motion.div
+                key={backdrop}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{
+                  duration: reduceMotion ? 0 : BACKDROP_FADE_MS / 1000,
+                  ease: TRANSITION_EASE,
+                }}
+                className="absolute inset-0"
+              >
+                <Image
+                  src={backdrop}
+                  alt=""
+                  fill
+                  sizes="100vw"
+                  // `blur-sm` (4px), not `blur-2xl` (40px): soft enough that
+                  // nothing behind the poster competes with it, light enough
+                  // that it reads as the same photograph rather than as fog.
+                  // The scale exists only to push the blur's soft edge outside
+                  // the clip, and 4px needs far less room than 40.
+                  className="scale-110 object-cover blur-sm saturate-150"
+                />
+              </motion.div>
+            </AnimatePresence>
           </motion.div>
         ) : null}
 
@@ -1104,16 +844,13 @@ function Hero({
             {slides.length > 0 ? (
               <div
                 ref={railRef}
-                // Read by the deck, which must NOT claim a gesture that starts
-                // in here: its horizontal swipe changes EVENT, and inside this
-                // rail a horizontal swipe changes PICTURE. See `onPointerDown`.
-                data-hero-gallery
                 onScroll={onRailScroll}
                 className={cn(
                   'flex h-full w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden',
                   // `touch-pan-x`: this element handles sideways and nothing
                   // else, so a vertical drag over the artwork scrolls the PAGE
-                  // instead of being arbitrated against the gallery.
+                  // instead of being arbitrated against the gallery. It is
+                  // the ONLY horizontal gesture on this surface.
                   'touch-pan-x overscroll-x-contain',
                   'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
                 )}
@@ -1121,6 +858,9 @@ function Hero({
                 {slides.map((image, index) => (
                   <button
                     key={`${image.url}#${index}`}
+                    ref={(element) => {
+                      slideRefs.current[index] = element;
+                    }}
                     type="button"
                     onPointerDown={onSlidePointerDown}
                     onPointerMove={onSlidePointerMove}
@@ -1130,19 +870,19 @@ function Hero({
                         ? `View ${event.title} poster full size`
                         : image.alt || `View photo ${index + 1} full size`
                     }
-                    className="relative h-full w-full shrink-0 snap-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    // Rounded like the frame, so a slide stepping back
+                    // mid-swipe reads as a card rather than as a square
+                    // cut-out; at rest the frame's own clip makes the two
+                    // radii one edge.
+                    style={{ borderRadius: HERO_RADIUS_PX }}
+                    className="relative h-full w-full shrink-0 snap-center snap-always overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                   >
-                    <Image
+                    <SlideImage
                       src={image.url}
-                      alt=""
-                      fill
-                      sizes="100vw"
                       // Only the FIRST is priority. Marking a whole gallery
                       // high-priority makes every image compete for the same
                       // connections and delays the one that IS the LCP element.
                       priority={index === 0}
-                      className="object-cover"
-                      draggable={false}
                     />
                   </button>
                 ))}
@@ -1160,33 +900,30 @@ function Hero({
 }
 
 /**
- * The page's own branding, above the artwork and in the flow.
+ * One photograph in the hero gallery, faded in once it has decoded.
  *
- * The deck is opened from a feed, from a shared link and from an in-app
- * webview, and in the last two there is no site chrome anywhere on the screen —
- * nothing says whose product this is. This is that, and it is deliberately the
- * cheapest possible version: a mark, a word, and no controls.
- *
- * NOT STICKY, and that is the requirement rather than an oversight. A branding
- * bar pinned to the top of a page whose whole first screen is one photograph
- * spends permanent vertical space on something the reader learns once. It
- * scrolls away with the poster; the TAB bar is the thing that stays.
- *
- * The mark is `BrandMark` — the one definition of it in the codebase, so a
- * brand change lands here without anybody remembering this file exists.
+ * The slides after the first load lazily, so a quick swipe could land on a
+ * picture that appeared in one frame, all at once, over the backdrop. It
+ * fades up instead. The FIRST slide never fades: it is the shared-poster
+ * transition's destination, and the handover is pixel-identical only if the
+ * picture underneath is already fully there.
  */
-function BrandHeader() {
+function SlideImage({ src, priority }: { src: string; priority: boolean }) {
+  const [loaded, setLoaded] = React.useState(priority);
   return (
-    <div className="relative flex items-center justify-center px-4 pb-2 pt-3">
-      <span className="absolute left-4 top-1/2 -translate-y-1/2 inline-flex">
-        <BrandMark title="Curatix" className="h-6 w-auto" />
-      </span>
-      {/* Absolutely centred against the SCREEN, not against the space left
-          over beside the mark — a flex-centred word shifts right by half the
-          logo's width, which is visible the moment anything else joins the
-          row. */}
-      <span className="text-body font-extrabold tracking-tight text-foreground">Curatix</span>
-    </div>
+    <Image
+      src={src}
+      alt=""
+      fill
+      sizes="100vw"
+      priority={priority}
+      onLoad={() => setLoaded(true)}
+      className={cn(
+        'object-cover transition-opacity duration-500 ease-out',
+        loaded ? 'opacity-100' : 'opacity-0',
+      )}
+      draggable={false}
+    />
   );
 }
 
@@ -1201,28 +938,23 @@ function BookingBar({
   event,
   tiers,
   docked,
-  /** Present only on the active page: a neighbour must not own the shared id. */
   layoutId,
   transition,
   barRef,
   onLeave,
-  inert,
 }: {
   event: EventCardData;
   /**
-   * `null` while the tiers are still in flight, `undefined` on a neighbour
-   * that never asks for them. Both mean the same thing here — nothing is
-   * known about the sale window yet — and the bar draws its ordinary label
-   * rather than guessing a refusal.
+   * `null` while the tiers are still in flight: nothing is known about the
+   * sale window yet, and the bar draws its ordinary label rather than
+   * guessing a refusal.
    */
   tiers: TicketTier[] | null | undefined;
   docked: boolean;
-  layoutId?: string;
+  layoutId: string;
   transition: { duration: number; ease: [number, number, number, number] };
   barRef?: React.RefObject<HTMLDivElement>;
   onLeave?: () => void;
-  /** A neighbour's bar is scenery during a swipe — drawn, never pressable. */
-  inert?: boolean;
 }) {
   const price = formatFromPrice(event.from_price);
   const saleState = tiers ? summariseTiers(tiers).state : null;
@@ -1254,38 +986,21 @@ function BookingBar({
           checkout surface, backed by nothing. */}
       <div className="flex items-center gap-3">
         {docked ? (
-          layoutId ? (
-            <motion.div
-              layoutId={layoutId}
-              // The poster's whereabouts while it is docked — see the note on
-              // the hero's copy of this attribute.
-              {...{ [DECK_POSTER_ATTR]: '' }}
-              style={{
-                borderRadius: THUMB_RADIUS_PX,
-                width: THUMB_SIZE_PX,
-                height: THUMB_SIZE_PX,
-              }}
-              transition={transition}
-              className="relative shrink-0 overflow-hidden bg-muted"
-            >
-              <Poster event={event} />
-            </motion.div>
-          ) : (
-            // A neighbour draws the same disc so the bar does not lose an
-            // element for the length of a swipe — but WITHOUT the shared id,
-            // or framer would try to fly the poster between two pages.
-            <span
-              aria-hidden
-              style={{
-                borderRadius: THUMB_RADIUS_PX,
-                width: THUMB_SIZE_PX,
-                height: THUMB_SIZE_PX,
-              }}
-              className="relative block shrink-0 overflow-hidden bg-muted"
-            >
-              <Poster event={event} />
-            </span>
-          )
+          <motion.div
+            layoutId={layoutId}
+            // The poster's whereabouts while it is docked — see the note on
+            // the hero's copy of this attribute.
+            {...{ [DECK_POSTER_ATTR]: '' }}
+            style={{
+              borderRadius: THUMB_RADIUS_PX,
+              width: THUMB_SIZE_PX,
+              height: THUMB_SIZE_PX,
+            }}
+            transition={transition}
+            className="relative shrink-0 overflow-hidden bg-muted"
+          >
+            <Poster event={event} />
+          </motion.div>
         ) : null}
 
         <div className="flex min-w-0 flex-col">
@@ -1297,11 +1012,7 @@ function BookingBar({
           ) : null}
         </div>
 
-        {inert ? (
-          <span className="ml-auto inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-cta px-7 text-body-sm font-extrabold text-cta-foreground">
-            Book tickets
-          </span>
-        ) : !bookable ? (
+        {!bookable ? (
           <span
             aria-disabled="true"
             className="ml-auto inline-flex h-12 shrink-0 cursor-not-allowed items-center justify-center rounded-full border border-border bg-sunken px-7 text-body-sm font-extrabold text-muted-foreground"
@@ -1343,8 +1054,6 @@ function ActivePage({
   ctaRef,
   heroRef,
   onScroll,
-  onPointerDown,
-  onPointerMove,
   onOpenSheet,
   onSelectEvent,
   onLeave,
@@ -1365,8 +1074,6 @@ function ActivePage({
   ctaRef: React.RefObject<HTMLDivElement>;
   heroRef: React.RefObject<HTMLDivElement>;
   onScroll: () => void;
-  onPointerDown: (event: React.PointerEvent) => void;
-  onPointerMove: (event: React.PointerEvent) => void;
   onOpenSheet: (sheet: NonNullable<SubSheetType>) => void;
   onSelectEvent: (id: string) => void;
   /** Closes WITHOUT the exit animation — for navigating away. */
@@ -1375,39 +1082,33 @@ function ActivePage({
   /**
    * The shared id is scoped to the EVENT.
    *
-   * A constant would make every page change a match: framer would see the id
-   * leave the outgoing page and arrive in the incoming one and fly the poster
-   * a screen-width sideways, mid-swipe. Per event, a swipe is an unmount and a
-   * separate mount with nothing in common — which is the instant swap the
-   * docked thumbnail is supposed to do.
+   * A constant would make every switch between events a match: framer would
+   * see the id leave the outgoing page and arrive in the incoming one and fly
+   * the old poster into the new page. Per event, a switch is an unmount and a
+   * separate mount with nothing in common.
    */
   const layoutId = `deck-poster-${event.id}`;
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
       {/* ── AN ORDINARY SCROLLER ──────────────────────────────────────────
-          `overflow-y-auto`, and that is the whole vertical story. The pointer
-          handlers watch for a decisively horizontal movement and hand it to the
-          deck; everything else reaches the browser untouched. */}
+          `overflow-y-auto`, and that is the whole story: no pointer handlers,
+          no touch listeners, nothing between the finger and the browser. */}
       <div
         ref={scrollerRef}
         data-deck-scroller
         onScroll={onScroll}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
         className="flex-1 overflow-y-auto overscroll-contain"
         // The bar's measured height PLUS the gap it now floats above, so the
         // last section clears it exactly. A hard-coded `pb-28` is either a void
         // or a clipped final row on some device.
         style={{ paddingBottom: `${(ctaHeight || 96) + 32}px` }}
       >
-        {/* ── BRANDING, AND IT SCROLLS AWAY ──────────────────────────────
-            The first thing in the scroller and nothing more than that: no
-            `sticky`, no `fixed`, no z-index. It is in the normal flow, so it
-            leaves with the first flick and gives the artwork the whole screen
-            for the rest of the read — which is the point of putting it above
-            the poster rather than over it. */}
-        <BrandHeader />
+        {/* ── BRANDING, AND IT STAYS ─────────────────────────────────────
+            First in the scroller and `sticky`, so it pins to the top of THIS
+            box as everything below it scrolls underneath. See `DeckBrandHeader`
+            for why it is sticky here rather than fixed. */}
+        <DeckBrandHeader />
         <Hero
           event={event}
           images={images}
@@ -1419,18 +1120,8 @@ function ActivePage({
           blurOpacity={blurOpacity}
           onOpenPoster={onOpenPoster}
         />
-        {/* WHAT it is, WHERE and WHEN — above the tabs, because the tabs
-            navigate WITHIN an event and these three say which one. */}
+        {/* WHAT it is, WHERE and WHEN. */}
         <EventWidgetSummary event={event} content={content} onOpenSheet={onOpenSheet} />
-        {/* ── THE TABS STICK, AND THEY STICK INSIDE THIS SCROLLER ────────
-            Declared between the summary and the content so `position: sticky`
-            pins them against the page's own scroll box. They cannot be
-            `fixed`: that would resolve against the deck's transformed page
-            track and land in the wrong place on every swipe — the same trap
-            the lightbox portal exists for. */}
-        <div className="px-4">
-          <SectionTabs tabs={sectionTabsFor(detail, content)} scrollerRef={scrollerRef} />
-        </div>
         <EventWidgetContent
           key={event.id}
           event={event}
@@ -1451,81 +1142,6 @@ function ActivePage({
         transition={dockTransition}
         barRef={ctaRef}
         onLeave={onLeave}
-      />
-    </div>
-  );
-}
-
-/**
- * A NEIGHBOUR — everything the LIST already knows, and no more.
- *
- * A page is the full viewport, so the incoming event is entirely visible for
- * the whole length of a swipe, and a screen that is blank below the title reads
- * as the next event having failed to load. So it carries the same first screen
- * as an active page: the inset hero, the title, the date, the venue and the
- * ticket bar with the real price. On release the swap for the real page fills
- * in what was below the fold, and the eye reads it as having been there all
- * along.
- *
- * Every field is on the `EventCard` the list already handed us — no request, no
- * `useEventWidgetData`, no event-page subtree. Twenty of these are mounted at
- * once and the cost of one is a handful of DOM nodes.
- */
-function NeighbourPage({ event, docked }: { event: EventCardData; docked: boolean }) {
-  const when = event.starts_at
-    ? [formatEventDate(event.starts_at), formatEventTime(event.starts_at)]
-        .filter(Boolean)
-        .join(' · ')
-    : null;
-  const where = [event.venue, event.city].filter(Boolean).join(', ');
-
-  return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
-      {/* ── A NEIGHBOUR IMITATES THE PAGE IT IS ABOUT TO BECOME ──────────
-          Including its SCROLL POSITION. The incoming page mounts with the
-          reader's offset carried over, so while the poster is docked it is
-          scrolled past its hero — and a neighbour that drew a full-height hero
-          box anyway would put 450px of empty container at the top of the screen
-          for the length of every swipe, and then close it the instant the swap
-          landed. Docked, it simply starts at the title, which is roughly what
-          the real page shows at that offset. */}
-      {docked ? null : (
-        <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
-          <div
-            style={{
-              aspectRatio: `${HERO_ASPECT_W} / ${HERO_ASPECT_H}`,
-              borderRadius: HERO_RADIUS_PX,
-            }}
-            className="relative w-full overflow-hidden bg-muted"
-          >
-            {event.poster_url ? (
-              <span aria-hidden className="pointer-events-none absolute inset-0">
-                <Image
-                  src={event.poster_url}
-                  alt=""
-                  fill
-                  sizes="100vw"
-                  className="scale-110 object-cover blur-sm saturate-150"
-                />
-              </span>
-            ) : null}
-            <Poster event={event} />
-          </div>
-        </div>
-      )}
-      <div className={cn('flex flex-col gap-1.5 px-4', docked ? 'pt-4' : 'pt-6')}>
-        <p className="line-clamp-2 text-h3 font-extrabold leading-snug tracking-tight text-foreground">
-          {event.title}
-        </p>
-        {when ? <p className="text-body-sm font-semibold text-primary">{when}</p> : null}
-        {where ? <p className="line-clamp-1 text-body-sm text-muted-foreground">{where}</p> : null}
-      </div>
-      <BookingBar
-        event={event}
-        tiers={undefined}
-        docked={docked}
-        transition={{ duration: 0, ease: TRANSITION_EASE }}
-        inert
       />
     </div>
   );

@@ -15,7 +15,9 @@ import razorpay
 
 from core.ports.payment_port import (
     OrderTransfer,
+    PaymentOrderRejected,
     PaymentPort,
+    PaymentProviderUnavailable,
     ProviderPayment,
     SplitTransferResult,
 )
@@ -75,7 +77,36 @@ class RazorpayPaymentAdapter(PaymentPort):
                 }
                 for t in transfers
             ]
-        order = self._client.order.create(params)
+        # ── THE SDK'S EXCEPTIONS STOP HERE ─────────────────────────────
+        #
+        # This call had no handling at all, so any refusal from Razorpay
+        # left the booking service as a raw SDK exception, reached DRF's
+        # last-resort handler and was answered as a 500 with the sentence
+        # "An unexpected error occurred" — the customer saw a crash and
+        # the log said nothing about WHAT Razorpay had objected to.
+        #
+        # Translated into the port's own two failures, split on the one
+        # distinction a caller can act on: a 4xx is a definite refusal of
+        # THIS request (retrying it unchanged is pointless), and anything
+        # else is an outcome nobody knows. Matched on the class NAME, as
+        # `fetch_payment` does, so `razorpay.errors` is never imported at
+        # module scope and the lazy import stays lazy.
+        try:
+            order = self._client.order.create(params)
+        except Exception as exc:  # noqa: BLE001 — translated below
+            reason = str(exc) or type(exc).__name__
+            logger.error(
+                "razorpay.order_create_failed",
+                extra={
+                    "receipt": receipt,
+                    "error_class": type(exc).__name__,
+                    "reason": reason,
+                    "had_transfers": bool(transfers),
+                },
+            )
+            if type(exc).__name__ == "BadRequestError":
+                raise PaymentOrderRejected(reason, had_transfers=bool(transfers)) from exc
+            raise PaymentProviderUnavailable(reason) from exc
         return order["id"]
 
     def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:

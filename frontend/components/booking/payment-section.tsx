@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { ApiError } from '@/lib/api/errors';
 import { rememberFailure } from '@/lib/booking/payment-failure';
+import { setBookingDonation } from '@/lib/api/bookings';
 import { simulatePayment, verifyPayment } from '@/lib/api/payments';
 import { resolveProvider } from '@/lib/booking/payment-provider';
 import { openCheckout, resolveKeyId } from '@/lib/booking/razorpay';
@@ -93,7 +94,7 @@ export function PaymentSection({
    */
   pending?: boolean;
 }) {
-  const { paymentKeyId, paymentProvider } = useBooking();
+  const { paymentKeyId, paymentProvider, reservedFor, setBooking } = useBooking();
   const { user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -124,21 +125,52 @@ export function PaymentSection({
     active.status !== 'paid' &&
     Date.parse(active.hold_expires_at as string) <= Date.now();
 
+  /**
+   * ── A HOLD WITH NO ORDER IS REPAIRED, NOT ABANDONED ─────────────────────
+   *
+   * A donation or a coupon changes the total, and the server re-creates the
+   * payment order for it AFTER committing the change. If the provider failed
+   * at that second step the booking keeps its hold — deliberately — but has no
+   * order, and this button used to answer "Please start the booking again" over
+   * a hold that was perfectly fine.
+   *
+   * Setting the donation to the amount it ALREADY has is the one write that
+   * does nothing but make sure an order exists: the server falls through to
+   * `_ensure_payment_order` on an unchanged amount. So that is the repair, and
+   * the checkout opens on the order it returns. The new total comes back with
+   * it and is published to the screen, so the pay button and the summary above
+   * it cannot disagree about what was just charged.
+   */
+  const reissueOrder = async (): Promise<Booking | null> => {
+    try {
+      const repaired = await setBookingDonation(active.id, active.donation);
+      setBooking(repaired, reservedFor);
+      return repaired;
+    } catch {
+      return null;
+    }
+  };
+
   const pay = async () => {
     if (holdLapsed()) {
       setError('Your hold has expired and these tickets were released. Nothing has been charged.');
       return;
     }
-    if (!active.payment_order_id) {
-      setError('This order has no payment reference. Please start the booking again.');
-      return;
-    }
     setBusy(true);
     setError(null);
+    const order = active.payment_order_id ? active : await reissueOrder();
+    if (!order?.payment_order_id) {
+      setBusy(false);
+      setError(
+        'We could not prepare this payment just now. Your tickets are still held and nothing ' +
+          'has been charged — please try again in a moment.',
+      );
+      return;
+    }
     await openCheckout({
       keyId,
-      orderId: active.payment_order_id,
-      amountMinor: active.total_amount,
+      orderId: order.payment_order_id,
+      amountMinor: order.total_amount,
       currency: 'INR',
       eventTitle: event.title,
       customer: { name: user?.full_name, email: user?.email },

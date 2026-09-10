@@ -48,7 +48,12 @@ from core.events import (
     TICKET_ISSUED,
 )
 from core.ports.cache_port import CachePort
-from core.ports.payment_port import OrderTransfer, PaymentPort
+from core.ports.payment_port import (
+    OrderTransfer,
+    PaymentOrderRejected,
+    PaymentPort,
+    PaymentProviderUnavailable,
+)
 from core.unit_of_work import UnitOfWork
 
 from .exceptions import (
@@ -60,6 +65,7 @@ from .exceptions import (
     InvalidAttendeeAssignmentsError,
     InvalidBookingItemsError,
     NotBookingOwnerError,
+    PaymentOrderFailedError,
 )
 from .models import Booking, BookingAnswer, BookingItem, BookingStatus, Ticket, TicketStatus
 from .qr import sign_ticket
@@ -68,6 +74,26 @@ from .repositories import BookingRepository, TicketRepository
 logger = logging.getLogger(__name__)
 
 _CURRENCY = "INR"
+
+#: ── IF RAZORPAY REFUSES THE ROUTE SPLIT, SELL WITHOUT ONE ────────────────
+#:
+#: The one input to a payment order that varies by ORGANIZER rather than by
+#: booking is the Route transfer to their linked account. When Razorpay refuses
+#: an order that carried one — a linked account not yet activated, not in this
+#: key's mode, or closed — every event that organizer publishes becomes
+#: unbuyable, deterministically, on the first press and on every retry.
+#:
+#: Falling back to an order with NO transfer is not a new money policy. It is
+#: exactly the order `_build_transfers` already creates for an organizer with
+#: no linked account at all, which the platform sells for today: the full
+#: amount is collected and the organizer's share becomes a settlement concern
+#: rather than a Route hold. A refused linked account is, as far as Razorpay is
+#: concerned, the same thing as no linked account.
+#:
+#: It is LOUD, and it has to be: the fallback is logged as a WARNING naming the
+#: event and the provider's reason, because the organizer's payout now depends
+#: on somebody fixing that account. Set to False to refuse the sale instead.
+ROUTE_TRANSFER_FALLBACK = True
 
 
 @dataclass(frozen=True)
@@ -284,7 +310,9 @@ class BookingService:
         if idempotency_key:
             existing = self._bookings.get_replayable_by_idempotency_key(user_id, idempotency_key)
             if existing is not None:
-                return self._creation_result(self._ensure_payment_order(existing))
+                return self._creation_result(
+                    self._ensure_payment_order(existing, release_hold_on_failure=True)
+                )
             # Serialise concurrent same-key creates so a double-click doesn't do a
             # second (doomed) reserve. Correctness doesn't depend on this — the DB
             # unique constraint + transaction rollback below are the real guard —
@@ -298,7 +326,9 @@ class BookingService:
                     user_id, idempotency_key
                 )
                 if existing is not None:
-                    return self._creation_result(self._ensure_payment_order(existing))
+                    return self._creation_result(
+                        self._ensure_payment_order(existing, release_hold_on_failure=True)
+                    )
                 # Nothing replayable, so anything still holding this key is a
                 # booking that ended — expired, cancelled, or reserved past its
                 # deadline. Detach it, or the insert below collides with the very
@@ -320,7 +350,9 @@ class BookingService:
             )
 
         # OUTSIDE the transaction/lock: the external payment-order call.
-        return self._creation_result(self._ensure_payment_order(booking))
+        return self._creation_result(
+            self._ensure_payment_order(booking, release_hold_on_failure=True)
+        )
 
     def _validate_donation(self, donation_minor: int) -> int:
         """A donation is optional, whole paise, and bounded.
@@ -558,22 +590,127 @@ class BookingService:
         logger.info("booking_created", extra={"booking_id": str(booking.id)})
         return booking
 
-    def _ensure_payment_order(self, booking: Booking) -> Booking:
+    def _ensure_payment_order(self, booking: Booking, *, release_hold_on_failure: bool) -> Booking:
         """Create the payment order if this reserved booking doesn't have one
         yet (external call — always outside any DB lock). Idempotent, so a
-        retry after a crash between commit and this call just fills it in."""
+        retry after a crash between commit and this call just fills it in.
+
+        ── A FAILED ORDER RELEASES A NEW HOLD, AND THAT IS HALF THE FIX ──────
+
+        The seats are reserved and COMMITTED before this runs — the order call
+        is deliberately outside the reserve transaction. So when the provider
+        refused, the booking was left `reserved` with no order, holding
+        inventory for the rest of its ten minutes, and the customer's Try
+        again replayed that same booking by its idempotency key straight back
+        into the same refused call. A deterministic loop: every press a 500,
+        and the seats counted against the event the whole time.
+
+        On the CREATE path a failure now cancels the hold before it is
+        reported. Nothing was charged — there is no order to pay — so releasing
+        is always safe, and it is what makes the next press a fresh reserve
+        rather than a replay of the one that just failed.
+
+        ── …AND KEEPS AN EXISTING ONE ───────────────────────────────────────
+
+        The re-issue paths (a donation, a coupon applied or removed) reach here
+        with a hold the customer is already reading a screen about. Cancelling
+        it because a chip was pressed during a provider blip would cost them
+        their seats over a decision with nothing to do with stock — the exact
+        harm `set_donation` exists to avoid. So the hold stays, with an empty
+        order id, and the next call that reaches here fills it in: the same
+        chip pressed again, the code applied again, or the create replay on a
+        reload.
+
+        Required rather than defaulted: which of the two a caller wants is the
+        whole question, and a default is how the next call site gets it wrong.
+        """
         if booking.payment_order_id or booking.status != BookingStatus.RESERVED:
             return booking
-        order_id = self._payments.create_order(
+
+        try:
+            order_id = self._create_order_with_fallback(booking)
+        except (PaymentOrderRejected, PaymentProviderUnavailable) as failed:
+            if release_hold_on_failure:
+                self._release_unstartable(booking.id, reason=failed.reason)
+                raise PaymentOrderFailedError() from failed
+            logger.error(
+                "booking.payment_order_reissue_failed",
+                extra={"booking_id": str(booking.id), "reason": failed.reason},
+            )
+            raise PaymentOrderFailedError(
+                "We could not update the payment just now. Your tickets are still "
+                "held and nothing has been charged — please try again."
+            ) from failed
+
+        booking.payment_order_id = order_id
+        self._bookings.save(booking)
+        return booking
+
+    def _create_order_with_fallback(self, booking: Booking) -> str:
+        """The order, with the organizer's Route split — or without it, if
+        Razorpay refuses the split. See `ROUTE_TRANSFER_FALLBACK`.
+
+        A refusal of an order that carried NO split is re-raised untouched:
+        there was nothing to drop, and the identical request would be refused
+        identically. A refusal of the no-split retry is re-raised too — the
+        split was never the problem, and the warning below has already recorded
+        the first refusal for whoever reads the log.
+        """
+        transfers = self._build_transfers(booking)
+        try:
+            return self._create_order(booking, transfers)
+        except PaymentOrderRejected as rejected:
+            if not (transfers and ROUTE_TRANSFER_FALLBACK):
+                raise
+            logger.warning(
+                "booking.route_transfer_refused",
+                extra={
+                    "booking_id": str(booking.id),
+                    "event_id": str(booking.event_id),
+                    "reason": rejected.reason,
+                },
+            )
+            return self._create_order(booking, None)
+
+    def _create_order(self, booking: Booking, transfers: list[OrderTransfer] | None) -> str:
+        return self._payments.create_order(
             amount_minor=booking.total_amount_minor,
             currency=_CURRENCY,
             receipt=str(booking.id),
             notes={"booking_id": str(booking.id)},
-            transfers=self._build_transfers(booking),
+            transfers=transfers,
         )
-        booking.payment_order_id = order_id
-        self._bookings.save(booking)
-        return booking
+
+    def _release_unstartable(self, booking_id: uuid.UUID | str, *, reason: str) -> None:
+        """Cancel a hold whose payment could not be started.
+
+        `cancel_booking` without the ownership check — there is no actor here,
+        only a provider that declined — and with its own reason on the outbox
+        event so the two are never confused in the activity feed. Same lock
+        order as every other release: the booking row first, then the tiers
+        via `_release_items`, so it cannot invert against a concurrent cancel
+        or the sweeper.
+
+        Re-checked under the lock: a concurrent request may already have
+        released it, and releasing twice would hand the seats back twice.
+        """
+        with UnitOfWork() as uow:
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None or booking.status != BookingStatus.RESERVED:
+                return
+            self._release_items(booking_id)
+            self._coupons.release_for_booking(booking_id=booking_id)
+            booking.status = BookingStatus.CANCELLED
+            self._bookings.save(booking)
+            uow.publish(
+                BOOKING_CANCELLED,
+                {"booking_id": str(booking.id), "reason": "payment_order_failed"},
+                aggregate_id=str(booking.id),
+            )
+        logger.error(
+            "booking.payment_order_failed",
+            extra={"booking_id": str(booking_id), "reason": reason},
+        )
 
     def _build_transfers(self, booking: Booking) -> list[OrderTransfer] | None:
         """The Route split for this order: the organizer's share transferred to
@@ -694,23 +831,26 @@ class BookingService:
                 raise NotBookingOwnerError()
             if booking.status != BookingStatus.RESERVED:
                 raise BookingNotModifiableError(booking.status)
-            if booking.donation_amount_minor == donation_minor:
-                return booking  # nothing to do, and no order to churn
+            # An UNCHANGED amount moves nothing and falls through to the order
+            # check below, which is a no-op while the order exists. It used to
+            # return here, and that made a failed re-issue a dead end: the
+            # amount was already written, so pressing the same chip again did
+            # nothing and the booking stayed without an order to pay.
+            if booking.donation_amount_minor != donation_minor:
+                # The ticket subtotal + fee, recovered from the row rather than
+                # recomputed from the tiers: those prices were decided under a
+                # lock that is long released, and re-reading them now could
+                # bill a different sale phase than the one this hold got.
+                without_donation = booking.total_amount_minor - booking.donation_amount_minor
+                booking.donation_amount_minor = donation_minor
+                booking.total_amount_minor = without_donation + donation_minor
+                # Dropped so `_ensure_payment_order` issues a new one for the
+                # new amount. The abandoned order is never handed to a browser
+                # again and expires at the provider on its own.
+                booking.payment_order_id = ""
+                self._bookings.save(booking)
 
-            # The ticket subtotal + fee, recovered from the row rather than
-            # recomputed from the tiers: those prices were decided under a lock
-            # that is long released, and re-reading them now could bill a
-            # different sale phase than the one this hold actually got.
-            without_donation = booking.total_amount_minor - booking.donation_amount_minor
-            booking.donation_amount_minor = donation_minor
-            booking.total_amount_minor = without_donation + donation_minor
-            # Dropped so `_ensure_payment_order` issues a new one for the new
-            # amount. The abandoned order is never handed to a browser again and
-            # expires at the provider on its own.
-            booking.payment_order_id = ""
-            self._bookings.save(booking)
-
-        return self._ensure_payment_order(booking)
+        return self._ensure_payment_order(booking, release_hold_on_failure=False)
 
     # --- SetCoupon ---------------------------------------------------------
 
@@ -817,7 +957,7 @@ class BookingService:
                 target_id=str(booking.id),
             )
 
-        return self._ensure_payment_order(booking)
+        return self._ensure_payment_order(booking, release_hold_on_failure=False)
 
     def clear_coupon(self, *, booking_id: uuid.UUID | str, actor_id: uuid.UUID | str) -> Booking:
         """Take the code back off, and put the redemption back in the pool.
@@ -851,7 +991,7 @@ class BookingService:
                 target_id=str(booking.id),
             )
 
-        return self._ensure_payment_order(booking)
+        return self._ensure_payment_order(booking, release_hold_on_failure=False)
 
     # --- ReleaseExpired (the sweeper / reliability backstop) ---------------
 

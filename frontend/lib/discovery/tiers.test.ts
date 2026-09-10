@@ -283,6 +283,26 @@ describe('the sale window', () => {
     expect(state).toEqual({ kind: 'not_on_sale', opensAt: ist });
   });
 
+  it('is not on sale when the only tier ON SALE has sold out', () => {
+    // The Book button used to be live here: one tier on sale (empty) beside
+    // one with stock whose window opens later read as `available`, and the
+    // picker it opened had nothing anybody could choose.
+    const state = summariseTiers([
+      tier({ id: 'now', is_on_sale: true, available: 0, sold: 100 }),
+      tier({ id: 'later', is_on_sale: false, sale_start: later }),
+    ]).state;
+    expect(state).toEqual({ kind: 'not_on_sale', opensAt: later });
+    expect(canStartBooking(state)).toBe(false);
+  });
+
+  it('counts down only the stock that can be bought now', () => {
+    const state = summariseTiers([
+      tier({ id: 'now', is_on_sale: true, available: 3 }),
+      tier({ id: 'later', is_on_sale: false, sale_start: later, available: 400 }),
+    ]).state;
+    expect(state).toEqual({ kind: 'few_left', left: 3 });
+  });
+
   it('carries a null date rather than inventing one', () => {
     // A tier can be off sale because its window CLOSED. There is no opening
     // date in that case and the label must not make one up.
