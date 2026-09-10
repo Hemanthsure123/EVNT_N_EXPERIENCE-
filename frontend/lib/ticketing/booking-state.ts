@@ -106,14 +106,25 @@ export function bookingRef(id: string): string {
   return id.slice(0, 8).toUpperCase();
 }
 
-export type StateFilter = 'all' | BookingState;
+/**
+ * THE THREE VIEWS OF THE TICKETS SCREEN.
+ *
+ * There used to be five chips — All, Upcoming, Unpaid, Past, Cancelled — and a
+ * separate "Rate your recent experiences" card above them. Three views replace
+ * all of it, and each one is a question somebody opens this screen to answer:
+ * what am I going to, what did I not finish paying for, and what have I not
+ * rated yet.
+ *
+ * `rate` is not a booking state. Its rows are the server's pending-review list
+ * (`GET /me/pending-reviews`), which already knows which attended events have
+ * no review — so it is fetched, not derived here.
+ */
+export type TicketsTab = 'upcoming' | 'unpaid' | 'rate';
 
-export const STATE_FILTERS: readonly { value: StateFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
+export const TICKETS_TABS: readonly { value: TicketsTab; label: string }[] = [
   { value: 'upcoming', label: 'Upcoming' },
   { value: 'unpaid', label: 'Unpaid' },
-  { value: 'finished', label: 'Past' },
-  { value: 'refunded', label: 'Cancelled' },
+  { value: 'rate', label: 'Yet to Rate' },
 ] as const;
 
 export type DecoratedBooking = {
@@ -123,71 +134,45 @@ export type DecoratedBooking = {
 };
 
 /**
- * Sorts decorated bookings according to the selected tab.
+ * The bookings a tab shows, in the order it shows them.
  *
- * When "all" is active:
- *   1. Upcoming/active bookings first (soonest event_starts_at first).
- *   2. Unpaid/incomplete bookings next (live holds first, then newest).
- *   3. Past/finished bookings next (most recent past event first).
- *   4. Cancelled/refunded bookings last (newest first).
+ * ── A REFUNDED BOOKING STILL LISTS UNDER UPCOMING ─────────────────────────
+ *
+ * Refund status is shown on the ticket's own page and nowhere on this list, by
+ * the owner's rule. Dropping refunded rows instead would make a refund
+ * unreachable: the list is the only way to the page that explains it. So a
+ * paid booking for an event still to come is listed whether or not its money
+ * came back, and the row stays silent about which.
+ *
+ * `finished` rows (paid and over) are in NO booking tab. The ones still worth
+ * acting on — attended and not yet rated — are what the `rate` tab lists.
+ *
+ * Upcoming is soonest first, because the next thing you are going to is the
+ * thing you need at a door. Unpaid is live holds first — the only rows with a
+ * deadline — and then the newest attempt.
  */
-export function sortDecoratedBookings(
+export function rowsForTab(
   items: DecoratedBooking[],
-  filter: StateFilter,
+  tab: Exclude<TicketsTab, 'rate'>,
   now: number,
 ): DecoratedBooking[] {
-  if (filter === 'upcoming') {
-    return [...items].sort(
-      (a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at),
-    );
+  if (tab === 'upcoming') {
+    return items
+      .filter(
+        (item) =>
+          item.state === 'upcoming' ||
+          (item.state === 'refunded' && eventEndsAt(item.booking) > now),
+      )
+      .sort(
+        (a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at),
+      );
   }
-  if (filter === 'unpaid') {
-    return [...items].sort((a, b) => {
+  return items
+    .filter((item) => item.state === 'unpaid')
+    .sort((a, b) => {
       const aLive = holdIsLive(a.booking, now);
       const bLive = holdIsLive(b.booking, now);
       if (aLive !== bLive) return aLive ? -1 : 1;
       return Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at);
     });
-  }
-  if (filter === 'finished') {
-    return [...items].sort(
-      (a, b) => Date.parse(b.booking.event_starts_at) - Date.parse(a.booking.event_starts_at),
-    );
-  }
-  if (filter === 'refunded') {
-    return [...items].sort(
-      (a, b) => Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at),
-    );
-  }
-
-  // filter === 'all'
-  const upcoming: DecoratedBooking[] = [];
-  const unpaid: DecoratedBooking[] = [];
-  const finished: DecoratedBooking[] = [];
-  const refunded: DecoratedBooking[] = [];
-
-  for (const item of items) {
-    if (item.state === 'upcoming') upcoming.push(item);
-    else if (item.state === 'unpaid') unpaid.push(item);
-    else if (item.state === 'finished') finished.push(item);
-    else refunded.push(item);
-  }
-
-  upcoming.sort(
-    (a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at),
-  );
-  unpaid.sort((a, b) => {
-    const aLive = holdIsLive(a.booking, now);
-    const bLive = holdIsLive(b.booking, now);
-    if (aLive !== bLive) return aLive ? -1 : 1;
-    return Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at);
-  });
-  finished.sort(
-    (a, b) => Date.parse(b.booking.event_starts_at) - Date.parse(a.booking.event_starts_at),
-  );
-  refunded.sort(
-    (a, b) => Date.parse(b.booking.created_at) - Date.parse(a.booking.created_at),
-  );
-
-  return [...upcoming, ...unpaid, ...finished, ...refunded];
 }

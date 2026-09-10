@@ -52,7 +52,15 @@ export interface SegmentedControlProps<T extends string = string> {
    * "2 of 4" is useless without knowing 4 of what.
    */
   'aria-label': string;
-  size?: 'sm' | 'md';
+  /** `lg` is the 44px touch-target floor, for a control that IS the page's filter. */
+  size?: 'sm' | 'md' | 'lg';
+  /**
+   * `biscuit` draws the sliding pill in the account's own active colour
+   * (`nav-active` — butter with dark ink), so a filter on an account screen
+   * reads as the same kind of "you are here" as the tab above it. `neutral`
+   * is the white-on-grey default everywhere else.
+   */
+  tone?: 'neutral' | 'biscuit';
   className?: string;
 }
 
@@ -62,6 +70,7 @@ export function SegmentedControl<T extends string = string>({
   onValueChange,
   'aria-label': ariaLabel,
   size = 'md',
+  tone = 'neutral',
   className,
 }: SegmentedControlProps<T>) {
   const itemRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
@@ -129,7 +138,8 @@ export function SegmentedControl<T extends string = string>({
       <span
         aria-hidden
         className={cn(
-          'col-start-1 row-start-1 rounded-full bg-surface shadow-sm',
+          'col-start-1 row-start-1 rounded-full shadow-sm',
+          tone === 'biscuit' ? 'bg-nav-active' : 'bg-surface',
           'transition-transform duration-base ease-out motion-reduce:transition-none',
           activeIndex < 0 && 'invisible',
         )}
@@ -152,15 +162,23 @@ export function SegmentedControl<T extends string = string>({
             onClick={() => onValueChange(option.value)}
             onKeyDown={(event) => handleKeyDown(event, index)}
             className={cn(
-              'row-start-1 inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-label',
+              // `relative z-10`: the pill behind carries a `transform`, and a
+              // transformed element paints ABOVE non-positioned siblings — so
+              // without this the selected label sat underneath its own pill,
+              // invisible, which a screenshot caught and no test could.
+              'relative z-10 row-start-1 inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-label',
               'transition-colors duration-fast ease-out motion-reduce:transition-none',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:pointer-events-none disabled:opacity-60',
-              size === 'sm' ? 'h-8' : 'h-control-sm',
+              size === 'sm' ? 'h-8' : size === 'lg' ? 'h-control' : 'h-control-sm',
               // Colour only. A weight change on selection would reflow the
               // label inside its column, which is the jitter this control is
               // built to avoid at the row level.
-              selected ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              selected
+                ? tone === 'biscuit'
+                  ? 'text-nav-active-foreground'
+                  : 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
             )}
             style={{ gridColumnStart: index + 1 }}
           >

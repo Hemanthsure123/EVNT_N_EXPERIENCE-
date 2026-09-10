@@ -2277,6 +2277,21 @@ Everything shared now lives in `components/ticketing/`, so the confirmation's
 bill, the failed-payment order card and the refund's breakdown are literally the
 same component rather than three that look alike this week.
 
+**The tickets screen is three views, and refunds are not on it.** `/account/
+tickets` is one sliding `SegmentedControl` (biscuit tone) — Upcoming (default),
+Unpaid, Yet to Rate — with no "All" and no helper text under any heading, at the
+owner's instruction. `rowsForTab` (`lib/ticketing/booking-state.ts`) decides
+membership and is tested: a REFUNDED booking for a future event still lists
+under Upcoming, silently, because the list is the only road to the page that
+explains the refund; past bookings are in no booking view, and the ones still
+worth acting on are the Yet to Rate rows (`GET /me/pending-reviews`). Every
+card opens the ticket page with `&from=bookings`, which tells
+`step-confirmation.tsx` not to poll (an unpaid booking opened from the list is
+not being paid for) and not to throw confetti. That page is the ONE place refund
+status, amount, reference and "Request a refund" appear, and it draws the same
+ticket card for every state — pass, unpaid, refunded, no-active, confirming —
+changing only the middle (the swipeable `QrCarousel`, or a stamp).
+
 **`GET /me/bookings` is the purchase history, and `/me/tickets` is not.** The
 account screen read the tickets endpoint, which returns ACTIVE tickets only — so
 its "Used" and "Refunded" filters could only ever count zero, and a booking whose

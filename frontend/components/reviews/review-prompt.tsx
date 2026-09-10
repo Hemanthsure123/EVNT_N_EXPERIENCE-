@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { fetchPendingReviews, type PendingReview } from '@/lib/api/reviews';
 import { Modal, ModalContent } from '@/components/ui/modal';
 import { cn } from '@/lib/utils/cn';
+import { PosterThumb } from '@/components/ticketing/primitives';
 import { ReviewForm } from './review-form';
 
 /**
@@ -23,8 +24,8 @@ import { ReviewForm } from './review-form';
  * snooze, not "we'll ask again next week" — an answer.
  *
  * **2. Dismissing costs you nothing.** The opportunity does not disappear with
- * the modal: `PendingReviewCard` renders the same thing, quietly, on the
- * tickets page, for as long as the window is open. That is what makes the
+ * the modal: the tickets page's "Yet to Rate" view (`PendingReviewRow`) lists
+ * the same events, quietly, for as long as the window is open. That is what makes the
  * dismissal safe to honour permanently — the brief's own suggestion, and the
  * reason this is not a nag.
  *
@@ -157,104 +158,82 @@ export function ReviewPrompt() {
 }
 
 /**
- * The quiet half. Lives on the tickets page and never interrupts anything.
+ * The events still waiting for a rating, one per event, most recent first.
+ *
+ * Several bookings for one night produce several pending rows; a person rates
+ * the NIGHT once, so the list is folded to one entry per event.
+ */
+export function uniquePendingReviews(pending: readonly PendingReview[]): PendingReview[] {
+  const seen = new Set<string>();
+  const list: PendingReview[] = [];
+  for (const item of pending) {
+    if (seen.has(item.event_id)) continue;
+    seen.add(item.event_id);
+    list.push(item);
+  }
+  return list;
+}
+
+/**
+ * One event waiting for a rating — a row in the tickets screen's "Yet to Rate"
+ * view.
  *
  * This is what makes the modal's permanent dismissal honest: the chance to
- * review does not vanish because somebody was busy the first time.
+ * review does not vanish because somebody was busy the first time. It used to
+ * be a separate "Rate your recent experiences" card stacked above the bookings;
+ * it is a VIEW of that list now, with the same card shape as a booking, so
+ * rating is somewhere you go rather than something the page pushes at you.
+ *
+ * The Rate button is BLACK — the page's primary-action colour — not violet.
  */
-export function PendingReviewCard({ className }: { className?: string }) {
-  const { data, isPending } = usePendingReviews();
-  const [openId, setOpenId] = React.useState<string | null>(null);
-
-  const uniquePending = React.useMemo(() => {
-    const pending = data?.data ?? [];
-    const seen = new Set<string>();
-    const list: PendingReview[] = [];
-    for (const item of pending) {
-      if (!seen.has(item.event_id)) {
-        seen.add(item.event_id);
-        list.push(item);
-      }
-    }
-    return list;
-  }, [data?.data]);
-
-  // No skeleton and no empty state: an absent section is correct when there is
-  // nothing to review, and a placeholder for a thing most people never have is
-  // clutter on the page they came to for their tickets.
-  if (isPending || uniquePending.length === 0) return null;
+export function PendingReviewRow({ row }: { row: PendingReview }) {
+  const [open, setOpen] = React.useState(false);
 
   return (
-    <section
-      className={cn('flex flex-col gap-3 rounded-2xl border border-border/80 bg-surface/50 p-4', className)}
-      aria-label="Rate your recent experiences"
-    >
-      <div className="flex flex-col gap-0.5">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex size-6 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
-            <Star className="size-3.5 fill-amber-500 text-amber-500" />
-          </span>
-          <h2 className="text-body font-bold text-foreground">
-            Rate your recent experiences
-          </h2>
+    <article className="flex flex-col rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center gap-3.5">
+        <PosterThumb src={row.poster_url} alt="" className="size-16" />
+        <div className="min-w-0 flex-1">
+          <OpenEventLink
+            event={{ id: row.event_id, title: row.title, poster_url: row.poster_url ?? '' }}
+            className="max-w-full truncate text-body font-bold text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {row.title}
+          </OpenEventLink>
+          <p className="mt-0.5 truncate text-caption text-muted-foreground">
+            {formatAttended(row.ended_at)} · {[row.venue, row.city].filter(Boolean).join(', ')}
+          </p>
         </div>
-        <p className="pl-8 text-caption text-muted-foreground">
-          Help fellow attendees by sharing how your event went.
-        </p>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className={cn(
+            'inline-flex h-control-sm shrink-0 items-center gap-1.5 rounded-full px-4 text-label transition-colors duration-fast',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            'motion-reduce:transition-none',
+            open
+              ? 'border border-border bg-surface text-foreground hover:bg-muted'
+              : 'bg-cta text-cta-foreground shadow-sm hover:bg-cta-hover active:bg-cta-active',
+          )}
+        >
+          <Star className="size-3.5" aria-hidden />
+          {open ? 'Close' : 'Rate'}
+        </button>
       </div>
 
-      <ul className="flex flex-col gap-2.5 pt-1">
-        {uniquePending.map((row) => {
-          const isOpen = openId === row.event_id;
-          return (
-            <li key={row.event_id}>
-              <article className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-3.5 shadow-sm transition-all">
-                <div className="flex items-center gap-3">
-                  <EventThumb event={row} />
-                  <div className="min-w-0 flex-1">
-                    <OpenEventLink
-                      event={{ id: row.event_id, title: row.title, poster_url: row.poster_url ?? '' }}
-                      className="block truncate text-body-sm font-semibold text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      {row.title}
-                    </OpenEventLink>
-                    <p className="mt-0.5 truncate text-caption text-muted-foreground">
-                      {formatAttended(row.ended_at)} · {row.venue}, {row.city}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setOpenId(isOpen ? null : row.event_id)}
-                    className={cn(
-                      'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-caption font-medium transition-colors duration-fast',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      isOpen
-                        ? 'bg-muted text-muted-foreground hover:bg-muted/80'
-                        : 'bg-primary text-primary-foreground hover:bg-primary-hover shadow-sm',
-                    )}
-                  >
-                    <Star className="size-3.5" />
-                    {isOpen ? 'Close' : 'Rate'}
-                  </button>
-                </div>
-
-                {isOpen ? (
-                  <div className="border-t border-border pt-3">
-                    <ReviewForm
-                      eventId={row.event_id}
-                      onDone={() => {
-                        setOpenId(null);
-                        dismiss(row.event_id);
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </article>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
+      {open ? (
+        <div className="mt-4 border-t border-border pt-4">
+          <ReviewForm
+            eventId={row.event_id}
+            onDone={() => {
+              setOpen(false);
+              dismiss(row.event_id);
+            }}
+          />
+        </div>
+      ) : null}
+    </article>
   );
 }
 

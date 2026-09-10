@@ -50,7 +50,12 @@ import { cn } from '@/lib/utils/cn';
  * gets wrong.
  */
 export type TicketingTone =
-  /** A live pass. The one violet fill on the list: it is the thing you came for. */
+  /**
+   * A live pass — the thing you came for. BISCUIT on a light surface, the
+   * account's own "you are here" colour (`nav-active`), not violet: the owner
+   * took the brand violet off this screen's controls, and a violet chip beside
+   * black buttons read as a third, competing kind of emphasis.
+   */
   | 'pass'
   /** Money settled, nothing outstanding. */
   | 'confirmed'
@@ -65,7 +70,7 @@ export type TicketingTone =
 
 const CHIP: Record<TicketingTone, { light: string; dark: string }> = {
   pass: {
-    light: 'bg-primary text-primary-foreground',
+    light: 'bg-nav-active text-nav-active-foreground ring-1 ring-inset ring-border-strong/40',
     dark: 'bg-violet-500/25 text-violet-100 ring-1 ring-inset ring-violet-400/30',
   },
   confirmed: {

@@ -42,7 +42,21 @@ import { eventPath } from '@/lib/events/ref';
  * No endpoint, no round trip. Everything it needs is already on the page, so
  * the download is instant and works offline once the page has loaded.
  */
-export function AddToCalendar({ event, className }: { event: EventDetail; className?: string }) {
+export function AddToCalendar({
+  event,
+  className,
+  label = 'Add to calendar',
+}: {
+  event: EventDetail;
+  className?: string;
+  /**
+   * The VISIBLE words on the trigger. A row of three equal pills on a phone
+   * has about 100px per pill, where "Add to calendar" does not fit — so a
+   * caller may shorten it ("Calendar"). The accessible name stays the full
+   * phrase whatever is drawn.
+   */
+  label?: string;
+}) {
   const [open, setOpen] = React.useState(false);
   const [downloaded, setDownloaded] = React.useState(false);
 
@@ -83,6 +97,7 @@ export function AddToCalendar({ event, className }: { event: EventDetail; classN
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
+        aria-label={downloaded ? 'Added to calendar' : 'Add to calendar'}
         className={cn(
           // The pill vocabulary, matching Share and Save beside it: fully
           // rounded, hairline, 44px. It was the one rounded-md control in the
@@ -98,7 +113,7 @@ export function AddToCalendar({ event, className }: { event: EventDetail; classN
         ) : (
           <CalendarPlus className="size-4 shrink-0" aria-hidden />
         )}
-        {downloaded ? 'Added' : 'Add to calendar'}
+        <span className="min-w-0 truncate">{downloaded ? 'Added' : label}</span>
       </PopoverTrigger>
 
       <PopoverContent align="start" className="w-72 p-1.5">

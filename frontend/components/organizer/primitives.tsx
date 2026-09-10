@@ -116,7 +116,8 @@ export function EmptyState({
   scene: Scene = SceneNothingYet,
 }: {
   title: string;
-  body: string;
+  /** Optional: a screen that keeps only its headings passes none. */
+  body?: string;
   action?: React.ReactNode;
   /**
    * A SUBJECT hint, not a replacement for the illustration.
@@ -169,7 +170,7 @@ export function EmptyState({
         ) : null}
       </span>
       <p className="text-body font-medium text-foreground">{title}</p>
-      <p className="max-w-sm text-body-sm text-muted-foreground">{body}</p>
+      {body ? <p className="max-w-sm text-body-sm text-muted-foreground">{body}</p> : null}
       {action}
     </div>
   );

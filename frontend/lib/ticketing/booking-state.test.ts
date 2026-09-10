@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { MyBooking } from '@/lib/api/types';
 import type { RefundRequest } from '@/lib/api/refund-requests';
-import { bookingRef, bookingState, eventEndsAt, holdIsLive, refundSettled } from './booking-state';
+import {
+  TICKETS_TABS,
+  bookingRef,
+  bookingState,
+  eventEndsAt,
+  holdIsLive,
+  refundSettled,
+  rowsForTab,
+  type DecoratedBooking,
+} from './booking-state';
 
 /**
  * The rules a component would get wrong silently.
@@ -146,5 +155,64 @@ describe('eventEndsAt', () => {
 describe('bookingRef', () => {
   it('is the uuid prefix, upper-cased — not a new identifier', () => {
     expect(bookingRef('9f8e7d6c-1111-2222-3333-444455556666')).toBe('9F8E7D6C');
+  });
+});
+
+describe('the tickets screen tabs', () => {
+  const decorate = (row: MyBooking, refund?: RefundRequest): DecoratedBooking => ({
+    booking: row,
+    request: refund,
+    state: bookingState(row, refund, NOW),
+  });
+
+  it('has exactly three views, Upcoming first, and no "All"', () => {
+    expect(TICKETS_TABS.map((tab) => tab.value)).toEqual(['upcoming', 'unpaid', 'rate']);
+    expect(TICKETS_TABS.map((tab) => tab.label)).toEqual(['Upcoming', 'Unpaid', 'Yet to Rate']);
+  });
+
+  it('lists upcoming passes soonest first', () => {
+    const later = decorate(booking({ id: 'later', event_starts_at: '2026-08-01T18:00:00Z' }));
+    const sooner = decorate(booking({ id: 'sooner', event_starts_at: '2026-06-10T18:00:00Z' }));
+    expect(rowsForTab([later, sooner], 'upcoming', NOW).map((row) => row.booking.id)).toEqual([
+      'sooner',
+      'later',
+    ]);
+  });
+
+  it('keeps a REFUNDED booking for a future event under Upcoming — its page is where the refund is explained', () => {
+    const refunded = decorate(
+      booking({ id: 'refunded' }),
+      request({ refund_reference: 'rfnd_1', refunded_at: PAST, refund_amount_minor: 101000 }),
+    );
+    expect(refunded.state).toBe('refunded');
+    expect(rowsForTab([refunded], 'upcoming', NOW).map((row) => row.booking.id)).toEqual([
+      'refunded',
+    ]);
+  });
+
+  it('lists a past booking in neither booking tab', () => {
+    const past = decorate(booking({ id: 'past', event_starts_at: PAST }));
+    expect(rowsForTab([past], 'upcoming', NOW)).toEqual([]);
+    expect(rowsForTab([past], 'unpaid', NOW)).toEqual([]);
+  });
+
+  it('lists unpaid bookings with the live holds first, then the newest attempt', () => {
+    const lapsedOld = decorate(
+      booking({ id: 'lapsed-old', status: 'expired', created_at: '2026-05-01T10:00:00Z' }),
+    );
+    const lapsedNew = decorate(
+      booking({ id: 'lapsed-new', status: 'cancelled', created_at: '2026-05-20T10:00:00Z' }),
+    );
+    const live = decorate(
+      booking({
+        id: 'live',
+        status: 'reserved',
+        created_at: '2026-04-01T10:00:00Z',
+        hold_expires_at: new Date(NOW + 5 * 60_000).toISOString(),
+      }),
+    );
+    expect(
+      rowsForTab([lapsedOld, lapsedNew, live], 'unpaid', NOW).map((row) => row.booking.id),
+    ).toEqual(['live', 'lapsed-new', 'lapsed-old']);
   });
 });

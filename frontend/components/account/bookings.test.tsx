@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/components/ui/toast';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +24,7 @@ const harness = vi.hoisted(() => ({
   bookings: [] as unknown[],
   tickets: [] as unknown[],
   refunds: [] as unknown[],
+  pending: [] as { event_id: string; title: string }[],
 }));
 
 vi.mock('@/lib/api/client', () => ({
@@ -59,7 +60,18 @@ vi.mock('@/components/booking/qr-code', () => ({
   TicketQrCode: () => <div data-testid="qr" />,
 }));
 
-vi.mock('@/components/reviews/review-prompt', () => ({ PendingReviewCard: () => null }));
+// The rating rows are their own component with their own form; here they only
+// need to say which event they are for.
+vi.mock('@/components/reviews/review-prompt', () => ({
+  usePendingReviews: () => ({
+    data: { data: harness.pending },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+  uniquePendingReviews: (rows: unknown[]) => rows,
+  PendingReviewRow: ({ row }: { row: { title: string } }) => <p>Rate {row.title}</p>,
+}));
 
 vi.mock('@/lib/discovery/event-deck-context', () => ({
   useEventDeck: () => ({ openEvent: vi.fn() }),
@@ -114,7 +126,10 @@ beforeEach(() => {
   harness.bookings = [];
   harness.tickets = [];
   harness.refunds = [];
+  harness.pending = [];
 });
+
+const openTab = (name: string) => fireEvent.click(screen.getByRole('radio', { name }));
 
 describe('MyBookings', () => {
   it('shows a booking whose payment never happened — the row that had nowhere to appear', async () => {
@@ -129,42 +144,87 @@ describe('MyBookings', () => {
     ];
 
     view();
+    // Upcoming is the default view, so an unpaid booking is one press away.
+    await screen.findByRole('radio', { name: 'Unpaid' });
+    openTab('Unpaid');
 
-    expect(await screen.findByText('Payment incomplete')).toBeInTheDocument();
-    // The hold is still LIVE, which is the good news on that row: nothing was
-    // charged and the seats are still held. The action says so.
+    // The hold is still LIVE: the chip is its countdown and the primary action
+    // finishes the payment.
+    expect(await screen.findByText(/mins left/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Finish payment/ })).toHaveAttribute(
       'href',
       '/booking/e1/review',
     );
-    expect(screen.getByText(/mins left/)).toBeInTheDocument();
+    // And the booking's own page -- the same ticket layout as a paid one.
+    expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute(
+      'href',
+      '/booking/e1/confirmation?booking=bbbbbbbb-1111-2222-3333-444444444444&from=bookings',
+    );
   });
 
-  it('counts each state on its own chip, including the ones that used to be empty', async () => {
+  it('has three views, Upcoming, Unpaid and Yet to Rate, and opens on Upcoming', async () => {
     harness.bookings = [
-      bookingRow({ id: 'a1111111-0000-0000-0000-000000000000' }),
-      bookingRow({ id: 'b2222222-0000-0000-0000-000000000000', event_starts_at: PAST }),
-      bookingRow({ id: 'c3333333-0000-0000-0000-000000000000', status: 'expired', ticket_count: 0, active_ticket_count: 0 }),
+      bookingRow({ id: 'a1111111-0000-0000-0000-000000000000', event_title: 'Coming Up' }),
+      bookingRow({
+        id: 'b2222222-0000-0000-0000-000000000000',
+        event_title: 'Already Over',
+        event_starts_at: PAST,
+      }),
+      bookingRow({
+        id: 'c3333333-0000-0000-0000-000000000000',
+        event_title: 'Never Paid',
+        status: 'expired',
+        ticket_count: 0,
+        active_ticket_count: 0,
+      }),
     ];
 
     view();
 
-    // Wait for the DATA, not for the tablist. The chips render on the first
-    // paint with nothing in them, so `findAllByRole('tab')` resolves against an
-    // empty list and every count reads zero.
-    await screen.findByRole('link', { name: /Finish payment|Book again/ });
-    const tabs = screen.getAllByRole('tab');
-    const label = (name: RegExp) => tabs.find((tab) => name.test(tab.textContent ?? ''));
-    expect(label(/^All/)?.textContent).toContain('3');
-    expect(label(/^Upcoming/)?.textContent).toContain('1');
-    expect(label(/^Past/)?.textContent).toContain('1');
-    expect(label(/^Unpaid/)?.textContent).toContain('1');
+    expect((await screen.findAllByText('Coming Up')).length).toBeGreaterThan(0);
+    const radios = screen.getAllByRole('radio');
+    expect(radios.map((radio) => radio.textContent)).toEqual(['Upcoming', 'Unpaid', 'Yet to Rate']);
+    expect(screen.getByRole('radio', { name: 'Upcoming' })).toHaveAttribute('aria-checked', 'true');
+    // No "All": a past booking is in no booking view at all.
+    expect(screen.queryByRole('radio', { name: /^All/ })).toBeNull();
+    expect(screen.queryByText('Already Over')).toBeNull();
+    expect(screen.queryByText('Never Paid')).toBeNull();
+
+    openTab('Unpaid');
+    expect((await screen.findAllByText('Never Paid')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Book again/ })).toBeInTheDocument();
+    // The upcoming card is gone from this view. ("Coming Up" itself is still
+    // on screen, in the next-pass banner, which belongs to every view.)
+    expect(screen.queryByRole('link', { name: /View .*ticket/i })).toBeNull();
   });
 
-  it('does NOT render an approved-but-unpaid refund as a completed one', async () => {
-    // The single most important rule on this screen. `approved` enqueues the
-    // vendor call; `refund_reference` is what says money moved. Rendering the
-    // first as the second tells somebody their money is back when it is not.
+  it('lists the events waiting for a rating under Yet to Rate, and nowhere else', async () => {
+    harness.bookings = [bookingRow()];
+    harness.pending = [{ event_id: 'e9', title: 'Last Weekend' }];
+
+    view();
+
+    expect((await screen.findAllByText('Headline Show')).length).toBeGreaterThan(0);
+    // The standalone "Rate your recent experiences" card is gone.
+    expect(screen.queryByText('Rate Last Weekend')).toBeNull();
+    expect(screen.queryByText(/Rate your recent experiences/)).toBeNull();
+
+    openTab('Yet to Rate');
+    expect(await screen.findByText('Rate Last Weekend')).toBeInTheDocument();
+  });
+
+  it('keeps only the headings, with no subtitle under the page title', async () => {
+    harness.bookings = [bookingRow()];
+    view();
+    expect(
+      await screen.findByRole('heading', { name: /Your Bookings & Purchases/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Every ticket, pass and refund/)).toBeNull();
+  });
+
+  it('says nothing on the list about a refund that is only approved', async () => {
+    // Approval is a decision and a transfer is a fact, and neither is the
+    // list's to show. Both are explained on the ticket's own page.
     harness.bookings = [bookingRow()];
     harness.refunds = [
       {
@@ -195,11 +255,12 @@ describe('MyBookings', () => {
     // (the mobile event deck) and a `hidden sm:inline` anchor (the canonical
     // page), and CSS picks. Asserting one would be asserting a viewport.
     expect((await screen.findAllByText('Headline Show')).length).toBeGreaterThan(0);
-    expect(screen.queryByText('Refund settled')).toBeNull();
-    expect(screen.getByText(/Refund request/)).toBeInTheDocument();
+    // Refund status lives on the ticket's own page, never on the list.
+    expect(screen.queryByText(/refund/i)).toBeNull();
+    expect(screen.getByRole('link', { name: /View .*ticket/i })).toBeInTheDocument();
   });
 
-  it('renders a SETTLED refund with the reference a bank asks for', async () => {
+  it('lists a SETTLED refund without saying so, and opens its ticket page', async () => {
     harness.bookings = [bookingRow()];
     harness.refunds = [
       {
@@ -226,12 +287,16 @@ describe('MyBookings', () => {
 
     view();
 
-    expect(await screen.findByText('Refund settled')).toBeInTheDocument();
-    expect(screen.getByText(/rfnd_XYZ123/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /View refund details/ })).toHaveAttribute(
+    // Still listed (the list is the only way to the page that explains it)
+    // with no chip, no amount returned and no reference.
+    const link = await screen.findByRole('link', { name: /View ticket/ });
+    expect(link).toHaveAttribute(
       'href',
-      '/account/refunds/rfr_2',
+      `/booking/${bookingRow().event_id}/confirmation?booking=${bookingRow().id}&from=bookings`,
     );
+    expect(screen.queryByText(/refund/i)).toBeNull();
+    expect(screen.queryByText(/rfnd_XYZ123/)).toBeNull();
+    expect(screen.queryByText('Confirmed')).toBeNull();
   });
 
   it('links View ticket to the confirmation page', async () => {
@@ -241,13 +306,14 @@ describe('MyBookings', () => {
     const link = await screen.findByRole('link', { name: /View .*ticket/i });
     expect(link).toHaveAttribute(
       'href',
-      `/booking/${bookingRow().event_id}/confirmation?booking=${bookingRow().id}`,
+      `/booking/${bookingRow().event_id}/confirmation?booking=${bookingRow().id}&from=bookings`,
     );
   });
 
-  it('never offers a refund on a booking that already has a request', async () => {
-    // A second request on one booking is a 409, so the control would be a
-    // button whose only outcome is an error.
+  it('offers no refund control on the list, because it is on the ticket page now', async () => {
+    // Moved with the rest of the refund information. The ticket page still
+    // withholds it from a booking that already has a request (a second request
+    // is a 409).
     harness.bookings = [bookingRow()];
     harness.refunds = [
       {
@@ -275,6 +341,6 @@ describe('MyBookings', () => {
     view();
 
     expect((await screen.findAllByText('Headline Show')).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Request refund' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /refund/i })).toBeNull();
   });
 });
