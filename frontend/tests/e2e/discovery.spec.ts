@@ -1134,13 +1134,45 @@ test.describe('the event page', () => {
   };
 
   /**
+   * An event whose CTA is a LINK — one with a tier on sale and stock left.
+   *
+   * `anEvent` opens whichever event the list shows first, and the fixture's
+   * dates roll forward a day at a time, so WHICH event that is changes from one
+   * day to the next. When it rolled onto a sold-out one, its CTA became the
+   * waiting-list button — correctly — and the two specs that press "the" Book
+   * tickets link failed on a morning when nothing in the code had changed. Ask
+   * the API for a sellable event instead, exactly as the quantity spec does.
+   */
+  const aBookableEvent = async (page: Page) => {
+    const target = await page.evaluate(async (api) => {
+      const list = (await (await fetch(`${api}/events?page_size=40`)).json()) as {
+        data: { id: string; slug?: string; tickets_available: number | null }[];
+      };
+      for (const event of list.data) {
+        if (!event.tickets_available) continue;
+        const tiers = (await (await fetch(`${api}/events/${event.id}/ticket-types`)).json()) as {
+          data: { available: number; is_on_sale: boolean }[];
+        };
+        if (tiers.data.some((tier) => tier.is_on_sale && tier.available > 0)) {
+          return { id: event.id, slug: event.slug ?? '' };
+        }
+      }
+      return null;
+    }, API);
+    if (!target) throw new Error('the fixture is serving no event with a sellable tier');
+    await page.goto(`/events/${target.slug ? `${target.slug}-` : ''}${target.id}`);
+    await expect(page).toHaveURL(EVENT_URL);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  };
+
+  /**
    * The ticket picker used to sit ON the event page; it is a screen of its own
    * now (`/booking/{id}`). The assertions about it did not weaken, they
    * MOVED — reaching them costs one press, and that press is itself the thing
    * §5 asked for.
    */
   const itsTicketPage = async (page: Page) => {
-    await anEvent(page);
+    await aBookableEvent(page);
     // `LocationPrompt` is a MODAL. While it is open everything behind it is
     // inert, so a click on the CTA lands on the scrim and simply does nothing
     // — no error, no navigation, and a failure that reads like a broken link.
@@ -1365,7 +1397,9 @@ test.describe('the event page', () => {
 
   test('one booking CTA per viewport, and it never promises a checkout', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
-    await anEvent(page);
+    // A SELLABLE event: a sold-out one's CTA is the waiting-list button, and
+    // this spec is about the link.
+    await aBookableEvent(page);
 
     // The event page no longer CONTAINS a picker — that is the change §5
     // asked for, and it is the thing most likely to creep back. One region,
