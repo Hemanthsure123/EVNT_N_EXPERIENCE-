@@ -23,6 +23,7 @@ import { ProfileEditor } from '@/components/account/profile-editor';
 import { MobileSettings } from '@/components/account/settings-mobile';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils/cn';
 import { SettingsCard, SettingsRow, SettingsValue } from './settings-primitives';
 import {
@@ -224,13 +225,12 @@ function SectionBody({ id }: { id: SettingsSectionId }) {
 
 /**
  * The one segmented control on this page, used by both the theme choice and the
- * cookie choice.
+ * cookie choice — and it is the APP's segmented control, not a local one.
  *
- * The track is `bg-sunken` so unselected segments read as recessed and the
- * selected one as lifted — the only elevation trick available on a pure-white
- * canvas. `role="radiogroup"` rather than a `<select>` because there are two or
- * three options and all of them fit: a menu that has to be opened to see three
- * words is a click spent on nothing.
+ * It used to hand-build its own row of pills that jumped between segments.
+ * `SegmentedControl` (biscuit tone) is the one the tickets filter uses: the
+ * same track, the same biscuit pill that SLIDES to the chosen option, the same
+ * radiogroup keyboard behaviour. One control, one look, everywhere.
  */
 function Segmented<T extends string>({
   label,
@@ -244,35 +244,29 @@ function Segmented<T extends string>({
   value: T | null;
   onChange: (value: T) => void;
 }) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className="inline-flex max-w-full flex-wrap gap-1 rounded-full border border-border bg-sunken p-1"
-    >
-      {options.map((option) => {
-        const selected = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              'inline-flex h-control items-center gap-2 rounded-full px-4 text-label transition-colors duration-fast motion-reduce:transition-none',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-              selected
-                ? 'bg-nav-active text-nav-active-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-            )}
-          >
+  const segments = React.useMemo(
+    () =>
+      options.map((option) => ({
+        value: option.value,
+        label: (
+          <>
             {option.icon ? <option.icon className="size-4" aria-hidden /> : null}
             {option.label}
-          </button>
-        );
-      })}
-    </div>
+          </>
+        ),
+      })),
+    [options],
+  );
+  return (
+    <SegmentedControl<T>
+      aria-label={label}
+      options={segments}
+      value={value}
+      onValueChange={onChange}
+      tone="biscuit"
+      size="lg"
+      className="max-w-full p-1"
+    />
   );
 }
 

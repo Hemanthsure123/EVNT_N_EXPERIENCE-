@@ -219,7 +219,7 @@ export function HeroGallery({
         ) : null}
 
         {images.length > 0 && (hideMainImage || images.length > 1) ? (
-          <ul className="flex flex-wrap gap-2 overflow-x-auto pb-1">
+          <ul className="flex flex-wrap gap-2 overflow-x-auto touch-manipulation pb-1">
             {images.map((image, position) => (
               // Keyed by POSITION as well as url. Two `EventMedia` rows may
               // legitimately point at the same stored object — an organiser

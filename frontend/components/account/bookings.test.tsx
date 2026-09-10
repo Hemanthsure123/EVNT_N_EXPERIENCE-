@@ -213,6 +213,36 @@ describe('MyBookings', () => {
     expect(await screen.findByText('Rate Last Weekend')).toBeInTheDocument();
   });
 
+  it('draws an upcoming card with one full-width button and nothing else to read', async () => {
+    harness.bookings = [bookingRow()];
+    view();
+
+    const button = await screen.findByRole('link', { name: /View .*ticket/i });
+    expect(button.className).toContain('w-full');
+    // No next-pass banner, no "Confirmed" chip, no envelope beside the button.
+    expect(screen.queryByText(/ready for entry/)).toBeNull();
+    expect(screen.queryByText('Confirmed')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Email the receipt' })).toBeNull();
+  });
+
+  it('gives an unpaid card two buttons of exactly equal share', async () => {
+    harness.bookings = [
+      bookingRow({ status: 'expired', ticket_count: 0, active_ticket_count: 0 }),
+    ];
+    view();
+    await screen.findByRole('radio', { name: 'Unpaid' });
+    openTab('Unpaid');
+
+    const again = await screen.findByRole('link', { name: /Book again/ });
+    const details = screen.getByRole('link', { name: /Details/ });
+    // `flex-1 basis-0` on BOTH: the split is half and half whatever the labels.
+    for (const link of [again, details]) {
+      expect(link.className).toContain('flex-1');
+      expect(link.className).toContain('basis-0');
+      expect(link.className).toContain('h-control');
+    }
+  });
+
   it('keeps only the headings, with no subtitle under the page title', async () => {
     harness.bookings = [bookingRow()];
     view();

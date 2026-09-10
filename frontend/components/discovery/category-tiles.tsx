@@ -119,7 +119,7 @@ export function CategoryTiles({
   return (
     <ul
       className={cn(
-        '-mx-4 grid grid-flow-col grid-rows-2 gap-3 overflow-x-auto overscroll-x-contain px-4 pb-3 snap-x snap-mandatory scroll-pl-4 scrollbar-none',
+        '-mx-4 grid grid-flow-col grid-rows-2 gap-3 overflow-x-auto touch-manipulation overscroll-x-contain px-4 pb-3 snap-x snap-mandatory scroll-pl-4 scrollbar-none',
         'sm:mx-0 sm:grid-flow-row sm:grid-rows-1 sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0 sm:gap-4 lg:grid-cols-4 lg:scroll-pl-6',
         className
       )}

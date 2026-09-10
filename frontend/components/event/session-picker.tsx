@@ -63,7 +63,7 @@ export function SessionPicker({
           aria-label="Date"
           // Scrolls rather than wraps: a run of dates is a strip people swipe,
           // and wrapping turns a two-line control into four on a phone.
-          className="-mx-1 flex snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1"
+          className="-mx-1 flex snap-x snap-mandatory gap-2 overflow-x-auto touch-manipulation px-1 pb-1"
         >
           {days.map((day) => {
             const active = day.dayKey === activeDay.dayKey;

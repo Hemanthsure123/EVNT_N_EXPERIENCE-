@@ -38,6 +38,7 @@ import {
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
 import { EventWidgetContent, EventWidgetSummary } from './event-widget-content';
+import { DeckAccount } from './deck-account';
 import { DeckBrandHeader } from './deck-brand-header';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
@@ -457,8 +458,14 @@ export function EventWidgetDeck() {
     return () => window.removeEventListener('popstate', onPop);
   }, [closeDeck]);
 
-  // A route-origin deck closes only once the NEXT route is on screen, so the
-  // standalone page it was covering never gets a frame of its own.
+  // The deck closes once the NEXT route is on screen, so the page it was
+  // covering never gets a frame of its own.
+  //
+  // For EVERY origin, not just a route open. The header now carries the account
+  // drawer, whose links (bookings, settings, support) navigate away while the
+  // deck is up; a feed-origin deck used to stay open over whatever page they
+  // opened. Its pushed history entry is simply abandoned rather than popped:
+  // this was a forward navigation, and going back here would undo it.
   React.useEffect(() => {
     if (!isOpen) {
       openedPathRef.current = null;
@@ -468,7 +475,8 @@ export function EventWidgetDeck() {
       openedPathRef.current = pathname;
       return;
     }
-    if (openOptionsRef.current.origin === 'route' && pathname !== openedPathRef.current) {
+    if (pathname !== openedPathRef.current) {
+      pushedHistoryRef.current = false;
       closeDeck();
     }
   }, [isOpen, pathname, closeDeck]);
@@ -847,11 +855,15 @@ function Hero({
                 onScroll={onRailScroll}
                 className={cn(
                   'flex h-full w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden',
-                  // `touch-pan-x`: this element handles sideways and nothing
-                  // else, so a vertical drag over the artwork scrolls the PAGE
-                  // instead of being arbitrated against the gallery. It is
-                  // the ONLY horizontal gesture on this surface.
-                  'touch-pan-x overscroll-x-contain',
+                  // `touch-manipulation` (pan-x pan-y pinch-zoom), and NOT
+                  // `touch-pan-x`. `pan-x` forbids vertical panning for any
+                  // touch that STARTS here — so a thumb landing on the poster
+                  // could not scroll the page at all, which was the report.
+                  // With both axes allowed the browser locks each gesture to
+                  // its dominant direction: down scrolls the page, sideways
+                  // moves the gallery. See `PEEK_RAIL_TRACK` for why it is
+                  // not `pan-y` either.
+                  'touch-manipulation overscroll-x-contain',
                   'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
                 )}
               >
@@ -1104,11 +1116,11 @@ function ActivePage({
         // or a clipped final row on some device.
         style={{ paddingBottom: `${(ctaHeight || 96) + 32}px` }}
       >
-        {/* ── BRANDING, AND IT STAYS ─────────────────────────────────────
-            First in the scroller and `sticky`, so it pins to the top of THIS
-            box as everything below it scrolls underneath. See `DeckBrandHeader`
-            for why it is sticky here rather than fixed. */}
-        <DeckBrandHeader />
+        {/* ── THE HEADER, AND IT STAYS ───────────────────────────────────
+            The home page's shape — lockup home on the left, the account avatar
+            on the right — first in the scroller and `sticky`, so it pins to
+            the top of THIS box. The logo closes the deck on its way home. */}
+        <DeckBrandHeader account={<DeckAccount />} onHome={onLeave} />
         <Hero
           event={event}
           images={images}

@@ -242,7 +242,7 @@ export function FilterToolbar({
           {/* Mobile Horizontal Scrollable Chip Container with Scroll Minimization Listener */}
           <div
             onScroll={handleChipsScroll}
-            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none snap-x snap-mandatory py-0.5 sm:hidden"
+            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto touch-manipulation scrollbar-none snap-x snap-mandatory py-0.5 sm:hidden"
           >
             {items.map((item) => (
               <div key={item.key} className="shrink-0 snap-start">

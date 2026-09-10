@@ -2438,6 +2438,27 @@ blurred backdrop cross-fades rather than swapping at the midpoint; slides after
 the first fade in on load. The snap itself stays the BROWSER's — a JavaScript
 tween over a native scroller is how a gallery ends up fighting the finger.
 
+**A horizontal scroller is `touch-manipulation`, never `touch-pan-x`, and
+`touch-pan-y` only when JavaScript does the moving.** `touch-action` lists what
+the browser may do for a touch that STARTS on the element. `pan-x` leaves out
+vertical panning, so a thumb landing on a rail could not scroll the page at all
+— which is what shipped on every peek rail, the event poster and the QR strip,
+under a comment claiming the opposite. `pan-y` alone forbids the horizontal
+panning that IS a native scroller's scrolling. `manipulation` (`pan-x pan-y
+pinch-zoom`) lets the browser lock each gesture to its dominant axis and keeps
+pinch zoom. Measured with real CDP touch events on a probe page: `pan-x` moved
+the page 0px on a vertical drag, `manipulation` 235px; both moved the rail
+sideways. `paged-rail.tsx` is the one `touch-pan-y`, correctly: it moves itself
+with pointer handlers.
+
+**The header matches the home page** (`components/event/deck-brand-header.tsx`):
+the full lockup linking home on the left, and only the account avatar on the
+right — `AccountMenu variant="avatar" layer="overlay"`, the SAME drawer the site
+header opens, lifted to `z-popover` because the deck sits at `z-modal` and the
+drawer's own `z-drawer` would open behind it. The deck now closes on ANY route
+change, not only for a route-origin open: the drawer's links navigate away with
+the deck up.
+
 **The branding row is sticky** (`components/event/deck-brand-header.tsx`),
 `sticky top-0 z-50` with a solid background, INSIDE the page's own scroller —
 the deck is a fixed overlay over a scroll-locked document, so nothing waiting

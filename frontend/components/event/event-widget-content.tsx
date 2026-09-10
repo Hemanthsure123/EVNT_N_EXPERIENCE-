@@ -317,7 +317,7 @@ export function EventWidgetContent({
           </h3>
           {/* A rail with real edge peeking and CSS scroll-snap — no library, no
               scroll handler, and it stays draggable and swipeable. */}
-          <ul className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-pl-4 px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <ul className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto touch-manipulation scroll-pl-4 px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {similar.map((other) => (
               <li key={other.id} className="w-36 shrink-0 snap-start">
                 <SimilarCard event={other} onSelect={onSelectEvent} />

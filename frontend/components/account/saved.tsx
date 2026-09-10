@@ -79,13 +79,10 @@ export function SavedEvents() {
 
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
-      <header className="flex flex-col gap-stack">
+      {/* The heading and nothing under it — the account screens keep only
+          their headings, at the owner's instruction. */}
+      <header>
         <h1 className="text-h3 md:text-h2">Saved events</h1>
-        <p className="text-body text-muted-foreground">
-          {signedIn
-            ? 'Saved to your account, so they follow you to any device you sign in on.'
-            : 'Kept on this device while you are signed out. Sign in and they move to your account.'}
-        </p>
       </header>
 
       {loading ? (

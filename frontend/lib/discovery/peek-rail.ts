@@ -73,23 +73,29 @@ export const centredRailPadding = (itemWidthVw: number): string =>
  * swipeable, keyboard-scrollable and works with a trackpad without a line of
  * JavaScript doing the moving.
  *
- * ── `touch-pan-x`, AND IT IS NOT `pan-y` ──────────────────────────────────
+ * ── `touch-manipulation`: BOTH AXES, AND NEITHER ONE ALONE ────────────────
  *
- * The complaint was that casual VERTICAL scrolling over one of these rails
- * dragged it sideways to the next event. The instinct is `touch-action:
- * pan-y`, and it would be exactly wrong: `pan-y` declares that this element
- * handles only VERTICAL panning, which on a horizontally scrolling rail means
- * it can no longer be scrolled at all.
+ * This was `touch-pan-x`, on the belief that it passes a vertical gesture on
+ * to the page. It does the opposite. `touch-action` lists the gestures the
+ * browser may perform for a touch that STARTS on the element, and `pan-x`
+ * leaves vertical panning off that list — so a thumb that landed on Featured
+ * events or the lineup could not scroll the page at all. That was the report:
+ * "vertical scrolling is blocked on every carousel".
  *
- * `pan-x` is the one that does what was asked. It tells the browser this
- * element handles horizontal panning and NOTHING else, so a gesture with any
- * meaningful vertical component is passed straight to the ancestor scroller
- * rather than being arbitrated against the rail. Sideways still works, and it
- * now takes a deliberately sideways movement.
+ * `pan-y` alone, the obvious swap, is wrong the other way: this rail is a
+ * NATIVE scroller, and `pan-y` would forbid the horizontal panning that IS its
+ * scrolling. `pan-y` is only right for a carousel that moves itself in
+ * JavaScript (`paged-rail.tsx` uses it, correctly: the browser takes vertical,
+ * its pointer handlers take sideways).
+ *
+ * `manipulation` is `pan-x pan-y pinch-zoom`: both directions allowed, the
+ * browser locks each gesture to its dominant axis at the start, and pinch zoom
+ * still works — an accessibility floor, not a nicety. It also drops the
+ * double-tap-to-zoom delay on a surface that is all taps.
  */
 export const PEEK_RAIL_TRACK =
   'relative flex snap-x snap-mandatory items-center overflow-x-auto scroll-smooth py-6 ' +
-  'touch-pan-x ' +
+  'touch-manipulation ' +
   'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
 
 /** Centred: every item can reach the middle. Start: an ordinary row. */

@@ -74,7 +74,7 @@ export function AllEventsChips({
         // Unchanged from the server version: sticky under the header, bounded
         // by the section's Container, `z-[999]` one below the header's 1000,
         // and an opaque background or the poster grid scrolls through it.
-        'sticky top-sticky-top z-[999] -mx-4 flex gap-2.5 overflow-x-auto bg-background px-4 py-2',
+        'sticky top-sticky-top z-[999] -mx-4 flex gap-2.5 overflow-x-auto touch-manipulation bg-background px-4 py-2',
         'scrollbar-none lg:top-sticky-top-lg lg:-mx-6 lg:px-6',
         className,
       )}

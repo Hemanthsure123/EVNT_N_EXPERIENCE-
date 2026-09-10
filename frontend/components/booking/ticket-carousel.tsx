@@ -114,7 +114,7 @@ export function TicketCarousel({
         // still bleeds to the edge of a phone, which is what makes the next
         // ticket peek in and invites the swipe.
         className={cn(
-          'flex snap-x snap-mandatory gap-stack-lg overflow-x-auto scroll-smooth',
+          'flex snap-x snap-mandatory gap-stack-lg overflow-x-auto touch-manipulation scroll-smooth',
           'motion-reduce:scroll-auto',
           // Hide the scrollbar: the dots and the counter already say where you
           // are, and a visible bar under a ticket reads as a rendering artifact.

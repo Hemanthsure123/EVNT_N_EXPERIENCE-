@@ -34,6 +34,7 @@ import { useSavedEventIds } from '@/lib/discovery/use-favourites';
 import { usePush } from '@/lib/push/use-push';
 import { useTheme, type Theme } from '@/lib/theme/theme-provider';
 import { IdentityAvatar } from '@/components/ui';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils/cn';
 import { sectionHref } from './settings-sections';
@@ -698,6 +699,17 @@ const THEMES: readonly { value: Theme; label: string; icon: LucideIcon }[] = [
   { value: 'system', label: 'System', icon: Monitor },
 ];
 
+/** The same three, as segments: the glyph beside the word. */
+const THEME_OPTIONS = THEMES.map((option) => ({
+  value: option.value,
+  label: (
+    <>
+      <option.icon className="size-4" aria-hidden />
+      {option.label}
+    </>
+  ),
+}));
+
 function ExperienceGroup() {
   return (
     <section className="flex flex-col gap-2">
@@ -732,33 +744,20 @@ function ThemeRow() {
 
   return (
     <ControlRow icon={Moon} tone="neutral" label="Theme" hint="Light, dark or this device" stacked>
-      <div
-        role="radiogroup"
+      {/* THE APP'S OWN SEGMENTED CONTROL — the one the tickets filter uses:
+          a full pill track, a biscuit pill that SLIDES to the chosen theme,
+          radiogroup semantics with arrow keys. It was a hand-built row of
+          square-cornered white buttons that looked borrowed from somewhere
+          else, on the screen where the design system is most visible. */}
+      <SegmentedControl<Theme>
         aria-label="Colour theme"
-        className="flex w-full gap-1 rounded-xl border border-border bg-sunken p-1"
-      >
-        {THEMES.map((option) => {
-          const selected = option.value === theme;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => setTheme(option.value)}
-              className={cn(
-                'inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-label transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none',
-                selected
-                  ? 'bg-surface text-foreground shadow-sm'
-                  : 'font-medium text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <option.icon className="size-3.5" aria-hidden />
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
+        options={THEME_OPTIONS}
+        value={theme}
+        onValueChange={setTheme}
+        tone="biscuit"
+        size="lg"
+        className="w-full p-1"
+      />
     </ControlRow>
   );
 }

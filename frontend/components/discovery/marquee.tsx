@@ -210,7 +210,7 @@ export function Marquee({
         ref={viewportRef}
         // `scrollbar-none`: the rail is its own affordance (arrows, drag,
         // wheel) and a scrollbar under a row of posters is chrome nobody needs.
-        className="marquee-mask scrollbar-none w-full overflow-x-auto overscroll-x-contain"
+        className="marquee-mask scrollbar-none w-full overflow-x-auto touch-manipulation overscroll-x-contain"
         onPointerDown={() => {
           manualUntil.current = performance.now() + RESUME_DELAY_MS;
         }}

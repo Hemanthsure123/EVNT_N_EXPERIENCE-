@@ -98,7 +98,7 @@ export function PhotoGallery({ photos, name }: { photos: PerformerPhoto[]; name:
         </div>
 
         {photos.length > 1 ? (
-          <ul className="flex gap-2 overflow-x-auto pb-1">
+          <ul className="flex gap-2 overflow-x-auto touch-manipulation pb-1">
             {photos.map((photo, position) => (
               <li key={photo.id} className="shrink-0">
                 <button

@@ -12,7 +12,6 @@ import {
   Loader2,
   MapPin,
   QrCode,
-  Send,
   Star,
   Ticket as TicketIcon,
 } from 'lucide-react';
@@ -46,7 +45,6 @@ import {
   StatusChip,
   SurfaceCard,
 } from '@/components/ticketing/primitives';
-import { ShareReceiptDialog } from './share-receipt';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -79,10 +77,16 @@ import { cn } from '@/lib/utils/cn';
  *
  * ── COLOUR ────────────────────────────────────────────────────────────────
  *
- * Black (`bg-cta`) for the one primary action on each card, biscuit
- * (`nav-active`) for "this is selected / this is the one to look at" — the
- * sliding pill, the live-pass chip and the next-pass banner. The brand violet
- * is off this screen's controls entirely.
+ * Black (`bg-cta`) for the primary action on each card, biscuit (`nav-active`)
+ * for the selected view. The brand violet is off this screen's controls
+ * entirely.
+ *
+ * ── MINIMAL CARDS ─────────────────────────────────────────────────────────
+ *
+ * An upcoming card is the event, what was bought, and one full-width "View
+ * ticket". The next-pass banner above the list, the "Confirmed" chip on every
+ * card (everything under Upcoming is confirmed) and the envelope beside the
+ * button are gone — the receipt is emailed from the ticket's own page.
  *
  * ── TWO REQUESTS FOR THE WHOLE SCREEN, NOT TWO PER ROW ────────────────────
  *
@@ -95,12 +99,11 @@ import { cn } from '@/lib/utils/cn';
  * ── EVERY NUMBER HERE IS BACKED ───────────────────────────────────────────
  *
  * No seat numbers (there is no seat map — `venues` is deferred), no invoice
- * download (the receipt is EMAILED as a PDF, which is what the envelope does).
+ * download (the receipt is EMAILED as a PDF, from the ticket's page).
  */
 
 export function MyBookings() {
   const [tab, setTab] = React.useState<TicketsTab>('upcoming');
-  const [sharing, setSharing] = React.useState<MyBooking | null>(null);
 
   // `now` is state, not `Date.now()` inline: a booking moves from "upcoming" to
   // "finished" and a hold from live to lapsed while this page is open, and a
@@ -164,50 +167,8 @@ export function MyBookings() {
     [pending.data],
   );
 
-  /**
-   * The banner: the soonest live pass, and nothing else.
-   *
-   * `/me/bookings` is ordered by PURCHASE date, so the first upcoming row is
-   * the most recently bought, not the next one you are going to. Sorting by
-   * `event_starts_at` is what makes this say the thing somebody needs on the
-   * day — and it is why the banner is computed here rather than taken off the
-   * top of the list.
-   */
-  const nextUp = React.useMemo(() => {
-    const live = decorated
-      .filter((row) => row.state === 'upcoming' && row.booking.active_ticket_count > 0)
-      .sort((a, b) => Date.parse(a.booking.event_starts_at) - Date.parse(b.booking.event_starts_at));
-    return live[0] ?? null;
-  }, [decorated]);
-
   return (
     <div className="flex flex-col gap-5">
-      {nextUp ? (
-        // BISCUIT, not violet: it is the "look here" highlight, and on this
-        // screen that is the account's own active colour.
-        <Link
-          href={ticketHref(nextUp.booking)}
-          className={cn(
-            'group flex w-full items-center gap-3 rounded-2xl bg-nav-active px-4 py-3 text-left text-nav-active-foreground',
-            'transition-colors duration-fast hover:bg-nav-active-hover',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-            'motion-reduce:transition-none',
-          )}
-        >
-          <TicketIcon className="size-4 shrink-0" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-body-sm font-medium">
-            {nextUp.booking.active_ticket_count === 1
-              ? '1 pass ready for entry at '
-              : `${nextUp.booking.active_ticket_count} passes ready for entry at `}
-            <span className="font-semibold">{nextUp.booking.event_title}</span>
-          </span>
-          <ArrowRight
-            className="size-4 shrink-0 transition-transform duration-fast group-hover:translate-x-0.5 motion-reduce:transform-none"
-            aria-hidden
-          />
-        </Link>
-      ) : null}
-
       <header className="flex items-center justify-between gap-3">
         <h1 className="text-h3 md:text-h2">Your Bookings &amp; Purchases</h1>
         {/* A LINK to browse, not a search field. There is no endpoint that
@@ -273,12 +234,7 @@ export function MyBookings() {
         <ul className="flex flex-col gap-4">
           {visible.map(({ booking, state }) => (
             <li key={booking.id}>
-              <BookingCard
-                booking={booking}
-                state={state}
-                now={now}
-                onShare={() => setSharing(booking)}
-              />
+              <BookingCard booking={booking} state={state} now={now} />
             </li>
           ))}
         </ul>
@@ -319,18 +275,6 @@ export function MyBookings() {
         </Link>
       </SurfaceCard>
 
-      <ShareReceiptDialog
-        target={
-          sharing
-            ? {
-                bookingId: sharing.id,
-                eventTitle: sharing.event_title,
-                ticketCount: sharing.ticket_count,
-              }
-            : null
-        }
-        onClose={() => setSharing(null)}
-      />
     </div>
   );
 }
@@ -400,24 +344,35 @@ function ticketHref(booking: MyBooking): string {
   return `/booking/${booking.event_id}/confirmation?booking=${booking.id}&from=bookings`;
 }
 
-/** Black: the one primary action on a card. */
-const PRIMARY =
-  'inline-flex h-control flex-1 basis-40 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-cta px-pill text-label text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none';
+/**
+ * The two card buttons share ONE box: `h-control` tall, `flex-1 basis-0` wide
+ * (so two of them split a row exactly in half), `min-w-0` so a label can
+ * truncate rather than push its neighbour. Only the colours differ.
+ */
+const CARD_BUTTON =
+  'inline-flex h-control min-w-0 flex-1 basis-0 items-center justify-center gap-2 whitespace-nowrap rounded-full border px-4 text-label transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none';
 
-/** Outline: everything else on a card. */
-const SECONDARY =
-  'inline-flex h-control shrink-0 items-center justify-center gap-1.5 rounded-full border border-border bg-surface px-4 text-label text-foreground transition-colors duration-fast hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none';
+/**
+ * Black: the one primary action on a card. Its border is TRANSPARENT, not
+ * absent: a zero flex-basis still counts padding and border, so an outlined
+ * neighbour with a 1px border came out 2px wider than this one.
+ */
+const PRIMARY = cn(
+  CARD_BUTTON,
+  'border-transparent bg-cta text-cta-foreground shadow-sm hover:bg-cta-hover active:bg-cta-active',
+);
+
+/** Outline: the other one. */
+const SECONDARY = cn(CARD_BUTTON, 'border-border bg-surface text-foreground hover:bg-muted');
 
 function BookingCard({
   booking,
   state,
   now,
-  onShare,
 }: {
   booking: MyBooking;
   state: BookingState;
   now: number;
-  onShare: () => void;
 }) {
   const live = holdIsLive(booking, now);
   const tiers = booking.items.map((item) => item.ticket_type_name);
@@ -430,29 +385,25 @@ function BookingCard({
 
   return (
     <SurfaceCard as="article" className="p-4">
-      {/* ── THE STATUS ROW ──────────────────────────────────────────────
-          A refunded booking gets NO chip. "Confirmed" would be false and
-          "Refunded" belongs to the ticket's page, so the honest thing to show
-          here is nothing. */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {state === 'upcoming' ? (
-            <StatusChip tone="pass" dot>
-              Confirmed
-            </StatusChip>
-          ) : state === 'unpaid' ? (
-            <StatusChip tone="failed" icon={Clock3}>
-              {live ? minutesLeft(booking.hold_expires_at as string, now) : 'Payment incomplete'}
-            </StatusChip>
-          ) : null}
+      {/* ── THE STATUS ROW — UNPAID ONLY ────────────────────────────────
+          An upcoming card carries no "Confirmed" chip: everything under
+          Upcoming is confirmed, so the chip said the tab's name again on every
+          card. (A refunded booking gets no chip either — "Refunded" belongs to
+          the ticket's page.) An unpaid card keeps its chip because it is the
+          one with news: a countdown, or that the hold lapsed. */}
+      {state === 'unpaid' ? (
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <StatusChip tone="failed" icon={Clock3}>
+            {live ? minutesLeft(booking.hold_expires_at as string, now) : 'Payment incomplete'}
+          </StatusChip>
+          <span className="shrink-0 font-mono text-caption text-foreground-subtle">
+            {bookingRef(booking.id)}
+          </span>
         </div>
-        <span className="shrink-0 font-mono text-caption text-foreground-subtle">
-          {bookingRef(booking.id)}
-        </span>
-      </div>
+      ) : null}
 
       {/* ── THE EVENT ─────────────────────────────────────────────────── */}
-      <div className="mt-3 flex gap-3.5">
+      <div className="flex gap-3.5">
         <PosterThumb src={booking.event_poster_url} alt="" className="size-16" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <OpenEventLink
@@ -480,8 +431,13 @@ function BookingCard({
           </p>
           <p className="mt-0.5 text-caption text-muted-foreground">
             {/* SEATS DO NOT EXIST — no row anywhere stores one, so the count is
-                the true version of the reference's "Sec A • G12, G13". */}
+                the true version of the reference's "Sec A • G12, G13". The
+                reference support asks for rides here on an upcoming card,
+                which has no status row to carry it. */}
             {booked === 1 ? '1 pass' : `${booked} passes`}
+            {state !== 'unpaid' ? (
+              <span className="font-mono text-foreground-subtle"> · {bookingRef(booking.id)}</span>
+            ) : null}
           </p>
         </div>
         <p className="shrink-0 text-body font-bold tabular-nums text-foreground">
@@ -489,8 +445,12 @@ function BookingCard({
         </p>
       </InsetPanel>
 
-      {/* ── WHAT IS LEFT TO DO ────────────────────────────────────────── */}
-      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+      {/* ── WHAT IS LEFT TO DO ────────────────────────────────────────────
+          One full-width black button on an upcoming card. Two EQUAL buttons
+          on an unpaid one: `flex-1` with a zero basis on both, so the split is
+          exactly half and half whatever each label says — a content-sized
+          basis made "Book again" wide and "Details" a stub. */}
+      <div className="mt-3.5 flex flex-row gap-3">
         {state === 'unpaid' ? (
           <>
             <Link
@@ -511,19 +471,12 @@ function BookingCard({
           </>
         ) : (
           <>
-            <Link href={ticketHref(booking)} className={PRIMARY}>
+            {/* The receipt is emailed from the ticket's own page (its Receipt
+                pill); a second copy of that control here was clutter. */}
+            <Link href={ticketHref(booking)} className={cn(PRIMARY, 'w-full')}>
               <QrCode className="size-4" aria-hidden />
               {state === 'upcoming' && count > 1 ? `View ${count} tickets` : 'View ticket'}
             </Link>
-            <button
-              type="button"
-              onClick={onShare}
-              aria-label="Email the receipt"
-              title="Email the receipt"
-              className="inline-flex size-control shrink-0 items-center justify-center rounded-full border border-border bg-surface text-muted-foreground transition-colors duration-fast hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none"
-            >
-              <Send className="size-4" aria-hidden />
-            </button>
           </>
         )}
       </div>

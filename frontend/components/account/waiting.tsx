@@ -62,12 +62,11 @@ export function WaitingList() {
 
   return (
     <div className="flex flex-col gap-block lg:gap-block-lg">
-      <header className="flex flex-col gap-stack">
+      {/* The heading and nothing under it — the account screens keep only
+          their headings. "First come, first served, nothing is held" is
+          still said where it binds: in the email itself. */}
+      <header>
         <h1 className="text-h3 md:text-h2">Waiting for tickets</h1>
-        <p className="max-w-prose text-body text-muted-foreground">
-          Events you asked to be told about. We email you once if tickets come back — they go first
-          come, first served, and nothing is held for you.
-        </p>
       </header>
 
       {error ? (
@@ -87,7 +86,6 @@ export function WaitingList() {
           <EmptyState
             icon={BellRing}
             title="You are not waiting for anything"
-            body="When an event is sold out, ask to be told if tickets come back and it will show up here."
             action={
               <Link
                 href="/events"

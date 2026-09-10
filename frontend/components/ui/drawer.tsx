@@ -44,16 +44,30 @@ export interface DrawerContentProps
    * scroll the footer away with the content.
    */
   bare?: boolean;
+  /**
+   * Classes for the scrim. Exists for one reason: a drawer opened from INSIDE a
+   * `z-modal` surface (the mobile event page) has to clear it, and the scrim
+   * must move up with the panel or the panel floats over an undimmed page.
+   */
+  overlayClassName?: string;
 }
 
 /** Slide-over panel — a bottom sheet on mobile, a side drawer on larger screens. */
 export const DrawerContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DrawerContentProps
->(function DrawerContent({ className, children, side = 'bottom', hideClose, bare, ...props }, ref) {
+>(function DrawerContent(
+  { className, children, side = 'bottom', hideClose, bare, overlayClassName, ...props },
+  ref,
+) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-drawer bg-black/60 backdrop-blur-sm animate-in fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+      <DialogPrimitive.Overlay
+        className={cn(
+          'fixed inset-0 z-drawer bg-black/60 backdrop-blur-sm animate-in fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+          overlayClassName,
+        )}
+      />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(drawerVariants({ side }), className)}

@@ -26,6 +26,9 @@ const twMerge = extendTailwindMerge({
         },
       ],
       shadow: [{ shadow: ['sm', 'md', 'lg', 'xl', 'glow', 'none'] }],
+      // The named layers. Without them `z-drawer z-popover` kept BOTH classes
+      // and the stylesheet's order, not the className, decided which applied.
+      z: [{ z: ['sticky', 'dropdown', 'drawer', 'modal', 'popover', 'toast', 'tooltip'] }],
     },
   },
 });

@@ -91,7 +91,7 @@ export function QrCarousel({
           aria-label="Your tickets"
           className={cn(
             'flex w-full snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain',
-            'touch-pan-x rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'touch-manipulation rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
           )}
         >

@@ -110,7 +110,7 @@ export function AutoRail({
           // padding — so the rail silently sat at `scrollLeft: 24` on load and
           // the first card was a padding-width left of the heading above it.
           // Measured, not guessed: the alignment spec caught exactly 24px.
-          '-mx-4 flex snap-x snap-mandatory scroll-pl-4 gap-5 overflow-x-auto px-4 pb-2',
+          '-mx-4 flex snap-x snap-mandatory scroll-pl-4 gap-5 overflow-x-auto touch-manipulation px-4 pb-2',
           'lg:scroll-pl-6',
           '[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
           'lg:-mx-6 lg:px-6',

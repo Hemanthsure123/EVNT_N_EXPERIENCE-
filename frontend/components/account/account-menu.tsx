@@ -29,8 +29,23 @@ import { cn } from '@/lib/utils/cn';
 
 /**
  * The account menu — District by Zomato style right-side drawer profile experience.
+ *
+ * ONE drawer, two triggers. The site header draws the `pill` (avatar, and from
+ * `lg` the name and a chevron); the mobile event page draws just the `avatar`,
+ * a plain circle, because its header holds nothing else on the right. Both
+ * open this same drawer — the event page's is not a copy that could drift.
+ *
+ * `layer="overlay"` lifts the drawer above a `z-modal` surface. The event page
+ * IS one (a fixed overlay at 1300), and the drawer's own level (1200) would
+ * open it BEHIND the page that asked for it.
  */
-export function AccountMenu() {
+export function AccountMenu({
+  variant = 'pill',
+  layer = 'drawer',
+}: {
+  variant?: 'pill' | 'avatar';
+  layer?: 'drawer' | 'overlay';
+} = {}) {
   const { user, signOut } = useAuth();
   const { isAdmin, isOrganizer, organizations, active, switchTo, ready } = useScope();
   const router = useRouter();
@@ -49,29 +64,59 @@ export function AccountMenu() {
 
   return (
     <Drawer open={open} onOpenChange={setOpen}>
-      <DrawerTrigger
-        aria-label={`Account menu — currently ${label}`}
+      {variant === 'avatar' ? (
+        <DrawerTrigger
+          aria-label={`Account menu — currently ${label}`}
+          className={cn(
+            'inline-flex size-control shrink-0 items-center justify-center rounded-full border border-border bg-surface p-0.5',
+            'transition-colors duration-fast ease-out hover:border-foreground/20',
+            'active:scale-95 motion-reduce:active:scale-100',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          )}
+        >
+          {/* The photograph when there is one, the initial when there is not —
+              `IdentityAvatar` decides, exactly as it does in the site header. */}
+          <IdentityAvatar
+            name={label}
+            imageUrl={triggerImageUrl}
+            size="md"
+            shape={active.kind === 'organization' ? 'tile' : 'circle'}
+          />
+        </DrawerTrigger>
+      ) : (
+        <DrawerTrigger
+          aria-label={`Account menu — currently ${label}`}
+          className={cn(
+            'inline-flex h-control shrink-0 items-center gap-2 rounded-full border border-border bg-surface pl-1.5 pr-2.5',
+            'transition-colors duration-fast ease-out hover:border-foreground/20 hover:bg-muted',
+            'active:scale-95 motion-reduce:active:scale-100',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          )}
+        >
+          <IdentityAvatar
+            name={label}
+            imageUrl={triggerImageUrl}
+            size="sm"
+            shape={active.kind === 'organization' ? 'tile' : 'circle'}
+          />
+          <span className="hidden max-w-28 truncate text-label lg:inline">{label}</span>
+          <ChevronsUpDown
+            className="hidden size-3.5 shrink-0 text-muted-foreground lg:block"
+            aria-hidden
+          />
+        </DrawerTrigger>
+      )}
+
+      <DrawerContent
+        side="right"
+        bare
+        hideClose
+        overlayClassName={layer === 'overlay' ? 'z-popover' : undefined}
         className={cn(
-          'inline-flex h-control shrink-0 items-center gap-2 rounded-full border border-border bg-surface pl-1.5 pr-2.5',
-          'transition-colors duration-fast ease-out hover:border-foreground/20 hover:bg-muted',
-          'active:scale-95 motion-reduce:active:scale-100',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full',
+          layer === 'overlay' && 'z-popover',
         )}
       >
-        <IdentityAvatar
-          name={label}
-          imageUrl={triggerImageUrl}
-          size="sm"
-          shape={active.kind === 'organization' ? 'tile' : 'circle'}
-        />
-        <span className="hidden max-w-28 truncate text-label lg:inline">{label}</span>
-        <ChevronsUpDown
-          className="hidden size-3.5 shrink-0 text-muted-foreground lg:block"
-          aria-hidden
-        />
-      </DrawerTrigger>
-
-      <DrawerContent side="right" bare hideClose className="w-full max-w-md bg-background border-l shadow-2xl flex flex-col h-full">
         {/* District Top Header Bar */}
         <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4 shrink-0">
           {/* `DrawerTitle`, not a bare `h2`. This is a Radix Dialog: without a

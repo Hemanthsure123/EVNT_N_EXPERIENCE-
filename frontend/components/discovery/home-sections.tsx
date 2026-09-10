@@ -79,7 +79,7 @@ export async function SellingFastSection() {
             The card is `w-4/5`, not full width, deliberately — the sliver of
             the next card is the affordance. A rail whose items are exactly
             100% wide looks identical to a stack and nobody swipes it. */}
-        <ul className="scrollbar-none -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 xl:grid-cols-4">
+        <ul className="scrollbar-none -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto touch-manipulation px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 xl:grid-cols-4">
           {scarce.map((event, index) => (
             <li key={event.id} className="h-full w-4/5 shrink-0 snap-start sm:w-auto sm:shrink">
               <Reveal delayMs={Math.min(index, 5) * 60} className="h-full">
