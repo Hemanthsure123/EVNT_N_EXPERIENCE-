@@ -110,7 +110,7 @@ export function SectionTabs({
       // first pill lines up with the content's gutter — otherwise the sticky
       // state shows the page sliding past in two four-pixel channels.
       className={cn(
-        'sticky top-0 z-20 -mx-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur',
+        'sticky top-0 z-50 -mx-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur',
         className,
       )}
     >

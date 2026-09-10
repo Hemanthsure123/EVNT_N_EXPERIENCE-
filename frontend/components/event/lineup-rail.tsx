@@ -91,7 +91,7 @@ export function LineupRail({ crew, className }: { crew: EventCrewEntry[]; classN
 
   return (
     <section aria-labelledby="lineup-heading" className={cn('flex flex-col gap-1', className)}>
-      <h3 id="lineup-heading" className="text-body font-extrabold text-foreground">
+      <h3 id="lineup-heading" className="text-h4 text-foreground">
         Who&rsquo;s taking the stage
       </h3>
 

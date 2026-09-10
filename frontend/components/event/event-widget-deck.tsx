@@ -31,8 +31,13 @@ import {
 } from '@/lib/discovery/shared-poster';
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
-import { EventWidgetContent, sectionTabsFor } from './event-widget-content';
+import {
+  EventWidgetContent,
+  EventWidgetSummary,
+  sectionTabsFor,
+} from './event-widget-content';
 import { SectionTabs } from './section-tabs';
+import { BrandMark } from '@/components/shell/brand-mark';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
 
@@ -1155,7 +1160,11 @@ function Hero({
             </button>
             <span
               aria-hidden
-              className="absolute bottom-3 left-3 z-20 flex items-center gap-1.5"
+              // CENTRED under the artwork rather than tucked in a corner:
+              // pagination is about the whole picture, and a corner reads as
+              // a badge attached to whatever is nearest it. The pause control
+              // keeps the right-hand corner, where a control belongs.
+              className="absolute inset-x-0 bottom-3 z-20 flex items-center justify-center gap-1.5"
             >
               {images.map((image, position) => (
                 <span
@@ -1173,6 +1182,37 @@ function Hero({
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The page's own branding, above the artwork and in the flow.
+ *
+ * The deck is opened from a feed, from a shared link and from an in-app
+ * webview, and in the last two there is no site chrome anywhere on the screen —
+ * nothing says whose product this is. This is that, and it is deliberately the
+ * cheapest possible version: a mark, a word, and no controls.
+ *
+ * NOT STICKY, and that is the requirement rather than an oversight. A branding
+ * bar pinned to the top of a page whose whole first screen is one photograph
+ * spends permanent vertical space on something the reader learns once. It
+ * scrolls away with the poster; the TAB bar is the thing that stays.
+ *
+ * The mark is `BrandMark` — the one definition of it in the codebase, so a
+ * brand change lands here without anybody remembering this file exists.
+ */
+function BrandHeader() {
+  return (
+    <div className="relative flex items-center justify-center px-4 pb-2 pt-3">
+      <span className="absolute left-4 top-1/2 -translate-y-1/2 inline-flex">
+        <BrandMark title="Curatix" className="h-6 w-auto" />
+      </span>
+      {/* Absolutely centred against the SCREEN, not against the space left
+          over beside the mark — a flex-centred word shifts right by half the
+          logo's width, which is visible the moment anything else joins the
+          row. */}
+      <span className="text-body font-extrabold tracking-tight text-foreground">Curatix</span>
     </div>
   );
 }
@@ -1388,6 +1428,13 @@ function ActivePage({
         // or a clipped final row on some device.
         style={{ paddingBottom: `${(ctaHeight || 96) + 32}px` }}
       >
+        {/* ── BRANDING, AND IT SCROLLS AWAY ──────────────────────────────
+            The first thing in the scroller and nothing more than that: no
+            `sticky`, no `fixed`, no z-index. It is in the normal flow, so it
+            leaves with the first flick and gives the artwork the whole screen
+            for the rest of the read — which is the point of putting it above
+            the poster rather than over it. */}
+        <BrandHeader />
         <Hero
           event={event}
           images={images}
@@ -1399,13 +1446,16 @@ function ActivePage({
           blurOpacity={blurOpacity}
           onOpenPoster={onOpenPoster}
         />
+        {/* WHAT it is, WHERE and WHEN — above the tabs, because the tabs
+            navigate WITHIN an event and these three say which one. */}
+        <EventWidgetSummary event={event} content={content} onOpenSheet={onOpenSheet} />
         {/* ── THE TABS STICK, AND THEY STICK INSIDE THIS SCROLLER ────────
-            Declared between the hero and the content so `position: sticky`
+            Declared between the summary and the content so `position: sticky`
             pins them against the page's own scroll box. They cannot be
             `fixed`: that would resolve against the deck's transformed page
             track and land in the wrong place on every swipe — the same trap
             the lightbox portal exists for. */}
-        <div className="px-4">
+        <div className="px-4 pt-5">
           <SectionTabs tabs={sectionTabsFor(detail, content)} scrollerRef={scrollerRef} />
         </div>
         <EventWidgetContent

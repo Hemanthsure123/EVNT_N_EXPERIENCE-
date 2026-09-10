@@ -6,8 +6,6 @@ import Link from 'next/link';
 import {
   CalendarClock,
   ChevronRight,
-  FileText,
-  HelpCircle,
   MapPin,
   Ticket,
 } from 'lucide-react';
@@ -25,6 +23,7 @@ import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
 import { type GalleryImage } from './hero-gallery';
 import { GalleryGrid } from './gallery-grid';
+import { HelpSection } from './help-section';
 import { ShareMenu } from './share-menu';
 import type { SubSheetType } from './event-sub-sheets';
 
@@ -96,6 +95,82 @@ export type EventWidgetContentProps = {
   onSelectEvent?: (eventId: string) => void;
 };
 
+/**
+ * WHAT THE EVENT IS, ABOVE THE TABS.
+ *
+ * Split out of `EventWidgetContent` so the page can put the sticky tab bar
+ * BETWEEN them: the title, the date and the two info cards are the answer to
+ * "what am I looking at", and they belong above a control that navigates
+ * within it. Everything the tabs point AT is in the component below.
+ *
+ * It is not a second copy of anything — the rows are the same `DisclosureRow`
+ * the rest of the page uses, and the decision about which tabs exist still
+ * lives in `sectionTabsFor` in this same file.
+ */
+export function EventWidgetSummary({
+  event,
+  content,
+  onOpenSheet,
+  className,
+}: {
+  event: EventCardData;
+  content: EventContent | null | undefined;
+  onOpenSheet: (sheet: NonNullable<SubSheetType>) => void;
+  className?: string;
+}) {
+  // The REAL category only. A second pill ("Nightlife") used to be hard-coded
+  // beside it, so every event on the platform claimed the same two tags.
+  const category = categoryBySlug(event.category);
+  const firstTimelineEntry = (content?.timeline ?? []).find((entry) => entry.starts_at);
+
+  return (
+    <div className={cn('flex flex-col gap-4 px-4 pt-5', className)}>
+      {category ? (
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full border border-border bg-muted px-3 py-1 text-caption font-semibold text-muted-foreground">
+            {category.label}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-1">
+        <h2 className="text-h3 font-extrabold leading-snug tracking-tight text-foreground">
+          {event.title}
+        </h2>
+        <p className="text-body-sm font-semibold text-primary">
+          {formatEventDateTime(event.starts_at)}
+        </p>
+      </div>
+
+      {/* ── THE TWO INFO CARDS ────────────────────────────────────────────
+          Where and when, in that order, because "can I get there" is the
+          question somebody asks before "what time". `gap-3` between them and
+          nothing else in this stack, so the pair reads as one block rather
+          than as two unrelated rows. */}
+      <div className="flex flex-col gap-3">
+        <DisclosureRow
+          icon={<MapPin className="size-5" aria-hidden />}
+          label={`${event.venue}, ${event.city}`}
+          hint="Venue details"
+          onClick={() => onOpenSheet('venue')}
+        />
+        {/* The summary states a REAL time or omits it — this row used to read
+            "Starts at 8 PM" on every event on the platform. */}
+        <DisclosureRow
+          icon={<CalendarClock className="size-5" aria-hidden />}
+          label={
+            firstTimelineEntry?.starts_at
+              ? `${firstTimelineEntry.label} at ${formatEventTime(firstTimelineEntry.starts_at)}`
+              : `Starts at ${formatEventTime(event.starts_at)}`
+          }
+          hint="View full schedule & timeline"
+          onClick={() => onOpenSheet('schedule')}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function EventWidgetContent({
   event,
   detail,
@@ -105,9 +180,6 @@ export function EventWidgetContent({
   onOpenSheet,
   onSelectEvent,
 }: EventWidgetContentProps) {
-  // The REAL category only. A second pill ("Nightlife") used to be hard-coded
-  // beside it, so every event on the platform claimed the same two tags.
-  const category = categoryBySlug(event.category);
   const summary = React.useMemo(() => summariseTiers(tiers), [tiers]);
   const visibleTiers = React.useMemo(
     () => (tiers ? sellableTiers(tiers).slice(0, 3) : []),
@@ -128,59 +200,12 @@ export function EventWidgetContent({
   );
   const railIsOrganiser = isOrganiserRail(event, similar);
 
-  const firstTimelineEntry = (content?.timeline ?? []).find((entry) => entry.starts_at);
   const aboutPreview = detail?.short_description?.trim() || detail?.description?.trim() || '';
   const hasMoreAbout = Boolean(detail?.description?.trim());
 
   return (
-    <div className="flex flex-col gap-6 px-4 pt-4">
-      {/* 1. Category ---------------------------------------------------- */}
-      {category ? (
-        <div className="flex flex-wrap gap-2">
-          <span className="rounded-full border border-border bg-muted px-3 py-1 text-caption font-semibold text-muted-foreground">
-            {category.label}
-          </span>
-        </div>
-      ) : null}
-
-      {/* 2. Title and 3. when -------------------------------------------- */}
-      <div className="flex flex-col gap-1">
-        <h2 className="text-h3 font-extrabold leading-snug tracking-tight text-foreground">
-          {event.title}
-        </h2>
-        <p className="text-body-sm font-semibold text-primary">
-          {formatEventDateTime(event.starts_at)}
-        </p>
-      </div>
-
-      {/* 4. Where -------------------------------------------------------- */}
-      {/* The `id`s here and below are the tab bar's scroll targets — see
-          `sectionTabsFor`, which decides WHICH of them exist for an event.
-          A wrapper rather than an id on the row itself, so the tab lands
-          with the section's own top edge under the sticky bar. */}
-      <div id="event-venue" className="scroll-mt-16">
-        <DisclosureRow
-          icon={<MapPin className="size-5" aria-hidden />}
-          label={`${event.venue}, ${event.city}`}
-          hint="Venue details"
-          onClick={() => onOpenSheet('venue')}
-        />
-      </div>
-
-      {/* 5. Schedule. The summary states a REAL time or omits it — this row
-             used to read "Starts at 8 PM" on every event on the platform. */}
-      <DisclosureRow
-        icon={<CalendarClock className="size-5" aria-hidden />}
-        label={
-          firstTimelineEntry?.starts_at
-            ? `${firstTimelineEntry.label} at ${formatEventTime(firstTimelineEntry.starts_at)}`
-            : `Starts at ${formatEventTime(event.starts_at)}`
-        }
-        hint="View full schedule & timeline"
-        onClick={() => onOpenSheet('schedule')}
-      />
-
-      {/* 6. Actions. All three are the existing implementations — none of them
+    <div className="flex flex-col gap-6 px-4 pt-6">
+      {/* Actions. All three are the existing implementations — none of them
              navigates away from the widget. */}
       <div className="flex items-center gap-2">
         <ShareMenu
@@ -198,7 +223,7 @@ export function EventWidgetContent({
       {visibleTiers.length > 0 ? (
         <section className="flex flex-col gap-3">
           <div className="flex items-baseline justify-between gap-3">
-            <h3 className="text-body font-extrabold text-foreground">Tickets</h3>
+            <h3 className="text-h4 text-foreground">Tickets</h3>
             {availabilityLabel(summary.state) ? (
               <span className="text-caption font-semibold text-muted-foreground">
                 {availabilityLabel(summary.state)}
@@ -234,7 +259,7 @@ export function EventWidgetContent({
       {/* 9. About -------------------------------------------------------- */}
       {aboutPreview ? (
         <section id="event-about" className="flex scroll-mt-16 flex-col gap-2">
-          <h3 className="text-body font-extrabold text-foreground">About the event</h3>
+          <h3 className="text-h4 text-foreground">About the event</h3>
           <p className="line-clamp-3 whitespace-pre-line text-body-sm text-muted-foreground">
             {aboutPreview}
           </p>
@@ -264,14 +289,27 @@ export function EventWidgetContent({
               screen already has one at the top. */}
       {galleryImages.length > 0 ? (
         <section id="event-photos" className="flex scroll-mt-16 flex-col gap-3">
-          <h3 className="text-body font-extrabold text-foreground">Gallery</h3>
+          <h3 className="text-h4 text-foreground">Gallery</h3>
           <GalleryGrid images={galleryImages} />
         </section>
       ) : null}
 
-      {/* 12. Organiser --------------------------------------------------- */}
+      {/* Venue — the tab target, and a real section rather than the card
+              above it. The card answers "where"; this answers "what is it
+              like getting in", which is what the sheet behind it carries. */}
+      <section id="event-venue" className="flex scroll-mt-16 flex-col gap-3">
+        <h3 className="text-h4 text-foreground">Venue &amp; seating</h3>
+        <DisclosureRow
+          icon={<MapPin className="size-5" aria-hidden />}
+          label={`${event.venue}, ${event.city}`}
+          hint="Directions, seating and access"
+          onClick={() => onOpenSheet('venue')}
+        />
+      </section>
+
+      {/* Organiser --------------------------------------------------- */}
       <section className="flex flex-col gap-3">
-        <h3 className="text-body font-extrabold text-foreground">Organised by</h3>
+        <h3 className="text-h4 text-foreground">Organised by</h3>
         {/* An explicit name. Without one the button announces as its own
             contents — an initial and a company name — which says who runs the
             event but not that pressing it opens anything. */}
@@ -294,28 +332,10 @@ export function EventWidgetContent({
         </button>
       </section>
 
-      {/* 13. More — the two long-form documents, grouped rather than
-              scattered through the page. */}
-      <section id="event-help" className="flex scroll-mt-16 flex-col gap-3">
-        <h3 className="text-body font-extrabold text-foreground">More</h3>
-        <div className="flex flex-col divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface">
-          <MoreRow
-            icon={<HelpCircle className="size-5" aria-hidden />}
-            label="Frequently asked questions"
-            onClick={() => onOpenSheet('faq')}
-          />
-          <MoreRow
-            icon={<FileText className="size-5" aria-hidden />}
-            label="Terms and conditions"
-            onClick={() => onOpenSheet('terms')}
-          />
-        </div>
-      </section>
-
       {/* 14. Similar events ---------------------------------------------- */}
       {similar.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h3 className="text-body font-extrabold text-foreground">
+          <h3 className="text-h4 text-foreground">
             {railIsOrganiser ? `More from ${event.organization_name}` : 'Similar events'}
           </h3>
           {/* A rail with real edge peeking and CSS scroll-snap — no library, no
@@ -329,6 +349,13 @@ export function EventWidgetContent({
           </ul>
         </section>
       ) : null}
+
+      {/* Help — LAST, and last on purpose. The tab bar reads About, Photos,
+              Venue, Help, and an `IntersectionObserver` marks whichever
+              section is nearest the top: a tab whose target sits ABOVE the
+              one before it makes the bar highlight backwards as you scroll.
+              The DOM order here IS the tab order. */}
+      <HelpSection faqs={content?.faqs ?? []} onOpenPolicies={() => onOpenSheet('terms')} />
     </div>
   );
 }
@@ -357,7 +384,10 @@ function DisclosureRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3.5 rounded-2xl border border-border bg-surface p-3.5 text-left transition-colors active:bg-muted"
+      // `p-4` and `rounded-2xl` (16px), uniform on all four sides. It was
+      // `p-3.5`, a half-step nothing else on the page uses, which read as a
+      // slightly squashed version of the same card.
+      className="flex w-full items-center gap-3.5 rounded-2xl border border-border bg-surface p-4 text-left transition-colors active:bg-muted"
     >
       <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
         {icon}
@@ -371,38 +401,6 @@ function DisclosureRow({
   );
 }
 
-function MoreRow({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-control items-center gap-3.5 p-3.5 text-left transition-colors active:bg-muted"
-    >
-      <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="min-w-0 flex-1 truncate text-body-sm font-semibold text-foreground">
-        {label}
-      </span>
-      <ChevronRight className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-    </button>
-  );
-}
-
-/**
- * A card in the similar-events rail.
- *
- * When the deck can switch to it in place (`onSelectEvent`) it is a BUTTON and
- * stays inside the widget, which is the whole architecture — the widget is the
- * mobile event page, so moving between events must not leave it. It falls back
- * to a real link when it cannot, so the row is never a dead end.
- */
 function SimilarCard({
   event,
   onSelect,
