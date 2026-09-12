@@ -62,6 +62,16 @@ class ScheduledJob:
 # inventory or somebody's money.
 SCHEDULE: tuple[ScheduledJob, ...] = (
     ScheduledJob(
+        task_name="core.purge_ephemeral_tokens",
+        # Fifteen minutes. Nothing waits on this — `consume` already refuses
+        # an expired row and deletes it — so the only cost of a slow sweep is
+        # rows sitting in a small table. A tighter loop would be a query every
+        # minute to delete nothing, which is what most ticks would do.
+        interval_seconds=900,
+        payload={"limit": 1000},
+        why="Clears OAuth states and handoffs from flows nobody completed.",
+    ),
+    ScheduledJob(
         task_name="booking.release_expired",
         # A minute. The hold window is BOOKING_HOLD_MINUTES (10 by default), so
         # a tighter interval buys nothing, and a looser one means a customer

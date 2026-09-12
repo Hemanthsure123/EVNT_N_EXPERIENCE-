@@ -78,7 +78,26 @@ import { cn } from '@/lib/utils/cn';
 /** The face's share of the viewport, below `sm`. */
 const ITEM_VW = 34;
 
-export function LineupRail({ crew, className }: { crew: EventCrewEntry[]; className?: string }) {
+export function LineupRail({
+  crew,
+  className,
+  onOpenPortrait,
+}: {
+  crew: EventCrewEntry[];
+  className?: string;
+  /**
+   * Opens the full-screen viewer on that person. Absent on the desktop page,
+   * which has no deck-level viewer to open — and a face that is not a button
+   * there is the behaviour that already shipped, not a regression.
+   *
+   * Takes an ID rather than an index ON PURPOSE. This rail draws every crew
+   * member; the viewer holds only the ones with a photograph, and a position
+   * handed across that boundary agrees right up until somebody has no picture
+   * — then it opens a stranger, silently, on the one screen where being wrong
+   * about who somebody is matters most.
+   */
+  onOpenPortrait?: (personId: string) => void;
+}) {
   const { ref, activeIndex, mode, looping, scrollable } = useSnapRail<HTMLUListElement>(
     crew.length,
     { loop: true },
@@ -141,6 +160,35 @@ export function LineupRail({ crew, className }: { crew: EventCrewEntry[]; classN
               )}
             >
               <figure className="flex flex-col items-center gap-2">
+                {/* ── A FACE IS PRESSABLE ONLY WHEN THERE IS SOMETHING TO
+                    SHOW ────────────────────────────────────────────────────
+                    A button that opens an empty viewer is worse than a plain
+                    picture, so a member with no photograph stays a `div`. The
+                    element CHANGES rather than a disabled button being drawn:
+                    a disabled control in a rail of enabled ones reads as
+                    broken, where a picture that simply is not a control reads
+                    as a picture. */}
+                {onOpenPortrait && person.photo_url && !isClone ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPortrait(person.id)}
+                    aria-label={`View ${person.name}${person.role ? `, ${person.role}` : ''}`}
+                    className={cn(
+                      'relative aspect-square w-full overflow-hidden rounded-full bg-muted ring-1 ring-border',
+                      'transition-transform duration-fast active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                      PEEK_RAIL_SURFACE,
+                      peekRailSurfaceState(isActive, mode),
+                    )}
+                  >
+                    <RemoteImage
+                      src={person.photo_url}
+                      alt={person.photo_alt_text || ''}
+                      className="size-full object-cover"
+                      fallback={<span aria-hidden className="size-full bg-muted" />}
+                    />
+                  </button>
+                ) : (
                 <div
                   className={cn(
                     // `rounded-full` on the CLIPPING box, so the photograph is
@@ -172,6 +220,7 @@ export function LineupRail({ crew, className }: { crew: EventCrewEntry[]; classN
                     }
                   />
                 </div>
+                )}
                 <figcaption className="flex w-full flex-col items-center gap-0.5 text-center">
                   <span className="w-full truncate text-body-sm font-bold text-foreground">
                     {person.name}

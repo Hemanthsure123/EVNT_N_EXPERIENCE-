@@ -29,6 +29,17 @@ function remotePatterns() {
   // Uploads served straight from a bucket or CDN (STORAGE_BACKEND=s3|gcs).
   add(process.env.NEXT_PUBLIC_MEDIA_BASE_URL);
 
+  // Google account photos. `User.avatar_url` is set from the `picture` claim
+  // when somebody signs up with Google, so without this entry `next/image`
+  // refuses every one of those avatars — silently, one image at a time, which
+  // is the exact failure mode the media host has its own note about.
+  patterns.push({ protocol: 'https', hostname: 'lh3.googleusercontent.com' });
+
+  // YouTube stills for the trailer tile — see `lib/events/video-thumbnail.ts`.
+  // The URL is DERIVED from the stored embed url, so without this entry the
+  // tile silently draws nothing where a thumbnail should be.
+  patterns.push({ protocol: 'https', hostname: 'i.ytimg.com' });
+
   // Local development, so `npm run dev` works with nothing configured.
   if (process.env.NODE_ENV !== 'production') {
     patterns.push({

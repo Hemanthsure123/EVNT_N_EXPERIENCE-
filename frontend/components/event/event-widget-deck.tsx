@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { Ticket } from 'lucide-react';
+import { Play, Ticket } from 'lucide-react';
 import {
   AnimatePresence,
   type MotionValue,
@@ -43,6 +43,7 @@ import { DeckAccount } from './deck-account';
 import { DeckBrandHeader } from './deck-brand-header';
 import { Lightbox, type LightboxImage } from './lightbox';
 import { SharedPoster } from './shared-poster';
+import { videoThumbnail } from '@/lib/events/video-thumbnail';
 
 /**
  * THE MOBILE EVENT PAGE.
@@ -198,12 +199,68 @@ export function EventWidgetDeck() {
     if (currentEvent?.poster_url) {
       list.push({ url: currentEvent.poster_url, alt: currentEvent.title });
     }
+    // THE TRAILER SITS SECOND, not last. It is the one piece of media an
+    // organiser uploads expecting it to be watched, and burying it behind
+    // nine photographs is where a trailer goes to be missed. It was excluded
+    // from this list entirely before — `kind !== 'gallery'` skipped it — so
+    // the video an organiser had attached was unreachable from the viewer.
+    for (const item of content?.media ?? []) {
+      if (item.kind !== 'video') continue;
+      list.push({
+        kind: 'video',
+        url: item.url,
+        alt: item.alt_text || `${currentEvent?.title ?? ''} trailer`.trim(),
+        poster: videoThumbnail(item.url) ?? undefined,
+      });
+    }
     for (const item of content?.media ?? []) {
       if (item.kind !== 'gallery') continue;
       list.push({ url: item.url, alt: item.alt_text || currentEvent?.title || '' });
     }
     return list;
   }, [content, currentEvent]);
+
+  /**
+   * The lineup gets its OWN sequence, and that is the point.
+   *
+   * Clicking a face and then arrowing into the venue photographs would be a
+   * viewer that had forgotten what was asked of it. Somebody who opens a
+   * portrait wants the other portraits. Same component, same gestures, a
+   * different array — which is exactly what the brief asks for when it says
+   * "the other images in that specific section".
+   */
+  const [crewAt, setCrewAt] = React.useState<number | null>(null);
+  const withPortraits = React.useMemo(
+    () => (content?.crew ?? []).filter((member) => Boolean(member.photo_url)),
+    [content],
+  );
+  const crewPortraits = React.useMemo<LightboxImage[]>(
+    () =>
+      withPortraits.map((member) => ({
+        url: member.photo_url,
+        // The name is the caption. `photo_alt_text` describes the picture for
+        // somebody who cannot see it; the person looking at it wants to know
+        // who this is, and the role under it.
+        alt: [member.name, member.role].filter(Boolean).join(' — '),
+      })),
+    [withPortraits],
+  );
+  /**
+   * Addressed by ID, never by position.
+   *
+   * The rail draws every crew member; this viewer holds only the ones with a
+   * photograph. Handing an index across that boundary means two lists whose
+   * positions agree right up until somebody on the roster has no picture — and
+   * then it opens a stranger, silently, on the one screen where being wrong
+   * about who somebody is matters.
+   */
+  const openCrewPortrait = React.useCallback(
+    (personId: string) => {
+      const index = withPortraits.findIndex((member) => member.id === personId);
+      if (index >= 0) setCrewAt(index);
+    },
+    [withPortraits],
+  );
 
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const ctaRef = React.useRef<HTMLDivElement>(null);
@@ -311,6 +368,7 @@ export function EventWidgetDeck() {
     dockedRef.current = false;
     setDocked(false);
     setLightboxAt(null);
+    setCrewAt(null);
     blurOpacity.set(1);
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
@@ -359,6 +417,7 @@ export function EventWidgetDeck() {
       setDocked(false);
       blurOpacity.set(1);
       setLightboxAt(null);
+    setCrewAt(null);
       setCurrentIndex(index);
     },
     [events.length, currentIndex, setCurrentIndex, blurOpacity],
@@ -554,6 +613,7 @@ export function EventWidgetDeck() {
             blurOpacity={blurOpacity}
             onOpenPoster={setLightboxAt}
             images={lightboxImages}
+            onOpenCrew={openCrewPortrait}
             ctaHeight={ctaHeight}
             scrollerRef={scrollerRef}
             ctaRef={ctaRef}
@@ -577,6 +637,18 @@ export function EventWidgetDeck() {
           index={lightboxAt}
           onIndexChange={setLightboxAt}
           onClose={() => setLightboxAt(null)}
+        />
+      ) : null}
+
+      {/* The lineup's own viewer. Two `Lightbox` elements never coexist —
+          each is gated on its own index being non-null and opening one does
+          not touch the other's state — so there is no stacked focus trap. */}
+      {crewAt !== null && crewPortraits.length > 0 ? (
+        <Lightbox
+          images={crewPortraits}
+          index={crewAt}
+          onIndexChange={setCrewAt}
+          onClose={() => setCrewAt(null)}
         />
       ) : null}
 
@@ -644,7 +716,7 @@ function Hero({
   onOpenPoster,
 }: {
   event: EventCardData;
-  /** The poster FIRST, then the organiser's gallery. */
+  /** The poster FIRST, then the trailer, then the organiser's gallery. */
   images: LightboxImage[];
   docked: boolean;
   /** True while a clone is flying, so the same photograph is never on screen twice. */
@@ -657,7 +729,7 @@ function Hero({
   onOpenPoster: (index: number) => void;
 }) {
   const railRef = React.useRef<HTMLDivElement>(null);
-  const slideRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const slideRefs = React.useRef<(HTMLElement | null)[]>([]);
   const frameRef = React.useRef<number | null>(null);
   const reduceMotion = useReducedMotion();
   const [slide, setSlide] = React.useState(0);
@@ -765,7 +837,18 @@ function Hero({
     onOpenPoster(index);
   };
 
-  const backdrop = slides[Math.min(slide, Math.max(slides.length - 1, 0))]?.url ?? null;
+  /**
+   * The blurred backdrop is an `<Image>`, so it must never be handed a video's
+   * EMBED url — `next/image` would refuse a host that is not in
+   * `remotePatterns` and the frame would sit empty behind the player. On a
+   * video slide it keeps showing the poster, which is the right picture
+   * anyway: the backdrop exists to fill what the artwork does not.
+   */
+  const activeSlide = slides[Math.min(slide, Math.max(slides.length - 1, 0))] ?? null;
+  const backdrop =
+    activeSlide && activeSlide.kind !== 'video'
+      ? activeSlide.url
+      : (slides.find((item) => item.kind !== 'video')?.url ?? event.poster_url ?? null);
 
   return (
     <div style={{ padding: DECK_EDGE_PADDING_PX, paddingBottom: 0 }}>
@@ -868,7 +951,21 @@ function Hero({
                   'scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
                 )}
               >
-                {slides.map((image, index) => (
+                {slides.map((image, index) =>
+                  image.kind === 'video' ? (
+                    <HeroVideoSlide
+                      key={`${image.url}#${index}`}
+                      slideRef={(element) => {
+                        slideRefs.current[index] = element;
+                      }}
+                      title={image.alt || `${event.title} trailer`}
+                      embedUrl={image.url}
+                      poster={image.poster}
+                      onPointerDown={onSlidePointerDown}
+                      onPointerMove={onSlidePointerMove}
+                      wasDragged={() => dragRef.current.moved}
+                    />
+                  ) : (
                   <button
                     key={`${image.url}#${index}`}
                     ref={(element) => {
@@ -898,7 +995,8 @@ function Hero({
                       priority={index === 0}
                     />
                   </button>
-                ))}
+                  ),
+                )}
               </div>
             ) : (
               <span className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
@@ -908,6 +1006,104 @@ function Hero({
           </motion.div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The trailer, PLAYING IN THE HERO — not in a modal, and not on arrival.
+ *
+ * ── WHY A FACADE AND NOT A LIVE IFRAME ────────────────────────────────────
+ *
+ * The brief asks for the player inline, so a press must not open the viewer.
+ * Mounting the iframe immediately would satisfy that sentence and break two
+ * things that matter more on the platform's hottest public route:
+ *
+ * 1. **It eats the swipe.** The hero is a scroll-snap rail. A cross-origin
+ *    iframe owns every touch inside its own box, so the poster on one side and
+ *    the gallery on the other become unreachable by the gesture that reaches
+ *    everything else on this page. That is not a trade — it is a rail that
+ *    stops working where the trailer is.
+ * 2. **It costs the page a third party.** A YouTube embed pulls its own
+ *    scripts, frames and cookies on every event view, for a video most
+ *    visitors never press. The event page is edge-cached and tuned to a 0-query
+ *    warm read; loading a player nobody asked for is the largest single
+ *    regression available here.
+ *
+ * So the slide is a still with a play control until somebody presses it, and
+ * the real player replaces it IN PLACE — same box, same position in the rail,
+ * no modal. After that the iframe does own the gestures inside it, which is
+ * correct: at that point the person is watching a video, and the controls they
+ * want are its own.
+ *
+ * `wasDragged` is the same guard the photo slides use: a swipe ends in a
+ * `click`, and without it flicking past the trailer starts playing it.
+ */
+function HeroVideoSlide({
+  slideRef,
+  title,
+  embedUrl,
+  poster,
+  onPointerDown,
+  onPointerMove,
+  wasDragged,
+}: {
+  slideRef: (element: HTMLElement | null) => void;
+  title: string;
+  embedUrl: string;
+  /** The provider's still, where one can be derived. Absent for Vimeo. */
+  poster?: string;
+  onPointerDown: (event: React.PointerEvent) => void;
+  onPointerMove: (event: React.PointerEvent) => void;
+  wasDragged: () => boolean;
+}) {
+  const [playing, setPlaying] = React.useState(false);
+
+  return (
+    <div
+      ref={slideRef}
+      style={{ borderRadius: HERO_RADIUS_PX }}
+      className="relative h-full w-full shrink-0 snap-center snap-always overflow-hidden bg-ink-900"
+    >
+      {playing ? (
+        <iframe
+          src={`${embedUrl}${embedUrl.includes('?') ? '&' : '?'}autoplay=1`}
+          title={title}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+          className="absolute inset-0 size-full border-0"
+        />
+      ) : (
+        <button
+          type="button"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onClick={() => {
+            if (wasDragged()) return;
+            setPlaying(true);
+          }}
+          aria-label={`Play ${title}`}
+          className="absolute inset-0 flex size-full items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          {poster ? (
+            <Image src={poster} alt="" fill sizes="100vw" className="object-cover" />
+          ) : null}
+          {/* Dimmed either way, so a white play glyph reads over a bright
+              still — and so a slide with no derivable thumbnail still looks
+              like a deliberate surface rather than a hole. */}
+          <span aria-hidden className="absolute inset-0 bg-ink-900/45" />
+          <span
+            aria-hidden
+            className="relative inline-flex size-16 items-center justify-center rounded-full bg-white/90 text-ink-900 shadow-lg transition-transform duration-fast active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100"
+          >
+            <Play className="size-7 translate-x-0.5 fill-current" />
+          </span>
+          <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-ink-900/80 to-transparent px-4 pb-3 pt-8 text-left text-body-sm font-semibold text-white">
+            {title}
+          </span>
+        </button>
+      )}
     </div>
   );
 }
@@ -1070,6 +1266,7 @@ function ActivePage({
   hidePoster,
   blurOpacity,
   onOpenPoster,
+  onOpenCrew,
   images,
   ctaHeight,
   scrollerRef,
@@ -1090,6 +1287,7 @@ function ActivePage({
   hidePoster: boolean;
   blurOpacity: MotionValue<number>;
   onOpenPoster: (index: number) => void;
+  onOpenCrew: (personId: string) => void;
   images: LightboxImage[];
   ctaHeight: number;
   scrollerRef: React.RefObject<HTMLDivElement>;
@@ -1153,6 +1351,7 @@ function ActivePage({
           pool={events}
           onOpenSheet={onOpenSheet}
           onSelectEvent={onSelectEvent}
+          onOpenCrew={onOpenCrew}
         />
       </div>
 

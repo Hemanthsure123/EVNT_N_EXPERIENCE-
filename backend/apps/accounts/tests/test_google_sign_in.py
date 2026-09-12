@@ -24,7 +24,6 @@ from apps.accounts.models import User
 from apps.accounts.repositories import UserRepository
 from apps.accounts.services import AuthService, GoogleSignInService
 from core.adapters.local.console_email import ConsoleEmailAdapter
-from core.adapters.local.locmem_cache import LocMemCacheAdapter
 from core.adapters.local.sync_task_queue import SyncTaskQueueAdapter
 from core.ports.oidc_port import OidcIdentity, OidcPort
 
@@ -67,7 +66,6 @@ def build(google: FakeGoogle | None = None) -> tuple[GoogleSignInService, FakeGo
     service = GoogleSignInService(
         users=users,
         oidc=oidc,
-        cache=LocMemCacheAdapter(),
         auth=AuthService(
             users=users, email=ConsoleEmailAdapter(), task_queue=SyncTaskQueueAdapter()
         ),
@@ -115,7 +113,6 @@ class TestStartingTheFlow:
         service = GoogleSignInService(
             users=users,
             oidc=FakeGoogle(),
-            cache=LocMemCacheAdapter(),
             auth=AuthService(
                 users=users, email=ConsoleEmailAdapter(), task_queue=SyncTaskQueueAdapter()
             ),
@@ -282,8 +279,11 @@ class TestTheHandoff:
         state = _state_from(service.start())
         handoff, _next = service.complete(state=state, code="auth-code")
 
-        tokens = service.redeem(handoff=handoff)
+        user, tokens = service.redeem(handoff=handoff)
         assert tokens.access and tokens.refresh
+        # The user comes back WITH the tokens now. The view used to recover it
+        # by decoding the access token it had just been handed.
+        assert user.email == "person@example.com"
 
     def test_a_handoff_is_single_use(self):
         service, _ = build()
@@ -347,3 +347,43 @@ class TestTheRoutesDoNotCollide:
             "auth-google-callback"
         )
         assert settings.GOOGLE_OAUTH_SIGNIN_REDIRECT_URI.endswith(reverse("auth-google-callback"))
+
+
+class TestItSurvivesACacheOutage:
+    """The regression. This is the bug, written as a test.
+
+    The state and the handoff used to live in `CachePort`. In production the
+    cache went down, `/health/` reported `{"database": true, "cache": false}`
+    with `status: "ok"` — correctly, since every read path here is cache-aside
+    — and EVERY Google sign-in failed at the callback with
+    `oauth_state_invalid`, shown to the user as "That sign-in link expired or
+    was already used."
+
+    Neither of these tests constructs a cache at all. `GoogleSignInService` no
+    longer accepts one, so a flow that depended on it could not compile, let
+    alone pass. That is the strongest form this guard can take: the dependency
+    is gone rather than merely exercised.
+    """
+
+    def test_a_whole_sign_in_completes_with_no_cache_anywhere(self):
+        service, _ = build()
+
+        state = _state_from(service.start(next_path="/account/tickets"))
+        handoff, next_path = service.complete(state=state, code="auth-code")
+        user, tokens = service.redeem(handoff=handoff)
+
+        assert next_path == "/account/tickets"
+        assert tokens.access and tokens.refresh
+        assert user.email == "person@example.com"
+
+    def test_the_state_is_durable_rather_than_best_effort(self):
+        # It is a row, and the row is what the callback reads. Nothing about
+        # this flow can be lost by evicting a key.
+        from core.models import EphemeralToken
+
+        service, _ = build()
+        state = _state_from(service.start())
+
+        assert EphemeralToken.objects.filter(token=state).exists()
+        service.complete(state=state, code="auth-code")
+        assert not EphemeralToken.objects.filter(token=state).exists()

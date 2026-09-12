@@ -172,6 +172,11 @@ class GoogleOidcAdapter(OidcPort):
             # that stops an unverified account taking over a real one.
             email_verified=str(claims.get("email_verified", "")).lower() == "true",
             full_name=str(claims.get("name") or "").strip(),
+            # `https` only. The claim is attacker-controllable in the sense
+            # that any Google account can set a photo, and a `javascript:` or
+            # `data:` value reaching an `<img src>` is the kind of thing that
+            # is obvious in hindsight.
+            avatar_url=_https_only(str(claims.get("picture") or "").strip()),
         )
 
     @staticmethod
@@ -226,3 +231,12 @@ class DisabledOidcAdapter(OidcPort):
 
     def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> OidcIdentity:
         raise OidcError("Google sign-in is not configured on this deployment.")
+
+
+def _https_only(url: str) -> str:
+    """Keep an `https://` URL, discard anything else.
+
+    Not a validator — the only question is whether this string is safe to put
+    in an `<img src>`, and every real Google avatar is https.
+    """
+    return url if url.startswith("https://") else ""

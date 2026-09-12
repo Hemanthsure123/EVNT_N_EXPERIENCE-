@@ -40,12 +40,31 @@ import { trapTab, useBackgroundInert } from '@/lib/utils/focus-trap';
  * used. It mounts nothing until opened.
  */
 
-export type LightboxImage = {
+/**
+ * One slide. An image unless it says otherwise.
+ *
+ * `kind` defaults to `'image'` rather than being required, so every existing
+ * caller stayed correct when video arrived — and a caller that forgets it gets
+ * the safe rendering (an `<img>`) instead of an empty `<iframe>`.
+ */
+export type LightboxMedia = {
   url: string;
+  /** `image` draws the url. `video` treats it as an EMBED url and iframes it —
+   *  the backend builds that url itself from an allow-list of hosts
+   *  (`core.video_embeds`), so nothing pasted by an organiser reaches an
+   *  iframe on our origin. */
+  kind?: 'image' | 'video';
+  /** A video's still, for the grid tile that opens this. Unused by the viewer
+   *  itself, which shows the player. */
+  poster?: string;
   /** The organiser's alt text. Doubles as the caption — it is the closest thing
    *  to one the API stores, and a sighted visitor benefits from it too. */
   alt: string;
 };
+
+/** The name every existing call site uses. Kept so adding video did not mean
+ *  touching six files that only ever pass images. */
+export type LightboxImage = LightboxMedia;
 
 export function Lightbox({
   images,
@@ -118,6 +137,19 @@ export function Lightbox({
     if (!start || !touch) return;
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
+
+    // ── DOWN CLOSES ────────────────────────────────────────────────────
+    // The gesture every full-screen viewer on a phone has, and the one people
+    // try before looking for an X. Tested BEFORE the horizontal step and only
+    // when the movement is decisively vertical, so a sloppy sideways swipe
+    // still pages instead of dismissing what somebody wanted to look at.
+    // DOWN only: up is where a scroll gesture goes, and closing on it would
+    // make the viewer feel like it fell out from under them.
+    if (dy > 96 && Math.abs(dy) > Math.abs(dx)) {
+      onClose();
+      return;
+    }
+
     // Decisively sideways, and far enough to be a swipe rather than a slip.
     if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy)) return;
     step(dx < 0 ? 1 : -1);
@@ -138,7 +170,7 @@ export function Lightbox({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label={current.alt || 'Photo'}
+        aria-label={current.alt || (current.kind === 'video' ? 'Video' : 'Photo')}
         tabIndex={-1}
         onKeyDown={(event) => trapTab(event, panelRef.current)}
         // The picture is not a dismiss target: a tap meant to steady a pinch
@@ -164,7 +196,7 @@ export function Lightbox({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close photo"
+            aria-label="Close"
             className={cn(
               'inline-flex size-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur',
               'transition duration-fast hover:bg-white/20 active:scale-95',
@@ -176,16 +208,40 @@ export function Lightbox({
           </button>
         </div>
 
-        {/* The picture, at whatever shape it is, filling what is left. */}
+        {/* The media, at whatever shape it is, filling what is left. */}
         <div className="relative min-h-0 flex-1">
-          <Image
-            src={current.url}
-            alt={current.alt}
-            fill
-            sizes="100vw"
-            className="object-contain"
-            priority
-          />
+          {current.kind === 'video' ? (
+            /* ── A TRAILER PLAYS, IT DOES NOT WAIT TO BE PRESSED ─────────
+               Somebody who taps a tile with a play badge on it has already
+               said what they want, and a second press inside the player is a
+               step that exists only because the embed defaults that way.
+               `autoplay=1` with the provider's own `mute` left alone: a muted
+               autoplay is the only kind a browser will honour without a
+               gesture, and this HAS a gesture, so the sound is allowed.
+
+               `allow` lists exactly what the frame may do and nothing else —
+               notably no `camera`, `microphone` or `geolocation`. The src is
+               the url the BACKEND built from its host allow-list, never a
+               string an organiser pasted. */
+            <iframe
+              key={current.url}
+              src={`${current.url}${current.url.includes('?') ? '&' : '?'}autoplay=1`}
+              title={current.alt || 'Event trailer'}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+              className="absolute inset-0 size-full border-0"
+            />
+          ) : (
+            <Image
+              src={current.url}
+              alt={current.alt}
+              fill
+              sizes="100vw"
+              className="object-contain"
+              priority
+            />
+          )}
           {count > 1 ? (
             <>
               <Arrow side="left" onClick={() => step(-1)} />

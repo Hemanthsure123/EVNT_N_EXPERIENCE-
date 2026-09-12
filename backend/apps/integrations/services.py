@@ -42,8 +42,8 @@ from datetime import timedelta
 from apps.accounts.repositories import UserRepository
 from apps.booking.repositories import BookingRepository
 from apps.events.repositories import EventRepository
+from core import ephemeral
 from core.audit import record_audit
-from core.ports.cache_port import CachePort
 from core.ports.calendar_port import (
     CalendarAuthError,
     CalendarError,
@@ -101,13 +101,11 @@ class GoogleOAuthService:
         *,
         connections: GoogleConnectionRepository,
         calendar: CalendarPort,
-        cache: CachePort,
         users: UserRepository,
         redirect_uri: str,
     ) -> None:
         self._connections = connections
         self._calendar = calendar
-        self._cache = cache
         self._users = users
         self._redirect_uri = redirect_uri
 
@@ -124,10 +122,6 @@ class GoogleOAuthService:
         digest = hashlib.sha256(verifier.encode()).digest()
         challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
         return verifier, challenge
-
-    @staticmethod
-    def _state_key(state: str) -> str:
-        return f"oauth:google:state:{state}"
 
     def start_authorization(
         self, *, user_id: uuid.UUID, login_hint: str = ""
@@ -147,10 +141,16 @@ class GoogleOAuthService:
         # Authorization header — there is no other way to know whose grant it
         # is, and trusting a user id in the query string would let anyone
         # attach their Google account to somebody else's Curatix account.
-        self._cache.set(
-            self._state_key(state),
-            {"user_id": str(user_id), "code_verifier": verifier},
-            timeout_seconds=STATE_TTL_SECONDS,
+        # POSTGRES, not the cache. The identical line in
+        # `accounts.GoogleSignInService` made every Google SIGN-IN fail while
+        # the platform reported itself healthy — a degraded cache is
+        # survivable on every read path here and was silently fatal on this
+        # one. See `core.models.EphemeralToken`.
+        ephemeral.issue(
+            purpose=ephemeral.CALENDAR_STATE,
+            token=state,
+            payload={"user_id": str(user_id), "code_verifier": verifier},
+            ttl_seconds=STATE_TTL_SECONDS,
         )
 
         url = self._calendar.build_authorization_url(
@@ -179,8 +179,7 @@ class GoogleOAuthService:
         # makes a replayed callback fail: the second attempt finds nothing.
         # Doing it first also means a crash mid-exchange cannot leave a
         # redeemable state behind.
-        pending = self._cache.get(self._state_key(state))
-        self._cache.delete(self._state_key(state))
+        pending = ephemeral.consume(purpose=ephemeral.CALENDAR_STATE, token=state)
         if not pending:
             raise OAuthStateInvalidError(
                 "That authorization link has expired or was already used. Try connecting again."

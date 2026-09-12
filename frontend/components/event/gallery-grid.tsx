@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Image from 'next/image';
 import { cn } from '@/lib/utils/cn';
+import { Play } from 'lucide-react';
 import { Lightbox, type LightboxImage } from './lightbox';
 
 /**
@@ -100,7 +101,9 @@ export function GalleryGrid({
               aria-label={
                 showsCount
                   ? `View all ${images.length} photos`
-                  : image.alt || `Photo ${index + 1}`
+                  : image.kind === 'video'
+                    ? `Play ${image.alt || 'the trailer'}`
+                    : image.alt || `Photo ${index + 1}`
               }
               className={cn(
                 'group/tile relative overflow-hidden rounded-xl bg-muted',
@@ -112,13 +115,59 @@ export function GalleryGrid({
             >
               {/* Empty alt: the button already carries the description, and
                   repeating it announces every photograph twice. */}
-              <Image
-                src={image.url}
-                alt=""
-                fill
-                sizes={index === 0 ? '66vw' : '33vw'}
-                className="object-cover"
-              />
+              {image.kind === 'video' ? (
+                /* ── A VIDEO TILE IS A STILL PLUS A BADGE ──────────────────
+                   Never an `<iframe>` in the grid. Six embedded players in a
+                   scroller is six third-party documents loading their own
+                   scripts on the busiest public route, and each one swallows
+                   the tap that was meant to open the viewer. The tile stays a
+                   button; the player exists only full-screen.
+
+                   `poster` is the still the caller supplies. There is no
+                   automatic thumbnail — the provider's own thumbnail URL is
+                   a different host with a different shape per provider, so a
+                   missing one draws the gradient below rather than a guess
+                   that 404s. */
+                <>
+                  {image.poster ? (
+                    <Image
+                      src={image.poster}
+                      alt=""
+                      fill
+                      sizes={index === 0 ? '66vw' : '33vw'}
+                      className="object-cover"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="absolute inset-0 bg-gradient-to-br from-primary/25 via-muted to-muted"
+                    />
+                  )}
+                  {/* Dimmed, so a white play glyph reads over a bright still. */}
+                  <span aria-hidden className="absolute inset-0 bg-black/25" />
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'absolute left-1/2 top-1/2 inline-flex size-12 -translate-x-1/2 -translate-y-1/2',
+                      'items-center justify-center rounded-full bg-white/90 text-ink-900 shadow-lg',
+                      'transition-transform duration-fast group-hover/tile:scale-105',
+                      'motion-reduce:transition-none motion-reduce:group-hover/tile:scale-100',
+                    )}
+                  >
+                    {/* `fill-current` — a play triangle reads as solid, and an
+                        outlined one at 20px reads as a bug. */}
+                    <Play className="size-5 translate-x-px fill-current" />
+                  </span>
+                </>
+              ) : (
+                <Image
+                  src={image.url}
+                  alt=""
+                  fill
+                  sizes={index === 0 ? '66vw' : '33vw'}
+                  className="object-cover"
+                />
+              )}
               {showsCount ? (
                 <span
                   aria-hidden

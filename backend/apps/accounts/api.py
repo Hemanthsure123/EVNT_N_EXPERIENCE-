@@ -391,15 +391,12 @@ class GoogleSignInRedeemView(APIView):
         payload = GoogleSignInRedeemSerializer(data=request.data)
         payload.is_valid(raise_exception=True)
 
-        tokens = build_google_sign_in_service().redeem(**payload.validated_data)
-
-        # The profile is read from the ACCESS TOKEN the handoff produced, not
-        # from `request.user` — this endpoint is unauthenticated, and the
-        # session belongs to whoever the callback minted it for.
-        from rest_framework_simplejwt.tokens import AccessToken
-
-        user_id = AccessToken(tokens.access)["user_id"]  # type: ignore[arg-type]
-        user = User.objects.get(pk=user_id)
+        # The service returns the user ALONGSIDE the tokens. This used to
+        # decode the access token it had just been handed to recover a user id
+        # the lookup already had — parsing a credential to learn something
+        # nobody had lost. It also reached for `User.objects` directly, which
+        # is the one thing a view may never do.
+        user, tokens = build_google_sign_in_service().redeem(**payload.validated_data)
 
         return Response(
             {

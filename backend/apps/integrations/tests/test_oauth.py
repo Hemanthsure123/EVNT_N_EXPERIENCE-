@@ -122,13 +122,12 @@ def calendar():
 
 
 @pytest.fixture
-def oauth(cache, calendar):
+def oauth(calendar):
     from apps.accounts.repositories import UserRepository
 
     return GoogleOAuthService(
         connections=GoogleConnectionRepository(),
         calendar=calendar,
-        cache=cache,
         users=UserRepository(),
         redirect_uri=REDIRECT_URI,
     )
@@ -184,7 +183,6 @@ class TestStartingTheFlow:
         service = GoogleOAuthService(
             connections=GoogleConnectionRepository(),
             calendar=FakeCalendar(configured=False),
-            cache=cache,
             users=UserRepository(),
             redirect_uri=REDIRECT_URI,
         )

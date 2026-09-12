@@ -55,6 +55,11 @@ class OidcIdentity:
     #: any address on an unverified account.
     email_verified: bool
     full_name: str = ""
+    #: The `picture` claim. Google returns it under the `profile` scope we
+    #: already request, so this costs no extra consent. Blank whenever the
+    #: account has no photo — never a placeholder URL, because a link that
+    #: 404s is worse than a column the UI already knows how to draw empty.
+    avatar_url: str = ""
 
 
 class OidcPort(ABC):

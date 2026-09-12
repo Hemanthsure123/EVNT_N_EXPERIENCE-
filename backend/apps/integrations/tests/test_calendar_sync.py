@@ -29,7 +29,6 @@ from apps.integrations.repositories import (
 )
 from apps.integrations.services import CalendarSyncService, GoogleOAuthService
 from apps.organizations.models import Organization
-from core.adapters.local.locmem_cache import LocMemCacheAdapter
 from core.ports.calendar_port import CalendarAuthError, CalendarError
 
 from .test_oauth import REDIRECT_URI, FakeCalendar
@@ -89,7 +88,6 @@ def services(calendar, queue, settings):
     oauth = GoogleOAuthService(
         connections=GoogleConnectionRepository(),
         calendar=calendar,
-        cache=LocMemCacheAdapter(),
         users=UserRepository(),
         redirect_uri=REDIRECT_URI,
     )

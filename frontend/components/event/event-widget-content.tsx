@@ -25,6 +25,7 @@ import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
 import { type GalleryImage } from './hero-gallery';
 import { GalleryGrid } from './gallery-grid';
+import { videoThumbnail } from '@/lib/events/video-thumbnail';
 import { ShareMenu } from './share-menu';
 import type { SubSheetType } from './event-sub-sheets';
 
@@ -67,6 +68,10 @@ export type EventWidgetContentProps = {
   onOpenSheet: (sheet: NonNullable<SubSheetType>) => void;
   /** Switches the deck to another event without leaving the widget. */
   onSelectEvent?: (eventId: string) => void;
+  /** Opens the lineup's own full-screen viewer on that person. Optional: the
+   *  desktop page renders this content without a deck around it, and a face
+   *  that is not a button there is the existing behaviour, not a regression. */
+  onOpenCrew?: (personId: string) => void;
 };
 
 /**
@@ -150,6 +155,7 @@ export function EventWidgetContent({
   pool,
   onOpenSheet,
   onSelectEvent,
+  onOpenCrew,
 }: EventWidgetContentProps) {
   const summary = React.useMemo(() => summariseTiers(tiers), [tiers]);
   const visibleTiers = React.useMemo(
@@ -157,13 +163,35 @@ export function EventWidgetContent({
     [tiers],
   );
 
-  const galleryImages: GalleryImage[] = React.useMemo(
-    () =>
-      (content?.media ?? [])
-        .filter((item) => item.kind === 'gallery')
-        .map((item) => ({ url: item.url, alt: item.alt_text || event.title })),
-    [content, event.title],
-  );
+  /**
+   * THE TRAILER LEADS THE GALLERY.
+   *
+   * It used to be filtered out of this list entirely, so an organiser who
+   * attached a video had nowhere it appeared: the grid took `kind ===
+   * 'gallery'` and the poster strip took the poster. First, because the tile
+   * layout gives position 0 the large two-row cell — and a trailer is the one
+   * piece of media on an event that somebody deliberately made to be watched.
+   *
+   * `poster` is DERIVED from the embed url — see `videoThumbnail`, which can
+   * do it for YouTube and deliberately cannot for Vimeo. A tile with no still
+   * draws its own gradient behind the play badge, which is a chosen state
+   * rather than a broken image.
+   */
+  const galleryImages: GalleryImage[] = React.useMemo(() => {
+    const media = content?.media ?? [];
+    const videos = media
+      .filter((item) => item.kind === 'video')
+      .map((item) => ({
+        kind: 'video' as const,
+        url: item.url,
+        alt: item.alt_text || `${event.title} trailer`,
+        poster: videoThumbnail(item.url) ?? undefined,
+      }));
+    const photos = media
+      .filter((item) => item.kind === 'gallery')
+      .map((item) => ({ url: item.url, alt: item.alt_text || event.title }));
+    return [...videos, ...photos];
+  }, [content, event.title]);
 
   const similar = React.useMemo(
     () => selectSimilarEvents(event, pool, { limit: 8 }),
@@ -250,7 +278,7 @@ export function EventWidgetContent({
               ARE the product, so this is visible rather than filed behind a
               disclosure row with the refund policy. Absent, not empty, when
               the organiser has not named anybody. */}
-      <LineupRail crew={content?.crew ?? []} />
+      <LineupRail crew={content?.crew ?? []} onOpenPortrait={onOpenCrew} />
 
       {/* 11. Gallery — a masonry GRID, not a strip of equal thumbnails.
               One large picture with smaller ones packed beside it shows the

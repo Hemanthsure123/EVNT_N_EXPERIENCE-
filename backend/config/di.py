@@ -386,10 +386,13 @@ def build_google_sign_in_service() -> GoogleSignInService:
     from apps.accounts.repositories import UserRepository
     from apps.accounts.services import GoogleSignInService
 
+    # No `cache=`. The OAuth state and the handoff live in Postgres
+    # (`core.ephemeral`) because a degraded cache silently broke every
+    # sign-in in production while `/health/` stayed green — see
+    # `core.models.EphemeralToken`.
     return GoogleSignInService(
         users=UserRepository(),
         oidc=oidc_port(),
-        cache=cache_port(),
         auth=build_auth_service(),
         redirect_uri=settings.GOOGLE_OAUTH_SIGNIN_REDIRECT_URI,
     )
@@ -818,10 +821,10 @@ def build_google_oauth_service():
     from apps.integrations.repositories import GoogleConnectionRepository
     from apps.integrations.services import GoogleOAuthService
 
+    # No `cache=` — same reason as `build_google_sign_in_service` above.
     return GoogleOAuthService(
         connections=GoogleConnectionRepository(),
         calendar=calendar_port(),
-        cache=cache_port(),
         users=UserRepository(),
         redirect_uri=settings.GOOGLE_OAUTH_REDIRECT_URI,
     )

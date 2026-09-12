@@ -26,10 +26,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.notifications.models import NotificationType
 from apps.notifications.services import NotificationService
+from core import ephemeral
 from core.audit import record_audit
 from core.errors import NotFoundError
 from core.events import USER_REGISTERED
-from core.ports.cache_port import CachePort
 from core.ports.email_port import EmailPort
 from core.ports.oidc_port import OidcIdentity, OidcPort
 from core.ports.storage_port import StoragePort
@@ -869,23 +869,31 @@ class GoogleSignInService:
         *,
         users: UserRepository,
         oidc: OidcPort,
-        cache: CachePort,
         auth: AuthService,
         redirect_uri: str,
     ) -> None:
         self._users = users
         self._oidc = oidc
-        self._cache = cache
         self._auth = auth
         self._redirect_uri = redirect_uri
 
-    @staticmethod
-    def _state_key(state: str) -> str:
-        return f"oauth:signin:state:{state}"
-
-    @staticmethod
-    def _handoff_key(handoff: str) -> str:
-        return f"oauth:signin:handoff:{handoff}"
+    # ── THE STATE AND THE HANDOFF LIVE IN POSTGRES, NOT THE CACHE ────────
+    #
+    # This class used to take a `CachePort` and keep both there. It was
+    # wrong, and it was wrong in the way that does not announce itself: with
+    # the cache degraded, `set` is a no-op and `get` returns nothing, so
+    # every callback raised `OAuthStateInvalidError` and every user was told
+    # "That sign-in link expired or was already used."
+    #
+    # Measured on the deployed site: `/health/` reported
+    # `{"database": true, "cache": false}` with `status: "ok"` — correctly,
+    # because a degraded cache IS survivable everywhere on this platform
+    # that reads through it. Sign-in did not read through it. A state issued
+    # seconds earlier was already invalid, 100% of the time, with nothing
+    # logged and nothing failing.
+    #
+    # See `core.models.EphemeralToken`: if losing it breaks a user-visible
+    # flow, it is not a cache.
 
     def is_available(self) -> bool:
         """Whether a Google sign-in can actually COMPLETE, not merely start.
@@ -932,10 +940,11 @@ class GoogleSignInService:
         # `next_path` rides along here rather than in the query string, so a
         # user cannot be redirected somewhere they did not choose by editing
         # the callback URL. It is re-validated as a same-origin path anyway.
-        self._cache.set(
-            self._state_key(state),
-            {"code_verifier": verifier, "next": next_path},
-            timeout_seconds=OAUTH_STATE_TTL_SECONDS,
+        ephemeral.issue(
+            purpose=ephemeral.SIGN_IN_STATE,
+            token=state,
+            payload={"code_verifier": verifier, "next": next_path},
+            ttl_seconds=OAUTH_STATE_TTL_SECONDS,
         )
         return self._oidc.build_authorization_url(
             state=state,
@@ -950,9 +959,10 @@ class GoogleSignInService:
             raise OAuthStateInvalidError()
 
         # CONSUMED before any work, so a replayed callback finds nothing and a
-        # crash mid-exchange cannot leave a redeemable state behind.
-        pending = self._cache.get(self._state_key(state))
-        self._cache.delete(self._state_key(state))
+        # crash mid-exchange cannot leave a redeemable state behind. The read
+        # and the delete are ONE locked statement inside `consume`, so two
+        # callbacks arriving together cannot both proceed.
+        pending = ephemeral.consume(purpose=ephemeral.SIGN_IN_STATE, token=state)
         if not pending:
             raise OAuthStateInvalidError()
 
@@ -972,13 +982,21 @@ class GoogleSignInService:
         )
 
         user = self._find_or_create(identity)
-        tokens = self._auth.issue_tokens(user)
 
+        # ── THE HANDOFF CARRIES A USER ID, NEVER A SESSION ──────────────
+        #
+        # It used to mint the token pair here and store both halves. Nothing
+        # needed that: the tokens are minted at REDEEM now, from the user id
+        # this row stands for. Two things improve at once — no session
+        # material is ever at rest, and the access token's lifetime starts
+        # when the browser actually receives it rather than up to two minutes
+        # earlier.
         handoff = secrets.token_urlsafe(32)
-        self._cache.set(
-            self._handoff_key(handoff),
-            {"access": tokens.access, "refresh": tokens.refresh},
-            timeout_seconds=HANDOFF_TTL_SECONDS,
+        ephemeral.issue(
+            purpose=ephemeral.SIGN_IN_HANDOFF,
+            token=handoff,
+            payload={"user_id": str(user.id)},
+            ttl_seconds=HANDOFF_TTL_SECONDS,
         )
         record_audit(
             actor_id=str(user.id),
@@ -988,15 +1006,28 @@ class GoogleSignInService:
         )
         return handoff, str(pending.get("next") or "")
 
-    def redeem(self, *, handoff: str) -> TokenPair:
-        """Exchange a handoff code for the session it stands for. Single use."""
-        stored = self._cache.get(self._handoff_key(handoff))
-        # Deleted whether or not it was found: there is no reason to leave a
-        # valid one behind after any redemption attempt.
-        self._cache.delete(self._handoff_key(handoff))
+    def redeem(self, *, handoff: str) -> tuple[User, TokenPair]:
+        """Exchange a handoff code for the session it stands for. Single use.
+
+        Returns the USER alongside the tokens. The view used to recover it by
+        decoding the access token it had just been handed, which meant parsing
+        a credential to learn something the lookup already knew.
+
+        A user suspended between the callback and this call is refused here as
+        well as there: the handoff is seconds old, but "seconds" is not "never",
+        and an access decision that holds only at the start of a flow is not an
+        access decision.
+        """
+        stored = ephemeral.consume(purpose=ephemeral.SIGN_IN_HANDOFF, token=handoff)
         if not stored:
             raise OAuthStateInvalidError()
-        return TokenPair(access=str(stored["access"]), refresh=str(stored["refresh"]))
+
+        user = self._users.get_by_id(str(stored["user_id"]))
+        if user is None:
+            raise OAuthStateInvalidError()
+        if not user.is_active:
+            raise AccountSuspendedError()
+        return user, self._auth.issue_tokens(user)
 
     def _find_or_create(self, identity: OidcIdentity) -> User:
         existing = self._users.get_by_email(identity.email)
@@ -1015,6 +1046,13 @@ class GoogleSignInService:
                 # has just proven this person owns the address, so there is
                 # nothing left to conceal from them.
                 raise AccountSuspendedError()
+            if identity.avatar_url and not existing.avatar_url:
+                # Only when they have NONE. Refreshing it on every sign-in
+                # would silently replace a photo the person uploaded here with
+                # whatever their Google account happens to show — their own
+                # choice, overwritten by a login.
+                self._users.set_avatar_url(user_id=existing.id, url=identity.avatar_url)
+                existing.refresh_from_db()
             if not existing.email_verified:
                 # Google has proven the address, so our own pending
                 # verification is satisfied — there is nothing left to prove
@@ -1036,6 +1074,11 @@ class GoogleSignInService:
             password=secrets.token_urlsafe(48),
             full_name=identity.full_name,
         )
+        # Name, email and picture, which is the whole of what `openid email
+        # profile` buys — so a brand-new account already looks like an account
+        # rather than like a form somebody has not filled in.
+        if identity.avatar_url:
+            self._users.set_avatar_url(user_id=user.id, url=identity.avatar_url)
         self._users.mark_email_verified_by_google(user.id)
         user.refresh_from_db()
         logger.info("user_registered_via_google", extra={"user_id": str(user.id)})
