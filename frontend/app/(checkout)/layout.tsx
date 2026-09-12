@@ -1,3 +1,4 @@
+import { SkipToContent } from '@/components/shell/skip-to-content';
 import * as React from 'react';
 
 /**
@@ -41,12 +42,7 @@ import * as React from 'react';
 export default function CheckoutLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <a
-        href="#funnel-main"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-full focus:bg-cta focus:px-pill focus:py-2.5 focus:text-label focus:text-cta-foreground focus:shadow-lg"
-      >
-        Skip to content
-      </a>
+      <SkipToContent targetId="funnel-main" />
       {children}
     </>
   );

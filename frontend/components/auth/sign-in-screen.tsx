@@ -8,6 +8,8 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { BRAND_NAME } from '@/lib/brand';
 import { AuthPanel } from './auth-panel';
 import { SignInArt } from './sign-in-art';
+import { NoticePanel } from '@/components/ui/notice';
+import { oauthErrorMessage } from './oauth-errors';
 import { safeNext } from './safe-next';
 
 /**
@@ -101,6 +103,17 @@ export function SignInScreen() {
   const { status } = useAuth();
   const next = safeNext(params?.get('next'));
 
+  /**
+   * WHY A FAILED GOOGLE SIGN-IN ENDED HERE, SAID OUT LOUD.
+   *
+   * The backend's OAuth callback redirects refusals to `/sign-in?error=<code>`
+   * — cancelled, expired state, an unverified Google address, a suspended
+   * account. This page used to read `?next=` and nothing else, so all of them
+   * arrived as a pristine form: press the button, come back, nothing happened,
+   * no reason given. See `oauth-errors.ts`.
+   */
+  const oauthError = oauthErrorMessage(params?.get('error'));
+
   // Already signed in — this page has nothing to do. `replace`, so Back doesn't
   // bounce between here and wherever they were.
   React.useEffect(() => {
@@ -124,6 +137,13 @@ export function SignInScreen() {
       >
         <BrandLockup />
       </Link>
+
+      {/* ABOVE the card, not inside it. The failure is about the journey that
+          led here, not about any field in the form — and putting it beside the
+          password input would read as a password problem, which is the one
+          thing it is never about. `NoticePanel` carries `role="alert"`, so it
+          is announced on arrival rather than merely drawn. */}
+      {oauthError ? <NoticePanel>{oauthError}</NoticePanel> : null}
 
       <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-md">
         <SignInArt />

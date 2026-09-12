@@ -88,34 +88,52 @@ describe('the enquiry form is one page, not five steps', () => {
     expect(screen.queryByRole('button', { name: /^continue$/i })).toBeNull();
   });
 
-  it('names what is still missing, with a link to each section', () => {
+  it('tells a screen reader why Send is disabled, without drawing the reason', () => {
     renderForm();
-    // A dim Send with no explanation is the failure mode a one-page form has
-    // and a wizard does not.
-    expect(screen.getByRole('button', { name: /send enquiry/i }).hasAttribute('disabled')).toBe(
-      true,
-    );
-    expect(screen.getByRole('link', { name: 'the kind of act' }).getAttribute('href')).toBe(
-      '#brief-act',
-    );
-    expect(screen.getByRole('link', { name: 'the city' }).getAttribute('href')).toBe(
-      '#brief-place',
-    );
-    expect(screen.getByRole('link', { name: 'a budget range' }).getAttribute('href')).toBe(
-      '#brief-budget',
-    );
+    const send = screen.getByRole('button', { name: /send enquiry/i });
+    expect(send.hasAttribute('disabled')).toBe(true);
+
+    // The visible "Still needed: …" line was removed for a plainer form. What
+    // it leaves is the accessible description of the disabled control — which
+    // is what somebody who cannot see the empty fields has instead. A button
+    // that announces "Send enquiry, dimmed" and nothing else is WCAG 3.3.1.
+    const described = send.getAttribute('aria-describedby');
+    expect(described).toBe('brief-missing');
+    const reason = document.getElementById(described ?? '');
+    expect(reason?.className).toContain('sr-only');
+    expect(reason?.textContent).toContain('the kind of act');
+    expect(reason?.textContent).toContain('the city');
   });
 
-  it('drops a name from that list as soon as it is answered', async () => {
+  it('shortens that description as answers arrive, and drops it when complete', async () => {
     const user = userEvent.setup();
     renderForm();
-    expect(screen.queryByRole('link', { name: 'the kind of act' })).not.toBeNull();
+    expect(document.getElementById('brief-missing')?.textContent).toContain('the kind of act');
 
     await user.click(screen.getByRole('button', { name: 'DJ' }));
 
-    expect(screen.queryByRole('link', { name: 'the kind of act' })).toBeNull();
-    // And the rest are still named — the list shrinks, it does not vanish.
-    expect(screen.queryByRole('link', { name: 'the city' })).not.toBeNull();
+    const reason = document.getElementById('brief-missing');
+    expect(reason?.textContent).not.toContain('the kind of act');
+    // The list shrinks, it does not vanish — the rest is still described.
+    expect(reason?.textContent).toContain('the city');
+  });
+
+  it('draws no explanatory blurb under any section heading', () => {
+    // These five sentences were removed at the owner's instruction. Asserting
+    // their absence is what stops one drifting back in beside the four that
+    // are gone, leaving the form half-explained.
+    renderForm();
+    const body = document.body.textContent ?? '';
+    for (const removed of [
+      'choose Something else and tell us in your own words',
+      'what it costs to travel',
+      'Nothing here is a commitment',
+      'the closer the first reply lands',
+      'Change it if somebody else is organising',
+      'we will use your account details',
+    ]) {
+      expect(body).not.toContain(removed);
+    }
   });
 
   it('carries the selected state on the card itself, not only in colour', async () => {
@@ -170,12 +188,17 @@ describe('the budget slider', () => {
     expect((screen.getByLabelText('Maximum') as HTMLInputElement).value).toBe('4000000');
   });
 
-  it('offers the bands as a shortcut that fills both fields', async () => {
-    const user = userEvent.setup();
+  it('offers no fixed bands, because the slider and the fields are the control', () => {
+    // The five "typical range" chips were removed at the owner's instruction.
+    // They were also the thing whose ceiling misreported a real budget — a
+    // wedding with ₹4,00,000 had to pick "₹2,50,000+" — so re-adding them
+    // would bring that back along with the clutter.
     renderForm();
-    await user.click(screen.getByRole('button', { name: /₹10k – ₹25k/ }));
-    expect((screen.getByLabelText('Minimum') as HTMLInputElement).value).toBe('1000');
-    expect((screen.getByLabelText('Maximum') as HTMLInputElement).value).toBe('2500');
+    const body = document.body.textContent ?? '';
+    expect(body).not.toContain('Or start from a typical range');
+    for (const band of ['₹10k – ₹25k', '₹25k – ₹50k', '₹50k – ₹1L', '₹1L – ₹2.5L', '₹2.5L+']) {
+      expect(body).not.toContain(band);
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { SkipToContent } from '@/components/shell/skip-to-content';
 import { AnnouncementBar } from '@/components/shell/announcement-bar';
 import { fetchAnnouncementsSafe, fetchHomepageSafe } from '@/lib/api/cms';
 import { browseHref } from '@/lib/discovery/filters';
@@ -50,12 +51,7 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
               sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
             })}
           />
-          <a
-            href="#main"
-            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-tooltip focus:rounded-full focus:bg-cta focus:px-pill focus:py-2.5 focus:text-label focus:text-cta-foreground focus:shadow-lg"
-          >
-            Skip to content
-          </a>
+          <SkipToContent targetId="main" />
           <div id="site-shell">
             <div className="flex min-h-dvh flex-col">
               <AnnouncementBar announcements={announcements} />

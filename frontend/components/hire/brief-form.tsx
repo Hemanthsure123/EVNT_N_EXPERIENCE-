@@ -119,23 +119,6 @@ const OCCASION_ICONS: Record<Occasion, React.ComponentType<{ className?: string 
   other: Sparkles,
 };
 
-/** Rupees. Converted to minor units at the boundary, once. */
-/**
- * The bands are SHORTCUTS, not the only way to answer.
- *
- * Five fixed brackets ending at "₹2,50,000+" cannot express a real budget —
- * a wedding with ₹4,00,000 to spend picked the top band and was quoted as if
- * it had ₹2,50,000. The form takes a min and a max; pressing a band fills
- * them, and either can then be dragged or typed over.
- */
-const BUDGET_BANDS = [
-  { min: 1_000_00, max: 2_500_00, label: '₹10k – ₹25k' },
-  { min: 2_500_00, max: 5_000_00, label: '₹25k – ₹50k' },
-  { min: 5_000_00, max: 10_000_00, label: '₹50k – ₹1L' },
-  { min: 10_000_00, max: 25_000_00, label: '₹1L – ₹2.5L' },
-  { min: 25_000_00, max: 100_000_00, label: '₹2.5L+' },
-];
-
 /**
  * The slider's range, in RUPEES, and why it stops where it does.
  *
@@ -174,15 +157,14 @@ export function BriefForm() {
   const [occasionOther, setOccasionOther] = React.useState('');
   const [city, setCity] = React.useState(params?.get('city') ?? '');
   const [eventDate, setEventDate] = React.useState('');
-  const [band, setBand] = React.useState<number | null>(null);
   /**
    * The actual numbers, in RUPEES (the API takes paise; converted on submit).
    *
    * Five fixed brackets ending at "₹2,50,000+" could not express a real
    * budget: a wedding with ₹4,00,000 had to pick the top band and was read as
-   * having ₹2,50,000. Pressing a band fills these; either can then be dragged
-   * or typed over, which is what makes the bands a shortcut rather than the
-   * only vocabulary.
+   * having ₹2,50,000. The brackets are gone entirely now — the slider and
+   * these two fields are the whole control, and neither has a ceiling the
+   * other cannot pass.
    */
   const [budgetMin, setBudgetMin] = React.useState('');
   const [budgetMax, setBudgetMax] = React.useState('');
@@ -334,7 +316,6 @@ export function BriefForm() {
               setOccasion('');
               setCity('');
               setEventDate('');
-              setBand(null);
               setBudgetMin('');
               setBudgetMax('');
               setGuests('');
@@ -420,7 +401,6 @@ export function BriefForm() {
           id="brief-act"
           index={1}
           title="What are you looking for?"
-          blurb="Pick the kind of act and the occasion. If it is not here, choose Something else and tell us in your own words."
         >
           <CardGrid label="Act">
             {(Object.keys(PERFORMER_TYPE_LABELS) as PerformerType[]).map((option) => (
@@ -482,7 +462,6 @@ export function BriefForm() {
           id="brief-place"
           index={2}
           title="Where and when?"
-          blurb="A performer needs the city and the date before they can say whether they are free, or what it costs to travel."
         >
           <div className="grid gap-block sm:grid-cols-2">
             <div className="flex flex-col gap-2">
@@ -553,58 +532,19 @@ export function BriefForm() {
           id="brief-budget"
           index={3}
           title="What is the budget?"
-          blurb="A range, not a number — what is comfortable and what is the ceiling. Nothing here is a commitment."
         >
           <BudgetRange
             min={budgetMin}
             max={budgetMax}
-            onMin={(value) => {
-              setBudgetMin(value);
-              // Typing or dragging over a band means the band no longer
-              // describes the answer, so it stops being shown as chosen.
-              setBand(null);
-            }}
-            onMax={(value) => {
-              setBudgetMax(value);
-              setBand(null);
-            }}
+            onMin={setBudgetMin}
+            onMax={setBudgetMax}
           />
-
-          <div className="flex flex-col gap-2">
-            <span className="text-caption text-muted-foreground">Or start from a typical range</span>
-            <ul className="flex flex-wrap gap-2">
-              {BUDGET_BANDS.map((option, index) => (
-                <li key={option.label}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBand(index);
-                      setBudgetMin(String(option.min / 100));
-                      setBudgetMax(String(option.max / 100));
-                    }}
-                    aria-pressed={band === index}
-                    className={cn(
-                      'inline-flex min-h-control items-center gap-2 rounded-full border px-4 text-body-sm transition-colors duration-fast sm:h-10 sm:min-h-0',
-                      'motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      band === index
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground',
-                    )}
-                  >
-                    {band === index ? <Check className="size-3.5 text-primary" aria-hidden /> : null}
-                    {option.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
         </Section>
 
         <Section
           id="brief-details"
           index={4}
           title="Anything else we should know?"
-          blurb="Optional, and the part people find most useful. The more the brief says, the closer the first reply lands."
         >
           <div className="grid gap-block sm:grid-cols-[12rem_minmax(0,1fr)]">
             <FloatField
@@ -631,7 +571,6 @@ export function BriefForm() {
           id="brief-contact"
           index={5}
           title="How should we reach you?"
-          blurb="Pre-filled from your account. Change it if somebody else is organising."
         >
           <div className="grid gap-block sm:grid-cols-2">
             <FloatField
@@ -656,34 +595,24 @@ export function BriefForm() {
             type="email"
             value={contactEmail}
             onChange={setContactEmail}
-            /* Nothing here is required, and saying so is the point: the
-               account already has an address the server falls back to, so a
-               required field would be the form insisting on a value it can
-               answer for itself. */
-            hint="Leave any of these blank and we will use your account details."
           />
         </Section>
 
         {/* ── THE SEND ROW ────────────────────────────────────────────────
-            A disabled button on a one-page form is a control with no
-            explanation anywhere on screen, so what is missing is NAMED and
-            each name jumps to the section that fixes it. */}
+            The visible "Still needed: …" line was REMOVED at the owner's
+            instruction, with the section blurbs, for a plainer form.
+
+            What is left is `sr-only`, and that is not the same decision being
+            quietly reversed. The line was drawn text; this is the accessible
+            NAME of a disabled control, which is the one thing a person using a
+            screen reader has instead of looking at the form and seeing the
+            empty fields. Ship the button with nothing attached and it
+            announces "Send enquiry, dimmed" and stops — WCAG 3.3.1 is about
+            exactly that. It occupies no space and is never drawn. */}
         <div className="mt-block flex flex-col gap-4 border-t border-border pt-6">
           {missing.length ? (
-            <p className="text-body-sm text-muted-foreground">
-              Still needed:{' '}
-              {missing.map((item, index) => (
-                <React.Fragment key={item.label}>
-                  {index > 0 ? ', ' : null}
-                  <a
-                    href={`#${item.section}`}
-                    className="font-medium text-foreground underline underline-offset-4 hover:text-primary"
-                  >
-                    {item.label}
-                  </a>
-                </React.Fragment>
-              ))}
-              .
+            <p id="brief-missing" className="sr-only">
+              Still needed: {missing.map((item) => item.label).join(', ')}.
             </p>
           ) : null}
 
@@ -707,6 +636,7 @@ export function BriefForm() {
             <button
               type="submit"
               disabled={!ready || create.isPending}
+              aria-describedby={missing.length ? 'brief-missing' : undefined}
               className="inline-flex h-control w-full items-center justify-center gap-2 rounded-xl bg-cta px-6 text-label text-cta-foreground transition-colors hover:bg-cta-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto sm:self-start"
             >
               {create.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
@@ -780,7 +710,13 @@ function Section({
   id: SectionId;
   index: number;
   title: string;
-  blurb: string;
+  /**
+   * OPTIONAL, and every caller now omits it — the explanatory sentence under
+   * each heading was removed at the owner's instruction for a plainer form.
+   * The prop stays because the component is the shape of a section, not a
+   * record of which ones currently have a subtitle.
+   */
+  blurb?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -800,7 +736,7 @@ function Section({
           <h2 id={`${id}-title`} className="text-h4">
             {title}
           </h2>
-          <p className="max-w-prose text-body-sm text-muted-foreground">{blurb}</p>
+          {blurb ? <p className="max-w-prose text-body-sm text-muted-foreground">{blurb}</p> : null}
         </div>
       </header>
       {children}

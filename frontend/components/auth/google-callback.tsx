@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
+import { oauthErrorMessage } from './oauth-errors';
 import { safeNext } from './safe-next';
 
 /**
@@ -21,16 +22,6 @@ import { safeNext } from './safe-next';
  * out of the way. It is not a destination — nobody should ever look at it for
  * more than a moment.
  */
-
-const MESSAGES: Record<string, string> = {
-  google_sign_in_cancelled: 'Sign-in was cancelled. You can try again whenever you like.',
-  google_account_unverified:
-    "That Google account's email address isn't verified with Google, so it can't be used to " +
-    'sign in. Verify it with Google, or sign in with your password.',
-  oauth_state_invalid: 'That sign-in link expired or was already used. Please try again.',
-  google_sign_in_unavailable: 'Google sign-in is not available on this deployment.',
-  invalid_credentials: 'That account is not available. Please contact support.',
-};
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -81,7 +72,9 @@ export function GoogleCallback() {
 
   React.useEffect(() => {
     if (failure) {
-      setError(MESSAGES[failure] ?? 'Sign-in failed. Please try again.');
+      // The same sentence `/sign-in` now shows for the same code — see
+      // `oauth-errors.ts` on why one map rather than two.
+      setError(oauthErrorMessage(failure));
       return;
     }
     if (!handoff) {

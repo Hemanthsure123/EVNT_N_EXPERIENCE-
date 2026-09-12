@@ -80,6 +80,23 @@ export function BrandMark({
  * Mark plus wordmark — renders the official Curatix logo assets:
  * Light mode: /curatix-logo.png
  * Dark mode: /curatix-logo-dark.png
+ *
+ * ── THE SIZE, AND WHAT BOUNDS IT ──────────────────────────────────────────
+ *
+ * `h-10` (40px), up from `h-7` (28px): the lockup read as small beside the
+ * 44px account avatar it shares every header row with, and a wordmark that has
+ * to carry the brand at 28px on a phone is carrying it at the size of body
+ * copy.
+ *
+ * 40px is the ceiling, not a preference. The header is `--header-height` 64px
+ * and its brand link adds `py-1`, so the lockup occupies 48 of those 64 —
+ * comfortable. `h-12` (48px) would occupy 56 and leave 4px of clearance top
+ * and bottom, which is not a margin, it is a rounding error; the row would
+ * look wrong the first time anything gained a border.
+ *
+ * `w-auto` throughout, so the aspect ratio is the asset's and never this
+ * file's opinion, and `shrink-0` on the wrapper so a long city name in the
+ * next grid column squeezes itself rather than the logo.
  */
 export function BrandLockup({
   className,
@@ -93,12 +110,12 @@ export function BrandLockup({
       <img
         src="/curatix-logo.png"
         alt={BRAND_NAME}
-        className={cn('h-7 w-auto object-contain dark:hidden', collapsed && 'h-6')}
+        className={cn('h-10 w-auto object-contain dark:hidden', collapsed && 'h-8')}
       />
       <img
         src="/curatix-logo-dark.png"
         alt={BRAND_NAME}
-        className={cn('hidden h-7 w-auto object-contain dark:block', collapsed && 'h-6')}
+        className={cn('hidden h-10 w-auto object-contain dark:block', collapsed && 'h-8')}
       />
     </span>
   );
