@@ -36,7 +36,23 @@ WORKDIR /app
 # ran, on an image whose contents had not changed at all. `upgrade` means a
 # rebuild picks up security patches rather than pinning the past, and the
 # ARG is what makes a rebuild happen when nothing else here has moved.
-ARG APT_REFRESH=2026-09-03
+#
+# ── BUMPED 2026-09-12, AND WHAT IT COST TO LEARN THE CADENCE ─────────────
+#
+# It happened again, nine days after the date below was last set: Trivy
+# failed the release on 13 findings (3 CRITICAL, 10 HIGH) in perl-base,
+# libsqlite3-0, libpcre2-8-0, libssh2-1t64 and gzip. Every one carried
+# `Status: fixed` with the patched version already in Debian's security
+# repository, every Python package in the same scan was clean, and the
+# frontend image (alpine) had nothing at all. Nothing in the application had
+# changed — the layer was simply nine days old.
+#
+# So the number to keep in mind is that this goes stale in about a WEEK, not
+# a quarter. The alternative is passing a build-time date from the workflow,
+# which never goes stale and never reuses this layer either — every release
+# would reinstall the apt packages. That trade belongs to whoever is watching
+# build times, so it is written down here rather than taken unilaterally.
+ARG APT_REFRESH=2026-09-12
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libpq5 curl \
