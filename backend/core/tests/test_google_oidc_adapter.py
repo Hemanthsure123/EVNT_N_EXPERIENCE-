@@ -22,11 +22,40 @@ from core.ports.oidc_port import OidcError, OidcIdentityError
 CLIENT_ID = "123-abc.apps.googleusercontent.com"
 
 
+def _b64url(raw: bytes) -> str:
+    """Unpadded base64url — the encoding EVERY segment of a JWT uses, the
+    signature included.
+
+    ── WHY THE SIGNATURE SEGMENT CANNOT BE AN ARBITRARY STRING ────────────
+
+    This helper used to end the token with the literal `stub-signature`, on
+    the reasonable-sounding grounds that the adapter never verifies it. That
+    was true of the adapter and false of the PARSER: PyJWT splits and decodes
+    all three segments before any option is consulted, and `verify_signature:
+    False` turns off the cryptography, not the base64.
+
+    PyJWT 2.13 accepted it and **2.14 does not** — it now requires each
+    segment to be CANONICAL base64url (`b64encode(b64decode(x)) == x`), and
+    `stub-signature` decodes to bytes that re-encode to something else. So
+    eleven tests in this file began failing on a machine that resolved a
+    fresh dependency set, with no code change anywhere near them.
+
+    The library is right and the fixture was wrong. A real Google id_token's
+    third segment is canonical base64url, so a stub that is not was testing
+    the adapter against a token Google could never send — and it only ever
+    worked because a parser happened to be lenient. Encoding the stub bytes
+    properly keeps the signature meaningless (which is the point) while making
+    the token a real JWT (which is what the adapter is handed in production).
+    """
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
 def _id_token(**claims) -> str:
     """A JWT-shaped string. The signature is not checked here — see the
     adapter's module docstring on why (the token is fetched by us, from
-    Google's token endpoint, over TLS) — so a stub header/signature is
-    faithful to what the code actually inspects."""
+    Google's token endpoint, over TLS) — so a stub signature is faithful to
+    what the code actually inspects. It is still ENCODED like one: see
+    `_b64url`."""
     payload = {
         "iss": "https://accounts.google.com",
         "aud": CLIENT_ID,
@@ -36,8 +65,27 @@ def _id_token(**claims) -> str:
         "exp": int(time.time()) + 600,
         **claims,
     }
-    encode = lambda data: base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()  # noqa: E731
-    return f"{encode({'alg': 'RS256'})}.{encode(payload)}.stub-signature"
+    encode = lambda data: _b64url(json.dumps(data).encode())  # noqa: E731
+    return f"{encode({'alg': 'RS256'})}.{encode(payload)}.{_b64url(b'stub-signature')}"
+
+
+def test_the_fixture_builds_a_token_a_jwt_parser_will_accept():
+    """The guard for the bug above, and it belongs HERE rather than in the
+    adapter's own tests.
+
+    Every other test in this file asserts what the adapter does with a token.
+    None of them could tell "the adapter refused these claims" apart from "the
+    string was never a JWT" — both surface as `OidcIdentityError`, which is
+    exactly why the real cause took a CI run to find. This one asserts the
+    fixture itself, so a malformed stub fails as a malformed stub.
+    """
+    segments = _id_token().split(".")
+    assert len(segments) == 3
+    for segment in segments:
+        raw = segment.encode()
+        # PyJWT >= 2.14's rule, written out: a segment must be exactly what
+        # re-encoding its own decoded bytes produces.
+        assert _b64url(base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))).encode() == raw
 
 
 class _Response:
