@@ -1,5 +1,6 @@
 import { API_BASE_URL } from './config';
 import { ApiError, type ApiErrorEnvelope } from './errors';
+import { tokenIsExpired } from './jwt';
 import { tokenStore } from './token-store';
 import type { TokenPair } from './types';
 
@@ -110,6 +111,35 @@ async function doRefresh(refresh: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Force one refresh, sharing any that is already running.
+ *
+ * Exported for the UPLOAD path, which cannot use `apiFetch` (no upload
+ * progress from `fetch`) and so has to do the refresh itself. Keeping ONE
+ * implementation is what stops the two drifting — and the de-dupe above means
+ * four files uploading at once still trigger a single refresh.
+ */
+export function refreshAccessToken(): Promise<boolean> {
+  return tryRefresh();
+}
+
+/**
+ * The access token to send, refreshed FIRST when the one in hand has expired.
+ *
+ * `apiFetch` refreshes reactively, on the 401, because a retried JSON request
+ * costs nothing. An upload cannot be retried for free — see `lib/api/jwt.ts`.
+ * Returns whatever is in the store when there is no refresh token or the
+ * refresh fails: the server is the one that decides, and sending a token it
+ * may still accept beats sending none at all.
+ */
+export async function freshAccessToken(): Promise<string | null> {
+  const access = tokenStore.getAccess();
+  if (!tokenIsExpired(access)) return access;
+  if (!tokenStore.getRefresh()) return access;
+  await tryRefresh();
+  return tokenStore.getAccess();
 }
 
 function tryRefresh(): Promise<boolean> {

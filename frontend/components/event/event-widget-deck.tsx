@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Ticket } from 'lucide-react';
 import {
@@ -26,6 +25,7 @@ import {
 } from '@/lib/discovery/deck-metrics';
 import { formatFromPrice } from '@/lib/discovery/format';
 import { bookingCtaLabel, canStartBooking, summariseTiers } from '@/lib/discovery/tiers';
+import type { EventQuestion } from '@/lib/api/event-content';
 import type { EventCard as EventCardData, TicketTier } from '@/lib/api/types';
 import {
   DECK_POSTER_ATTR,
@@ -37,6 +37,7 @@ import {
 } from '@/lib/discovery/shared-poster';
 import { cn } from '@/lib/utils/cn';
 import { EventSubSheets, type SubSheetType } from './event-sub-sheets';
+import { BookTicketsAction } from './pre-book-gate';
 import { EventWidgetContent, EventWidgetSummary } from './event-widget-content';
 import { DeckAccount } from './deck-account';
 import { DeckBrandHeader } from './deck-brand-header';
@@ -949,6 +950,8 @@ function SlideImage({ src, priority }: { src: string; priority: boolean }) {
 function BookingBar({
   event,
   tiers,
+  ageRestriction = '',
+  questions = [],
   docked,
   layoutId,
   transition,
@@ -962,6 +965,10 @@ function BookingBar({
    * guessing a refusal.
    */
   tiers: TicketTier[] | null | undefined;
+  /** For the pre-book gate. Both arrive with the page's own data, so the
+   *  question is asked with no request of its own. */
+  ageRestriction?: string;
+  questions?: EventQuestion[];
   docked: boolean;
   layoutId: string;
   transition: { duration: number; ease: [number, number, number, number] };
@@ -1032,17 +1039,20 @@ function BookingBar({
             {label}
           </span>
         ) : (
-          <Link
+          /* The gate asks the organiser's questions before the checkout —
+             see `pre-book-gate.tsx`. It closes the deck on the way, for the
+             same reason the link did: `dismiss` finishes in an animation
+             callback that never runs once the route has changed. */
+          <BookTicketsAction
+            eventId={event.id}
             href={`/booking/${event.id}`}
-            // `onLeave`, not `onDismiss`: dismiss animates and closes in the
-            // animation's completion callback, and this component unmounts the
-            // moment the route changes — so that callback never ran and the
-            // deck was still "open" when you came back.
-            onClick={onLeave}
+            ageRestriction={ageRestriction}
+            questions={questions}
+            onBeforeNavigate={onLeave}
             className="ml-auto inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-cta px-7 text-body-sm font-extrabold text-cta-foreground shadow-lg transition-transform active:scale-95"
           >
             Book tickets
-          </Link>
+          </BookTicketsAction>
         )}
       </div>
     </motion.div>
@@ -1149,6 +1159,8 @@ function ActivePage({
       <BookingBar
         event={event}
         tiers={tiers}
+        ageRestriction={detail?.age_restriction ?? ''}
+        questions={content?.questions ?? []}
         docked={docked}
         layoutId={layoutId}
         transition={dockTransition}

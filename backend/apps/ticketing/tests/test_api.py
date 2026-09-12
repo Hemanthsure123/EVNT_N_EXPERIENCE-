@@ -13,11 +13,11 @@ from apps.events.tests.conftest import PUBLISHABLE_TAGS
 def _draft_event(organization):
     """A draft that is complete APART FROM its tickets.
 
-    `tags` is filled because `events.publish_checks._require_tags` demands
-    `MIN_TAGS_TO_PUBLISH` of them. Without it the two tests below would both
-    pass and prove nothing: the "cannot submit without a tier" case would be
-    refused for the wrong reason, and the "can submit once it has one" case
-    would fail while the ticketing gate it exists to test was satisfied.
+    `tags` and `poster_url` are filled because `events.publish_checks` demands
+    both (`_require_tags`, `_require_poster`). Without them the two tests below
+    would both pass and prove nothing: the "cannot submit without a tier" case
+    would be refused for the wrong reason, and the "can submit once it has one"
+    case would fail while the ticketing gate it exists to test was satisfied.
     """
     event = EventRepository().create(
         organization_id=organization.id,
@@ -25,6 +25,7 @@ def _draft_event(organization):
         venue="Hall",
         city="Pune",
         starts_at=timezone.now() + timedelta(days=20),
+        poster_url="https://cdn.test/posters/draft-concert.jpg",
     )
     Event.objects.filter(pk=event.id).update(tags=PUBLISHABLE_TAGS)
     event.refresh_from_db()

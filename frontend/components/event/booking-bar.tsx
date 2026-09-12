@@ -12,6 +12,8 @@ import {
   isUrgent,
   summariseTiers,
 } from '@/lib/discovery/tiers';
+import type { EventQuestion } from '@/lib/api/event-content';
+import { BookTicketsAction } from '@/components/event/pre-book-gate';
 import { cn } from '@/lib/utils/cn';
 import { WaitlistButton } from './waitlist-button';
 
@@ -44,9 +46,14 @@ import { WaitlistButton } from './waitlist-button';
 export function BookingBar({
   eventId,
   initialTiers,
+  ageRestriction = '',
+  questions = [],
 }: {
   eventId: string;
   initialTiers: TicketTier[];
+  /** For the pre-book gate — see `pre-book-gate.tsx`. */
+  ageRestriction?: string;
+  questions?: EventQuestion[];
 }) {
   const query = useQuery({
     queryKey: ['event-tiers', eventId],
@@ -145,8 +152,11 @@ export function BookingBar({
             {bookingCtaLabel(state)}
           </span>
         ) : (
-          <a
+          <BookTicketsAction
+            eventId={eventId}
             href={`/booking/${eventId}`}
+            ageRestriction={ageRestriction}
+            questions={questions}
             className={cn(
               'ml-auto inline-flex h-control shrink-0 items-center justify-center rounded-full px-pill text-label',
               'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
@@ -154,7 +164,7 @@ export function BookingBar({
             )}
           >
             Book tickets
-          </a>
+          </BookTicketsAction>
         )}
       </div>
     </div>

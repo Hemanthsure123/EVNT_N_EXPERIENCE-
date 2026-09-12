@@ -125,7 +125,7 @@ export function ReviewStep({
   /**
    * Two lists, not one.
    *
-   * Only the first four actually gate a publish — they are what `POST /events`
+   * Only the first five actually gate a publish — they are what `POST /events`
    * and the registered publish checks require. The rest are worth doing and
    * nothing more, so they are labelled "optional" rather than sitting
    * unchecked next to the real blockers. A checklist that treats an SEO
@@ -144,13 +144,16 @@ export function ReviewStep({
     },
     { label: 'Start time in the future', done: Boolean(draft.startsAt), step: 'schedule' },
     { label: 'At least one ticket type', done: draft.tiers.length > 0, step: 'tickets' },
+    // Not optional, and it used to be. `publish_checks._require_poster` refuses
+    // a publish without one, so listing it beside the SEO copy would be the
+    // checklist's own version of the bug it warns about below.
+    { label: 'Event poster', done: Boolean(draft.posterUrl), step: 'media' },
     {
       label: 'Description',
       done: Boolean(draft.description.trim()),
       step: 'basics',
       optional: true,
     },
-    { label: 'Cover image', done: Boolean(draft.posterUrl), step: 'media', optional: true },
     {
       label: 'Duration, age policy and access notes',
       done: Boolean(

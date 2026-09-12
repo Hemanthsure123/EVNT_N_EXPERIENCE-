@@ -23,6 +23,7 @@ import {
   patchFingerprint,
   priceSummary,
   publishBlockers,
+  POSTER_BLOCKER,
   resolveOrganizationId,
   restoreDraft,
   draftFromEvent,
@@ -62,6 +63,9 @@ function draftWith(patch: Partial<Draft> = {}): Draft {
     // otherwise complete" and every caller relies on that. A test about the
     // TAG gate passes `tags: []` explicitly, which reads as the point.
     tags: PUBLISHABLE_TAGS,
+    // Same move for the poster gate (`publish_checks._require_poster`). A test
+    // about THAT passes `posterUrl: ''`.
+    posterUrl: 'https://cdn.test/posters/summer-sessions.jpg',
     ...patch,
   };
 }
@@ -287,6 +291,24 @@ describe('publishBlockers', () => {
     expect(publishBlockers(draft)).toEqual([
       'Pick 1 more tag so people browsing can find this event.',
     ]);
+  });
+
+  it('mirrors the server poster gate', () => {
+    // `publish_checks._require_poster`. The blue placeholder every card falls
+    // back to is a BROKEN-IMAGE fallback, not permission to publish without
+    // artwork — so this refuses rather than shrugging.
+    const draft = draftWith({
+      eventId: 'evt-1',
+      tiers: [tierWith({ serverId: 'tt-1', version: 1 })],
+      posterUrl: '',
+    });
+    expect(publishBlockers(draft)).toEqual([POSTER_BLOCKER]);
+  });
+
+  it('exports the poster blocker by name, so Media can print the same sentence', () => {
+    // The empty cover uploader renders this exact string. Two hand-written
+    // copies is how the form and the checklist end up saying different things.
+    expect(POSTER_BLOCKER).toContain('poster');
   });
 
   it('does NOT appear in validate(), so an empty draft is not painted red', () => {
@@ -714,13 +736,16 @@ describe('completion agrees with the submit gate', () => {
       tiers: [tierWith({ name: 'GA', price: '499', quantity: '100', serverId: 'tier-1' })],
     });
 
-  it('reaches 100% with no cover image, because a cover is not required', () => {
-    // It used to count `posterUrl`, so a perfectly publishable event sat at
-    // 83% forever and the bar under-reported finished work.
-    const draft = publishable();
+  it('does NOT reach 100% with no cover image, because a poster IS required', () => {
+    // This test asserted the opposite for a long time, and it was right then:
+    // `poster_url` was recommended, so counting it left a publishable event at
+    // 83% forever. `publish_checks._require_poster` changed the fact, not the
+    // rule — the rule is that the bar and the Publish button must never
+    // disagree, and 100% beside a refusal is the disagreement.
+    const draft = draftWith({ ...publishable(), posterUrl: '' });
     expect(validate(draft)).toHaveLength(0);
-    expect(draft.posterUrl).toBe('');
-    expect(completion(draft)).toBe(100);
+    expect(completion(draft)).toBeLessThan(100);
+    expect(publishBlockers(draft)).toContain(POSTER_BLOCKER);
   });
 
   it('never reads 100% while anything would be refused', () => {

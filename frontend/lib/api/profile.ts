@@ -20,8 +20,8 @@
 
 import { api } from './client';
 import { API_BASE_URL } from './config';
+import { uploadWithProgress } from './upload';
 import { ApiError } from './errors';
-import { tokenStore } from './token-store';
 import type { Gender, User } from './types';
 
 const AVATAR_PATH = '/auth/me/avatar';
@@ -132,23 +132,17 @@ export const isUploadCancelled = (error: unknown): boolean =>
   error instanceof ApiError && error.code === 'cancelled';
 
 /**
- * Set the profile picture, with real progress and a real cancel.
+ * Replace the profile picture, with progress and a real cancel.
  *
- * `XMLHttpRequest` rather than `fetch`, for the one documented reason this
- * codebase uses it (see the event studio's media step): `fetch` has no
- * upload-progress event, and a spinner that cannot say "40%" is the difference
- * between "it is working" and "it has frozen". Cancel aborts the request rather
- * than hiding a row that keeps uploading.
- *
- * The URL is built from `API_BASE_URL`, exactly as `client.ts` builds
- * `API_ROOT`. The sibling uploaders open a same-origin `/api/v1/...` path,
- * which only works where something proxies the API onto the site origin —
- * nothing in this app does (there are no rewrites and no route handler).
- *
- * One thing this cannot borrow from `apiFetch`: its transparent
- * refresh-on-401. A stale access token surfaces as a 401 here, and the auth
- * provider's next `/auth/me` is what resolves it — re-uploading the bytes
- * behind the user's back would be worse than telling them to try again.
+ * The transport is `lib/api/upload.ts`, shared with every other upload on the
+ * platform. This file used to carry its own `XMLHttpRequest` copy, and its
+ * docstring explained that it could not borrow `apiFetch`'s refresh-on-401 —
+ * "re-uploading the bytes behind the user's back would be worse than telling
+ * them to try again". That reasoning is reversed now, and deliberately: the
+ * shared helper refreshes BEFORE sending when the token has already expired,
+ * so the usual case costs one small request rather than a wasted upload, and
+ * the one bounded retry only happens on a 401 the customer would otherwise
+ * have had to answer by pressing the same button again.
  */
 export function uploadAvatar(
   file: File,
@@ -158,58 +152,7 @@ export function uploadAvatar(
   // `file` is the field name `MeAvatarView` reads; anything else is a 400.
   form.append('file', file);
 
-  const request = new XMLHttpRequest();
-  const promise = new Promise<ProfileUser>((resolve, reject) => {
-    request.open('POST', `${API_BASE_URL}/api/v1${AVATAR_PATH}`);
-    const token = tokenStore.getAccess();
-    if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
-    // No `Content-Type`: the browser must set the multipart boundary itself.
-
-    request.upload.addEventListener('progress', (event) => {
-      // `lengthComputable` is false for a chunked body; reporting 0 forever
-      // would be worse than reporting nothing, so the caller keeps whatever
-      // indeterminate state it started with.
-      if (event.lengthComputable && onProgress) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
-    });
-
-    request.addEventListener('load', () => {
-      let parsed: unknown = null;
-      try {
-        parsed = request.responseText ? JSON.parse(request.responseText) : null;
-      } catch {
-        parsed = null;
-      }
-      if (request.status >= 200 && request.status < 300) {
-        resolve(parsed as ProfileUser);
-        return;
-      }
-      // The server's own message, in the same envelope `ApiError` normalises
-      // everywhere else — it is written to be acted on ("that image is 14.2 MB,
-      // the limit is 10 MB") in a way nothing here could invent.
-      const envelope = parsed as { error?: { code?: string; message?: string } } | null;
-      reject(
-        new ApiError(
-          request.status,
-          envelope?.error?.code ?? 'upload_failed',
-          envelope?.error?.message ?? 'That upload did not go through.',
-          {},
-        ),
-      );
-    });
-
-    request.addEventListener('error', () =>
-      reject(new ApiError(0, 'network_error', 'The connection dropped during the upload.', {})),
-    );
-    request.addEventListener('abort', () =>
-      reject(new ApiError(0, 'cancelled', 'Upload cancelled.', {})),
-    );
-
-    request.send(form);
-  });
-
-  return { promise, cancel: () => request.abort() };
+  return uploadWithProgress<ProfileUser>(AVATAR_PATH, form, onProgress);
 }
 
 /**

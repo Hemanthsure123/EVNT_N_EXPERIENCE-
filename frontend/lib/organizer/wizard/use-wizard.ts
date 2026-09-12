@@ -187,15 +187,32 @@ export function useWizard({ userId, organizationIds, ready, existing, cloneSourc
   /** Set once this draft is done with (published, submitted, or reset), so the
    *  persist effect stops re-creating what `clearStored` just removed. */
   const finished = React.useRef(false);
-  /** Which key the draft in state came from, so the pass below runs once per
-   *  account rather than on every render — and runs AGAIN if the account
-   *  changes in this tab, which is what loads that person's own draft. */
+  /**
+   * WHICH DRAFT THE STATE IN HAND CAME FROM, so the pass below runs once per
+   * account rather than on every render — and runs AGAIN if the account
+   * changes in this tab, which is what loads that person's own draft.
+   *
+   * ── THE CLONE SOURCE IS PART OF THE TOKEN, AND THAT IS A FIX ──────────
+   *
+   * It was the storage key alone, and the storage key for a clone is the same
+   * one a blank new draft uses (there is no event id yet). The Copy panel
+   * lives ON `/dashboard/events/new`, so pressing Copy pushes `?from={id}` to
+   * the route this component is already mounted on: no remount, the same key,
+   * the guard trips, and the seeded draft is never committed. The form sat
+   * empty until the organizer reloaded the page by hand — which is exactly
+   * what was reported. Keying on the source as well lets a clone arriving
+   * into a live wizard hydrate, once, the moment its data lands.
+   */
   const restoredFor = React.useRef<string | null>(null);
+  /** Null unless cloning. Named for the token rather than the source object,
+   *  which is a fresh identity on every render and would loop. */
+  const cloneId = cloneSource?.event.id ?? null;
 
   React.useEffect(() => {
     if (!ready || !storageKey) return;
-    if (restoredFor.current === storageKey) return;
-    restoredFor.current = storageKey;
+    const token = `${storageKey}::${cloneId ?? ''}`;
+    if (restoredFor.current === token) return;
+    restoredFor.current = token;
     // A fresh mount of the wizard is a fresh draft's life, even when the user
     // never left the app — otherwise navigating away after a publish and back
     // to /new would land on a component whose guard is still tripped and which
@@ -323,7 +340,7 @@ export function useWizard({ userId, organizationIds, ready, existing, cloneSourc
     // event nobody has touched yet.
     if (!server && !restored.eventId && canCreate(restored)) schedule();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, storageKey, organizationIds]);
+  }, [ready, storageKey, organizationIds, cloneId]);
 
   React.useEffect(() => {
     // ── A FINISHED DRAFT MUST NOT WRITE ITSELF BACK ────────────────────────

@@ -55,8 +55,16 @@ import { Poster } from '../primitives';
  * hundred events is not scrolling.
  */
 
-/** How many rows to show before asking the organizer to search. */
-const VISIBLE = 4;
+/**
+ * EVERY event is listed, not the four most recent.
+ *
+ * This used to `slice(0, 4)` with a line underneath saying so, which made the
+ * fifth-newest event uncopyable unless the organizer guessed a search term
+ * that matched it — and a promoter's most-copied night is rarely in their last
+ * four. The list is the same cursor-paginated `GET /organizer/event-rows` the
+ * events table uses (20 a page, server-side), so this shows what has loaded
+ * and asks for the next page on a press. Nothing is capped client-side.
+ */
 
 export function StartFromEvent({ className }: { className?: string }) {
   const [open, setOpen] = React.useState(false);
@@ -153,7 +161,7 @@ function ClonePanel({ className, onDismiss }: { className?: string; onDismiss: (
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {rows.slice(0, VISIBLE).map((row) => (
+          {rows.map((row) => (
             <li key={row.id}>
               <button
                 type="button"
@@ -186,10 +194,19 @@ function ClonePanel({ className, onDismiss }: { className?: string; onDismiss: (
         </ul>
       )}
 
-      {rows.length > VISIBLE ? (
-        <p className="text-caption text-muted-foreground">
-          Showing {VISIBLE} of your most recent. Search to narrow it down.
-        </p>
+      {query.hasNextPage ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          disabled={query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+        >
+          {query.isFetchingNextPage ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          ) : null}
+          Show more
+        </Button>
       ) : null}
     </section>
   );

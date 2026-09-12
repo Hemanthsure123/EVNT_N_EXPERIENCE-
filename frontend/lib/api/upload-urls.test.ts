@@ -24,7 +24,18 @@ import { API_BASE_URL } from './config';
  * The two upload paths are checked TOGETHER on purpose. `uploadAvatar` always
  * had the base URL and `uploadMedia` did not — two functions, the same shape,
  * disagreeing, with only one of them exercised by anybody. Testing them side
- * by side is what makes the next one impossible to add wrong.
+ * by side is what makes the next one impossible to add wrong. They are one
+ * function now (`uploadWithProgress`), which is the fix that bug earned.
+ *
+ * ── THE OPEN IS ASYNCHRONOUS NOW, AND THAT IS DELIBERATE ──────────────────
+ *
+ * These assertions used to read `FakeXhr.opened` on the line after the call.
+ * `uploadWithProgress` awaits `freshAccessToken()` first — it refreshes an
+ * access token that is about to expire BEFORE spending a large upload on a
+ * request that would 401 — so `open` now happens a microtask later. Hence
+ * `vi.waitFor`. Reverting to a synchronous read would not fail here; it would
+ * fail everywhere, which is why the reason is written down rather than the
+ * timing quietly patched.
  */
 
 class FakeXhr {
@@ -60,7 +71,7 @@ describe('upload URLs', () => {
 
     uploadMedia('evt-1', { file: pngFile(), kind: 'gallery', altText: 'A crowd' });
 
-    expect(FakeXhr.opened).toHaveLength(1);
+    await vi.waitFor(() => expect(FakeXhr.opened).toHaveLength(1));
     const { url } = FakeXhr.opened[0];
     expect(url.startsWith(API_BASE_URL)).toBe(true);
     expect(url).toContain('/api/v1/events/evt-1/media/upload');
@@ -71,7 +82,7 @@ describe('upload URLs', () => {
 
     uploadAvatar(pngFile());
 
-    expect(FakeXhr.opened).toHaveLength(1);
+    await vi.waitFor(() => expect(FakeXhr.opened).toHaveLength(1));
     expect(FakeXhr.opened[0].url.startsWith(API_BASE_URL)).toBe(true);
   });
 
@@ -85,6 +96,7 @@ describe('upload URLs', () => {
     uploadMedia('evt-2', { file: pngFile(), kind: 'hero', altText: 'Stage' });
     uploadAvatar(pngFile());
 
+    await vi.waitFor(() => expect(FakeXhr.opened).toHaveLength(2));
     for (const { url } of FakeXhr.opened) {
       expect(url, `${url} is relative — it would resolve against the page origin`).toMatch(
         /^https?:\/\//,

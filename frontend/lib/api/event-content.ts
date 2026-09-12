@@ -1,5 +1,5 @@
+import { uploadWithProgress, type UploadHandle as SharedUploadHandle } from './upload';
 import { api } from './client';
-import { API_BASE_URL } from './config';
 
 /**
  * Event content: media, FAQs and running order.
@@ -21,8 +21,6 @@ import { API_BASE_URL } from './config';
  * is worse than no cancel button.
  */
 
-import { tokenStore } from './token-store';
-import { ApiError } from './errors';
 
 export type MediaKind = 'hero' | 'gallery' | 'thumbnail' | 'mobile' | 'video';
 
@@ -213,11 +211,17 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 // see the note on `ALLOWED_IMAGE_TYPES` in backend/core/uploads.py.
 export const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
-export type UploadHandle = {
-  promise: Promise<EventMedia>;
-  /** Aborts in flight. The server never sees a partial object. */
-  cancel: () => void;
-};
+/**
+ * The gallery/cover upload.
+ *
+ * The XHR plumbing — progress, cancel, the `API_BASE_URL` prefix, the error
+ * envelope AND the token refresh — lives in `lib/api/upload.ts` now. This file
+ * used to carry its own copy, which is where the reported
+ * "Token is invalid or expired" on the Media step came from: a copy that read
+ * the stored access token and sent it, with nothing to refresh it once it
+ * aged out.
+ */
+export type UploadHandle = SharedUploadHandle<EventMedia>;
 
 export function uploadMedia(
   eventId: string,
@@ -231,81 +235,7 @@ export function uploadMedia(
   form.append('caption', input.caption ?? '');
   form.append('position', String(input.position ?? 0));
 
-  const request = new XMLHttpRequest();
-  const promise = new Promise<EventMedia>((resolve, reject) => {
-    // `API_BASE_URL` is NOT optional here, and leaving it off is why every
-    // gallery and cover upload failed.
-    //
-    // A relative `/api/v1/...` resolves against the PAGE's origin — the Next
-    // server on :3000 — not the API on :8000. Next has no such route, so it
-    // answered with its own 404 HTML page. That is not JSON, the parse below
-    // threw into its `catch`, and the reject fell back to the generic
-    // "That upload did not go through." So a wrong URL surfaced as a message
-    // that describes no cause and suggests no fix.
-    //
-    // Every other call goes through `lib/api/client.ts`, which prefixes
-    // `API_BASE_URL` centrally; this function talks to `XMLHttpRequest`
-    // directly (for upload progress, which `fetch` cannot report) and so had
-    // to build its own URL. `uploadAvatar` in `profile.ts` is the same shape
-    // and got it right — the two are worth reading together.
-    request.open('POST', `${API_BASE_URL}/api/v1${base(eventId)}/media/upload`);
-    const token = tokenStore.getAccess();
-    if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
-
-    request.upload.addEventListener('progress', (event) => {
-      // `lengthComputable` is false for chunked bodies; reporting 0 forever
-      // would be worse than reporting nothing, so the caller keeps its
-      // indeterminate state.
-      if (event.lengthComputable && onProgress) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
-    });
-
-    request.addEventListener('load', () => {
-      let parsed: unknown = null;
-      try {
-        parsed = request.responseText ? JSON.parse(request.responseText) : null;
-      } catch {
-        parsed = null;
-      }
-      if (request.status >= 200 && request.status < 300) {
-        resolve(parsed as EventMedia);
-        return;
-      }
-      // Surface the server's own message — it is written to be actionable
-      // ("that image is 14.2 MB, the limit is 10 MB").
-      //
-      // The FALLBACK has to say something too. It used to be "That upload did
-      // not go through." for every non-JSON response, which is what a
-      // misrouted request looks like — and it hid a wrong URL for as long as
-      // nobody tried an upload in a browser. When there is no envelope the
-      // status code is the only fact available, so it is in the message.
-      const envelope = parsed as { error?: { code?: string; message?: string } } | null;
-      const fallback =
-        request.status === 0
-          ? 'The upload could not reach the server.'
-          : `The server rejected the upload (HTTP ${request.status}).`;
-      reject(
-        new ApiError(
-          request.status,
-          envelope?.error?.code ?? 'upload_failed',
-          envelope?.error?.message ?? fallback,
-          {},
-        ),
-      );
-    });
-
-    request.addEventListener('error', () =>
-      reject(new ApiError(0, 'network_error', 'The connection dropped during the upload.', {})),
-    );
-    request.addEventListener('abort', () =>
-      reject(new ApiError(0, 'cancelled', 'Upload cancelled.', {})),
-    );
-
-    request.send(form);
-  });
-
-  return { promise, cancel: () => request.abort() };
+  return uploadWithProgress<EventMedia>(`${base(eventId)}/media/upload`, form, onProgress);
 }
 
 /** Client-side pre-checks, so the common mistakes never cost a round trip. */

@@ -26,6 +26,12 @@ PUBLISHABLE_TAGS = [next(iter(dimension.tags)) for dimension in TAG_DIMENSIONS][
     :MIN_TAGS_TO_PUBLISH
 ]
 
+#: A poster, for the same reason the tags are real: `publish_checks`
+#: `_require_poster` refuses an event without one, and a fixture producing an
+#: unpublishable event makes every test about something else fail for a reason
+#: that has nothing to do with what it is testing.
+PUBLISHABLE_POSTER_URL = "https://cdn.test/posters/fixture.jpg"
+
 
 def _access_token_for(user: User) -> str:
     # simplejwt's for_user() is mistyped — see the note in apps/accounts/services.py.
@@ -111,7 +117,7 @@ def make_event(organization):
     A test that wants to prove the gate BITES passes `tags=[]` explicitly,
     which reads as the point being made — the same split
     `organization` / `unverified_organization` already uses for the
-    verification gate.
+    verification gate. `poster_url=""` is the same move for the poster gate.
     """
 
     def _make(
@@ -123,6 +129,7 @@ def make_event(organization):
         status: str = EventStatus.LIVE,
         starts_at=None,
         tags: list[str] | None = None,
+        poster_url: str = PUBLISHABLE_POSTER_URL,
         org=None,
     ) -> Event:
         starts_at = starts_at or (timezone.now() + timedelta(days=10))
@@ -133,6 +140,7 @@ def make_event(organization):
             city=city,
             description=description,
             starts_at=starts_at,
+            poster_url=poster_url,
             # Derived here for the same reason `EventService.create_event`
             # derives it: in production no event exists without one, so a
             # fixture that skipped it would test a state the system never

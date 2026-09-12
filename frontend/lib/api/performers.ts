@@ -1,3 +1,4 @@
+import { uploadWithProgress, type UploadHandle as SharedUploadHandle } from './upload';
 import { api } from './client';
 import type { Paginated } from './types';
 
@@ -475,8 +476,6 @@ export const OCCASION_LABELS: Record<Occasion, string> = {
 
 /* ------------------------------------------------------- photo upload */
 
-import { tokenStore } from './token-store';
-import { ApiError } from './errors';
 
 /**
  * Upload a photo, with real progress and a real cancel.
@@ -498,11 +497,15 @@ export const ACCEPTED_PHOTO_TYPES = [
   'image/gif',
 ];
 
-export type PhotoUploadHandle = {
-  promise: Promise<PerformerPhoto>;
-  /** Aborts in flight. The server never sees a partial object. */
-  cancel: () => void;
-};
+/**
+ * A performer photo.
+ *
+ * Shares `lib/api/upload.ts` with every other upload. That also repairs the
+ * URL: this built a RELATIVE `/api/v1/...`, which resolves against the Next
+ * origin rather than the API, so it only ever worked where something proxied
+ * the two onto one host — nothing in this app does.
+ */
+export type PhotoUploadHandle = SharedUploadHandle<PerformerPhoto>;
 
 export function uploadPerformerPhoto(
   performerId: string,
@@ -515,56 +518,11 @@ export function uploadPerformerPhoto(
   form.append('caption', input.caption ?? '');
   form.append('position', String(input.position ?? 0));
 
-  const request = new XMLHttpRequest();
-  const promise = new Promise<PerformerPhoto>((resolve, reject) => {
-    request.open('POST', `/api/v1/me/performers/${encodeURIComponent(performerId)}/photos`);
-    const token = tokenStore.getAccess();
-    if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
-
-    request.upload.addEventListener('progress', (event) => {
-      // `lengthComputable` is false for chunked bodies; reporting 0 forever
-      // would be worse than reporting nothing, so the caller keeps its
-      // indeterminate state.
-      if (event.lengthComputable && onProgress) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
-    });
-
-    request.addEventListener('load', () => {
-      let parsed: unknown = null;
-      try {
-        parsed = request.responseText ? JSON.parse(request.responseText) : null;
-      } catch {
-        parsed = null;
-      }
-      if (request.status >= 200 && request.status < 300) {
-        resolve(parsed as PerformerPhoto);
-        return;
-      }
-      // The server's own message — it is written to be acted on ("that image
-      // is 14.2 MB, the limit is 10 MB").
-      const envelope = parsed as { error?: { code?: string; message?: string } } | null;
-      reject(
-        new ApiError(
-          request.status,
-          envelope?.error?.code ?? 'upload_failed',
-          envelope?.error?.message ?? 'That upload did not go through.',
-          {},
-        ),
-      );
-    });
-
-    request.addEventListener('error', () =>
-      reject(new ApiError(0, 'network_error', 'The connection dropped during the upload.', {})),
-    );
-    request.addEventListener('abort', () =>
-      reject(new ApiError(0, 'cancelled', 'Upload cancelled.', {})),
-    );
-
-    request.send(form);
-  });
-
-  return { promise, cancel: () => request.abort() };
+  return uploadWithProgress<PerformerPhoto>(
+    `/me/performers/${encodeURIComponent(performerId)}/photos`,
+    form,
+    onProgress,
+  );
 }
 
 /** Client-side pre-checks, mirroring `core.uploads`. */

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import Link from 'next/link';
 import { CalendarClock, Ticket } from 'lucide-react';
 import type { TicketTier } from '@/lib/api/types';
 import { formatFromPrice } from '@/lib/discovery/format';
@@ -10,6 +9,8 @@ import {
   isUrgent,
   summariseTiers,
 } from '@/lib/discovery/tiers';
+import type { EventQuestion } from '@/lib/api/event-content';
+import { BookTicketsAction } from '@/components/event/pre-book-gate';
 import { cn } from '@/lib/utils/cn';
 import { WaitlistButton } from './waitlist-button';
 
@@ -80,11 +81,18 @@ export function BookingCta({
   tiers,
   cancelled = false,
   preview = false,
+  ageRestriction = '',
+  questions = [],
 }: {
   eventId: string;
   tiers: TicketTier[];
   cancelled?: boolean;
   preview?: boolean;
+  /** `Event.age_restriction`, for the gate. Blank asks nothing. */
+  ageRestriction?: string;
+  /** The organiser's questionnaire, from the content payload the page already
+   *  has — so the gate costs no request of its own. */
+  questions?: EventQuestion[];
 }) {
   const summary = summariseTiers(tiers);
   const price = formatFromPrice(summary.fromPrice);
@@ -150,8 +158,16 @@ export function BookingCta({
           {bookingCtaLabel(summary.state)}
         </span>
       ) : (
-        <Link
+        /* The GATE, not a bare link — and still a link when there is nothing
+           to ask, which is most events. See `pre-book-gate.tsx`: the age
+           restriction and the organiser's questions are settled here, before
+           the checkout, rather than as fields between a price and a Pay
+           button. This file stays a SERVER component; the gate is the leaf. */
+        <BookTicketsAction
+          eventId={eventId}
           href={`/booking/${eventId}`}
+          ageRestriction={ageRestriction}
+          questions={questions}
           className={cn(
             'inline-flex h-control items-center justify-center gap-2 rounded-full px-pill text-label',
             'bg-cta text-cta-foreground shadow-sm transition-colors duration-fast hover:bg-cta-hover active:bg-cta-active',
@@ -160,7 +176,7 @@ export function BookingCta({
         >
           <Ticket className="size-4" aria-hidden />
           Book tickets
-        </Link>
+        </BookTicketsAction>
       )}
     </section>
   );

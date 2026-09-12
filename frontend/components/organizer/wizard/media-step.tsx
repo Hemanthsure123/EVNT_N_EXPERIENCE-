@@ -30,6 +30,7 @@ import {
 import { ApiError, errorMessage } from '@/lib/api/errors';
 import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
+import { POSTER_BLOCKER } from '@/lib/organizer/wizard/model';
 import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { Section, StepHeader, type DraftSave } from './fields';
@@ -419,7 +420,11 @@ export function MediaStep({
           nine photos still has no card image. */}
       <Section
         title="Cover image"
-        count={draft.posterUrl ? 'Set' : 'Not set'}
+        /* "Required" rather than "Not set". The publish gate refuses without
+           one (`publish_checks._require_poster`), and a section summary that
+           reads like a preference is how somebody skips it and meets the
+           refusal eight steps later. */
+        count={draft.posterUrl ? 'Set' : 'Required'}
       >
         <CoverUploader draft={draft} onPoster={onPoster} posterFile={posterFile} />
       </Section>
@@ -909,9 +914,17 @@ function CoverUploader({
               <ImagePlus className="size-5 text-muted-foreground" />
             </span>
             <p className="text-body-sm font-medium">Drop the cover image here</p>
+            {/* The requirement, in the empty state, in the words the review
+                checklist and the server both use. It is NOT `role="alert"`:
+                nothing has gone wrong on a draft nobody has uploaded to yet,
+                and an assertive announcement on arrival is noise. The blocker
+                on Review is where it becomes a refusal. */}
+            <p className="max-w-sm text-caption font-medium text-foreground">
+              {POSTER_BLOCKER} It is the LCP image on the event page, the whole of the card in
+              every list, and the artwork on the ticket.
+            </p>
             <p className="max-w-sm text-caption text-muted-foreground">
-              {EVENT_IMAGE_HINT} It is the picture the event page opens on, so keep faces and text
-              away from the edges.
+              {EVENT_IMAGE_HINT} Keep faces and text away from the edges.
             </p>
             <Button variant="outline" onClick={() => inputRef.current?.click()}>
               Choose a file

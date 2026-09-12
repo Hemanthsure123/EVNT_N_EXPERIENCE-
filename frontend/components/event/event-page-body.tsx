@@ -279,6 +279,8 @@ export function EventPageBody({
               tiers={tiers}
               cancelled={event.status === 'cancelled'}
               preview={preview}
+              ageRestriction={event.age_restriction}
+              questions={content.questions}
             />
             {railItems.length ? <EventDisclosures items={railItems} /> : null}
           </div>
@@ -376,7 +378,12 @@ export function EventPageBody({
           happening, that is a button pointing at a checkout nobody can
           complete — and the panel above already says where the money is. */}
       {preview || event.status === 'cancelled' ? null : (
-        <BookingBar eventId={event.id} initialTiers={tiers} />
+        <BookingBar
+          eventId={event.id}
+          initialTiers={tiers}
+          ageRestriction={event.age_restriction}
+          questions={content.questions}
+        />
       )}
     </>
   );

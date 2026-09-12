@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EventDetail, TicketTier } from '@/lib/api/types';
 import type { EventQuestion, EventSlot } from '@/lib/api/event-content';
 import { cancelBooking } from '@/lib/api/bookings';
+import { eventPath } from '@/lib/events/ref';
 import { bumpAllAttemptsForEvent } from '@/lib/booking/attempt';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from '@/components/ui/drawer';
@@ -187,29 +188,51 @@ function BackControl() {
     return () => window.removeEventListener('popstate', onPop);
   }, [live]);
 
+  /**
+   * ── BACK GOES TO THE EVENT PAGE, NOT WHEREVER HISTORY POINTS ──────────
+   *
+   * It was `router.back()`, argued for as "the browser's own history is the
+   * truthful answer to where was I". It is not, inside this flow. The
+   * checkout's own screens are history entries: the picker pushes the review,
+   * a failed payment pushes `/failed`, the review's sign-in sheet and the
+   * hold guard below push their own entries, and Razorpay hands control back
+   * with entries of its own. So Back from the review landed on the screen
+   * before it — another checkout screen, which immediately re-reserves and
+   * offers Back again. That is the reported loop, and no number of extra
+   * entries makes a relative Back mean "leave the checkout".
+   *
+   * The event page is the one destination that is always correct: every route
+   * into this flow comes from it, and somebody who arrived on a shared
+   * `/booking/{id}` link has still, by definition, chosen that event.
+   *
+   * `replace`, not `push`: pushing leaves the checkout one Back press away
+   * from the page we just sent them to, which is the loop again with an extra
+   * step.
+   */
   const leave = () => {
     setAsking(false);
     clearSelection();
-    router.back();
+    router.replace(eventPath(event));
   };
 
+  /**
+   * Release the hold, and LEAVE — without waiting for the release.
+   *
+   * The request is fired and not awaited: a client-side navigation does not
+   * abort it, so the seats go back on sale either way, and making somebody
+   * watch a spinner to be told what they already decided is the one part of
+   * this that was never doing any work. Failure is swallowed on purpose — a
+   * 409 means the sweeper or another tab got there first, which is the
+   * outcome this call wanted.
+   */
   const cancelAndLeave = () => {
     if (!booking) return leave();
     setCancelling(true);
-    void (async () => {
-      // Swallowed on purpose: a 409 means the sweeper or another tab got there
-      // first, which is the outcome this call wanted. Blocking the exit on it
-      // would trap somebody on a checkout they have chosen to leave.
-      await cancelBooking(booking.id).catch(() => undefined);
-      // `replace`, not `back`: the guard above may have left a sentinel entry
-      // on the stack, and going back would land on it rather than leaving.
-      setBooking(null);
-      clearSelection();
-      bumpAllAttemptsForEvent(event.id);
-      setCancelling(false);
-      setAsking(false);
-      router.replace(`/booking/${event.id}`);
-    })();
+    void cancelBooking(booking.id).catch(() => undefined);
+    setBooking(null);
+    bumpAllAttemptsForEvent(event.id);
+    setCancelling(false);
+    leave();
   };
 
   return (
@@ -220,8 +243,7 @@ function BackControl() {
           if (live) {
             setAsking(true);
           } else {
-            clearSelection();
-            router.back();
+            leave();
           }
         }}
         aria-label="Go back"
@@ -282,11 +304,9 @@ function FunnelHeader({ title, subtitle }: { title: string; subtitle?: React.Rea
     // as one block, so they can never separate mid-scroll.
     <header className="border-b border-border bg-background/95 backdrop-blur">
       <div className="mx-auto flex w-full max-w-2xl items-start gap-3 px-4 py-3.5 sm:px-6">
-        {/* `router.back()`, not a link to the event. The two screens are one
-            flow and the browser's own history is the truthful answer to "where
-            was I" — a hard-coded href would send somebody who arrived from a
-            shared link to a page they had never seen. It asks first when there
-            is a live hold to release; see `BackControl`. */}
+        {/* Leaves the flow for the EVENT PAGE, explicitly — see the note in
+            `BackControl`, which is also where the live hold is released and
+            where the hardware back button is intercepted. */}
         <BackControl />
         <div className="flex min-w-0 flex-col">
           <h1 className="truncate text-body-lg font-semibold leading-tight text-foreground">

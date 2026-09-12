@@ -1039,6 +1039,14 @@ export function validate(draft: Draft, now = new Date()): Issue[] {
  */
 export const UNSAVED_DRAFT_BLOCKER = 'The draft has not been saved yet.';
 
+/**
+ * The poster blocker, exported by name so the MEDIA step can draw the same
+ * sentence beside the empty picker rather than writing a second one. Two
+ * copies of a requirement is how the checklist and the form end up telling an
+ * organizer different things.
+ */
+export const POSTER_BLOCKER = 'An event poster is required.';
+
 export function publishBlockers(
   draft: Draft,
   /** The caller's organisations, with the level the server gates on. Optional
@@ -1087,6 +1095,20 @@ export function publishBlockers(
     );
   }
 
+  // The server's `_require_poster`.
+  //
+  // A blocker rather than an Issue, for the same reason the tag minimum is
+  // one: `stepStatus` turns an Issue into a RED step and `completion` counts
+  // `validate(draft).length === 0`, so putting it there would paint Media red
+  // on a draft whose title has only just been typed. The poster is required
+  // to PUBLISH, not to save.
+  //
+  // The blue placeholder the cards and the hero fall back to is a
+  // BROKEN-IMAGE fallback, never a bypass: without artwork the event page's
+  // LCP element, the front-page card, the OG image and the issued ticket are
+  // all a flat rectangle.
+  if (!draft.posterUrl) blockers.push(POSTER_BLOCKER);
+
   // The server's `_require_future_start`. A draft left alone long enough
   // becomes unpublishable purely by its start time passing, and without this
   // the only notice is a failed submit.
@@ -1107,9 +1129,9 @@ export function stepStatus(
     venue: Boolean(draft.venue.trim() || draft.city.trim()),
     schedule: Boolean(draft.startsAt),
     tickets: draft.tiers.length > 0,
-    // Media is genuinely optional — the backend has no poster requirement, so
-    // marking it "done" only once an image exists would nag about a step that
-    // never blocks anything.
+    // Media is REQUIRED now (`publish_checks._require_poster`), so "done"
+    // meaning "has a poster" is the literal truth rather than a nag. This
+    // comment used to say the opposite and the code was already right.
     media: Boolean(draft.posterUrl),
     // "Done" means the organizer said something, not that they filled in every
     // field: an event with no age restriction is a complete event.
@@ -1164,6 +1186,13 @@ export function completion(draft: Draft): number {
     Boolean(draft.city.trim()),
     Boolean(draft.startsAt),
     draft.tiers.length > 0,
+    // Counted again, and the note below explaining why it was REMOVED is the
+    // history rather than the rule: `poster_url` was recommended when that was
+    // written and is a publish gate now, so a draft without one genuinely is
+    // not finished. A bar that read 100% beside a Publish button refusing for
+    // a missing poster would be the exact disagreement the rest of this
+    // function exists to end.
+    Boolean(draft.posterUrl),
     // The gate itself, and everything it does not cover.
     //
     // `validate` catches bad VALUES. It knows nothing about SAVE state, so a

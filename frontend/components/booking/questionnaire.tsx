@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Input, Textarea } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
+import type { EventQuestion } from '@/lib/api/event-content';
 import { useBooking } from './booking-context';
 
 /**
@@ -27,22 +28,43 @@ import { useBooking } from './booking-context';
  *
  * Most events ask nothing, and this renders nothing at all for them — never a
  * heading over a void.
+ *
+ * ── AND IT IS ASKED ON THE EVENT PAGE FIRST NOW ───────────────────────────
+ *
+ * The age check reads as a condition of ENTRY rather than a checkout field, so
+ * it is put before the flow starts: `components/event/pre-book-gate.tsx` opens
+ * it as a modal on Book tickets and writes the answers to the same
+ * `sessionStorage` store this screen reads. What is left here is the safety
+ * net, and it is not optional: a deep link to `/booking/{id}` skips the event
+ * page entirely, and `create_booking` refuses a required question that never
+ * got an answer. So this renders whatever is STILL unanswered — nothing at all
+ * when the gate collected it, every question when nobody passed through one.
+ *
+ * `QuestionFields` is the shared half, so the two surfaces cannot drift into
+ * asking one question two different ways.
  */
-export function Questionnaire({ showErrors }: { showErrors: boolean }) {
-  const { questions, answers, answerQuestion, unanswered } = useBooking();
-  if (!questions.length) return null;
-
-  const missing = new Set(unanswered.map((question) => question.id));
-
+/**
+ * The organiser's questions as inputs, with no opinion about where they sit.
+ *
+ * Rendered by the picker (below) and by the event page's pre-book gate. Kinds
+ * are the server's: `short_text`, `long_text`, `choice`, `boolean`, and
+ * anything unrecognised degrades to a text field rather than vanishing.
+ */
+export function QuestionFields({
+  questions,
+  answers,
+  answerQuestion,
+  missing,
+  showErrors,
+}: {
+  questions: EventQuestion[];
+  answers: Record<string, string>;
+  answerQuestion: (questionId: string, answer: string) => void;
+  /** Ids of the REQUIRED questions still unanswered. */
+  missing: Set<string>;
+  showErrors: boolean;
+}) {
   return (
-    <section className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-card">
-      <div className="flex flex-col gap-1">
-        <h3 className="text-body font-semibold text-foreground">Before you book</h3>
-        <p className="text-caption text-muted-foreground">
-          The organiser needs this to run the event.
-        </p>
-      </div>
-
       <ul className="flex flex-col gap-4">
         {questions.map((question) => {
           const value = answers[question.id] ?? '';
@@ -157,6 +179,41 @@ export function Questionnaire({ showErrors }: { showErrors: boolean }) {
           );
         })}
       </ul>
+  );
+}
+
+/**
+ * The picker's copy: whatever the gate did not already collect.
+ */
+export function Questionnaire({ showErrors }: { showErrors: boolean }) {
+  const { questions, answers, answerQuestion, unanswered } = useBooking();
+  const missing = React.useMemo(
+    () => new Set(unanswered.map((question) => question.id)),
+    [unanswered],
+  );
+  // Answered on the event page means answered. Asking again here would be the
+  // same question twice in one flow, which is what moving it was meant to end.
+  const remaining = React.useMemo(
+    () => questions.filter((question) => !(answers[question.id] ?? '').trim()),
+    [questions, answers],
+  );
+  if (!remaining.length) return null;
+
+  return (
+    <section className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-card">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-body font-semibold text-foreground">Before you book</h3>
+        <p className="text-caption text-muted-foreground">
+          The organiser needs this to run the event.
+        </p>
+      </div>
+      <QuestionFields
+        questions={remaining}
+        answers={answers}
+        answerQuestion={answerQuestion}
+        missing={missing}
+        showErrors={showErrors}
+      />
     </section>
   );
 }

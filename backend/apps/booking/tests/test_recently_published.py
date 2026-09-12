@@ -65,7 +65,11 @@ def test_an_event_published_by_its_organizer_can_be_booked(booking_service, buye
     from apps.events.models import Event
     from apps.events.taxonomy import MIN_TAGS_TO_PUBLISH
 
-    Event.objects.filter(pk=draft.id).update(tags=[f"tag-{n}" for n in range(MIN_TAGS_TO_PUBLISH)])
+    # A poster is a publish gate too, and `create_event` was given no file.
+    Event.objects.filter(pk=draft.id).update(
+        tags=[f"tag-{n}" for n in range(MIN_TAGS_TO_PUBLISH)],
+        poster_url="https://cdn.test/posters/fresh-night.jpg",
+    )
     tier = TicketTypeRepository().create(
         event_id=draft.id, name="General", price_minor=49900, quantity=50, max_per_order=10
     )

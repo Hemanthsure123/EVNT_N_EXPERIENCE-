@@ -69,6 +69,34 @@ def _require_tags(event: Event) -> None:
 
 
 # The core checks every event must pass. Modules append to this list via
+def _require_poster(event: Event) -> None:
+    """The one image every surface draws. It cannot be absent at publish.
+
+    ── WHY THIS IS A GATE AND NOT A COLUMN CONSTRAINT ─────────────────────
+
+    `Event.poster_url` is `blank=True` and stays that way: an event is created
+    by a wizard that autosaves on a keystroke, and a NOT NULL at the column
+    would refuse the first save of a title. Completeness belongs where
+    completeness is already decided — beside the tag minimum and the gallery
+    floor, which both carry the same argument in their own docstrings.
+
+    ── WHY IT IS REQUIRED AT ALL ──────────────────────────────────────────
+
+    The poster is not decoration on this platform. It is the LCP element of
+    the event page, the whole of a `PosterCard` on the front page, the shared
+    element the mobile deck flies between two boxes, the OG image a shared
+    link renders, and the artwork on the issued ticket. Without one, every one
+    of those falls back to a flat placeholder — and a placeholder is a
+    BROKEN-IMAGE fallback, not a permission to publish without artwork. An
+    organizer who never uploads one ships a listing that reads, on every
+    surface the platform has, as an event nobody finished making.
+    """
+    if not event.poster_url.strip():
+        raise EventNotPublishableError(
+            "An event poster is required. Add one in Media before publishing."
+        )
+
+
 def _require_gallery_size(event: Event) -> None:
     """A gallery is either absent or a GALLERY — never one lonely photograph.
 
@@ -108,6 +136,7 @@ _PUBLISH_CHECKS: list[PublishCheck] = [
     _require_venue,
     _require_future_start,
     _require_tags,
+    _require_poster,
     _require_gallery_size,
 ]
 
