@@ -11,6 +11,7 @@ import {
   SelectValue,
   Textarea,
 } from '@/components/ui';
+import { DayPicker } from '@/components/ui/day-picker';
 import type { SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { cn } from '@/lib/utils/cn';
 
@@ -200,15 +201,33 @@ export function DateField({
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id} value={label} />
-      <Input
-        id={id}
-        type="datetime-local"
-        value={value}
-        min={min}
-        aria-invalid={Boolean(error)}
-        aria-describedby={describedBy || undefined}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      {/* The calendar for the date and a plain time input beside it, rather
+          than one `datetime-local` — the native combined control is the least
+          consistent widget on the platform, and splitting it is also what lets
+          the date half use the design system's own picker.
+
+          The value is still ONE `YYYY-MM-DDTHH:mm` string in and out, so
+          nothing downstream learned about this. */}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <DayPicker
+          id={id}
+          value={value ? value.slice(0, 10) : null}
+          min={min ? min.slice(0, 10) : undefined}
+          onChange={(day: string) => onChange(`${day}T${value.slice(11) || '00:00'}`)}
+          placeholder="Pick a date"
+        />
+        <Input
+          id={`${id}-time`}
+          type="time"
+          value={value.slice(11)}
+          aria-label={`${label} — time`}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy || undefined}
+          onChange={(event) =>
+            onChange(`${value.slice(0, 10) || new Date().toISOString().slice(0, 10)}T${event.target.value}`)
+          }
+        />
+      </div>
       <Messages id={id} hint={hint} error={error} />
     </div>
   );
@@ -263,15 +282,23 @@ export function DateTimeField({
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id} value={label} />
-      <div className="grid grid-cols-2 gap-2">
-        <Input
+      {/* ── A REAL CALENDAR, NOT THE NATIVE DATE INPUT ───────────────────
+          `<input type="date">` renders whatever the browser feels like: a grey
+          `dd/mm/yyyy` with a system chevron on Android, something else on
+          iOS, something else again on desktop — which is what made the
+          schedule step look unfinished beside the rest of the form.
+
+          `DayPicker` is the same control the Hire form and the performer
+          profile already use, so this is the design system's calendar rather
+          than a third one. It keeps the field free of a locale guess: the
+          value is always `YYYY-MM-DD`, which is what the draft stores. */}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <DayPicker
           id={id}
-          type="date"
-          value={day}
+          value={day || null}
           min={min ? min.slice(0, 10) : undefined}
-          aria-invalid={Boolean(error)}
-          aria-describedby={describedBy || undefined}
-          onChange={(event) => onChange({ day: event.target.value, time })}
+          onChange={(nextDay: string) => onChange({ day: nextDay, time })}
+          placeholder="Pick a date"
         />
         <Input
           id={`${id}-time`}

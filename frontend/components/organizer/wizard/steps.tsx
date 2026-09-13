@@ -32,6 +32,7 @@ import {
   TimeOnlyField,
   FieldFrame,
   FieldGroup,
+  AccordionCard,
   Section,
   SelectField,
   StepHeader,
@@ -95,6 +96,7 @@ export function BasicsStep({
       {isDraftUntouched(draft) ? <StartFromEvent /> : null}
 
       {organizations.length > 1 ? (
+        <AccordionCard title="Organisation">
         <SelectField
           id="event-organization"
           label="Organisation"
@@ -113,17 +115,33 @@ export function BasicsStep({
               : 'It receives the payouts and its verification is what lets the event go live.'
           }
         />
+        </AccordionCard>
       ) : null}
 
-      <TextField
-        id="event-title"
-        label="Event title"
-        value={draft.title}
-        onChange={(title) => update({ title })}
-        max={TITLE_MAX}
-        error={errorFor(issues, 'title')}
-        autoFocus
-      />
+      {/* ── EVERY FIELD BEHIND ITS OWN HEADING ──────────────────────────
+          At the owner's instruction: nothing on this step is editable until
+          its card is opened. The mitigation that makes it workable is the
+          `count` — a collapsed card shows the value it holds, so the step
+          still reads as a summary of the event rather than a row of closed
+          doors with no way to tell which are filled.
+
+          `autoFocus` is gone with the wrapper. A field inside a closed
+          `<details>` cannot take focus, and asking for it would either fight
+          the collapse or silently do nothing. */}
+      <AccordionCard
+        title="Event title"
+        count={draft.title.trim() ? draft.title.trim().slice(0, 28) : 'Required'}
+        invalid={Boolean(errorFor(issues, 'title'))}
+      >
+        <TextField
+          id="event-title"
+          label="Event title"
+          value={draft.title}
+          onChange={(title) => update({ title })}
+          max={TITLE_MAX}
+          error={errorFor(issues, 'title')}
+        />
+      </AccordionCard>
 
       {/* `softMax` and not `max`, and the difference matters here more than
           anywhere else on the form: the server's `description` field has no
@@ -131,14 +149,19 @@ export function BasicsStep({
           exist between the two. Enforcing it would block or truncate a
           description the API accepts and the organiser can see on screen. It
           warns; `overHint` is what it says. */}
-      <TextArea
-        id="event-description"
-        label="Description"
-        value={draft.description}
-        onChange={(description) => update({ description })}
-        softMax={DESCRIPTION_SOFT_MAX}
-        overHint={`Past ${DESCRIPTION_SOFT_MAX} characters people stop reading — but this saves and publishes exactly as written.`}
-      />
+      <AccordionCard
+        title="Description"
+        count={draft.description.trim() ? `${draft.description.trim().length}` : undefined}
+      >
+        <TextArea
+          id="event-description"
+          label="Description"
+          value={draft.description}
+          onChange={(description) => update({ description })}
+          softMax={DESCRIPTION_SOFT_MAX}
+          overHint={`Past ${DESCRIPTION_SOFT_MAX} characters people stop reading — but this saves and publishes exactly as written.`}
+        />
+      </AccordionCard>
 
       <Section
         title="Category"

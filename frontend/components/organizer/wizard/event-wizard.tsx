@@ -18,6 +18,7 @@ import { Button } from '@/components/ui';
 import { fetchOwnerSlots } from '@/lib/api/event-content';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { useOrganizations } from '@/lib/identity/scope';
+import { useToast } from '@/components/ui/toast';
 import { useInvalidateOrganizer } from '@/lib/organizer/queries';
 import { describePublishFailure } from '@/lib/organizer/publish-error';
 import { STEPS, completion, stepStatus, validate, type StepId } from '@/lib/organizer/wizard/model';
@@ -98,6 +99,7 @@ export function EventWizard({
   // no extra request — and, more to the point, it cannot disagree with them
   // about which organisations exist.
   const organizationsQuery = useOrganizations();
+  const { toast } = useToast();
   const orgs = React.useMemo(
     () => organizationsQuery.data?.data ?? [],
     [organizationsQuery.data],
@@ -314,6 +316,45 @@ export function EventWizard({
   const next = STEPS[index + 1];
 
   /**
+   * FORWARD, AND WHAT IS WRONG WITH THIS STEP IF ANYTHING IS.
+   *
+   * ── WHY IT STILL MOVES ───────────────────────────────────────────────
+   *
+   * The brief asked for validation on Continue as a toast instead of inline
+   * red text. It does NOT block the navigation, and that is deliberate: the
+   * wizard is local-first and every step autosaves, so somebody who wants to
+   * fill in tickets before the venue is doing something reasonable. Refusing
+   * to move would turn a form you can fill in any order into a queue.
+   *
+   * So the toast REPORTS rather than refuses. Publish is still the gate —
+   * `publishBlockers` is what actually stops a half-finished event going out,
+   * and Review lists every one of them.
+   *
+   * One toast, not one per problem: four stacked toasts for four empty fields
+   * is a wall that has to be dismissed four times.
+   */
+  const goForward = React.useCallback(
+    (target: StepId) => {
+      const trouble = issues.filter((issue) => issue.step === step);
+      if (trouble.length) {
+        toast({
+          variant: 'warning',
+          title: `${STEPS[index]?.label ?? 'This step'} needs a little more`,
+          description: trouble
+            .slice(0, 3)
+            .map((issue) => issue.message)
+            .join(' · '),
+        });
+      }
+      setStep(target);
+    },
+    // `issues` and `step` are what decide the message; `index` is derived from
+    // `step`. Listed rather than silenced, so a stale closure here would have
+    // to be argued for rather than slipped past a disabled rule.
+    [issues, step, index, setStep, toast],
+  );
+
+  /**
    * Keyboard shortcuts.
    *
    * ⌘Z / ⇧⌘Z  undo, redo — skipped while a text field has focus, so the
@@ -349,12 +390,12 @@ export function EventWizard({
       }
       if (event.altKey && event.key === 'ArrowRight' && next) {
         event.preventDefault();
-        setStep(next.id);
+        goForward(next.id);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [wizard, previous, next]);
+  }, [wizard, previous, next, goForward]);
 
   /**
    * The close guard.
@@ -610,7 +651,7 @@ export function EventWizard({
                 // scrolling to the end of a very long form. Exactly one of the
                 // two is rendered at any width — see `action-bar.tsx`.
                 <Button
-                  onClick={() => setStep(next.id)}
+                  onClick={() => goForward(next.id)}
                   rightIcon={<ArrowRight className="size-4" aria-hidden />}
                   className="hidden sm:inline-flex"
                 >
@@ -641,7 +682,7 @@ export function EventWizard({
               onSaveDraft={() => void wizard.saveNow()}
               onPreview={openPreview}
               previewOpen={previewOpen}
-              forward={next ? { label: next.label, onClick: () => setStep(next.id) } : null}
+              forward={next ? { label: next.label, onClick: () => goForward(next.id) } : null}
             />
           </div>
         </main>

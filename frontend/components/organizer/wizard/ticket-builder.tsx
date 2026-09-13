@@ -370,15 +370,13 @@ export function TicketBuilder({
                     onChange={(groupBands) => patch(tier.key, { groupBands })}
                   />
 
-                  {problems.length ? (
-                    <ul className="mt-stack-lg flex flex-col gap-1" role="alert">
-                      {problems.map((problem) => (
-                        <li key={problem} className="text-caption text-muted-foreground">
-                          {problem}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
+                  {/* The inline red list is gone at the owner's instruction —
+                      the step's Continue raises a toast instead, and Review
+                      lists every blocker before publish. What stays is the
+                      tier card's own `invalid` outline, because a problem
+                      nobody can SEE while scrolling a list of six tiers is a
+                      problem they have to hunt for after the toast fades. */}
+                  {null}
 
                   {/* A footnote here said description and perks were not
                       stored — which was true when it was written and is now
