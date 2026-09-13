@@ -568,7 +568,17 @@ export function restoreDraft(
           // `tier.groupBands.map(...)` on `undefined` is a white screen over
           // somebody's half-written event — the same reason `phases` is
           // normalised beside it.
-          groupBands: Array.isArray(tier.groupBands) ? tier.groupBands : [],
+          //
+          // EVERY ROW IS NORMALISED TOO, not just the array. That distinction
+          // is the whole bug: when the band gained `totalPrice` and
+          // `description`, this line still returned the stored rows untouched,
+          // so a draft saved by the previous build arrived as
+          // `{key, minQuantity, price}` and the first `band.description.trim()`
+          // threw into the error boundary — "This screen didn't load", on the
+          // Create event page, for anybody with a draft in progress.
+          groupBands: Array.isArray(tier.groupBands)
+            ? tier.groupBands.map(normaliseBand)
+            : [],
         }))
       : [],
     // Same reason as `tiers`, and it is NOT covered by the spread above: an
@@ -580,6 +590,44 @@ export function restoreDraft(
     highlightsExcluded: asStrings(stored.highlightsExcluded),
     guidelines: asStrings(stored.guidelines),
     tags: asStrings(stored.tags),
+  };
+}
+
+/**
+ * One stored group band, brought up to the current shape.
+ *
+ * ── IT MIGRATES, IT DOES NOT BLANK ───────────────────────────────────────
+ *
+ * The previous shape held a PER-TICKET `price`; this one holds the group
+ * TOTAL. Defaulting `totalPrice` to `''` would have been safe and would have
+ * silently emptied a price the organizer had already typed, which is the
+ * quieter half of the same bug. The total is the per-ticket figure multiplied
+ * by the group size — the exact inverse of what `bandUnitPriceMinor` does on
+ * the way out, so a draft saved before this change reopens showing the same
+ * money.
+ *
+ * Everything is read defensively because the source is `localStorage`: it can
+ * hold anything a previous build, a hand edit or a half-finished write left
+ * there, and this runs while drawing the page.
+ */
+function normaliseBand(band: Partial<DraftGroupBand> & { price?: unknown }): DraftGroupBand {
+  const minQuantity = typeof band.minQuantity === 'string' ? band.minQuantity : '';
+
+  let totalPrice = typeof band.totalPrice === 'string' ? band.totalPrice : '';
+  if (!totalPrice && typeof band.price === 'string' && band.price !== '') {
+    const people = Number(minQuantity);
+    const perTicket = Number(band.price);
+    totalPrice =
+      Number.isFinite(people) && people >= 2 && Number.isFinite(perTicket)
+        ? String(perTicket * people)
+        : band.price;
+  }
+
+  return {
+    key: typeof band.key === 'string' && band.key ? band.key : `band-${minQuantity || 'x'}`,
+    minQuantity,
+    totalPrice,
+    description: typeof band.description === 'string' ? band.description : '',
   };
 }
 
@@ -784,7 +832,7 @@ export function groupBandIssues(tier: DraftTier): string[] {
     // one — "Family" is what they will look for on the form, where
     // "4+ tickets" makes them count rows.
     const label =
-      band.description.trim() ||
+      (band.description ?? '').trim() ||
       (band.minQuantity ? `${band.minQuantity} people` : `Group price ${index + 1}`);
     const minimum = Number(band.minQuantity);
     // Compared as the PER-UNIT figure the server will store and charge, not
@@ -1797,7 +1845,10 @@ function toGroupBandInput(band: DraftGroupBand): {
   return {
     min_quantity: Number(band.minQuantity) || 0,
     price_minor: bandUnitPriceMinor(band),
-    description: band.description.trim(),
+    // `?? ''` on the SAVE path too, not only where it is drawn. `restoreDraft`
+    // normalises every stored row now, but this is the write that reaches the
+    // money path and it costs nothing to make it independent of that.
+    description: (band.description ?? '').trim(),
   };
 }
 

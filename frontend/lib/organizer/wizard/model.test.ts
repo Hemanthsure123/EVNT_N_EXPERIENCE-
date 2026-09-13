@@ -1109,6 +1109,50 @@ describe('group prices', () => {
     description: '',
   });
 
+  describe('a band stored by the PREVIOUS build', () => {
+    // THE CRASH. When the band gained `totalPrice` and `description`,
+    // `restoreDraft` normalised the ARRAY and left the rows untouched — so a
+    // draft saved by the previous build arrived as `{key, minQuantity, price}`
+    // and the first `band.description.trim()` threw into the error boundary.
+    // "This screen didn't load", on Create event, for anybody mid-draft.
+    const legacy = () =>
+      restoreDraft(
+        {
+          organizationId: 'org-1',
+          tiers: [
+            {
+              ...newTier(0),
+              price: '500',
+              // The old shape: a PER-TICKET price, no total, no description.
+              groupBands: [{ key: 'b1', minQuantity: '4', price: '400' }],
+            },
+          ],
+        } as never,
+        ['org-1'],
+      );
+
+    it('does not throw while being read', () => {
+      const draft = legacy();
+      expect(() => groupBandIssues(draft.tiers[0])).not.toThrow();
+    });
+
+    it('fills the fields the row never had', () => {
+      const band = legacy().tiers[0].groupBands[0];
+      expect(band.description).toBe('');
+      expect(typeof band.totalPrice).toBe('string');
+    });
+
+    it('MIGRATES the price rather than blanking it', () => {
+      // Defaulting `totalPrice` to '' would have been safe and would have
+      // silently emptied money the organizer had already typed — the quieter
+      // half of the same bug. 4 × ₹400 is the ₹1,600 total the new field means.
+      const band = legacy().tiers[0].groupBands[0];
+      expect(band.totalPrice).toBe('1600');
+      // And it round-trips to the per-ticket price the server always stored.
+      expect(bandUnitPriceMinor(band)).toBe(40_000);
+    });
+  });
+
   describe('the group total, divided into what is charged', () => {
     it('turns a group total into a per-ticket price', () => {
       // The organizer types "₹1,600 for 4". The money path stores per UNIT,

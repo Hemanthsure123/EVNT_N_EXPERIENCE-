@@ -490,7 +490,7 @@ function GroupBandEditor({
                   {/* The GROUP SIZE, not the row number: unlike a phase, a
                       band's identity is the threshold itself, and it is what
                       the buyer sees on the picker. */}
-                  {band.description.trim() ||
+                  {(band.description ?? '').trim() ||
                     (band.minQuantity
                       ? `${band.minQuantity} people`
                       : `Group price ${index + 1}`)}
@@ -512,7 +512,7 @@ function GroupBandEditor({
                 <Field
                   label="People"
                   id={`${band.key}-min`}
-                  value={band.minQuantity}
+                  value={band.minQuantity ?? ''}
                   onChange={(value) => update(band.key, { minQuantity: value })}
                   type="number"
                   min="2"
@@ -520,7 +520,7 @@ function GroupBandEditor({
                 <Field
                   label="Total price (₹)"
                   id={`${band.key}-price`}
-                  value={band.totalPrice}
+                  value={band.totalPrice ?? ''}
                   onChange={(value) => update(band.key, { totalPrice: value })}
                   type="number"
                   min="1"
@@ -528,7 +528,7 @@ function GroupBandEditor({
                 <Field
                   label="Description"
                   id={`${band.key}-description`}
-                  value={band.description}
+                  value={band.description ?? ''}
                   onChange={(value) => update(band.key, { description: value })}
                   placeholder="e.g., Couples, Single, Family"
                 />
