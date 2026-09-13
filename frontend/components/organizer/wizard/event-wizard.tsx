@@ -21,7 +21,31 @@ import { useOrganizations } from '@/lib/identity/scope';
 import { useToast } from '@/components/ui/toast';
 import { useInvalidateOrganizer } from '@/lib/organizer/queries';
 import { describePublishFailure } from '@/lib/organizer/publish-error';
-import { STEPS, completion, stepStatus, validate, type StepId } from '@/lib/organizer/wizard/model';
+import { completion, stepStatus, validate, type StepId } from '@/lib/organizer/wizard/model';
+import {
+  PHASES,
+  memberAnchor,
+  phaseAt,
+  phaseIndex,
+  phaseOf,
+  phaseStatus,
+  type PhaseId,
+  type PhaseMember,
+} from '@/lib/organizer/wizard/phases';
+import { CouponsStep } from './coupons-step';
+
+/**
+ * The step a phase OPENS on.
+ *
+ * `step` stays a `StepId` because everything downstream is keyed by one, so
+ * moving to a phase means moving to its first validating member. `coupons` is
+ * skipped: it is not a `StepId`, and a phase that began there would put the
+ * optional thing at the top of a form whose required fields are below it.
+ */
+function firstMemberStep(phase: { members: readonly PhaseMember[] }): StepId {
+  const first = phase.members.find((member): member is StepId => member !== 'coupons');
+  return first ?? 'basics';
+}
 import { useWizard, type SaveState } from '@/lib/organizer/wizard/use-wizard';
 import { cn } from '@/lib/utils/cn';
 import { Skeleton } from '../primitives';
@@ -311,9 +335,16 @@ export function EventWizard({
     return map;
   }, [issues]);
 
-  const index = STEPS.findIndex((candidate) => candidate.id === step);
-  const previous = STEPS[index - 1];
-  const next = STEPS[index + 1];
+  // THE STEP STILL DECIDES EVERYTHING; the PHASE is what is navigated.
+  //
+  // `step` is unchanged — it is the key of `Issue.step`, of `stepStatus`, and
+  // of Review's jump. What changed is that the tracker, Next and Previous work
+  // in phases, and the screen renders every member of the current one stacked.
+  const phase = phaseOf(step);
+  const index = phaseIndex(phase);
+  const current = phaseAt(phase);
+  const previous = PHASES[index - 1];
+  const next = PHASES[index + 1];
 
   /**
    * FORWARD, AND WHAT IS WRONG WITH THIS STEP IF ANYTHING IS.
@@ -335,11 +366,16 @@ export function EventWizard({
    */
   const goForward = React.useCallback(
     (target: StepId) => {
-      const trouble = issues.filter((issue) => issue.step === step);
+      // EVERY member of the phase being left, not just the one `step` happens
+      // to name. A phase renders five forms at once; reporting only the
+      // problems of whichever one was last jumped to would stay silent about
+      // four of them and then surface all four on Review.
+      const scope = new Set<string>(current.members);
+      const trouble = issues.filter((issue) => scope.has(issue.step));
       if (trouble.length) {
         toast({
           variant: 'warning',
-          title: `${STEPS[index]?.label ?? 'This step'} needs a little more`,
+          title: `${current.label} needs a little more`,
           description: trouble
             .slice(0, 3)
             .map((issue) => issue.message)
@@ -348,11 +384,96 @@ export function EventWizard({
       }
       setStep(target);
     },
-    // `issues` and `step` are what decide the message; `index` is derived from
-    // `step`. Listed rather than silenced, so a stale closure here would have
-    // to be argued for rather than slipped past a disabled rule.
-    [issues, step, index, setStep, toast],
+    [issues, current, setStep, toast],
   );
+
+  /**
+   * ONE MEMBER OF THE CURRENT PHASE.
+   *
+   * A switch rather than a lookup table, because every branch takes a
+   * different set of props and a table would either widen them all to one
+   * union or lose the compiler's check that Media gets `posterFile` and
+   * Tickets gets `sessions`.
+   *
+   * This is the SAME eight components the eight-step wizard rendered. Nothing
+   * was rewritten to collapse the steps — they were grouped.
+   */
+  const renderMember = (member: PhaseMember) => {
+    switch (member) {
+      case 'basics':
+        return (
+          <BasicsStep draft={draft} update={update} issues={issues} organizations={orgs} />
+        );
+      case 'venue':
+        return <VenueStep draft={draft} update={update} issues={issues} />;
+      case 'media':
+        return (
+          <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} save={save} />
+        );
+      case 'details':
+        return <DetailsStep draft={draft} update={update} issues={issues} />;
+      case 'coupons':
+        return <CouponsStep draft={draft} save={save} />;
+      case 'schedule':
+        return <ScheduleStep draft={draft} update={update} issues={issues} save={save} />;
+      case 'tickets':
+        return (
+          <div className="flex flex-col gap-block">
+            <header className="flex flex-col gap-1.5">
+              <h2 className="text-h3">Tickets</h2>
+            </header>
+            <TicketBuilder
+              tiers={draft.tiers}
+              onChange={setTiers}
+              issues={tierIssues}
+              sessions={sessions}
+            />
+          </div>
+        );
+      case 'seo':
+        return <SeoStep draft={draft} update={update} issues={issues} />;
+      case 'review':
+      default:
+        return (
+          <ReviewStep
+            draft={draft}
+            issues={issues}
+            onJump={jumpToStep}
+            onPublish={() => void publish()}
+            publishing={publishing}
+            publishError={publishError}
+            organizationName={orgs.find((org) => org.id === draft.organizationId)?.name ?? ''}
+            organizations={orgs}
+            saveState={wizard.state}
+            saveError={wizard.error}
+            onSaveNow={() => void wizard.saveNow()}
+            eventStatus={eventQuery.data?.status}
+          />
+        );
+    }
+  };
+
+  /**
+   * REVIEW'S "TAKE ME TO THE PROBLEM", ACROSS A PHASE BOUNDARY.
+   *
+   * Setting the step switches the phase (`phaseOf` decides which), but the
+   * form being pointed at is one of five on that screen — so the scroll is
+   * what actually finishes the job. It runs on the NEXT frame because the
+   * target section does not exist until the new phase has rendered.
+   *
+   * `smooth` unless the reader asked for less motion: a scroll they did not
+   * initiate, jumping a screen's height, is exactly the class of movement
+   * `prefers-reduced-motion` is about.
+   */
+  const jumpToStep = React.useCallback((target: StepId) => {
+    setStep(target);
+    window.requestAnimationFrame(() => {
+      const node = document.getElementById(memberAnchor(target));
+      if (!node) return;
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      node.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+    });
+  }, [setStep]);
 
   /**
    * Keyboard shortcuts.
@@ -385,12 +506,12 @@ export function EventWizard({
       }
       if (event.altKey && event.key === 'ArrowLeft' && previous) {
         event.preventDefault();
-        setStep(previous.id);
+        setStep(firstMemberStep(previous));
         return;
       }
       if (event.altKey && event.key === 'ArrowRight' && next) {
         event.preventDefault();
-        goForward(next.id);
+        goForward(firstMemberStep(next));
       }
     };
     window.addEventListener('keydown', onKey);
@@ -578,55 +699,50 @@ export function EventWizard({
       </div>
 
       <div className="grid gap-block lg:grid-cols-[13rem_minmax(0,1fr)] xl:grid-cols-[13rem_minmax(0,1fr)_21rem]">
-        <StepRail current={step} status={status} percent={percent} onSelect={setStep} />
+        <StepRail current={phase} status={status} percent={percent} onSelect={setStep} />
 
         <main className="min-w-0">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-block-lg">
-            {step === 'basics' ? (
-              <BasicsStep
-                draft={draft}
-                update={update}
-                issues={issues}
-                organizations={orgs}
-              />
-            ) : step === 'venue' ? (
-              <VenueStep draft={draft} update={update} issues={issues} />
-            ) : step === 'schedule' ? (
-              <ScheduleStep draft={draft} update={update} issues={issues} save={save} />
-            ) : step === 'tickets' ? (
-              <div className="flex flex-col gap-block">
-                <header className="flex flex-col gap-1.5">
-                  <h1 className="text-h3">Tickets</h1>
-                </header>
-                <TicketBuilder
-                  tiers={draft.tiers}
-                  onChange={setTiers}
-                  issues={tierIssues}
-                  sessions={sessions}
-                />
-              </div>
-            ) : step === 'media' ? (
-              <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} save={save} />
-            ) : step === 'details' ? (
-              <DetailsStep draft={draft} update={update} issues={issues} />
-            ) : step === 'seo' ? (
-              <SeoStep draft={draft} update={update} issues={issues} />
-            ) : (
-              <ReviewStep
-                draft={draft}
-                issues={issues}
-                onJump={setStep}
-                onPublish={() => void publish()}
-                publishing={publishing}
-                publishError={publishError}
-                organizationName={orgs.find((org) => org.id === draft.organizationId)?.name ?? ''}
-                organizations={orgs}
-                saveState={wizard.state}
-                saveError={wizard.error}
-                onSaveNow={() => void wizard.saveNow()}
-                eventStatus={eventQuery.data?.status}
-              />
-            )}
+            {/* ── THE PHASE, AS A STACK ────────────────────────────────────
+                Every member of the current phase renders at once, in the order
+                `PHASES` lists them, each already a set of closed-by-default
+                accordions. So Step 1 is five headings and no open fields, not
+                five screens — which is the whole point of collapsing eight
+                steps into three.
+
+                `key={phase}` on the stack is what makes moving between phases
+                a real unmount: without it React reconciles five `<section>`s
+                into three and keeps the open/closed state of whichever
+                accordions happen to line up, so Schedule would open already
+                expanded because Basics was. The key also restarts the
+                transition, which is what the fade is attached to. */}
+            {/* THE PAGE'S ONE `h1`. Each form below carries an `h2`, so the
+                outline reads "Core & Media > Basics, Venue, Media…" rather
+                than five sibling page titles. On Review the component's own
+                heading says the same thing, so this one is `sr-only` there to
+                avoid printing it twice. */}
+            <h1
+              className={cn(
+                'text-h3',
+                current.id === 'review' && 'sr-only',
+              )}
+            >
+              {current.label}
+            </h1>
+
+            <div
+              key={phase}
+              className="flex animate-in flex-col gap-block-lg fade-in-0 slide-in-from-bottom-1 duration-base motion-reduce:animate-none"
+            >
+              {current.members.map((member) => (
+                // A landmark per member, so Review's checklist can scroll to
+                // the exact form rather than to the top of a phase with five
+                // in it.
+                <section key={member} id={memberAnchor(member)} className="scroll-mt-20">
+                  {renderMember(member)}
+                </section>
+              ))}
+            </div>
 
             {/* The step footer. `Next` is the ONE filled pill on the screen and
                 it never moves, so the forward path is a fixed target rather
@@ -637,7 +753,7 @@ export function EventWizard({
               {previous ? (
                 <Button
                   variant="ghost"
-                  onClick={() => setStep(previous.id)}
+                  onClick={() => setStep(firstMemberStep(previous))}
                   leftIcon={<ArrowLeft className="size-4" aria-hidden />}
                 >
                   {previous.label}
@@ -651,7 +767,7 @@ export function EventWizard({
                 // scrolling to the end of a very long form. Exactly one of the
                 // two is rendered at any width — see `action-bar.tsx`.
                 <Button
-                  onClick={() => goForward(next.id)}
+                  onClick={() => goForward(firstMemberStep(next))}
                   rightIcon={<ArrowRight className="size-4" aria-hidden />}
                   className="hidden sm:inline-flex"
                 >
@@ -682,7 +798,11 @@ export function EventWizard({
               onSaveDraft={() => void wizard.saveNow()}
               onPreview={openPreview}
               previewOpen={previewOpen}
-              forward={next ? { label: next.label, onClick: () => goForward(next.id) } : null}
+              forward={
+                next
+                  ? { label: next.label, onClick: () => goForward(firstMemberStep(next)) }
+                  : null
+              }
             />
           </div>
         </main>
@@ -717,41 +837,66 @@ export function EventWizard({
   );
 }
 
+/**
+ * THE THREE-PHASE TRACKER.
+ *
+ * Eight entries became three. The eight were a horizontal scroller on a phone
+ * — a progress indicator you have to scroll is one that has stopped telling
+ * you where you are — and at any width they presented eight forms as eight
+ * journeys.
+ *
+ * ── THE LINE IS CONTINUOUS, AND IT IS DRAWN PER ITEM ────────────────────
+ *
+ * Each phase draws the segment LEADING INTO it, so the rule always ends at a
+ * dot rather than running off the right-hand edge, and the dot's own opaque
+ * fill is what covers the join. One absolute rule behind the whole row would
+ * have to know where the row starts and ends; three stubs do not.
+ *
+ * The segment is violet once the phase behind it has been REACHED, which is
+ * what makes the line read as travelled distance rather than as decoration.
+ *
+ * ── EVERY PHASE IS PRESSABLE, INCLUDING THE ONES AHEAD ──────────────────
+ *
+ * The wizard is local-first and every field autosaves, so filling in tickets
+ * before the venue is a reasonable thing to do; a tracker that refused to move
+ * forward would turn a form you can complete in any order into a queue.
+ * Publish is the gate, and Review lists every blocker.
+ *
+ * ── VIOLET FOR THE ACTIVE PHASE ─────────────────────────────────────────
+ *
+ * The same `--primary` the footer bar's active tab and this dashboard's filter
+ * pills use. The butter `--nav-active` that used to fill the active row here
+ * is the attendee site's mark now: one product, one colour for "you are here".
+ */
 function StepRail({
   current,
   status,
   percent,
   onSelect,
 }: {
-  current: StepId;
+  current: PhaseId;
   status: Record<StepId, 'done' | 'todo' | 'error'>;
   percent: number;
   onSelect: (step: StepId) => void;
 }) {
+  const activeIndex = phaseIndex(current);
+
   return (
     // ── STICKY, LIKE THE PREVIEW OPPOSITE IT ──────────────────────────────
     //
-    // The rail scrolled away with the form while the preview on the other side
-    // stayed put, so on the long steps — tickets, details — an organizer lost
-    // both the step list AND the progress figure exactly when the page was
-    // long enough to need them, and had to scroll back up to move on.
-    //
     // `self-start` is load-bearing: a grid item stretches to the row height by
-    // default, which makes a sticky child have nowhere to stick because its
+    // default, which leaves a sticky child nowhere to stick because its
     // container is already as tall as the content beside it. Only from `lg`,
     // where the rail is a column; below that it is a horizontal strip in flow
     // and pinning it would eat a phone's viewport.
-    <nav
-      aria-label="Wizard steps"
-      className="min-w-0 lg:sticky lg:top-20 lg:self-start"
-    >
+    <nav aria-label="Wizard steps" className="min-w-0 lg:sticky lg:top-20 lg:self-start">
       <div className="mb-stack hidden flex-col gap-1.5 lg:flex">
         <div className="flex items-baseline justify-between">
           <span className="text-caption text-muted-foreground">Progress</span>
           <span className="text-caption tabular-nums text-muted-foreground">{percent}%</span>
         </div>
         {/* Violet survives here BECAUSE it is not a button: a completion bar is
-            wayfinding, which is exactly the role `--primary` kept. */}
+            wayfinding, which is exactly the role `--primary` keeps. */}
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div
             className="h-full rounded-full bg-primary transition-[width] duration-base ease-out motion-reduce:transition-none"
@@ -765,68 +910,56 @@ function StepRail({
         </div>
       </div>
 
-      {/* ── THE CONNECTED LINE STEPPER ──────────────────────────────────
-          Eight steps used to sit in an `overflow-x-auto` chip row, so on a
-          phone half of them were off screen behind a horizontal scrollbar —
-          a progress indicator you have to scroll is one that stops telling
-          you where you are.
+      <ol className="flex items-start gap-x-0 lg:flex-col lg:gap-y-1">
+        {PHASES.map((phase, position) => {
+          const state = phaseStatus(phase, status);
+          const active = current === phase.id;
+          const reached = position <= activeIndex;
 
-          It WRAPS now instead of scrolling, and the connector is drawn per
-          row rather than as one line behind everything: a single absolute
-          rule would run through the gap between wrapped rows and out the
-          right-hand edge. Each item draws its own leading segment and the
-          first item of each visual row hides it with `[&:first-child>span]`
-          — which cannot know about wrapping, so the segment is drawn UNDER
-          the dot and clipped by the dot's own opaque fill instead.
-
-          Vertical from `lg`, where there is room for the hint line. */}
-      <ol className="flex flex-wrap items-start gap-x-0 gap-y-2 lg:flex-col lg:flex-nowrap lg:gap-y-1">
-        {STEPS.map((entry, position) => {
-          const state = status[entry.id];
-          const active = current === entry.id;
-          const reached = position <= STEPS.findIndex((step) => step.id === current);
           return (
             <li
-              key={entry.id}
-              className="relative flex min-w-0 flex-1 basis-1/4 items-center lg:basis-auto lg:flex-none lg:flex-initial"
+              key={phase.id}
+              className="relative flex min-w-0 flex-1 items-center lg:flex-none lg:flex-initial"
             >
-              {/* The connector into this step. `aria-hidden` scenery, and it
-                  sits behind the dot so a wrapped row's leading stub is
-                  covered rather than needing to know it wrapped. */}
+              {/* The connector INTO this phase. `aria-hidden` scenery, sitting
+                  behind the dot so the join is covered by the dot's own fill. */}
               {position > 0 ? (
                 <span
                   aria-hidden
                   className={cn(
                     'absolute left-0 top-[1.125rem] -z-10 h-px w-full lg:hidden',
-                    reached ? 'bg-primary/40' : 'bg-border',
+                    'transition-colors duration-slow ease-out motion-reduce:transition-none',
+                    reached ? 'bg-primary' : 'bg-border',
                   )}
                 />
               ) : null}
+
               <button
                 type="button"
-                onClick={() => onSelect(entry.id)}
+                onClick={() => onSelect(firstMemberStep(phase))}
                 aria-current={active ? 'step' : undefined}
                 className={cn(
                   'group/step flex min-w-0 flex-1 flex-col items-center gap-1.5 rounded-xl px-1 py-1.5',
-                  'transition-colors duration-fast motion-reduce:transition-none',
+                  'transition-colors duration-slow ease-out motion-reduce:transition-none',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   'lg:min-h-control lg:flex-row lg:items-center lg:gap-2.5 lg:px-3 lg:py-2 lg:text-left',
                   active
-                    ? 'lg:bg-nav-active lg:text-nav-active-foreground'
+                    ? 'lg:bg-primary lg:text-primary-foreground'
                     : 'text-muted-foreground lg:hover:bg-muted lg:hover:text-foreground',
                 )}
               >
                 <span
                   className={cn(
                     'inline-flex size-7 shrink-0 items-center justify-center rounded-full text-caption tabular-nums lg:size-5',
-                    // OPAQUE on purpose: it is what hides the connector stub
-                    // at the start of a wrapped row.
+                    'transition-colors duration-slow ease-out motion-reduce:transition-none',
+                    // OPAQUE on purpose: it is what covers the connector where
+                    // the line meets the dot.
                     state === 'error'
                       ? 'bg-destructive text-destructive-foreground'
                       : state === 'done'
                         ? 'bg-success text-success-foreground'
                         : active
-                          ? 'bg-primary text-primary-foreground'
+                          ? 'bg-primary text-primary-foreground lg:bg-primary-foreground lg:text-primary'
                           : 'border border-border bg-surface text-muted-foreground',
                   )}
                   aria-hidden
@@ -839,22 +972,23 @@ function StepRail({
                     position + 1
                   )}
                 </span>
+
                 <span className="min-w-0 lg:flex-1">
                   <span
                     className={cn(
                       'block truncate text-caption lg:text-label',
-                      active ? 'font-semibold text-foreground lg:font-medium' : '',
+                      active ? 'font-semibold text-primary lg:font-medium lg:text-inherit' : '',
                     )}
                   >
-                    {entry.label}
+                    {phase.label}
                   </span>
                   <span
                     className={cn(
                       'hidden truncate text-caption lg:block',
-                      active ? 'text-nav-active-foreground/75' : 'text-foreground-subtle',
+                      active ? 'text-primary-foreground/75' : 'text-foreground-subtle',
                     )}
                   >
-                    {entry.hint}
+                    {phase.hint}
                   </span>
                 </span>
               </button>

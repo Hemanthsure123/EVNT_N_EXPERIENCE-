@@ -178,7 +178,7 @@ export function ReviewStep({
           chrome. */}
       <header className="flex flex-col items-start gap-1.5">
         <SpotTicketIssued className="size-20" />
-        <h1 className="text-h3">{submittable ? 'Review and publish' : 'Review'}</h1>
+        <h2 className="text-h3">{submittable ? 'Review and publish' : 'Review'}</h2>
         <p className="max-w-prose text-body-sm text-muted-foreground">
           {submittable
             ? 'You can keep editing after it is published.'

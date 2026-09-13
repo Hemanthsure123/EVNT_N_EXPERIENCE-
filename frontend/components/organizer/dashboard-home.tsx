@@ -135,12 +135,20 @@ export function DashboardHome() {
  * read, so a section added later appears here without anybody remembering to.
  * The five already on the footer bar are filtered out rather than repeated.
  */
+/**
+ * ANALYTICS IS NOT ON THE BAR ANY MORE, AND THIS SET IS WHY THAT IS SAFE.
+ *
+ * The bar's fifth tab used to be `/dashboard/analytics`; it is `/dashboard`
+ * now, because Home was moved to the public landing page and something had to
+ * keep the organizer's own landing — and this grid with it — reachable. Taking
+ * analytics off the bar without taking it OUT of this set would have left it
+ * in neither place: routable, and linked from nothing on a phone.
+ */
 const ON_THE_FOOTER_BAR = new Set([
   '/dashboard',
   '/dashboard/events',
   '/dashboard/events/new',
   '/dashboard/check-in',
-  '/dashboard/analytics',
 ]);
 
 function AllSections() {

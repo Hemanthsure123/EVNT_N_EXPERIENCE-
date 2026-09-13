@@ -20,6 +20,15 @@ import { describe, expect, it, vi } from 'vitest';
  *
  * Hence this renders the bar DIRECTLY, with a populated bell, which is the
  * exact condition that threw.
+ *
+ * ── WHAT THE BAR IS NOW ───────────────────────────────────────────────────
+ *
+ * The breadcrumb, the search button and the filled "Create event" pill are all
+ * gone: the brand lockup on the left, the bell and the account menu on the
+ * right. The `asChild` Button that caused the outage above went with Create,
+ * so the Slot trap is no longer reachable HERE — but the property that test
+ * was really pinning (the signed-in bar renders, with data in the bell) is
+ * what still matters, and it is what is asserted below.
  */
 
 const useAttention = vi.fn();
@@ -37,9 +46,8 @@ vi.mock('next/navigation', () => ({
 import { TopBar } from './dashboard-shell';
 
 function renderBar() {
-  return render(
-    <TopBar onOpenPalette={vi.fn()} pathname="/dashboard" />,
-  );
+  // No props. The bar takes none — it is the brand, the bell and the account.
+  return render(<TopBar />);
 }
 
 describe('organizer TopBar', () => {
@@ -48,8 +56,23 @@ describe('organizer TopBar', () => {
 
     renderBar();
 
-    expect(screen.getByLabelText('Create event')).toBeInTheDocument();
+    expect(screen.getByLabelText('Curatix dashboard')).toBeInTheDocument();
     expect(screen.getByLabelText('Notifications')).toBeInTheDocument();
+  });
+
+  it('carries the brand and NOT the controls that moved', () => {
+    // Create lives on the footer bar's raised `+` now, and search was removed
+    // outright. Either one reappearing here is the same action offered twice
+    // on one screen, which is how neither of them reads as the primary.
+    useAttention.mockReturnValue({ items: [], isPending: false, isError: false });
+
+    renderBar();
+
+    expect(screen.queryByLabelText('Create event')).toBeNull();
+    expect(screen.queryByLabelText('Search the dashboard')).toBeNull();
+    // And the trail it replaced is gone: every screen under this shell carries
+    // its own <h1>, so a second copy of the page name here was duplication.
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
   });
 
   it('renders when attention items arrive — the case that threw in production', () => {
@@ -67,10 +90,7 @@ describe('organizer TopBar', () => {
 
     renderBar();
 
-    // The create-event action and the bell are SIBLINGS. If the bell is ever
-    // nested back inside the `asChild` Button, Slot throws and render() fails
-    // before this line — which is precisely the regression being pinned.
     expect(screen.getByLabelText('Notifications, 2 needing attention')).toBeInTheDocument();
-    expect(screen.getByLabelText('Create event')).toBeInTheDocument();
+    expect(screen.getByLabelText('Curatix dashboard')).toBeInTheDocument();
   });
 });

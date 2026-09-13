@@ -17,15 +17,19 @@ describe('OrganizerFooterNav', () => {
     render(<OrganizerFooterNav />);
     const nav = screen.getByRole('navigation', { name: 'Organizer' });
 
-    expect(within(nav).getByRole('link', { name: 'Home' }).getAttribute('href')).toBe('/dashboard');
+    // THE PUBLIC LANDING PAGE, not an internal dashboard screen.
+    expect(within(nav).getByRole('link', { name: 'Home' }).getAttribute('href')).toBe('/');
     expect(within(nav).getByRole('link', { name: 'My events' }).getAttribute('href')).toBe(
       '/dashboard/events',
     );
     expect(within(nav).getByRole('link', { name: 'Scan' }).getAttribute('href')).toBe(
       '/dashboard/check-in',
     );
+    // The organizer's OWN landing, which is where Home used to point. It
+    // carries the sections grid, so this tab is what keeps the eight screens
+    // the bar has no room for reachable at all.
     expect(within(nav).getByRole('link', { name: 'Dashboard' }).getAttribute('href')).toBe(
-      '/dashboard/analytics',
+      '/dashboard',
     );
 
     // The centre button is a lone glyph, so its accessible name has to be
@@ -41,9 +45,47 @@ describe('OrganizerFooterNav', () => {
     expect(screen.getByRole('link', { name: 'My events' }).getAttribute('aria-current')).toBe(
       'page',
     );
-    // Home must NOT also claim to be current: every organizer route starts
-    // with `/dashboard`, so a naive prefix match lights Home on every screen.
+    // Dashboard must NOT also claim to be current: every organizer route
+    // starts with `/dashboard`, so a naive prefix match lights it on every
+    // screen. Home is `/`, which `isActive` special-cases for the same reason.
+    expect(screen.getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBeNull();
+  });
+
+  it('marks the current tab in VIOLET, not butter', () => {
+    // The organizer product's "you are here" colour. The attendee site keeps
+    // `--nav-active`; one surface using both is the drift this pins.
+    render(<OrganizerFooterNav />);
+    const pill = screen.getByRole('link', { name: 'My events' }).querySelector('span[aria-hidden]');
+    expect(pill).not.toBeNull();
+    const classes = (pill as HTMLElement).className.split(' ');
+    expect(classes).toContain('bg-primary');
+    expect(classes).toContain('text-primary-foreground');
+    expect(classes).not.toContain('bg-nav-active');
+  });
+
+  it('crossfades the colours rather than snapping them', () => {
+    // Pressing a tab has to read as one object changing state. Without the
+    // transition on BOTH the pill and the label, the fill animates and the
+    // text does not, which looks like a rendering fault rather than a press.
+    render(<OrganizerFooterNav />);
+    const tab = screen.getByRole('link', { name: 'Scan' });
+    expect(tab.className).toContain('transition-colors');
+    expect(tab.className).toContain('duration-slow');
+    const pill = tab.querySelector('span[aria-hidden]') as HTMLElement;
+    expect(pill.className).toContain('transition-colors');
+  });
+
+  it('starts on screen, and moves the raised + with the bar', () => {
+    // The transform is on the POSITIONER: the `+` sits outside the pill's
+    // bounds, so translating the pill alone would leave the button hovering
+    // over the page. Nothing has scrolled here, so it must be showing.
+    const { container } = render(<OrganizerFooterNav />);
+    const positioner = container.firstElementChild as HTMLElement;
+    expect(positioner.className).toContain('translate-y-0');
+    expect(positioner.className).toContain('transition-transform');
+    // And the plus is INSIDE the element that moves.
+    expect(positioner.querySelector('a[aria-label="Create an event"]')).not.toBeNull();
   });
 
   it('keeps every label in the DOM', () => {
@@ -78,7 +120,6 @@ describe('nothing is stranded by removing the drawer', () => {
       '/dashboard/events',
       '/dashboard/events/new',
       '/dashboard/check-in',
-      '/dashboard/analytics',
     ]);
 
     const elsewhere = ORGANIZER_SECTIONS.filter((section) => !onTheBar.has(section.href));

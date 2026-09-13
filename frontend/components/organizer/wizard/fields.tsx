@@ -616,6 +616,15 @@ export function fieldMessageId(id: string, error?: string): string {
  * spelled out — "Basics" with a quiet 1 beside it says where you are without
  * repeating the rail above it in a sentence.
  */
+/**
+ * The heading for ONE FORM inside a phase.
+ *
+ * `h2`, not `h1`, and the change is not cosmetic: a phase renders up to five
+ * of these at once, so five `h1`s put five page titles on one page and leave
+ * the outline a screen-reader user navigates by saying they are five unrelated
+ * documents. The single `h1` is the phase's own name, rendered once by the
+ * wizard above this stack.
+ */
 export function StepHeader({ title, step }: { title: string; step?: number }) {
   return (
     <header className="flex flex-col gap-2 border-b border-border pb-block">
@@ -628,7 +637,7 @@ export function StepHeader({ title, step }: { title: string; step?: number }) {
             {step}
           </span>
         ) : null}
-        <h1 className="text-h3">{title}</h1>
+        <h2 className="text-h3">{title}</h2>
       </div>
     </header>
   );

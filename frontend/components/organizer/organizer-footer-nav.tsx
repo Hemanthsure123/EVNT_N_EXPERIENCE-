@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BarChart3, CalendarDays, Home, Plus, QrCode } from 'lucide-react';
 import { isActive } from '@/components/shell/bottom-nav';
+import { useScrollDirection } from '@/lib/utils/use-scroll-direction';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -19,17 +20,31 @@ import { cn } from '@/lib/utils/cn';
  * into both shapes would leave every caller paying for a branch it does not
  * use.
  *
- * What IS shared is the part that must not drift: `isActive` decides the
- * current tab identically on both bars, and the glass surface, the butter
- * active pill and the floating inset are the same design-system pieces. Two
- * navigations that mark the current page differently is the drift this avoids.
+ * What IS shared is `isActive`, which decides the current tab identically on
+ * both bars. Two navigations that disagree about which page you are on is the
+ * drift that avoids.
  *
- * ── FIVE ITEMS, AND WHAT EACH ONE MEANS ──────────────────────────────────
+ * ── HOME LEAVES THE DASHBOARD, AND `Dashboard` IS WHERE IT USED TO GO ────
  *
- * Home and Dashboard are NOT the same destination, which is the one mapping
- * worth writing down: Home is the landing — what needs attention, what
- * happened today, what is next — and Dashboard is the numbers, which is a
- * different question asked at a different moment.
+ * Home is `/` — the public landing page — at the owner's instruction. That
+ * moved a real destination out of the bar, and `/dashboard` is not optional:
+ * it is the landing that carries the attention panel, today's figures AND the
+ * sections grid, which is the only route to the eight organizer screens this
+ * bar has no room for. So `Dashboard` points at `/dashboard` rather than at
+ * `/dashboard/analytics`, and analytics is reached from that grid.
+ *
+ * Without that swap, taking Home off `/dashboard` would have stranded
+ * Bookings, Customers, Promotions, Payouts, Refunds, Crew, Reviews, Support
+ * and Activity behind no link at all on a phone.
+ *
+ * ── THE ACTIVE MARK IS VIOLET HERE, AND BUTTER ON THE PUBLIC SITE ────────
+ *
+ * `bg-primary text-primary-foreground` — the wayfinding violet, which is the
+ * same token the filter pills on this dashboard already use for "this one is
+ * applied". The attendee site keeps `--nav-active` (the warm butter fill).
+ * That is a deliberate split rather than drift: the two products say "you are
+ * here" in their own colour, and the organizer surface says it the same way in
+ * the sidebar, in this bar and in the wizard's stepper.
  *
  * ── BELOW `lg`, MATCHING THE SIDEBAR IT REPLACES ─────────────────────────
  *
@@ -68,26 +83,28 @@ type NavItem = {
    *
    * `isActive` special-cases `'/'` because the public home is a prefix of
    * every other public route. `/dashboard` is exactly that problem one level
-   * down — without this, Home is marked current on Events, on Scan, on every
-   * organizer screen there is, and the bar stops answering the only question
-   * it exists to answer. A test pins it, because it looks right until you
-   * navigate.
+   * down — without this, Dashboard is marked current on Events, on Scan, on
+   * every organizer screen there is, and the bar stops answering the only
+   * question it exists to answer. A test pins it, because it looks right until
+   * you navigate.
    */
   exact?: boolean;
 };
 
 const LEFT: NavItem[] = [
-  { href: '/dashboard', label: 'Home', icon: <Home className="size-5" />, exact: true },
+  // THE PUBLIC LANDING PAGE, not the dashboard's own. See the note above.
+  { href: '/', label: 'Home', icon: <Home className="size-5" />, exact: true },
   { href: '/dashboard/events', label: 'My events', icon: <CalendarDays className="size-5" /> },
 ];
 
 const RIGHT: NavItem[] = [
   { href: '/dashboard/check-in', label: 'Scan', icon: <QrCode className="size-5" /> },
-  { href: '/dashboard/analytics', label: 'Dashboard', icon: <BarChart3 className="size-5" /> },
+  { href: '/dashboard', label: 'Dashboard', icon: <BarChart3 className="size-5" />, exact: true },
 ];
 
 export function OrganizerFooterNav({ className }: { className?: string }) {
   const pathname = usePathname() ?? '';
+  const hidden = useAutoHide();
 
   return (
     <div
@@ -96,9 +113,29 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
         // gap either side of a floating pill must not swallow presses aimed at
         // the page behind it.
         'pointer-events-none fixed inset-x-0 z-sticky flex justify-center px-4 lg:hidden',
+        // ── THE AUTO-HIDE ────────────────────────────────────────────────
+        //
+        // On the POSITIONER, not on the `<nav>`: the raised `+` is a sibling
+        // of the bar's items and sits OUTSIDE its bounds, so translating the
+        // bar alone would slide the pill away and leave the button hovering
+        // over the page. One transform on the parent moves both in lockstep,
+        // which is also why it is the parent that owns the transition.
+        //
+        // `150%`, not `translate-y-full`. "Full" is this element's own height
+        // and the button overhangs it — at exactly 100% the plus stays visible
+        // as a black semicircle on the bottom edge. The extra half also covers
+        // the float gap and the safe-area inset below it.
+        'transition-transform duration-slow ease-out motion-reduce:transition-none',
+        hidden ? 'translate-y-[150%]' : 'translate-y-0',
         className,
       )}
       style={{ bottom: `calc(${FLOAT_GAP} + env(safe-area-inset-bottom))` }}
+      // Hidden from the accessibility tree only while it is off screen, so a
+      // screen reader cannot land on a bar the sighted reader cannot see.
+      // `inert` would be stronger and is not used: it is still unsupported on
+      // enough Safari versions that the attribute would be a no-op exactly
+      // where this bar matters most.
+      aria-hidden={hidden || undefined}
     >
       <nav
         aria-label="Organizer"
@@ -119,7 +156,11 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
             Raised out of the bar so it reads as the primary thing you can do
             here rather than the third of five places you can go. It keeps a
             real `aria-label` because a lone glyph has no accessible name, and
-            "Create" is what it does — the plus is the picture of that. */}
+            "Create" is what it does — the plus is the picture of that.
+
+            It is also the ONLY create control on a phone now: the header's
+            filled "Create event" button is gone, so this is not a duplicate of
+            it — it is the replacement. */}
         <Link
           href="/dashboard/events/new"
           aria-label="Create an event"
@@ -146,12 +187,74 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
 }
 
 /**
+ * SHOULD THE BAR BE OUT OF THE WAY RIGHT NOW?
+ *
+ * The scroll direction decides it, with two refusals on top — and both are the
+ * difference between a bar that gets out of the way and one that disappears
+ * when somebody needs it:
+ *
+ * 1. **Never while focus is inside it.** Tabbing to "Scan" and having the
+ *    navigation slide off screen leaves a keyboard or switch user following a
+ *    focus ring they cannot see. The document's own `focusin`/`focusout` are
+ *    used rather than React's handlers, because the check has to hold for a
+ *    focus that arrives while this component is not re-rendering.
+ * 2. **Never on a page too short to scroll.** A document that barely exceeds
+ *    the viewport can still be pushed past the hook's top zone by an
+ *    overscroll bounce, which would hide the navigation on a page nobody
+ *    meaningfully scrolled.
+ */
+function useAutoHide(): boolean {
+  const direction = useScrollDirection();
+  const [focusWithin, setFocusWithin] = React.useState(false);
+  const [scrollable, setScrollable] = React.useState(false);
+
+  React.useEffect(() => {
+    const inNav = (node: EventTarget | null) =>
+      node instanceof Element && Boolean(node.closest('nav[aria-label="Organizer"]'));
+
+    const onFocusIn = (event: FocusEvent) => setFocusWithin(inNav(event.target));
+    const onFocusOut = () => setFocusWithin(false);
+
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    // Measured on a timer as well as on resize: the organizer's screens grow
+    // as their data arrives (a table paints its rows, a deck loads a page), so
+    // "is this page scrollable" is not answered once at mount.
+    const measure = () =>
+      setScrollable(document.documentElement.scrollHeight > window.innerHeight + SCROLL_SLACK);
+    measure();
+    window.addEventListener('resize', measure);
+    const timer = window.setInterval(measure, 1000);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  return direction === 'down' && !focusWithin && scrollable;
+}
+
+/** A page must exceed the viewport by more than this before the bar will hide
+ *  — roughly the height of the bar itself plus its clearance, so a page with
+ *  nothing below the fold never takes its own navigation away. */
+const SCROLL_SLACK = 200;
+
+/**
  * One destination.
  *
  * The label stays in the DOM at every width — a nav whose items lose their
  * names is four anonymous glyphs to a screen reader. It is the ACTIVE tab that
- * wears the butter pill, the same mark the public bar and the sidebar use, so
- * "where am I" is answered the same way everywhere and survives greyscale.
+ * wears the violet pill, and the colours CROSSFADE rather than snapping: the
+ * pill's fill, the icon and the label all run the same transition, so pressing
+ * a tab reads as one object changing state instead of three things repainting
+ * at once.
  */
 function Tab({ item, pathname }: { item: NavItem; pathname: string }) {
   const active = item.exact ? pathname === item.href : isActive(pathname, item.href);
@@ -161,17 +264,17 @@ function Tab({ item, pathname }: { item: NavItem; pathname: string }) {
       aria-current={active ? 'page' : undefined}
       className={cn(
         'flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-2xl px-1 py-2 text-caption',
-        'transition-colors duration-fast motion-reduce:transition-none',
+        'transition-colors duration-slow ease-out motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-        active ? 'text-nav-active-foreground' : 'text-muted-foreground hover:text-foreground',
+        active ? 'font-medium text-primary' : 'text-muted-foreground hover:text-foreground',
       )}
     >
       <span
         aria-hidden
         className={cn(
           'inline-flex items-center justify-center rounded-full px-3 py-0.5',
-          'transition-colors duration-fast motion-reduce:transition-none',
-          active ? 'bg-nav-active' : 'bg-transparent',
+          'transition-colors duration-slow ease-out motion-reduce:transition-none',
+          active ? 'bg-primary text-primary-foreground' : 'bg-transparent',
         )}
       >
         {item.icon}

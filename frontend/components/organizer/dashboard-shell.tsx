@@ -3,20 +3,12 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  LogOut,
-  Plus,
-  Search,
-  Ticket,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, LogOut, Ticket } from 'lucide-react';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { useScope } from '@/lib/identity/scope';
-import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib/organizer/nav';
+import { ORGANIZER_SECTIONS, isSectionActive } from '@/lib/organizer/nav';
 import { useSidebar } from '@/lib/organizer/use-sidebar';
 import {
   OrganizerFooterNav,
@@ -120,10 +112,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar
-          onOpenPalette={() => setPaletteOpen(true)}
-          pathname={pathname}
-        />
+        {/* No props: the bar is the brand, the bell and the account menu. The
+            palette is still opened by ⌘K, which the shell listens for above. */}
+        <TopBar />
         {/* Capped at 1600px and centred — a table stretched across an
             ultrawide is unreadable, not impressive. */}
         <main
@@ -266,93 +257,53 @@ function Sidebar({
 // check that mattered here ran signed-OUT, where the shell short-circuits to
 // `SignedOut` and this bar never mounts — which is how a throw inside it
 // reached production looking like a healthy deploy.
-export function TopBar({
-  onOpenPalette,
-  pathname,
-}: {
-  onOpenPalette: () => void;
-  pathname: string;
-}) {
-  const trail = organizerBreadcrumbs(pathname);
-
+export function TopBar() {
   return (
     // The gutter is the SAME rung as `<main>`'s, so the breadcrumb starts on
     // the same vertical line as the content it names. It was 16px against a
     // 24px page at lg, which reads as a wobble on every scroll.
     <header className="glass sticky top-0 z-sticky flex h-14 shrink-0 items-center gap-2 border-b border-border px-card lg:px-card-lg">
-      {/* THE HAMBURGER IS GONE. Below `lg` the organizer navigates from
-          `OrganizerFooterNav` and from the sections grid on Home; the drawer
-          it opened is no longer mounted at all. Above `lg` the sidebar was
-          always the navigation and is unchanged. */}
+      {/* ── THE BRAND, WHERE THE BREADCRUMB WAS ────────────────────────────
+          The bar used to carry a dynamic trail ("Dashboard / Create event")
+          and it WAS the page title — a separate <h1> saying the same word
+          twice is the biggest waste of vertical space in most admin UIs.
 
-      {/* The breadcrumb IS the page title. A separate <h1> saying the same
-          word twice is the single biggest waste of vertical space in most
-          admin UIs. */}
-      <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
-        <ol className="flex min-w-0 items-center gap-1.5 text-body-sm">
-          {trail.map((crumb, index) => (
-            <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1.5">
-              {index > 0 ? (
-                <span className="text-foreground-subtle" aria-hidden>
-                  /
-                </span>
-              ) : null}
-              {crumb.href ? (
-                <Link
-                  href={crumb.href}
-                  className="truncate rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {crumb.label}
-                </Link>
-              ) : (
-                <span
-                  className="truncate font-medium capitalize text-foreground"
-                  aria-current="page"
-                >
-                  {crumb.label}
-                </span>
-              )}
-            </li>
-          ))}
-        </ol>
-      </nav>
+          That argument still holds and the trail still went, at the owner's
+          instruction, so the job it was doing has to land somewhere: every
+          screen under this shell carries its own <h1> (the deck, the analytics
+          hero, the gate list) and the footer bar marks the current tab. What
+          the trail additionally gave — a link back UP a level — is what this
+          lockup now is: it goes to `/dashboard`, which is the one destination
+          the bar no longer has room to repeat on every screen.
 
-      {/* Outline, not filled: search is how you FIND a row, not the action the
-          screen is for. `aria-keyshortcuts` publishes the ⌘K binding the shell
-          already listens for, so it is discoverable without the visible kbd
-          hint that only fits at md. */}
-      <Button
-        variant="outline"
-        size="md"
-        onClick={onOpenPalette}
-        aria-label="Search the dashboard"
-        aria-keyshortcuts="Meta+K Control+K"
-        className="shrink-0 gap-2 text-muted-foreground hover:text-foreground lg:h-control-sm"
+          NOT the public home. Home is the bottom bar's job now, and a logo in
+          an organizer shell that quietly exits the product is a trapdoor. */}
+      <Link
+        href="/dashboard"
+        aria-label="Curatix dashboard"
+        className="flex min-w-0 shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Search className="size-4 shrink-0" aria-hidden />
-        <span className="hidden sm:inline">Search</span>
-        <kbd className="hidden rounded-full border border-border bg-muted px-1.5 py-0.5 font-mono text-caption md:inline">
-          ⌘K
-        </kbd>
-      </Button>
+        <BrandLockup collapsed />
+      </Link>
 
+      {/* The spacer, so the two remaining controls sit hard right at every
+          width. A `justify-between` on the header would also have to survive
+          the bar being empty in the middle, which this does not care about. */}
+      <span className="flex-1" aria-hidden />
+
+      {/* ── WHAT IS LEFT, AND WHAT LEFT ────────────────────────────────────
+          Search and the filled "Create event" pill are both gone.
+
+          Create moved to the raised `+` in `OrganizerFooterNav`, so a second
+          one here would have been the same action twice, four inches apart.
+
+          Search opened the ⌘K palette, and the shell still listens for that
+          binding — so the palette is intact for anybody with a keyboard and
+          unreachable on a phone. That is the real cost of removing the button
+          and it is stated here rather than discovered: the phone's answer is
+          the sections grid on the dashboard landing plus the deck's own search
+          field, both of which are reachable from the bottom bar. */}
       <NotificationBell />
-
-      {/* THE one filled control in this bar.
-          ── DO NOT PUT ANOTHER ELEMENT INSIDE THIS ────────────────────────
-          `asChild` renders through Radix `Slot`, which calls
-          `React.Children.only` — exactly one element child, or it THROWS.
-          The bell was briefly nested here and took the whole authenticated
-          dashboard down with it: unauthenticated visitors saw the sign-in
-          branch and never reached this line, so the screen looked fine to
-          every check that was not signed in. A sibling control goes beside
-          this Button, never within it. */}
-      <Button asChild size="md" className="shrink-0 lg:h-control-sm">
-        <Link href="/dashboard/events/new" aria-label="Create event">
-          <Plus className="size-4 shrink-0" aria-hidden />
-          <span className="hidden sm:inline">Create event</span>
-        </Link>
-      </Button>
 
       <AccountButton />
     </header>
