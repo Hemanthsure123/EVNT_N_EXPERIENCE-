@@ -192,3 +192,40 @@ class OAuthStateInvalidError(AuthenticationError):
 
     def __init__(self) -> None:
         super().__init__("That sign-in link has expired or was already used. Try again.")
+
+
+class GoogleSignInFailedError(AuthenticationError):
+    """Google was reached and the handshake did not complete.
+
+    ── THE 500 THIS REPLACES ─────────────────────────────────────────────
+
+    `OidcError` subclasses `RuntimeError`, not `DomainError`, and the callback
+    view catches only `DomainError` — so every failure of the code exchange
+    escaped to DRF's last-resort handler as a 500 with "An unexpected error
+    occurred", rendered as raw JSON in the address bar of somebody in the
+    middle of signing in.
+
+    Reachable without anything being wrong on either side: an authorization
+    code is single-use and short-lived, so pressing Back onto the callback
+    replays a spent one, and somebody who leaves Google's consent screen open
+    for a quarter of an hour returns with an expired one. Google being briefly
+    unreachable is the third.
+
+    Exactly the failure `RazorpayPaymentAdapter.create_order` had and CLAUDE.md
+    records — a vendor refusal reaching the generic handler because nobody
+    translated it — in the other half of the platform.
+
+    ── WHY ONE CODE AND NOT TWO ──────────────────────────────────────────
+
+    `OidcError` (could not reach Google) and `OidcIdentityError` (the identity
+    cannot be trusted) mean very different things HERE and the same thing to
+    the person reading the screen: try again. The distinction is logged, where
+    an operator can act on it. This module's rule is that a code exists when
+    the frontend has to do something different with it, and there is only one
+    thing to do with this.
+    """
+
+    code = "google_sign_in_failed"
+
+    def __init__(self) -> None:
+        super().__init__("Google sign-in could not be completed. Please try again.")

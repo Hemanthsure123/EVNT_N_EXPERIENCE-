@@ -28,6 +28,7 @@ describe('oauthErrorMessage', () => {
     expect(oauthErrorMessage('oauth_state_invalid')).toContain('expired');
     expect(oauthErrorMessage('google_account_unverified')).toContain("isn't verified");
     expect(oauthErrorMessage('account_suspended')).toContain('suspended');
+    expect(oauthErrorMessage('google_sign_in_failed')).toContain('could not be completed');
   });
 
   it('still speaks for a code it does not recognise', () => {

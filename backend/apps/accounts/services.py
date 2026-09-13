@@ -31,7 +31,7 @@ from core.audit import record_audit
 from core.errors import NotFoundError
 from core.events import USER_REGISTERED
 from core.ports.email_port import EmailPort
-from core.ports.oidc_port import OidcIdentity, OidcPort
+from core.ports.oidc_port import OidcError, OidcIdentity, OidcPort
 from core.ports.storage_port import StoragePort
 from core.ports.task_queue_port import TaskQueuePort
 from core.unit_of_work import UnitOfWork
@@ -45,6 +45,7 @@ from .exceptions import (
     EmailNotVerifiedError,
     GoogleAccountUnverifiedError,
     GoogleSignInCancelledError,
+    GoogleSignInFailedError,
     GoogleSignInUnavailableError,
     InvalidCredentialsError,
     InvalidTokenError,
@@ -975,11 +976,27 @@ class GoogleSignInService:
         if not code:
             raise OAuthStateInvalidError()
 
-        identity = self._oidc.exchange_code(
-            code=code,
-            code_verifier=str(pending["code_verifier"]),
-            redirect_uri=self._redirect_uri,
-        )
+        # TRANSLATED, never allowed to escape. `OidcError` is a
+        # `RuntimeError`, so without this it reaches DRF's last-resort handler
+        # as a 500 — mid-redirect, as raw JSON in the address bar of somebody
+        # signing in. A spent code (they pressed Back onto the callback), an
+        # expired one (they left the consent screen open), or Google being
+        # briefly unreachable all land here without anything being broken.
+        try:
+            identity = self._oidc.exchange_code(
+                code=code,
+                code_verifier=str(pending["code_verifier"]),
+                redirect_uri=self._redirect_uri,
+            )
+        except OidcError as exc:
+            # The distinction OidcIdentityError draws is real and belongs in
+            # the log, where an operator can act on it, rather than in a
+            # sentence the reader cannot act on differently either way.
+            logger.warning(
+                "google_sign_in.exchange_failed",
+                extra={"reason": type(exc).__name__, "detail": str(exc)[:200]},
+            )
+            raise GoogleSignInFailedError() from exc
 
         user = self._find_or_create(identity)
 

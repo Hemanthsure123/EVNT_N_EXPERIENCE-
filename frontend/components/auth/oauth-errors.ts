@@ -40,6 +40,11 @@ const MESSAGES: Record<string, string> = {
     "That Google account's email address isn't verified with Google, so it can't be used to " +
     'sign in. Verify it with Google, or sign in with your password.',
   oauth_state_invalid: 'That sign-in link expired or was already used. Please try again.',
+  // Google was reached and the handshake did not finish — a replayed or
+  // expired authorization code, or Google briefly unreachable. It used to be a
+  // raw 500 in the address bar, because `OidcError` is a `RuntimeError` and the
+  // callback view catches only `DomainError`.
+  google_sign_in_failed: 'Google sign-in could not be completed. Please try again.',
   google_sign_in_unavailable: 'Google sign-in is not available on this deployment.',
   account_suspended: 'That account has been suspended. Contact support if you think that is wrong.',
   invalid_credentials: 'That account is not available. Please contact support.',

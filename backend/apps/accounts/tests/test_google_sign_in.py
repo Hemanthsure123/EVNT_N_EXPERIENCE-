@@ -17,6 +17,7 @@ from apps.accounts.exceptions import (
     AccountSuspendedError,
     GoogleAccountUnverifiedError,
     GoogleSignInCancelledError,
+    GoogleSignInFailedError,
     GoogleSignInUnavailableError,
     OAuthStateInvalidError,
 )
@@ -386,4 +387,68 @@ class TestItSurvivesACacheOutage:
 
         assert EphemeralToken.objects.filter(token=state).exists()
         service.complete(state=state, code="auth-code")
+        assert not EphemeralToken.objects.filter(token=state).exists()
+
+
+class TestAFailedExchangeIsNotA500:
+    """`OidcError` is a `RuntimeError`, and the callback view catches only
+    `DomainError` — so every failure of the code exchange escaped to DRF's
+    last-resort handler as a 500 with "An unexpected error occurred", rendered
+    as raw JSON in the address bar of somebody mid-sign-in.
+
+    None of these needs anything to be broken: an authorization code is
+    single-use and short-lived, so Back onto the callback replays a spent one,
+    and a consent screen left open for fifteen minutes returns an expired one.
+    """
+
+    def test_an_unreachable_provider_is_a_domain_error(self):
+        from core.errors import DomainError
+        from core.ports.oidc_port import OidcError
+
+        class Unreachable(FakeGoogle):
+            def exchange_code(self, *, code, code_verifier, redirect_uri):
+                raise OidcError("connection reset")
+
+        service, _ = build(Unreachable())
+        state = _state_from(service.start())
+
+        with pytest.raises(GoogleSignInFailedError) as caught:
+            service.complete(state=state, code="auth-code")
+
+        # A DomainError is the whole point: the view catches that and redirects
+        # to sign-in with a code the page turns into a sentence.
+        assert isinstance(caught.value, DomainError)
+        assert caught.value.code == "google_sign_in_failed"
+
+    def test_an_untrustworthy_identity_is_the_same_code(self):
+        # `OidcIdentityError` means something very different here and the same
+        # thing to the reader: try again. The distinction is logged, not shown.
+        from core.ports.oidc_port import OidcIdentityError
+
+        class Untrustworthy(FakeGoogle):
+            def exchange_code(self, *, code, code_verifier, redirect_uri):
+                raise OidcIdentityError("aud mismatch")
+
+        service, _ = build(Untrustworthy())
+        state = _state_from(service.start())
+
+        with pytest.raises(GoogleSignInFailedError):
+            service.complete(state=state, code="auth-code")
+
+    def test_the_state_is_still_consumed_when_the_exchange_fails(self):
+        # It is consumed BEFORE the exchange, so a failed attempt cannot leave
+        # a replayable state behind. Retrying means starting again, which is
+        # what the error tells them to do.
+        from core.models import EphemeralToken
+        from core.ports.oidc_port import OidcError
+
+        class Unreachable(FakeGoogle):
+            def exchange_code(self, *, code, code_verifier, redirect_uri):
+                raise OidcError("nope")
+
+        service, _ = build(Unreachable())
+        state = _state_from(service.start())
+        with pytest.raises(GoogleSignInFailedError):
+            service.complete(state=state, code="auth-code")
+
         assert not EphemeralToken.objects.filter(token=state).exists()
