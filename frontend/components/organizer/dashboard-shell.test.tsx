@@ -38,7 +38,7 @@ import { TopBar } from './dashboard-shell';
 
 function renderBar() {
   return render(
-    <TopBar onOpenDrawer={vi.fn()} onOpenPalette={vi.fn()} pathname="/dashboard" />,
+    <TopBar onOpenPalette={vi.fn()} pathname="/dashboard" />,
   );
 }
 

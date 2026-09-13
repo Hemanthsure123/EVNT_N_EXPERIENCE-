@@ -8,11 +8,9 @@ import {
   ChevronRight,
   Loader2,
   LogOut,
-  Menu,
   Plus,
   Search,
   Ticket,
-  X,
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { Button } from '@/components/ui/button';
@@ -20,6 +18,10 @@ import { useAuth } from '@/lib/auth/auth-provider';
 import { useScope } from '@/lib/identity/scope';
 import { ORGANIZER_SECTIONS, isSectionActive, organizerBreadcrumbs } from '@/lib/organizer/nav';
 import { useSidebar } from '@/lib/organizer/use-sidebar';
+import {
+  OrganizerFooterNav,
+  ORGANIZER_NAV_CLEARANCE,
+} from '@/components/organizer/organizer-footer-nav';
 import { BrandLockup, BrandMark } from '@/components/shell/brand-mark';
 import { SceneWelcome } from '@/components/illustrations/onboarding-scenes';
 import { SpotListing } from '@/components/illustrations/spots';
@@ -66,12 +68,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { status } = useAuth();
   const { isOrganizer, hasOrganization, ready: scopeReady } = useScope();
   const { collapsed, ready, toggle } = useSidebar();
-  const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
 
   // A drawer that stays open over the page you just asked for is the most
   // common mobile dashboard annoyance.
-  React.useEffect(() => setDrawerOpen(false), [pathname]);
 
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -116,23 +116,25 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         collapsed={collapsed}
         ready={ready}
         onToggle={toggle}
-        drawerOpen={drawerOpen}
-        onCloseDrawer={() => setDrawerOpen(false)}
         pathname={pathname}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          onOpenDrawer={() => setDrawerOpen(true)}
           onOpenPalette={() => setPaletteOpen(true)}
           pathname={pathname}
         />
         {/* Capped at 1600px and centred — a table stretched across an
             ultrawide is unreadable, not impressive. */}
-        <main id="organizer-main" className="min-w-0 flex-1 p-card lg:p-card-lg">
+        <main
+          id="organizer-main"
+          className={cn('min-w-0 flex-1 p-card lg:p-card-lg', ORGANIZER_NAV_CLEARANCE)}
+        >
           <div className="mx-auto w-full max-w-dashboard">{children}</div>
         </main>
       </div>
+
+      <OrganizerFooterNav />
 
       <OrganizerPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
@@ -143,38 +145,30 @@ function Sidebar({
   collapsed,
   ready,
   onToggle,
-  drawerOpen,
-  onCloseDrawer,
   pathname,
 }: {
   collapsed: boolean;
   ready: boolean;
   onToggle: () => void;
-  drawerOpen: boolean;
-  onCloseDrawer: () => void;
   pathname: string;
 }) {
   return (
     <>
-      {drawerOpen ? (
-        <div
-          className="fixed inset-0 z-drawer bg-overlay/70 lg:hidden"
-          onClick={onCloseDrawer}
-          aria-hidden
-        />
-      ) : null}
-
+      {/* No scrim: there is no drawer to dim the page behind any more. */}
       <aside
         aria-label="Dashboard sections"
         className={cn(
-          'fixed inset-y-0 left-0 z-modal flex flex-col border-r border-border bg-surface',
-          'lg:sticky lg:top-0 lg:z-auto lg:h-dvh lg:translate-x-0',
+          // `hidden lg:flex`, not an off-canvas panel that slides. Below `lg`
+          // the sidebar does not exist at all — the footer bar is the
+          // navigation — so there is nothing to translate off screen and
+          // nothing a stray swipe can drag back on.
+          'hidden border-r border-border bg-surface',
+          'lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col',
           // Width is the only animated property, and only once the stored
           // state has been read — otherwise every load plays a collapse.
           ready &&
             'transition-[width,transform] duration-base ease-out motion-reduce:transition-none',
           collapsed ? 'w-sidebar lg:w-sidebar-collapsed' : 'w-sidebar',
-          drawerOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         {/* Same 56px as the top bar, so the brand and the breadcrumb sit on
@@ -199,15 +193,6 @@ function Sidebar({
               <BrandLockup />
             )}
           </Link>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onCloseDrawer}
-            aria-label="Close navigation"
-            className="ml-auto shrink-0 text-muted-foreground lg:hidden"
-          >
-            <X className="size-4" aria-hidden />
-          </Button>
         </div>
 
         <nav className="flex-1 overflow-y-auto p-2">
@@ -282,11 +267,9 @@ function Sidebar({
 // `SignedOut` and this bar never mounts — which is how a throw inside it
 // reached production looking like a healthy deploy.
 export function TopBar({
-  onOpenDrawer,
   onOpenPalette,
   pathname,
 }: {
-  onOpenDrawer: () => void;
   onOpenPalette: () => void;
   pathname: string;
 }) {
@@ -297,15 +280,10 @@ export function TopBar({
     // the same vertical line as the content it names. It was 16px against a
     // 24px page at lg, which reads as a wobble on every scroll.
     <header className="glass sticky top-0 z-sticky flex h-14 shrink-0 items-center gap-2 border-b border-border px-card lg:px-card-lg">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onOpenDrawer}
-        aria-label="Open navigation"
-        className="shrink-0 text-muted-foreground lg:hidden"
-      >
-        <Menu className="size-4" aria-hidden />
-      </Button>
+      {/* THE HAMBURGER IS GONE. Below `lg` the organizer navigates from
+          `OrganizerFooterNav` and from the sections grid on Home; the drawer
+          it opened is no longer mounted at all. Above `lg` the sidebar was
+          always the navigation and is unchanged. */}
 
       {/* The breadcrumb IS the page title. A separate <h1> saying the same
           word twice is the single biggest waste of vertical space in most

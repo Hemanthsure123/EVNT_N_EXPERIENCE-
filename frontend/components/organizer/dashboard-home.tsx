@@ -8,6 +8,8 @@ import { ProgressBar } from '@/components/ui';
 import { formatMoney } from '@/lib/discovery/format';
 import { useEventRows, useSettlements } from '@/lib/organizer/queries';
 import { owedTotal } from '@/lib/organizer/attention';
+import { ORGANIZER_SECTIONS } from '@/lib/organizer/nav';
+import { cn } from '@/lib/utils/cn';
 import type { EventRow } from '@/lib/api/organizer';
 import { EmptyState, ErrorState, Panel, Poster, Skeleton, StatusPill } from './primitives';
 import { ActivityFeed } from './activity-feed';
@@ -110,7 +112,66 @@ export function DashboardHome() {
           </section>
         </div>
       </div>
+
+      <AllSections />
     </div>
+  );
+}
+
+/**
+ * EVERY SECTION, ON THE LANDING PAGE — and it is here because the drawer left.
+ *
+ * The organizer has thirteen destinations and the footer bar has five. Removing
+ * the hamburger without this would strand seven of them on a phone: bookings,
+ * crew, customers, promotions, refunds, reviews and support would exist, be
+ * routable, and be reachable from nothing. That is a worse outcome than the
+ * drawer, not a cleaner one.
+ *
+ * So the landing page carries the rest. It is `lg:hidden` because above that
+ * width the sidebar is still the navigation and a second copy of it on the home
+ * page would be clutter — the exact thing this redesign is removing.
+ *
+ * Driven by `ORGANIZER_SECTIONS`, the same list the sidebar and the ⌘K palette
+ * read, so a section added later appears here without anybody remembering to.
+ * The five already on the footer bar are filtered out rather than repeated.
+ */
+const ON_THE_FOOTER_BAR = new Set([
+  '/dashboard',
+  '/dashboard/events',
+  '/dashboard/events/new',
+  '/dashboard/check-in',
+  '/dashboard/analytics',
+]);
+
+function AllSections() {
+  const rest = ORGANIZER_SECTIONS.filter((section) => !ON_THE_FOOTER_BAR.has(section.href));
+  if (rest.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-stack lg:hidden">
+      <SectionHeading title="Everything else" />
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {rest.map((section) => {
+          const Icon = section.icon;
+          return (
+            <li key={section.href}>
+              <Link
+                href={section.href}
+                className={cn(
+                  'flex min-h-control flex-col gap-1.5 rounded-2xl border border-border bg-surface p-card shadow-sm',
+                  'transition-colors duration-fast hover:border-primary/30 hover:bg-muted/50',
+                  'motion-reduce:transition-none',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                <Icon className="size-5 text-primary" aria-hidden />
+                <span className="text-body-sm font-medium text-foreground">{section.label}</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
