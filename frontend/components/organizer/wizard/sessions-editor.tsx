@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import {
   addSlot,
   fetchOwnerSlots,
@@ -11,7 +11,7 @@ import {
   type EventSlot,
 } from '@/lib/api/event-content';
 import { ApiError } from '@/lib/api/errors';
-import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
+import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
 import { tempId, toIso, type PendingSlot } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
@@ -178,11 +178,7 @@ export function SessionsEditor({
           <Skeleton className="h-14 w-full" />
         </div>
       ) : rows.length === 0 && pending.length === 0 ? (
-        <EmptyState
-          icon={CalendarClock}
-          title="One showing"
-          body="Add sessions only if this event runs more than once — a 6pm and a 9pm show, or the same play across a weekend. Each one sells its own tickets, so one can sell out while the next stays open."
-        />
+        null
       ) : (
         <ul className="flex flex-col gap-2">
           {rows.map((slot) => (
@@ -230,7 +226,7 @@ export function SessionsEditor({
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="session-ends" className="text-body-sm font-medium">
-              Ends <span className="font-normal text-muted-foreground">— optional</span>
+              Ends
             </label>
             <Input
               id="session-ends"
@@ -239,26 +235,19 @@ export function SessionsEditor({
               min={startsAt || undefined}
               onChange={(event) => setEndsAt(event.target.value)}
             />
-            <p className="text-caption text-muted-foreground">
-              Without one, the window closes a grace period after the session starts.
-            </p>
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="session-label" className="text-body-sm font-medium">
-            Name <span className="font-normal text-muted-foreground">— optional</span>
+            Name
           </label>
           <Input
             id="session-label"
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
-            placeholder="Matinee"
           />
-          <p className="text-caption text-muted-foreground">
-            Only needed when two sessions start at once — a main stage and a side stage.
-          </p>
         </div>
 
         {failure ? (
@@ -270,7 +259,12 @@ export function SessionsEditor({
         <Button
           variant="outline"
           onClick={submit}
-          disabled={!startsAt || create.isPending}
+          // Ends and Name are REQUIRED now, at the owner's instruction. The
+          // "— optional" labels and the sentences explaining what a blank one
+          // did are gone, so the control has to agree with the form: a field
+          // that still accepts blank after its label stopped saying optional
+          // is the worst of both.
+          disabled={!startsAt || !endsAt || !label.trim() || create.isPending}
           loading={create.isPending}
           leftIcon={<Plus className="size-4" aria-hidden />}
           className="w-fit"

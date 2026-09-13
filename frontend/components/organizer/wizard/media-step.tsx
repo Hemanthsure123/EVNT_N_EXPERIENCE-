@@ -30,7 +30,6 @@ import {
 import { ApiError, errorMessage } from '@/lib/api/errors';
 import { ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
-import { POSTER_BLOCKER } from '@/lib/organizer/wizard/model';
 import type { Draft } from '@/lib/organizer/wizard/model';
 import { cn } from '@/lib/utils/cn';
 import { Section, StepHeader, type DraftSave } from './fields';
@@ -732,7 +731,6 @@ function ZoneFrame({
       count={`${filled} of ${zone.uiCap}${zone.capIsGuideline ? ' recommended' : ''}`}
     >
       <div className="flex flex-col gap-1">
-        <p className="max-w-prose text-body-sm text-muted-foreground">{zone.purpose}</p>
         {/* The requirement, BEFORE the picker rather than as a refusal after
             the bytes have gone up over a phone connection.
             `EVENT_IMAGE_SPEC` refuses anything outside 1.5:1–2:1 at 1280x720
@@ -914,15 +912,6 @@ function CoverUploader({
               <ImagePlus className="size-5 text-muted-foreground" />
             </span>
             <p className="text-body-sm font-medium">Drop the cover image here</p>
-            {/* The requirement, in the empty state, in the words the review
-                checklist and the server both use. It is NOT `role="alert"`:
-                nothing has gone wrong on a draft nobody has uploaded to yet,
-                and an assertive announcement on arrival is noise. The blocker
-                on Review is where it becomes a refusal. */}
-            <p className="max-w-sm text-caption font-medium text-foreground">
-              {POSTER_BLOCKER} It is the LCP image on the event page, the whole of the card in
-              every list, and the artwork on the ticket.
-            </p>
             <p className="max-w-sm text-caption text-muted-foreground">
               {EVENT_IMAGE_HINT} Keep faces and text away from the edges.
             </p>

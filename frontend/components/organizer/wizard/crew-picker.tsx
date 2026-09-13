@@ -129,11 +129,6 @@ export function CrewPicker({
 
   return (
     <div className="flex flex-col gap-stack-lg">
-      <p className="text-body-sm text-muted-foreground">
-        Pick from your crew list. They appear on the event page under &ldquo;Who&rsquo;s taking the
-        stage&rdquo;, in the order you choose them.
-      </p>
-
       {members.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-card py-4 text-body-sm text-muted-foreground">
           Your crew list is empty. Add somebody below and they stay available for every event you
@@ -147,7 +142,15 @@ export function CrewPicker({
           role="listbox"
           aria-multiselectable
           aria-label="Crew members"
-          className="flex max-h-72 flex-col gap-2 overflow-y-auto overscroll-contain rounded-xl border border-border p-2"
+          /* ── THE PAGE MUST STILL SCROLL FROM IN HERE ──────────────────
+             `overscroll-contain` stops a scroll CHAINING to the page once
+             this list reaches its own end — which is exactly the report: a
+             finger placed on the crew members could not move the page up or
+             down. Containment is right for a modal that owns the screen and
+             wrong for a 288px box inside a long form. Default chaining means
+             the list scrolls while it has room and hands over when it does
+             not. */
+          className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-xl border border-border p-2"
         >
           {members.map((member) => {
             const index = selection.indexOf(member.id);
@@ -213,27 +216,6 @@ export function CrewPicker({
 
       <AddInline organizationId={organizationId} onAdded={(id) => toggle(id)} />
 
-      {/* The full form, for a photo and a bio, which the inline one
-          deliberately does not ask for. A LINK rather than a second copy of
-          the roster sheet: `crew.tsx` owns that form, including the portrait
-          upload, and two forms writing one table is how the two drift.
-
-          `target="_blank"` so a half-finished event is not navigated away
-          from — the draft is autosaved, but losing your place mid-wizard to
-          add one person is the detour this whole section exists to avoid. */}
-      <p className="text-caption text-muted-foreground">
-        Need a photo or a bio for somebody?{' '}
-        <a
-          href="/dashboard/crew"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="rounded-sm text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          Open the full crew list
-        </a>
-        . It opens in a new tab, so you keep your place here.
-      </p>
-
       {error ? (
         <p
           role="alert"
@@ -262,7 +244,7 @@ export function CrewPicker({
                 ? 'Nobody on the lineup'
                 : `${selection.length} on the lineup`
             : selection.length === 0
-              ? 'Nobody on the lineup yet'
+              ? ''
               : `${selection.length} chosen — added to the event when the draft first saves`}
         </p>
       </div>

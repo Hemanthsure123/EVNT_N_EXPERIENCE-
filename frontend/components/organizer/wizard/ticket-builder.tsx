@@ -322,7 +322,6 @@ export function TicketBuilder({
                       type="number"
                       min="0"
                       placeholder="499"
-                      hint="0 makes it a free ticket."
                     />
                     <Field
                       label="Quantity"
@@ -332,7 +331,6 @@ export function TicketBuilder({
                       type="number"
                       min="1"
                       placeholder="100"
-                      hint="The hard cap. Overselling is impossible below it."
                     />
                     {sessions.length ? (
                       <SessionField
@@ -355,7 +353,6 @@ export function TicketBuilder({
                       value={tier.saleStart}
                       onChange={(value) => patch(tier.key, { saleStart: value })}
                       type="datetime-local"
-                      hint="Leave blank to sell immediately."
                     />
                     <Field
                       label="Sales end"
@@ -363,7 +360,6 @@ export function TicketBuilder({
                       value={tier.saleEnd}
                       onChange={(value) => patch(tier.key, { saleEnd: value })}
                       type="datetime-local"
-                      hint="Leave blank to sell until the event starts."
                     />
                   </div>
 
@@ -410,7 +406,6 @@ export function TicketBuilder({
             nothing. It was wrong in both directions once `position` started
             being saved: the order here IS the order buyers get, and saying
             otherwise would train an organiser not to bother arranging it. */}
-        <p className="text-caption text-muted-foreground">Buyers see tiers in this order.</p>
       </div>
     </div>
   );
@@ -577,9 +572,6 @@ function PhaseEditor({
       <div className="flex flex-wrap items-start justify-between gap-stack">
         <div className="flex min-w-0 flex-col gap-1">
           <h4 className="text-body-sm font-medium text-foreground">Pricing phases</h4>
-          <p className="text-caption text-muted-foreground">
-            Buyers see the live phase price with the normal price struck through.
-          </p>
         </div>
         <Button
           variant="outline"
@@ -658,7 +650,6 @@ function PhaseEditor({
                   type="number"
                   min="1"
                   placeholder="100"
-                  hint="Cumulative — see below. Leave blank to end it on the time alone."
                 />
               </div>
             </li>
@@ -675,24 +666,15 @@ function PhaseEditor({
         get one cheap seat and two at the next price. Both assumptions are wrong,
         and both cost them money.
       */}
-      {/* ── THE ONE FACT THAT COSTS MONEY IF MISREAD ──────────────────────
-          Three paragraphs stood here explaining phase ordering, the cumulative
-          cap and whole-order pricing. They went, per the brief — but not the
-          cap semantics, which are the one thing no label can imply and the one
-          thing an organizer loses money by assuming: "Seat cap: 100" reads as
-          "100 seats at this price" and actually means "the first 100 seats
-          sold or held". A wrong guess there misprices the tier.
-          So it is a short line beside the field it qualifies, not prose above
-          the section — which is what "tooltips only where genuinely necessary"
-          means in practice. */}
-      <div className="flex flex-col gap-1 text-caption text-muted-foreground">
-        <p>
-          Caps are <strong className="font-medium text-foreground">cumulative</strong> — the first N
-          seats sold or held, not N seats at this price. An order crossing a cap pays the next
-          phase&apos;s price in full.
+      {/* The cumulative-cap paragraph was removed at the owner's instruction.
+          The LIMIT line stays: it is a fact about this form's state, not prose
+          about pricing, and without it Add simply stops working with nothing
+          saying why. */}
+      {atLimit ? (
+        <p className="text-caption text-muted-foreground">
+          That is the limit of {MAX_PHASES} phases.
         </p>
-        {atLimit ? <p>That is the limit of {MAX_PHASES} phases.</p> : null}
-      </div>
+      ) : null}
     </section>
   );
 }

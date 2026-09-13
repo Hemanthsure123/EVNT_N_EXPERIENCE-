@@ -84,22 +84,80 @@ const TIME_FORMAT: Intl.DateTimeFormatOptions = {
  */
 export function RunningOrder({
   eventId,
+  organizationId,
   startsAtLocal,
   pending,
   onPending,
 }: {
   /** `null` until the draft has been saved — see the note above. */
   eventId: string | null;
+  /** Scopes the remembered Kind vocabulary. One promoter's words are not
+   *  another's, and neither is public. */
+  organizationId: string;
   startsAtLocal: string;
   pending: PendingTimelineEntry[];
   onPending: (next: PendingTimelineEntry[]) => void;
 }) {
   const client = useQueryClient();
-  const [kind, setKind] = React.useState<TimelineKind>('doors');
   const [label, setLabel] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [startsAt, setStartsAt] = React.useState('');
   const [failure, setFailure] = React.useState<string | null>(null);
+
+  /**
+   * The organizer's OWN list of kinds, plus the seven built-ins.
+   *
+   * Per organization and on this device: the server has no column for a
+   * per-account vocabulary, and inventing one for a `<datalist>` would be a
+   * migration on the events module for an autocomplete. Reading is wrapped
+   * because `localStorage` throws in a private window and a suggestion list
+   * is not worth a white screen.
+   */
+  const vocabularyKey = `ee-timeline-kinds::${organizationId || 'default'}`;
+  const [remembered, setRemembered] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(vocabularyKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      setRemembered(
+        Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [],
+      );
+    } catch {
+      setRemembered([]);
+    }
+  }, [vocabularyKey]);
+
+  const kindOptions = React.useMemo(() => {
+    const seen = new Set<string>();
+    return [...KINDS.map((option) => option.label), ...remembered].filter((option) => {
+      const key = option.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [remembered]);
+
+  /**
+   * `EventTimelineEntry.kind` is a closed `TextChoices` on the server, so an
+   * unknown string is a 400. What the organizer typed is the LABEL — the text
+   * the event page renders — and this only decides which of the seven the row
+   * is filed under. `session` is the neutral one.
+   */
+  const kindFor = (text: string): TimelineKind =>
+    KINDS.find((option) => option.label.toLowerCase() === text.trim().toLowerCase())?.value ??
+    'session';
+
+  const rememberKind = (text: string) => {
+    const value = text.trim();
+    if (!value || KINDS.some((option) => option.label.toLowerCase() === value.toLowerCase())) return;
+    const next = [...new Set([value, ...remembered])].slice(0, 24);
+    setRemembered(next);
+    try {
+      window.localStorage.setItem(vocabularyKey, JSON.stringify(next));
+    } catch {
+      // A suggestion list is not worth failing an entry over.
+    }
+  };
 
   const content = useQuery({
     queryKey: ['event-content', eventId],
@@ -169,7 +227,9 @@ export function RunningOrder({
   ];
 
   const submit = () => {
-    if (!label.trim() || create.isPending) return;
+    if (!label.trim() || !startsAt || create.isPending) return;
+    const kind = kindFor(label);
+    rememberKind(label);
     // With an event the entry goes to the server now; without one there is
     // nothing to POST to, so it is staged for the save engine.
     if (!eventId) {
@@ -208,7 +268,6 @@ export function RunningOrder({
         <EmptyState
           icon={Clock}
           title="No running order yet"
-          body="Doors, support, headline, curfew."
         />
       ) : (
         <ol className="flex flex-col">
@@ -266,40 +325,42 @@ export function RunningOrder({
 
       <div className="flex flex-col gap-stack rounded-xl border border-border bg-sunken p-card">
         <div className="grid gap-stack-lg sm:grid-cols-[10rem_minmax(0,1fr)]">
-          <div className="flex flex-col gap-1.5">
+          {/* ── KIND IS FREE TEXT, AND IT IS THE ENTRY ────────────────────
+              "What happens" is gone at the owner's instruction, so Kind is
+              the only text left and therefore has to BE the line the event
+              page shows. What is typed is stored as `label`, which is the
+              column that renders; the enum `kind` is matched from the seven
+              built-ins when the text is one of them and falls back to
+              `session` otherwise, because that column is a closed
+              `TextChoices` on the server and an unknown value is a 400.
+
+              The `<datalist>` offers the built-ins PLUS everything this
+              organization has typed before — remembered per organization on
+              this device, which is "organizer specific, not public" as far as
+              it can be taken without a backend column to hold a real
+              account-level vocabulary. */}
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
             <label htmlFor="timeline-kind" className="text-body-sm font-medium">
               Kind
             </label>
-            <select
-              id="timeline-kind"
-              value={kind}
-              onChange={(event) => setKind(event.target.value as TimelineKind)}
-              className="h-control rounded-md border border-input bg-surface px-2.5 text-body text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              {KINDS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="timeline-label" className="text-body-sm font-medium">
-              What happens
-            </label>
             <Input
-              id="timeline-label"
+              id="timeline-kind"
+              list="timeline-kind-options"
               value={label}
               maxLength={120}
               onChange={(event) => setLabel(event.target.value)}
-              placeholder="Martin Garrix"
             />
+            <datalist id="timeline-kind-options">
+              {kindOptions.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="timeline-time" className="text-body-sm font-medium">
-            Time <span className="font-normal text-muted-foreground">— optional</span>
+            Time
           </label>
           <Input
             id="timeline-time"
@@ -318,9 +379,6 @@ export function RunningOrder({
               Use the event start time
             </button>
           ) : null}
-          <p className="text-caption text-muted-foreground">
-            Leave blank if you know the order but not the times — those entries sit at the end.
-          </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -332,7 +390,6 @@ export function RunningOrder({
             value={description}
             maxLength={300}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="Main stage. 90-minute set."
           />
         </div>
 
@@ -345,7 +402,7 @@ export function RunningOrder({
         <Button
           variant="outline"
           onClick={submit}
-          disabled={!label.trim() || create.isPending}
+          disabled={!label.trim() || !startsAt || create.isPending}
           loading={create.isPending}
           leftIcon={<Plus className="size-4" aria-hidden />}
           className="w-fit"

@@ -725,6 +725,7 @@ export function ScheduleStep({ draft, update, issues }: StepProps) {
         title="Running order"
       >
         <RunningOrder
+          organizationId={draft.organizationId}
           eventId={draft.eventId || null}
           startsAtLocal={draft.startsAt}
           pending={draft.pendingTimeline}

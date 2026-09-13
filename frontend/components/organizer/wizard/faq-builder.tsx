@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, Plus, Trash2 } from 'lucide-react';
 import { addFaq, fetchEventContent, removeFaq, type EventFaq } from '@/lib/api/event-content';
+import type { PendingFaq } from '@/lib/organizer/wizard/model';
 import { ApiError } from '@/lib/api/errors';
 import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input, Textarea } from '@/components/ui';
@@ -53,7 +54,29 @@ const SUGGESTED_QUESTIONS = [
 
 const QUESTION_MAX = 200;
 
-export function FaqBuilder({ eventId }: { eventId: string }) {
+/**
+ * FAQs, WITH OR WITHOUT A SAVED DRAFT.
+ *
+ * This used to be gated behind a "FAQs unlock once the draft is saved" panel.
+ * The staging it needed already existed and was simply never wired: the draft
+ * has carried `pendingFaqs` all along and `use-wizard`'s save engine already
+ * flushes them on the first create. Nothing in the UI wrote to it — the gate
+ * was standing in front of a door that was open.
+ *
+ * With an event the rows go to the server immediately; without one they are
+ * staged in the draft and posted the moment it first saves. Exactly what the
+ * running order and the session list do.
+ */
+export function FaqBuilder({
+  eventId,
+  pending,
+  onPending,
+}: {
+  /** `null` until the draft has been saved. */
+  eventId: string | null;
+  pending: PendingFaq[];
+  onPending: (next: PendingFaq[]) => void;
+}) {
   const client = useQueryClient();
   const [question, setQuestion] = React.useState('');
   const [answer, setAnswer] = React.useState('');
@@ -62,13 +85,15 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
 
   const content = useQuery({
     queryKey: ['event-content', eventId],
-    queryFn: () => fetchEventContent(eventId),
+    queryFn: () => fetchEventContent(eventId as string),
+    // Nothing to fetch until the event exists; the staged list is the view.
+    enabled: Boolean(eventId),
   });
 
   const invalidate = () => client.invalidateQueries({ queryKey: ['event-content', eventId] });
 
   const create = useMutation({
-    mutationFn: (input: Omit<EventFaq, 'id'>) => addFaq(eventId, input),
+    mutationFn: (input: Omit<EventFaq, 'id'>) => addFaq(eventId as string, input),
     onSuccess: () => {
       setQuestion('');
       setAnswer('');
@@ -83,15 +108,33 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
   });
 
   const drop = useMutation({
-    mutationFn: (faqId: string) => removeFaq(eventId, faqId),
+    mutationFn: (faqId: string) => removeFaq(eventId as string, faqId),
     onSuccess: () => void invalidate(),
   });
 
-  const faqs = content.data?.faqs ?? [];
+  // The saved rows when there is an event, the staged ones when there is not.
+  // Shaped alike so the list below renders one way; `id` is the temp id while
+  // staged, which is also what Remove needs.
+  const faqs = eventId
+    ? (content.data?.faqs ?? [])
+    : pending.map((row) => ({ id: row.tempId, question: row.question, answer: row.answer }));
   const ready = question.trim().length > 0 && answer.trim().length > 0;
 
   const submit = () => {
     if (!ready || create.isPending) return;
+    if (!eventId) {
+      onPending([
+        ...pending,
+        { tempId: `faq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          question: question.trim(),
+          answer: answer.trim() },
+      ]);
+      setQuestion('');
+      setAnswer('');
+      setFailure(null);
+      questionRef.current?.focus();
+      return;
+    }
     create.mutate({
       question: question.trim(),
       answer: answer.trim(),
@@ -99,11 +142,19 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
     });
   };
 
+  const removeRow = (id: string) => {
+    if (!eventId) {
+      onPending(pending.filter((row) => row.tempId !== id));
+      return;
+    }
+    drop.mutate(id);
+  };
+
   return (
     <div className="flex flex-col gap-stack-lg">
-      {content.isError ? (
+      {eventId && content.isError ? (
         <ErrorState message="Could not load the FAQs." onRetry={() => void content.refetch()} />
-      ) : content.isPending ? (
+      ) : eventId && content.isPending ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
@@ -136,7 +187,7 @@ export function FaqBuilder({ eventId }: { eventId: string }) {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => drop.mutate(faq.id)}
+                onClick={() => removeRow(faq.id)}
                 disabled={drop.isPending}
                 aria-label={`Remove “${faq.question}”`}
                 className="shrink-0 hover:text-destructive"

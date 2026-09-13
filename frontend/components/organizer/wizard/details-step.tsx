@@ -3,7 +3,6 @@
 import * as React from 'react';
 import {
   AGE_RESTRICTION_MAX,
-  DURATION_MAX_MINUTES,
   LANGUAGE_MAX,
   SHORT_DESCRIPTION_MAX,
   type Draft,
@@ -59,95 +58,40 @@ type Props = {
 const errorFor = (issues: Issue[], field: string) =>
   issues.find((issue) => issue.field === field)?.message;
 
-const DURATION_PRESETS = [
-  { label: '1 hour', minutes: 60 },
-  { label: '90 minutes', minutes: 90 },
-  { label: '2 hours', minutes: 120 },
-  { label: '3 hours', minutes: 180 },
-  { label: '4 hours', minutes: 240 },
-  { label: 'All day', minutes: 480 },
-];
-
 const AGE_PRESETS = ['All ages', 'Under 18s with an adult', '16+', '18+', '21+'];
 
-const LANGUAGE_PRESETS = ['English', 'Hindi', 'Hindi, English', 'Marathi', 'Tamil', 'Telugu'];
-
 export function DetailsStep({ draft, update, issues, save }: Props) {
-  const minutes = Number(draft.durationMinutes);
-  const readable =
-    Number.isInteger(minutes) && minutes > 0 && minutes <= DURATION_MAX_MINUTES
-      ? formatMinutes(minutes)
-      : null;
-
   return (
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Details"
       />
 
-      <TextField
-        id="event-short-description"
-        label="One-line summary"
-        value={draft.shortDescription}
-        onChange={(shortDescription) => update({ shortDescription })}
-        placeholder="Four stages, twelve artists, one night on the Mumbai waterfront."
-        max={SHORT_DESCRIPTION_MAX}
-        error={errorFor(issues, 'shortDescription')}
-      />
+      <Section title="One-line summary">
+        <TextField
+          id="event-short-description"
+          label="One-line summary"
+          value={draft.shortDescription}
+          onChange={(shortDescription) => update({ shortDescription })}
+          max={SHORT_DESCRIPTION_MAX}
+          error={errorFor(issues, 'shortDescription')}
+        />
+      </Section>
 
-      {/* ── TWO GROUPS, BECAUSE THESE ARE TWO QUESTIONS ────────────────────
-          The step was six sibling blocks at one weight: summary, duration,
-          language, age, accessibility, policies, FAQs. "How long is it and in
-          what language" and "who is allowed in and can they get around" are
-          different decisions, often made by different people, and flattening
-          them into one column is what made a short step feel long. */}
-      <Section title="Running time and language">
-        <div className="flex flex-col gap-block sm:flex-row sm:gap-4">
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <TextField
-              id="event-duration"
-              label="How long it runs"
-              value={draft.durationMinutes}
-              onChange={(value) => update({ durationMinutes: value.replace(/[^0-9]/g, '') })}
-              placeholder="Minutes, e.g. 180"
-              error={errorFor(issues, 'durationMinutes')}
-              // Live feedback, not an explanation. The two sentences that used
-              // to sit here described what the field was NOT (the end time) —
-              // the classic paragraph standing in for a label. The label says
-              // "how long it runs", the placeholder says minutes, and this
-              // echoes the typed number back in the words the event page will
-              // print. Nothing left to explain.
-              hint={readable ? `Shown as “${readable}”` : undefined}
-            />
-            <Chips
-              label="Common durations"
-              options={DURATION_PRESETS.map((preset) => ({
-                key: preset.label,
-                value: String(preset.minutes),
-              }))}
-              current={draft.durationMinutes}
-              onPick={(durationMinutes) => update({ durationMinutes })}
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <TextField
-              id="event-language"
-              label="Language"
-              value={draft.language}
-              onChange={(language) => update({ language })}
-              placeholder="Hindi, English"
-              max={LANGUAGE_MAX}
-              error={errorFor(issues, 'language')}
-            />
-            <Chips
-              label="Common languages"
-              options={LANGUAGE_PRESETS.map((value) => ({ key: value, value }))}
-              current={draft.language}
-              onPick={(language) => update({ language })}
-            />
-          </div>
-        </div>
+      {/* "Running time and language" is gone as a wrapper at the owner's
+          instruction — its children stand on their own. "How long it runs"
+          went with it: the start and end times already say how long the event
+          is, so it was a second place to state the same thing and a second
+          place for the two to disagree. */}
+      <Section title="Language">
+        <TextField
+          id="event-language"
+          label="Language"
+          value={draft.language}
+          onChange={(language) => update({ language })}
+          max={LANGUAGE_MAX}
+          error={errorFor(issues, 'language')}
+        />
       </Section>
 
       <Section title="Who can come, and how they get in">
@@ -242,19 +186,17 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
         <PolicyEditor policies={draft.policies} onChange={(policies) => update({ policies })} />
       </Section>
 
-      <Section
-        title="Frequently asked questions"
-      >
-        {draft.eventId ? (
-          <FaqBuilder eventId={draft.eventId} />
-        ) : (
-          <NeedsSavedDraft
-            title="FAQs unlock once the draft is saved"
-            what="Add these once the event exists. Fill in the fields below and the draft saves itself."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        )}
+      {/* NO DRAFT GATE. The "FAQs unlock once the draft is saved" panel is
+          gone at the owner's instruction — and it was standing in front of an
+          open door: the draft has always carried `pendingFaqs` and the save
+          engine has always flushed them on the first create. Nothing in the UI
+          wrote to it. */}
+      <Section title="Frequently asked questions">
+        <FaqBuilder
+          eventId={draft.eventId || null}
+          pending={draft.pendingFaqs}
+          onPending={(pendingFaqs) => update({ pendingFaqs })}
+        />
       </Section>
 
       {/* AFTER the FAQs, because the two are opposites and the order says so:
@@ -319,13 +261,6 @@ function Chips({
   );
 }
 
-function formatMinutes(minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours === 0) return `${rest} min`;
-  if (rest === 0) return `${hours} hr`;
-  return `${hours} hr ${rest} min`;
-}
 
 /** Exactly the fields `POST /events` needs — the same list `canCreate` checks. */
 export function missingForSave(draft: Draft): string[] {

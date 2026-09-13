@@ -538,10 +538,6 @@ export function EventWizard({
               <div className="flex flex-col gap-block">
                 <header className="flex flex-col gap-1.5">
                   <h1 className="text-h3">Tickets</h1>
-                  <p className="max-w-prose text-body-sm text-muted-foreground">
-                    At least one tier is required to publish. Quantity is a hard cap and
-                    cannot be oversold.
-                  </p>
                 </header>
                 <TicketBuilder
                   tiers={draft.tiers}
