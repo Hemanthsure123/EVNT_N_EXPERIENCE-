@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, ChevronRight } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import {
   Input,
   Select,
@@ -603,10 +603,33 @@ export function fieldMessageId(id: string, error?: string): string {
  * order — so the prop is gone rather than optional, and the compiler found
  * every call site.
  */
-export function StepHeader({ title }: { title: string }) {
+/**
+ * The step's title, with the rule that separates it from its cards.
+ *
+ * A bare `h1` sat directly on the same background as the first card, so the
+ * heading and the form it introduced read as one undifferentiated column. The
+ * hairline gives the step a top edge without adding another box: the cards are
+ * the boxes, and a card containing the title would make the heading look like
+ * one more thing to open.
+ *
+ * `step` is the position, drawn as a small monospaced marker rather than
+ * spelled out — "Basics" with a quiet 1 beside it says where you are without
+ * repeating the rail above it in a sentence.
+ */
+export function StepHeader({ title, step }: { title: string; step?: number }) {
   return (
-    <header className="flex flex-col gap-1.5">
-      <h1 className="text-h3">{title}</h1>
+    <header className="flex flex-col gap-2 border-b border-border pb-block">
+      <div className="flex items-center gap-2.5">
+        {step ? (
+          <span
+            aria-hidden
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-caption font-semibold tabular-nums text-primary"
+          >
+            {step}
+          </span>
+        ) : null}
+        <h1 className="text-h3">{title}</h1>
+      </div>
     </header>
   );
 }
@@ -750,33 +773,38 @@ export function FieldGroup({
 }
 
 /**
- * THE ACCORDION CARD — one collapsible, ticket-shaped surface, used everywhere.
+ * THE TOGGLE CARD — one switch, one section, closed until it is turned on.
  *
- * ── CLOSED BY DEFAULT, AND THAT IS THE WHOLE POINT ───────────────────────
+ * ── A SWITCH, NOT A CHEVRON ──────────────────────────────────────────────
  *
- * The wizard grew to eight steps of fully-expanded forms, so every screen
- * opened on a wall of inputs and the organizer had to scroll past finished
- * work to reach the field they came for. Everything is shut now; a step opens
- * as a list of headings you choose between.
+ * This was a `<details>` disclosure with a chevron. The owner asked for a
+ * TOGGLE: flip it on and the section opens, flip it off and it closes. So the
+ * affordance is a switch track and the whole header is the control.
  *
- * `defaultOpen` stays a prop rather than being deleted, because the one place
- * that genuinely must open on arrival is a section with exactly one field in
- * it — collapsing that hides a control behind a press that reveals a control.
+ * ── WHY IT IS STILL A DISCLOSURE UNDERNEATH ──────────────────────────────
  *
- * ── `<details>`, NOT A useState TOGGLE ───────────────────────────────────
+ * `role="switch"` announces "on/off", which is what a setting is. This does
+ * not CHANGE anything about the event — it reveals fields that were always
+ * going to be saved. A screen-reader user told "Tags, switch, off" would
+ * reasonably conclude tags are disabled; `aria-expanded` says "collapsed",
+ * which is the truth. So it is a `<button aria-expanded>` wearing a switch,
+ * and the two audiences each get the right answer.
  *
- * Keyboard operation, the open/closed state in the accessibility tree, and
- * find-in-page reaching collapsed content are all free and all things a
- * hand-rolled toggle has to be told to do. It also renders correctly before
- * hydration, which a state-driven one cannot.
+ * It also cannot be a `<details>` any more: a nested interactive control
+ * inside `<summary>` is undefined behaviour in several browsers, and the
+ * switch has to sit in the header.
  *
- * ── A SHUT SECTION STILL SAYS IT IS WRONG ────────────────────────────────
+ * ── CLOSED BY DEFAULT, AND A CLOSED CARD STILL SPEAKS ────────────────────
  *
- * `invalid` is not decoration. Collapsing by default means a validation
- * failure can be two presses away from being seen, so the header carries the
- * mark and the step rail carries it too. Without this, "closed by default" and
- * "errors surface on save" combine into a form that refuses to submit and
- * shows nothing anywhere.
+ * `count` is what makes collapsing safe. A closed card that holds a value says
+ * so — "3", "Set", the title itself — so the step reads as a summary of the
+ * event rather than a row of shut doors. `invalid` marks a section with a
+ * problem, because "closed by default" plus "errors on save" would otherwise
+ * combine into a form that refuses to submit and shows nothing anywhere.
+ *
+ * `defaultOpen` survives for the one case that earns it: a section holding a
+ * single control, where collapsing hides a field behind a press that reveals
+ * a field.
  */
 export function AccordionCard({
   title,
@@ -795,51 +823,98 @@ export function AccordionCard({
   invalid?: boolean;
   required?: boolean;
 }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  const bodyId = React.useId();
+
   return (
-    <details
-      open={defaultOpen}
+    <section
       className={cn(
-        // `rounded-2xl` and a hairline: the ticket shape the rest of the
-        // product uses, so an organizer's form looks like the thing they are
-        // making.
-        'group overflow-hidden rounded-2xl border bg-surface shadow-sm',
-        'transition-colors duration-fast motion-reduce:transition-none',
-        invalid ? 'border-destructive/50' : 'border-border',
+        // ── THE TICKET SHAPE ──────────────────────────────────────────
+        // `rounded-2xl` and a hairline, with the perforation drawn as a
+        // gradient stripe on the left edge when the card is open — the same
+        // language the issued ticket and the checkout cards use, so an
+        // organizer's form looks like the thing they are making.
+        'group/card relative overflow-hidden rounded-2xl border bg-surface',
+        'transition-[border-color,box-shadow] duration-base motion-reduce:transition-none',
+        invalid
+          ? 'border-destructive/50 shadow-sm'
+          : open
+            ? 'border-primary/30 shadow-md'
+            : 'border-border shadow-sm hover:border-primary/25',
       )}
     >
-      <summary
+      {/* The stub edge. Purely decorative, and only while open, so a closed
+          list of cards stays quiet. */}
+      <span
+        aria-hidden
         className={cn(
-          'flex min-h-control cursor-pointer list-none items-center gap-3 px-card py-3.5',
-          'transition-colors duration-fast hover:bg-muted/60 motion-reduce:transition-none',
+          'pointer-events-none absolute inset-y-0 left-0 w-1 transition-opacity duration-base motion-reduce:transition-none',
+          'bg-gradient-to-b from-primary/60 via-primary/20 to-transparent',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          'flex w-full min-h-control items-center gap-3 px-card py-3.5 text-left',
+          'transition-colors duration-fast hover:bg-muted/50 motion-reduce:transition-none',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         )}
       >
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 text-body-sm font-semibold">
+          <span className="flex items-center gap-2 text-body-sm font-semibold text-foreground">
             {title}
             {required ? (
-              <span className="text-caption font-medium text-destructive">Required</span>
+              <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-caption font-medium text-destructive">
+                Required
+              </span>
             ) : null}
           </span>
         </span>
+
         {invalid ? (
           <AlertTriangle className="size-4 shrink-0 text-destructive" aria-label="Needs attention" />
         ) : count ? (
-          <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{count}</span>
+          <span className="shrink-0 truncate text-caption tabular-nums text-muted-foreground">
+            {count}
+          </span>
         ) : null}
-        <ChevronRight
-          className="size-4 shrink-0 text-muted-foreground transition-transform duration-fast group-open:rotate-90 motion-reduce:transition-none"
+
+        {/* The switch, drawn rather than mounted: a real `<Switch>` here would
+            be a control inside a control, and a press would have to decide
+            which one it meant. The state is the button's own. */}
+        <span
           aria-hidden
-        />
-      </summary>
-      <div className="flex flex-col gap-stack-lg border-t border-border p-card">{children}</div>
-    </details>
+          className={cn(
+            'inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-transparent px-0.5',
+            'transition-colors duration-fast motion-reduce:transition-none',
+            open ? 'bg-primary' : 'bg-input',
+          )}
+        >
+          <span
+            className={cn(
+              'block size-5 rounded-full bg-surface shadow-sm',
+              'transition-transform duration-fast ease-out motion-reduce:transition-none',
+              open ? 'translate-x-5' : 'translate-x-0',
+            )}
+          />
+        </span>
+      </button>
+
+      <div id={bodyId} hidden={!open} className="border-t border-border p-card">
+        <div className="flex flex-col gap-stack-lg">{children}</div>
+      </div>
+    </section>
   );
 }
 
 /**
- * The name fifteen call sites already use. `AccordionCard` is the same
- * component — this alias exists so "collapse everything" was one default
- * changing rather than fifteen imports.
+ * The name every existing call site uses. `AccordionCard` is the same
+ * component — this alias is why "every section becomes a toggle" was one
+ * component changing rather than twenty imports.
  */
 export const Section = AccordionCard;

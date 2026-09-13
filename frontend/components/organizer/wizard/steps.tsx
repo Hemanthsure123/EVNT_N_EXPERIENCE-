@@ -87,6 +87,7 @@ export function BasicsStep({
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Basics"
+        step={1}
       />
 
       {/* The offer to copy, made where the retyping is about to happen — and
@@ -329,6 +330,7 @@ export function VenueStep({ draft, update, issues }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Venue"
+        step={2}
       />
 
       {/* WHERE IT HAPPENS: the venue and the city are one question asked in
@@ -657,10 +659,20 @@ function LocationMethod({
       <div className="flex flex-col gap-stack">
         {/* A radiogroup, not two switches: two switches can both be off, or
             both on, and neither state means anything here. */}
-        <div role="radiogroup" aria-label="How to give the exact location" className="flex gap-2">
+        {/* TWO SWITCHES, ONE ANSWER. Drawn as toggles because that is what was
+            asked for, and kept as RADIOS underneath because they are mutually
+            exclusive: two `role="switch"` controls can both be off, or both
+            on, and neither state means anything here. Turning one on turns the
+            other off, which a radiogroup expresses natively and a pair of
+            switches would have to be taught. */}
+        <div
+          role="radiogroup"
+          aria-label="How to give the exact location"
+          className="flex flex-col gap-2"
+        >
           {(
             [
-              { value: 'pin' as const, label: 'Pin on the map' },
+              { value: 'pin' as const, label: 'Pin the exact spot on the map' },
               { value: 'link' as const, label: 'Paste a Google Maps link' },
             ]
           ).map((option) => (
@@ -671,14 +683,31 @@ function LocationMethod({
               aria-checked={method === option.value}
               onClick={() => setMethod(option.value)}
               className={cn(
-                'inline-flex min-h-control flex-1 items-center justify-center rounded-xl border px-3 text-body-sm transition-colors duration-fast',
-                'motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'flex min-h-control items-center gap-3 rounded-xl border px-4 py-2.5 text-left text-body-sm',
+                'transition-colors duration-fast motion-reduce:transition-none',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 method === option.value
-                  ? 'border-primary bg-primary/10 font-medium text-foreground'
-                  : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground',
+                  ? 'border-primary/40 bg-primary/5 font-medium text-foreground'
+                  : 'border-border text-muted-foreground hover:border-primary/30 hover:text-foreground',
               )}
             >
-              {option.label}
+              <span className="min-w-0 flex-1">{option.label}</span>
+              <span
+                aria-hidden
+                className={cn(
+                  'inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-transparent px-0.5',
+                  'transition-colors duration-fast motion-reduce:transition-none',
+                  method === option.value ? 'bg-primary' : 'bg-input',
+                )}
+              >
+                <span
+                  className={cn(
+                    'block size-5 rounded-full bg-surface shadow-sm',
+                    'transition-transform duration-fast ease-out motion-reduce:transition-none',
+                    method === option.value ? 'translate-x-5' : 'translate-x-0',
+                  )}
+                />
+              </span>
             </button>
           ))}
         </div>
@@ -750,6 +779,7 @@ export function ScheduleStep({ draft, update, issues }: StepProps) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Schedule"
+        step={3}
       />
 
       {/* ── ONE DAY OR SEVERAL ────────────────────────────────────────────

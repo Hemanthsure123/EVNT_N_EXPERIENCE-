@@ -61,6 +61,7 @@ export function DetailsStep({ draft, update, issues }: Props) {
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Details"
+        step={6}
       />
 
       <Section title="One-line summary">

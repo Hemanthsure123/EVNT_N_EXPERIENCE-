@@ -409,6 +409,7 @@ export function MediaStep({
     <div className="flex flex-col gap-block">
       <StepHeader
         title="Media"
+        step={5}
       />
 
       {/* THE COVER AND THE GALLERY ARE DIFFERENT THINGS, so they are different
