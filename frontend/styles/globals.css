@@ -257,6 +257,10 @@
     .glass {
       background-color: rgb(var(--surface));
     }
+
+    /* The deeper frost needs it MORE than `.glass` does: its fill is thinner
+       (0.62) precisely because the blur carries the legibility, so without one
+       there is nothing left to read the bar against. */
     .glass-strong {
       background-color: rgb(var(--surface));
     }
