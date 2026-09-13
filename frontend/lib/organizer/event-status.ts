@@ -67,3 +67,41 @@ export const STATUS_FILTERS: { value: '' | EventStatus; label: string }[] = [
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'archived', label: 'Archived' },
 ];
+
+/**
+ * THE PHONE'S FILTER, AND WHY IT IS FOUR AND NOT NINE.
+ *
+ * `STATUS_FILTERS` above is the complete stored vocabulary, which is right for
+ * a `<select>` on a toolbar and wrong for a row of pills on a 390px screen:
+ * nine of them is a horizontal scroller, and a filter you have to scroll to
+ * find is a filter nobody uses.
+ *
+ * These four are the LIFECYCLE — the question an organizer actually arrives
+ * with ("what is on sale", "what have I not finished", "what already
+ * happened"). Each is one of the SAME stored statuses and writes the SAME
+ * `?status=` param, so the pills and the select are two controls over one
+ * piece of state and cannot disagree.
+ *
+ * ── NO COUNTS ON THE PILLS ────────────────────────────────────────────────
+ *
+ * The reference design carries them ("Live 3", "Past 8") and this list is
+ * CURSOR-paginated with no `meta.count` (BACKLOG). A count could therefore
+ * only ever describe the page that happens to be loaded FOR THE ACTIVE PILL —
+ * the other three filter server-side, so their rows are not in the client at
+ * all and their numbers would have to be invented. The house rule is that such
+ * a figure is a floor ("20+") or nothing, and a pill is far too small to carry
+ * that caveat. The deck states the loaded count ONCE, above the cards, where
+ * the sentence has room to say what it is counting.
+ *
+ * ── AND WHY A STATUS OUTSIDE THESE FOUR LIGHTS NOTHING ────────────────────
+ *
+ * Picking "Cancelled" from the desktop select leaves every pill unpressed,
+ * which is correct: "All" is not what is showing. The active-filter chip row
+ * below the pills names it and offers the clear.
+ */
+export const LIFECYCLE_FILTERS: { value: '' | EventStatus; label: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'live', label: 'Live' },
+  { value: 'finished', label: 'Past' },
+  { value: 'draft', label: 'Drafts' },
+];

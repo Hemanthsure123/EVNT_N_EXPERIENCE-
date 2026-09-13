@@ -563,6 +563,21 @@
   --glass-surface: 0.78; /* alpha of --surface under the blur */
   --glass-hairline: 0.12; /* alpha of --foreground for the 1px edge */
 
+  /* THE CARD FROST -- the same material, WITHOUT the blur.
+
+     `.glass` is chrome the page scrolls under, and there is one of it. A deck
+     of event cards is twenty surfaces at once, and a backdrop-filter is a
+     per-frame repaint of everything beneath it -- the measured reason
+     `.glass-media` dropped its blur when it landed on every card in a grid.
+     So the card keeps the frost's LOOK (a translucent pane over the page, a
+     hairline edge, a light that falls off down the face) and pays none of its
+     paint cost.
+
+     Two stops rather than one alpha: a flat translucent fill reads as a tinted
+     card, and it is the FALL-OFF that reads as a pane catching light. */
+  --glass-card-top: 0.96;
+  --glass-card-bottom: 0.74;
+
   /* Elevation. Two layers each -- a tight contact shadow plus a wide ambient
      one -- because a single blur at low alpha reads as a smudge, while the pair
      reads as an object above a surface. Tinted with `--ink-950` (warm) rather
@@ -744,6 +759,10 @@
      content passing under a glass bar is lighter than the bar itself. */
   --glass-hairline: 0.14;
   --glass-surface: 0.86;
+  /* Denser at the top and a shorter fall-off: on a dark ground a thin pane
+     disappears long before it does on white. */
+  --glass-card-top: 0.94;
+  --glass-card-bottom: 0.68;
 
   color-scheme: dark;
 }

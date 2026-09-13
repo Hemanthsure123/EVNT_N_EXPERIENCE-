@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   Camera,
@@ -115,7 +116,26 @@ export function CheckIn() {
     [events.data],
   );
 
+  /**
+   * THE GATE CAN BE DEEP-LINKED, AND IT VERIFIES THE LINK.
+   *
+   * "Scan desk" on an event card arrives as `?event={id}`. Taking that id on
+   * trust is the one thing this screen must not do: the `event_id` sent with
+   * every scan is what the backend authorizes and wrong-event-checks against,
+   * so a gate silently stationed at the wrong event denies an entire queue of
+   * valid tickets with `denied_wrong_event`.
+   *
+   * So the id is honoured only if it is actually in the live list this screen
+   * can scan for. Anything else — an event that went off sale between the card
+   * rendering and the press, a hand-edited URL — falls back to the default and
+   * SAYS it did, rather than showing a picker whose value matches none of its
+   * options.
+   */
+  const params = useSearchParams();
+  const requested = params?.get('event') ?? '';
   const [eventId, setEventId] = React.useState('');
+  const [ignoredLink, setIgnoredLink] = React.useState(false);
+  const gateChosen = React.useRef(false);
   const [gate, setGate] = React.useState('Main gate');
   const [token, setToken] = React.useState('');
   const [scans, setScans] = React.useState<Scan[]>([]);
@@ -126,8 +146,18 @@ export function CheckIn() {
   const sounder = React.useRef<ScanSound | null>(null);
 
   React.useEffect(() => {
-    if (!eventId && rows.length) setEventId(rows[0].id);
-  }, [rows, eventId]);
+    // ONCE, when the list first arrives. Without the latch a steward who
+    // changed the event by hand would be dragged back to the link's choice on
+    // the next refetch.
+    if (gateChosen.current || !rows.length) return;
+    gateChosen.current = true;
+    if (requested && rows.some((row) => row.id === requested)) {
+      setEventId(requested);
+      return;
+    }
+    if (requested) setIgnoredLink(true);
+    setEventId(rows[0].id);
+  }, [rows, requested]);
 
   React.useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -326,6 +356,12 @@ export function CheckIn() {
                       </option>
                     ))}
                   </select>
+                  {ignoredLink ? (
+                    <span role="alert" className="rounded-md bg-warning-subtle px-2 py-1 text-caption text-warning-subtle-foreground">
+                      That event is not on sale, so its gate is not open. Showing the first live
+                      event instead — check this is the right one before scanning.
+                    </span>
+                  ) : null}
                 </label>
                 <label className="flex flex-col gap-1.5">
                   <span className="text-caption font-medium text-muted-foreground">Gate</span>

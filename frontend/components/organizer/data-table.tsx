@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { downloadCsv, toCsv, type ColumnDef, type DataTable } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
+import { ORGANIZER_NAV_OFFSET } from './organizer-footer-nav';
 import { Skeleton } from './primitives';
 
 /**
@@ -444,7 +445,10 @@ export function BulkBar({
       role="region"
       aria-label={`${count} selected`}
       className={cn(
-        'fixed inset-x-0 bottom-4 z-sticky mx-auto flex w-[calc(100%-2rem)] max-w-2xl items-center gap-3',
+        // NOT a bare `bottom-4`: below `lg` the organizer's bottom
+        // navigation occupies exactly that corner.
+        'fixed inset-x-0 z-sticky mx-auto flex w-[calc(100%-2rem)] max-w-2xl items-center gap-3',
+        ORGANIZER_NAV_OFFSET,
         'rounded-xl border border-border bg-elevated px-card py-2 shadow-lg',
         'animate-in slide-in-from-bottom-2 fade-in-0 motion-reduce:animate-none',
       )}

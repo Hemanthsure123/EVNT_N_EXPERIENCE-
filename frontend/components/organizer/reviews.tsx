@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
@@ -29,7 +30,18 @@ import { SelectFilter } from './filters';
  * silently does nothing is worse than its absence, so this screen reads.
  */
 export function Reviews() {
-  const [eventId, setEventId] = React.useState('');
+  /**
+   * `?event={id}` opens this filtered to one event — the "Reviews" action on
+   * an event card. Seeded as the INITIAL value rather than pushed in by an
+   * effect, so the first render already asks for the right rows instead of
+   * fetching every review and then discarding them.
+   *
+   * Unlike the scan desk this needs no verification of the id: the worst a
+   * wrong one can do is show an empty list, and the picker below carries every
+   * event the organizer has.
+   */
+  const params = useSearchParams();
+  const [eventId, setEventId] = React.useState(() => params?.get('event') ?? '');
   const query = useReviews(eventId);
   const eventsQuery = useEventRows({});
 

@@ -44,6 +44,18 @@ import { cn } from '@/lib/utils/cn';
 export const ORGANIZER_NAV_CLEARANCE =
   'pb-[calc(var(--bottom-nav-height)_+_env(safe-area-inset-bottom)_+_1.5rem)] lg:pb-0';
 
+/**
+ * Where a FLOATING bar must sit so it clears this one.
+ *
+ * `BulkBar` is `fixed bottom-4` at `z-sticky` — the same corner and the same
+ * layer this bar took when it replaced the drawer, so a bulk selection landed
+ * underneath the navigation with the nav painting over it (later in the DOM
+ * wins on equal z). Derived from the same custom property as the clearance
+ * above rather than written out a second time.
+ */
+export const ORGANIZER_NAV_OFFSET =
+  'bottom-[calc(var(--bottom-nav-height)_+_env(safe-area-inset-bottom)_+_1.5rem)] lg:bottom-4';
+
 /** How far the bar floats off the bottom edge. */
 const FLOAT_GAP = '0.75rem';
 

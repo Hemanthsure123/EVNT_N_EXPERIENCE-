@@ -6,20 +6,15 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Archive,
   BarChart3,
-  CalendarDays,
   CalendarPlus,
   CopyPlus,
-  ExternalLink,
   LayoutGrid,
-  MapPin,
   Pencil,
-  Receipt,
   Rows3,
   Send,
   Ticket,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Chip, ProgressBar } from '@/components/ui';
 import { formatMoney } from '@/lib/discovery/format';
 import type { EventRow } from '@/lib/api/organizer';
 import { STATUS_FILTERS } from '@/lib/organizer/event-status';
@@ -40,7 +35,6 @@ import {
   TableSkeleton,
   TableToolbar,
   TOOLBAR_CONTROL,
-  TOOLBAR_ICON,
 } from './data-table';
 import {
   DateRangeFilter,
@@ -52,6 +46,7 @@ import {
   useUrlFilters,
   type DateRange,
 } from './filters';
+import { EventDeck, LifecyclePills } from './manage-events';
 import { EventPanel } from './event-panel';
 import { StatusBadge } from './status-badge';
 
@@ -233,7 +228,15 @@ export function EventsTable() {
   );
 
   return (
-    <TableCard>
+    <TableCard
+      // BELOW `lg` THE CARD CHROME COMES OFF. Two reasons, and the second is
+      // the one that is not cosmetic: a border, a radius and a shadow around a
+      // deck that already fills the screen is a frame around a frame; and
+      // `bg-surface` is OPAQUE, so a translucent `glass-card` laid on it has
+      // nothing to be translucent against and reads as a flat card. The deck
+      // sits on the page canvas instead, which is what the frost is for.
+      className="border-transparent bg-transparent shadow-none lg:border-border lg:bg-surface lg:shadow-sm"
+    >
       <TableToolbar>
         <SearchField
           value={values.q}
@@ -288,11 +291,16 @@ export function EventsTable() {
             wider than the card, and an inner nowrap row is exactly how a
             toolbar pushes a page into horizontal scroll. */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <ViewToggle view={values.view} onChange={(view) => set({ view })} />
+          {/* Below `lg` there is only the deck, so a control that offers a
+              choice between two views would offer one that does not exist. */}
+          <ViewToggle view={values.view} onChange={(view) => set({ view })} className="hidden lg:flex" />
           {cards ? null : <ColumnChooser table={table} />}
           <ExportButton table={table} filename="events.csv" disabled={query.isPending} />
-          {/* THE filled action on this screen. */}
-          <Button asChild className={TOOLBAR_CONTROL}>
+          {/* THE filled action on this screen — above `lg`. Below it the
+              raised `+` in the organizer's bottom bar is already this action,
+              and two primary buttons for one job is neither of them being
+              primary. */}
+          <Button asChild className={cn(TOOLBAR_CONTROL, 'hidden lg:inline-flex')}>
             <Link href="/dashboard/events/new">
               <CalendarPlus className="size-3.5" aria-hidden />
               <span className="hidden sm:inline">New event</span>
@@ -302,36 +310,20 @@ export function EventsTable() {
         </div>
       </TableToolbar>
 
-      {/* ── THE STATUS FILTER, AS CHIPS, ON A PHONE ────────────────────
-          Above `sm` the status filter lives in `FilterCluster` as a select,
-          which is right for a toolbar with four filters in it. On a phone that
-          cluster collapses behind one button, so the single filter an organizer
-          reaches for most — "show me my drafts" — was two taps and a dropdown
-          behind a chevron.
+      {/* ── THE LIFECYCLE PILLS, BELOW `lg` ───────────────────────────
+          This replaces a horizontal scroller of all NINE stored statuses. Nine
+          is a scroller, and a filter you have to scroll to find is a filter
+          nobody uses; these four are the question an organizer actually
+          arrives with. Same `?status=` param as the toolbar's select, so the
+          two controls cannot disagree — see `LIFECYCLE_FILTERS`.
 
-          These are the SAME URL param and the same `STATUS_FILTERS` list, so
-          the two controls cannot disagree; this is a second affordance for one
-          piece of state, not a second piece of state.
-
-          NO COUNTS on the chips. The reference has them ("Active 3", "Past 8")
-          and this list is CURSOR-paginated: the client holds one page, so any
-          count it rendered would be a count of what happens to be loaded. The
-          house rule is that such a number is shown as a floor ("24+") or not
-          at all, and a filter chip is far too small to carry the caveat. */}
-      <div className="border-b border-border sm:hidden">
-        <div className="flex gap-2 overflow-x-auto px-card py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {STATUS_FILTERS.map((option) => (
-            <Chip
-              key={option.value || 'all'}
-              selected={values.status === option.value}
-              onClick={() => set({ status: option.value })}
-              className="shrink-0"
-            >
-              {option.label}
-            </Chip>
-          ))}
-        </div>
-      </div>
+          At `lg` the select in `FilterCluster` takes over, because a toolbar
+          with four filters wants a dropdown and a phone does not. */}
+      <LifecyclePills
+        value={values.status}
+        onChange={(status) => set({ status })}
+        className="lg:hidden"
+      />
 
       {chips.length ? (
         <div className="border-b border-border px-card py-2">
@@ -379,20 +371,39 @@ export function EventsTable() {
             )
           }
         />
-      ) : cards ? (
-        <EventCards
-          rows={table.rows}
-          isSelected={table.isSelected}
-          onToggle={table.toggleRow}
-          onOpen={(row) => openRow(router, search, row.id)}
-        />
       ) : (
-        <DataGrid
-          table={table}
-          caption="Your events, with capacity, sales and revenue"
-          onOpen={(row) => openRow(router, search, row.id)}
-          loading={query.isFetchingNextPage}
-        />
+        <>
+          {/* ── THE DECK IS THE ONLY VIEW BELOW `lg` ────────────────────
+              An eight-column table on a 390px screen is a horizontal scroller
+              in which the title and the figure somebody wants are never on
+              screen together. The table keeps every desktop affordance it has
+              — sticky header, resizable columns, the column chooser, keyboard
+              row navigation — and simply is not the phone's answer.
+
+              ONE deck instance, hidden at `lg` unless the cards view is
+              chosen. Rendering a second copy for the wide breakpoint would put
+              two checkboxes with the same accessible name on the page. */}
+          <div className={cn('py-stack lg:p-card', cards ? undefined : 'lg:hidden')}>
+            <EventDeck
+              rows={table.rows}
+              isSelected={table.isSelected}
+              onToggle={table.toggleRow}
+              onOpen={(row) => openRow(router, search, row.id)}
+              hasMore={Boolean(query.hasNextPage)}
+            />
+          </div>
+
+          {cards ? null : (
+            <div className="hidden lg:block">
+              <DataGrid
+                table={table}
+                caption="Your events, with capacity, sales and revenue"
+                onOpen={(row) => openRow(router, search, row.id)}
+                loading={query.isFetchingNextPage}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {query.hasNextPage ? (
@@ -539,12 +550,23 @@ function BulkButton({
  * applied filter and the sidebar's current page — this is a "you are here",
  * not an action.
  */
-function ViewToggle({ view, onChange }: { view: string; onChange: (view: string) => void }) {
+function ViewToggle({
+  view,
+  onChange,
+  className,
+}: {
+  view: string;
+  onChange: (view: string) => void;
+  className?: string;
+}) {
   return (
     <div
       role="group"
       aria-label="View"
-      className="flex h-control overflow-hidden rounded-full border border-border sm:h-control-sm"
+      className={cn(
+        'flex h-control overflow-hidden rounded-full border border-border sm:h-control-sm',
+        className,
+      )}
     >
       {[
         { value: '', icon: Rows3, label: 'Table' },
@@ -573,215 +595,6 @@ function ViewToggle({ view, onChange }: { view: string; onChange: (view: string)
         );
       })}
     </div>
-  );
-}
-
-/* --------------------------------------------------------------- the cards */
-
-/**
- * The card view.
- *
- * The one place on this dashboard where an image earns its space — a poster is
- * how an organizer with twenty events picks one out. It is still not the
- * consumer product: the cards are compact, three to a row, and every figure on
- * one is a column the backend maintains — capacity and sold from the
- * authoritative tier counters, revenue from captured payments, check-ins from
- * used tickets. **Views and conversion are not here.** The brief marked both
- * "future-ready", and the honest form of future-ready is an absent row — not a
- * greyed-out one showing "—", which implies the number exists and merely
- * happens to be zero. Nothing counts a page view on this platform; BACKLOG
- * "Event view counting" says what it would take.
- */
-function EventCards({
-  rows,
-  isSelected,
-  onToggle,
-  onOpen,
-}: {
-  rows: EventRow[];
-  isSelected: (id: string) => boolean;
-  onToggle: (id: string) => void;
-  onOpen: (row: EventRow) => void;
-}) {
-  return (
-    <ul className="grid gap-stack p-card xl:grid-cols-2">
-      {rows.map((row) => {
-        const chosen = isSelected(row.id);
-        const remaining = Math.max(0, row.capacity - row.sold);
-        const sellThrough = row.capacity > 0 ? row.sold / row.capacity : null;
-        const soldOut = sellThrough !== null && row.sold >= row.capacity;
-
-        return (
-          <li key={row.id}>
-            <div
-              className={cn(
-                'group flex h-full flex-col gap-stack rounded-xl border p-card transition-colors duration-fast',
-                'motion-reduce:transition-none',
-                chosen ? 'border-nav-active bg-nav-active' : 'border-border bg-surface shadow-sm',
-              )}
-            >
-              {/* ── HEAD: a THUMBNAIL beside the meta, not a poster above it ──
-                  The poster used to be a full-width 4:3 block at the top of the
-                  card, which on a phone put roughly 290px of artwork above
-                  every title — three events to a screen, and the one fact that
-                  distinguishes them (the title) below the fold on each. A
-                  64px thumbnail is still enough to recognise a poster you
-                  chose, and it buys back the whole row. */}
-              <div className="flex gap-stack">
-                <div className="relative size-16 shrink-0 overflow-hidden rounded-lg bg-muted sm:size-20">
-                  <Poster
-                    url={row.poster_url}
-                    className="size-full object-cover"
-                    fallback={
-                      <span className="flex size-full items-center justify-center px-1 text-center text-caption leading-tight text-muted-foreground">
-                        No cover
-                      </span>
-                    }
-                  />
-
-                  <label className="absolute left-1 top-1 inline-flex cursor-pointer items-center rounded-md bg-surface/90 p-1 backdrop-blur">
-                    <input
-                      type="checkbox"
-                      checked={chosen}
-                      onChange={() => onToggle(row.id)}
-                      aria-label={`Select ${row.title}`}
-                      className="size-4 cursor-pointer accent-primary"
-                    />
-                  </label>
-                </div>
-
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  {/* The status leads, as in the reference: it is what decides
-                      whether the rest of the card is even actionable. */}
-                  <span className="w-fit">
-                    <StatusBadge status={row.status} capacity={row.capacity} sold={row.sold} />
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={() => onOpen(row)}
-                    className="rounded-sm text-left text-body-sm font-semibold underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <span className="line-clamp-2">{row.title}</span>
-                  </button>
-
-                  {/* Date and place on one wrapping row with their own icons.
-                      `venue` is included where the old card had only `city` —
-                      two events in the same city on the same night are exactly
-                      the pair somebody is trying to tell apart here. */}
-                  <p className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption text-muted-foreground">
-                    <span className="inline-flex items-center gap-1">
-                      <CalendarDays className="size-3.5 shrink-0" aria-hidden />
-                      <time dateTime={row.starts_at}>
-                        {new Date(row.starts_at).toLocaleString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </time>
-                    </span>
-                    <span className="inline-flex min-w-0 items-center gap-1">
-                      <MapPin className="size-3.5 shrink-0" aria-hidden />
-                      <span className="truncate">
-                        {row.venue}
-                        {row.city ? `, ${row.city}` : ''}
-                      </span>
-                    </span>
-                  </p>
-                </div>
-              </div>
-
-              {/* ── THE MEASURE, IN A SUNKEN PANEL ───────────────────────────
-                  Sold, remaining and revenue used to be a three-column `<dl>`
-                  of label-over-value pairs, which spends three lines and two
-                  type sizes on three numbers. The reference groups them into
-                  one tinted strip with the meter, and it is a better fit for
-                  what they are: one fact about the on-sale, read together.
-
-                  A card inside a card with the SAME treatment reads as a
-                  rendering fault, so this drops a step on the surface ladder
-                  (`bg-sunken`) rather than drawing a second border. */}
-              {sellThrough === null ? (
-                <p className="rounded-lg bg-sunken p-stack text-caption text-muted-foreground">
-                  No ticket types yet — add one and sales appear here.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2 rounded-lg bg-sunken p-stack">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground">
-                      <Ticket className="size-3.5 shrink-0" aria-hidden />
-                      <span className="truncate tabular-nums">
-                        {row.sold} / {row.capacity}
-                        {soldOut ? ' · Sold out' : ` · ${remaining} left`}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-body-sm font-semibold tabular-nums text-foreground">
-                      {formatMoney(row.revenue_minor)}
-                    </span>
-                  </div>
-                  <ProgressBar
-                    value={sellThrough}
-                    aria-label={`${row.sold} of ${row.capacity} sold`}
-                  />
-                </div>
-              )}
-
-              <div className="mt-auto flex items-center gap-1">
-                {/* FIRST, because it is the only one of these that changes
-                    the event rather than reporting on it — and because until
-                    this route existed every field was reachable exactly once,
-                    while the event was being created, and never again. */}
-                <CardAction icon={Pencil} label="Edit" href={`/dashboard/events/${row.id}/edit`} />
-                <CardAction
-                  icon={BarChart3}
-                  label="Analytics"
-                  href={`/dashboard/events/${row.id}/analytics`}
-                />
-                <CardAction
-                  icon={Receipt}
-                  label="Bookings"
-                  href={`/dashboard/bookings?event=${row.id}`}
-                />
-                {row.status === 'live' ? (
-                  <CardAction
-                    icon={ExternalLink}
-                    label="View public page"
-                    href={`/events/${row.id}`}
-                    external
-                  />
-                ) : null}
-              </div>
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function CardAction({
-  icon: Icon,
-  label,
-  href,
-  external,
-}: {
-  icon: typeof BarChart3;
-  label: string;
-  href: string;
-  external?: boolean;
-}) {
-  return (
-    <Button variant="ghost" size="icon" asChild className={TOOLBAR_ICON}>
-      <Link
-        href={href}
-        {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-        aria-label={label}
-        title={label}
-      >
-        <Icon className="size-4" aria-hidden />
-      </Link>
-    </Button>
   );
 }
 
