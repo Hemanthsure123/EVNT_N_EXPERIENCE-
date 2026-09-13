@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronRight } from 'lucide-react';
+import { AlertTriangle, ChevronRight } from 'lucide-react';
 import {
   Input,
   Select,
@@ -722,27 +722,82 @@ export function FieldGroup({
   );
 }
 
-export function Section({
+/**
+ * THE ACCORDION CARD — one collapsible, ticket-shaped surface, used everywhere.
+ *
+ * ── CLOSED BY DEFAULT, AND THAT IS THE WHOLE POINT ───────────────────────
+ *
+ * The wizard grew to eight steps of fully-expanded forms, so every screen
+ * opened on a wall of inputs and the organizer had to scroll past finished
+ * work to reach the field they came for. Everything is shut now; a step opens
+ * as a list of headings you choose between.
+ *
+ * `defaultOpen` stays a prop rather than being deleted, because the one place
+ * that genuinely must open on arrival is a section with exactly one field in
+ * it — collapsing that hides a control behind a press that reveals a control.
+ *
+ * ── `<details>`, NOT A useState TOGGLE ───────────────────────────────────
+ *
+ * Keyboard operation, the open/closed state in the accessibility tree, and
+ * find-in-page reaching collapsed content are all free and all things a
+ * hand-rolled toggle has to be told to do. It also renders correctly before
+ * hydration, which a state-driven one cannot.
+ *
+ * ── A SHUT SECTION STILL SAYS IT IS WRONG ────────────────────────────────
+ *
+ * `invalid` is not decoration. Collapsing by default means a validation
+ * failure can be two presses away from being seen, so the header carries the
+ * mark and the step rail carries it too. Without this, "closed by default" and
+ * "errors surface on save" combine into a form that refuses to submit and
+ * shows nothing anywhere.
+ */
+export function AccordionCard({
   title,
   count,
   children,
-  defaultOpen = true,
+  defaultOpen = false,
+  invalid = false,
+  required = false,
 }: {
   title: string;
+  /** The quiet right-hand figure — "3 of 10", "Set", "Required". */
   count?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  /** Draws the header as failing. Does NOT force it open — see the note. */
+  invalid?: boolean;
+  required?: boolean;
 }) {
   return (
     <details
       open={defaultOpen}
-      className="group rounded-xl border border-border bg-surface shadow-sm"
+      className={cn(
+        // `rounded-2xl` and a hairline: the ticket shape the rest of the
+        // product uses, so an organizer's form looks like the thing they are
+        // making.
+        'group overflow-hidden rounded-2xl border bg-surface shadow-sm',
+        'transition-colors duration-fast motion-reduce:transition-none',
+        invalid ? 'border-destructive/50' : 'border-border',
+      )}
     >
-      <summary className="flex min-h-control cursor-pointer list-none items-center gap-3 rounded-xl px-card py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      <summary
+        className={cn(
+          'flex min-h-control cursor-pointer list-none items-center gap-3 px-card py-3.5',
+          'transition-colors duration-fast hover:bg-muted/60 motion-reduce:transition-none',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        )}
+      >
         <span className="min-w-0 flex-1">
-          <span className="block text-body-sm font-semibold">{title}</span>
+          <span className="flex items-center gap-2 text-body-sm font-semibold">
+            {title}
+            {required ? (
+              <span className="text-caption font-medium text-destructive">Required</span>
+            ) : null}
+          </span>
         </span>
-        {count ? (
+        {invalid ? (
+          <AlertTriangle className="size-4 shrink-0 text-destructive" aria-label="Needs attention" />
+        ) : count ? (
           <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{count}</span>
         ) : null}
         <ChevronRight
@@ -754,3 +809,10 @@ export function Section({
     </details>
   );
 }
+
+/**
+ * The name fifteen call sites already use. `AccordionCard` is the same
+ * component — this alias exists so "collapse everything" was one default
+ * changing rather than fifteen imports.
+ */
+export const Section = AccordionCard;

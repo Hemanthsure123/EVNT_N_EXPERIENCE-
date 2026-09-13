@@ -126,7 +126,11 @@ export function saveSummary(
       return { label: 'Unsaved changes', tone: 'text-muted-foreground', icon: null };
     case 'local':
     default:
-      return { label: 'Saved on this device', tone: 'text-muted-foreground', icon: null };
+      // "Saved on this device" was removed at the owner's instruction. The
+      // state is still REAL — the draft is in local storage and not yet on the
+      // server — so it keeps a label rather than going blank, which would make
+      // the one state where work is at risk the one state that says nothing.
+      return { label: 'Saved', tone: 'text-muted-foreground', icon: null };
   }
 }
 

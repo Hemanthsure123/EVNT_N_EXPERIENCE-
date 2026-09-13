@@ -13,6 +13,7 @@ import {
   draftStorageKey,
   dayPart,
   emptyDraft,
+  bandUnitPriceMinor,
   groupBandIssues,
   tierIsSavable,
   isDraftUntouched,
@@ -1097,10 +1098,42 @@ describe('the datetime halves', () => {
 });
 
 describe('group prices', () => {
-  const band = (minQuantity: string, price: string, key = `b-${minQuantity}`) => ({
+  // The form collects a TOTAL for the group now; every rule below is about the
+  // PER-TICKET ladder, which is what the server still stores and charges. The
+  // helper multiplies up so each case reads as the per-ticket figure it is
+  // testing and the expectations did not have to move.
+  const band = (minQuantity: string, pricePerTicket: string, key = `b-${minQuantity}`) => ({
     key,
     minQuantity,
-    price,
+    totalPrice: String(Number(minQuantity) * Number(pricePerTicket)),
+    description: '',
+  });
+
+  describe('the group total, divided into what is charged', () => {
+    it('turns a group total into a per-ticket price', () => {
+      // The organizer types "₹1,600 for 4". The money path stores per UNIT,
+      // because `BookingItem` carries one `unit_price_minor` for its whole
+      // quantity and the fee, the Route split, refunds and settlement all
+      // read that identity.
+      expect(bandUnitPriceMinor(band('4', '400'))).toBe(40_000);
+    });
+
+    it('rounds DOWN when the total does not divide', () => {
+      // ₹1,000 for 3 is 333.33 each. Rounding up would bill ₹1,000.02 — a
+      // total one paisa ABOVE the figure printed on the control the buyer
+      // pressed, which is the one thing a group price must never do. Same
+      // rule as the coupon cap: a price is never worth more than it says.
+      const uneven = { key: 'k', minQuantity: '3', totalPrice: '1000', description: '' };
+      expect(bandUnitPriceMinor(uneven)).toBe(33_333);
+      expect(bandUnitPriceMinor(uneven) * 3).toBeLessThanOrEqual(100_000);
+    });
+
+    it('is 0 rather than Infinity when the size is missing', () => {
+      // A half-typed row runs through this on every keystroke, and a division
+      // by zero reaching `toTierInput` would put `Infinity` in a payload.
+      expect(bandUnitPriceMinor({ key: 'k', minQuantity: '', totalPrice: '500', description: '' }))
+        .toBe(0);
+    });
   });
 
   describe('groupBandIssues — mirroring the server', () => {
@@ -1165,7 +1198,9 @@ describe('group prices', () => {
     it('carries the bands, converted to paise', () => {
       const tier = tierWith({ price: '500', groupBands: [band('4', '400')] });
       expect(toTierInput(tier, 0).group_bands).toEqual([
-        { min_quantity: 4, price_minor: 40_000 },
+        // The total the organizer typed, divided by the group size — the
+        // money path stores and charges per UNIT, and that did not change.
+        { min_quantity: 4, price_minor: 40_000, description: '' },
       ]);
     });
 

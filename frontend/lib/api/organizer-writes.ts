@@ -265,6 +265,9 @@ export type GroupBandInput = {
   min_quantity: number;
   /** Minor units (paise). */
   price_minor: number;
+  /** The organizer's label for this band. Display only — it can never
+   *  influence the charge, which is `price_minor` and nothing else. */
+  description?: string;
 };
 
 export type UpdateTicketTypeInput = Partial<CreateTicketTypeInput> & { version: number };

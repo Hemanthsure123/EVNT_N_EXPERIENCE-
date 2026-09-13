@@ -99,7 +99,25 @@ export function NotificationBell() {
         <div
           role="dialog"
           aria-label="Notifications"
-          className="absolute right-0 top-11 z-dropdown w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
+          /* ── IT WAS RUNNING OFF THE LEFT OF THE SCREEN ──────────────────
+             `absolute right-0` anchors the panel's RIGHT edge to the bell.
+             The bell sits near the right of a 465px phone, and the panel is
+             352px wide, so its left edge landed at roughly -37px and the
+             first characters of every line were cut off — reported as the
+             dropdown overlapping the form.
+
+             Below `sm` it is anchored to the VIEWPORT instead, which is the
+             only box that can guarantee it fits; from `sm` there is room to
+             hang it off the bell as before.
+
+             `z-dropdown` (1100), NOT the literal `z-[100]` the brief asked
+             for: the sticky dashboard header is `z-sticky` (1000), so a flat
+             100 would put this panel behind the very bar its trigger lives
+             in. The token is already above everything it needs to clear. */
+          className={cn(
+            'fixed inset-x-3 top-16 z-dropdown overflow-hidden rounded-2xl border border-border bg-surface shadow-lg',
+            'sm:absolute sm:inset-x-auto sm:right-0 sm:top-11 sm:w-[22rem]',
+          )}
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-label">Needs your attention</h2>

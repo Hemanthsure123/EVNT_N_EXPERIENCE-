@@ -104,6 +104,17 @@ class GroupBandWriteSerializer(serializers.Serializer):
 
     min_quantity = serializers.IntegerField(min_value=2)
     price_minor = serializers.IntegerField(min_value=0)
+    #: WHAT THE ORGANIZER CALLS THIS BAND — "Couples", "Family", "Group of 6".
+    #:
+    #: Display only, and deliberately so: the CHARGE is `price_minor` and
+    #: nothing here may influence it. It exists because the organizer form now
+    #: collects a group SIZE and a group TOTAL, and "₹1,600 for 4" with no name
+    #: on it is a row a buyer has to do arithmetic on to recognise.
+    #:
+    #: Optional and blank-able, because every band written before this field
+    #: existed has none, and a required label would make those rows fail
+    #: validation on the next unrelated PATCH of the tier that holds them.
+    description = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
 
 
 class CreateTicketTypeRequestSerializer(serializers.Serializer):

@@ -83,11 +83,39 @@ export type DraftGroupBand = {
   /** Client-side list handle. Bands have no server identity — the whole list
    *  is replaced on every write, exactly like the phase schedule. */
   key: string;
-  /** The smallest order this price applies to. At least 2; 1 would just be
-   *  the face price. MAJOR units are not involved — this is a count. */
+  /**
+   * HOW MANY PEOPLE the group price is for. At least 2; 1 would just be the
+   * face price. MAJOR units are not involved — this is a count.
+   *
+   * Still `minQuantity` in the payload, because that is what it MEANS to the
+   * pricing engine: the band applies from this order size upward. The form
+   * says "People" because that is what an organizer is thinking about.
+   */
   minQuantity: string;
-  /** Per TICKET, in MAJOR units while editing. */
-  price: string;
+  /**
+   * THE TOTAL FOR THE GROUP, in MAJOR units while editing.
+   *
+   * ── THE FIELD CHANGED; THE STORAGE DID NOT ──────────────────────────────
+   *
+   * The organizer used to type a per-ticket price, which meant working out
+   * "₹1,600 for four" ÷ 4 in their head before they could fill in the form.
+   * They type the total now and `toGroupBandInput` divides.
+   *
+   * The money path still stores and charges a PER-UNIT price, because
+   * `BookingItem` carries one `unit_price_minor` for its whole quantity and
+   * every consumer — the fee, the Route split, refunds, settlement — reads
+   * that identity. Changing what is STORED would have been a different
+   * project; changing what is TYPED was the ask.
+   *
+   * The consequence, which the form states rather than hides: the total holds
+   * at exactly this size. An order of five pays five times the derived
+   * per-ticket price, not this total. A true fixed-price bundle is a
+   * different product — see BACKLOG.
+   */
+  totalPrice: string;
+  /** The organizer's own name for it — "Couples", "Family". Display only; it
+   *  can never influence the charge. */
+  description: string;
 };
 
 export type DraftTier = {
@@ -580,7 +608,8 @@ export function newGroupBand(index: number): DraftGroupBand {
   return {
     key: `band-${index}-${Math.random().toString(36).slice(2, 8)}`,
     minQuantity: '',
-    price: '',
+    totalPrice: '',
+    description: '',
   };
 }
 
@@ -751,9 +780,18 @@ export function groupBandIssues(tier: DraftTier): string[] {
   let previousPrice: number | null = null;
 
   tier.groupBands.forEach((band, index) => {
-    const label = band.minQuantity ? `${band.minQuantity}+ tickets` : `Group price ${index + 1}`;
+    // The organizer's own name for the band leads the message when they gave
+    // one — "Family" is what they will look for on the form, where
+    // "4+ tickets" makes them count rows.
+    const label =
+      band.description.trim() ||
+      (band.minQuantity ? `${band.minQuantity} people` : `Group price ${index + 1}`);
     const minimum = Number(band.minQuantity);
-    const price = toMinor(band.price);
+    // Compared as the PER-UNIT figure the server will store and charge, not
+    // as the total that was typed: the ordering rules ("never dearer than a
+    // smaller group", "never above face price") are per-ticket rules, and a
+    // larger group legitimately has a larger TOTAL.
+    const price = bandUnitPriceMinor(band);
 
     if (band.minQuantity === '' || !Number.isInteger(minimum) || minimum < 2) {
       problems.push(`${where}: "${label}" starts at 2 tickets or more — one is the normal price.`);
@@ -769,10 +807,10 @@ export function groupBandIssues(tier: DraftTier): string[] {
       previousMin = minimum;
     }
 
-    if (band.price === '' || !Number.isFinite(price) || price < 1) {
+    if (band.totalPrice === '' || !Number.isFinite(price) || price < 1) {
       // Above ₹0, matching the phase rule: a free group is a different
       // product, not a discount.
-      problems.push(`${where}: "${label}" needs a price above ₹0.`);
+      problems.push(`${where}: "${label}" needs a total above ₹0.`);
       return;
     }
     if (Number.isFinite(facePrice) && tier.price !== '' && price > facePrice) {
@@ -1493,7 +1531,13 @@ export function draftFromEvent(
       groupBands: (tier.group_bands ?? []).map((band, index) => ({
         key: `band-${index}-${band.min_quantity}`,
         minQuantity: String(band.min_quantity),
-        price: toMajorInput(band.price_minor),
+        // Back to a TOTAL, because that is what the form asks for. The
+        // round trip is lossless for every band the form can produce: the
+        // stored per-unit price was floored from this same product, so
+        // multiplying it back can only differ by the paise that were
+        // dropped — and it re-divides to the same figure.
+        totalPrice: toMajorInput(band.price_minor * (band.min_quantity || 1)),
+        description: band.description ?? '',
       })),
       phases: (tier.phases ?? []).map((phase) => ({
         key: phase.id,
@@ -1725,10 +1769,35 @@ export function toTierInput(tier: DraftTier, position: number): CreateTicketType
 }
 
 /** One band, converted the way the tier's own price is: rupees to paise. */
-function toGroupBandInput(band: DraftGroupBand): { min_quantity: number; price_minor: number } {
+/**
+ * The group total the organizer typed, divided into the per-unit price the
+ * money path stores.
+ *
+ * ── WHY `Math.floor` AND NOT ROUNDING ────────────────────────────────────
+ *
+ * "₹1,000 for 3" is 333.33 each, and paise do not divide. Rounding UP would
+ * charge a group of three ₹1,000.02 — a total one paisa above the one printed
+ * on the control they pressed, which is the single thing a group price must
+ * never do. Flooring bills ₹999.99 and the organizer is a paisa short on a
+ * band they chose the arithmetic of. Same rule as the coupon cap: rounding
+ * goes DOWN, always, so a price is never worth more than it says.
+ */
+export function bandUnitPriceMinor(band: DraftGroupBand): number {
+  const people = Number(band.minQuantity) || 0;
+  const total = toMinor(band.totalPrice);
+  if (people < 1) return 0;
+  return Math.floor(total / people);
+}
+
+function toGroupBandInput(band: DraftGroupBand): {
+  min_quantity: number;
+  price_minor: number;
+  description: string;
+} {
   return {
     min_quantity: Number(band.minQuantity) || 0,
-    price_minor: toMinor(band.price),
+    price_minor: bandUnitPriceMinor(band),
+    description: band.description.trim(),
   };
 }
 
@@ -1826,7 +1895,11 @@ export function tierFingerprint(tier: DraftTier, position: number): string {
     // field in the payload and absent here is a control that updates the
     // preview, marks its step done, and never PATCHes anything. `key` excluded
     // for the same reason as the phases' — it is a React list handle.
-    tier.groupBands.map((band) => [band.minQuantity, band.price]),
+    // `description` is in here for the reason the tier's own `description`
+    // and `perks` had to be added: a field missing from the fingerprint is a
+    // field whose edits produce an identical signature and therefore no
+    // PATCH — the organizer types, it looks saved, and nothing was sent.
+    tier.groupBands.map((band) => [band.minQuantity, band.totalPrice, band.description]),
   ]);
 }
 

@@ -15,6 +15,7 @@ import {
 import type { EventSlot } from '@/lib/api/event-content';
 import { formatMoney } from '@/lib/discovery/format';
 import {
+  bandUnitPriceMinor,
   MAX_PHASES,
   MAX_GROUP_BANDS,
   newGroupBand,
@@ -461,9 +462,6 @@ function GroupBandEditor({
       <div className="flex flex-wrap items-start justify-between gap-stack">
         <div className="flex min-w-0 flex-col gap-1">
           <h4 className="text-body-sm font-medium text-foreground">Group prices</h4>
-          <p className="text-caption text-muted-foreground">
-            A cheaper price per ticket once somebody buys this many at once.
-          </p>
         </div>
         <Button
           variant="outline"
@@ -478,7 +476,11 @@ function GroupBandEditor({
 
       {bands.length ? (
         <ul className="flex flex-col gap-stack">
-          {bands.map((band, index) => (
+          {bands.map((band, index) => {
+            const people = Number(band.minQuantity) || 0;
+            const perTicket =
+              people >= 2 && band.totalPrice !== '' ? bandUnitPriceMinor(band) : null;
+            return (
             <li
               key={band.key}
               className="flex flex-col gap-stack rounded-lg border border-border bg-surface p-stack"
@@ -488,7 +490,10 @@ function GroupBandEditor({
                   {/* The GROUP SIZE, not the row number: unlike a phase, a
                       band's identity is the threshold itself, and it is what
                       the buyer sees on the picker. */}
-                  {band.minQuantity ? `${band.minQuantity}+ tickets` : `Group price ${index + 1}`}
+                  {band.description.trim() ||
+                    (band.minQuantity
+                      ? `${band.minQuantity} people`
+                      : `Group price ${index + 1}`)}
                 </span>
                 <IconButton
                   label="Remove this group price"
@@ -498,30 +503,50 @@ function GroupBandEditor({
                 </IconButton>
               </div>
 
-              <div className="grid gap-stack sm:grid-cols-2">
+              {/* PEOPLE, TOTAL, NAME — what the organizer is actually
+                  thinking, instead of the per-ticket figure they used to have
+                  to divide out themselves. Every `hint` is gone at the owner's
+                  instruction; the rules still hold and are reported on save.
+                  `bandUnitPriceMinor` does the division at the boundary. */}
+              <div className="grid gap-stack sm:grid-cols-3">
                 <Field
-                  label="From this many tickets"
+                  label="People"
                   id={`${band.key}-min`}
                   value={band.minQuantity}
                   onChange={(value) => update(band.key, { minQuantity: value })}
                   type="number"
                   min="2"
-                  placeholder="4"
-                  hint="Two or more — one ticket is the normal price."
                 />
                 <Field
-                  label="Price each (₹)"
+                  label="Total price (₹)"
                   id={`${band.key}-price`}
-                  value={band.price}
-                  onChange={(value) => update(band.key, { price: value })}
+                  value={band.totalPrice}
+                  onChange={(value) => update(band.key, { totalPrice: value })}
                   type="number"
                   min="1"
-                  placeholder="400"
-                  hint="At or below the normal price, and never dearer than a smaller group."
+                />
+                <Field
+                  label="Description"
+                  id={`${band.key}-description`}
+                  value={band.description}
+                  onChange={(value) => update(band.key, { description: value })}
+                  placeholder="e.g., Couples, Single, Family"
                 />
               </div>
+
+              {/* THE ONE NUMBER THE FORM MUST STILL SHOW.
+                  What is stored and charged is a PER-TICKET price, and the
+                  total only holds at exactly this size — an order of five
+                  pays five times this, not the total above. Saying so here is
+                  what stops an organizer discovering it from a buyer. */}
+              {perTicket !== null ? (
+                <p className="text-caption text-muted-foreground">
+                  {formatMoney(perTicket)} per ticket
+                </p>
+              ) : null}
             </li>
-          ))}
+            );
+          })}
         </ul>
       ) : null}
 

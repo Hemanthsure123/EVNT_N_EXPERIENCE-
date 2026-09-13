@@ -710,56 +710,91 @@ function StepRail({
         </div>
       </div>
 
-      {/* Horizontal below lg, vertical above — the same responsive rail the
-          account shell uses, so the pattern is learned once. `overflow-x-auto`
-          only applies to the compact form, where eight chips genuinely will not
-          fit at 390px; `-mx-1 px-1` keeps the first and last focus ring from
-          being clipped by the scroller. */}
-      <ol className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-2 lg:mx-0 lg:flex-col lg:gap-1 lg:overflow-visible lg:px-0 lg:pb-0">
+      {/* ── THE CONNECTED LINE STEPPER ──────────────────────────────────
+          Eight steps used to sit in an `overflow-x-auto` chip row, so on a
+          phone half of them were off screen behind a horizontal scrollbar —
+          a progress indicator you have to scroll is one that stops telling
+          you where you are.
+
+          It WRAPS now instead of scrolling, and the connector is drawn per
+          row rather than as one line behind everything: a single absolute
+          rule would run through the gap between wrapped rows and out the
+          right-hand edge. Each item draws its own leading segment and the
+          first item of each visual row hides it with `[&:first-child>span]`
+          — which cannot know about wrapping, so the segment is drawn UNDER
+          the dot and clipped by the dot's own opaque fill instead.
+
+          Vertical from `lg`, where there is room for the hint line. */}
+      <ol className="flex flex-wrap items-start gap-x-0 gap-y-2 lg:flex-col lg:flex-nowrap lg:gap-y-1">
         {STEPS.map((entry, position) => {
           const state = status[entry.id];
           const active = current === entry.id;
+          const reached = position <= STEPS.findIndex((step) => step.id === current);
           return (
-            <li key={entry.id} className="shrink-0 lg:shrink">
+            <li
+              key={entry.id}
+              className="relative flex min-w-0 flex-1 basis-1/4 items-center lg:basis-auto lg:flex-none lg:flex-initial"
+            >
+              {/* The connector into this step. `aria-hidden` scenery, and it
+                  sits behind the dot so a wrapped row's leading stub is
+                  covered rather than needing to know it wrapped. */}
+              {position > 0 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'absolute left-0 top-[1.125rem] -z-10 h-px w-full lg:hidden',
+                    reached ? 'bg-primary/40' : 'bg-border',
+                  )}
+                />
+              ) : null}
               <button
                 type="button"
                 onClick={() => onSelect(entry.id)}
                 aria-current={active ? 'step' : undefined}
                 className={cn(
-                  'flex min-h-control w-full items-center gap-2.5 rounded-full px-3 py-2 text-left transition-colors duration-fast lg:rounded-xl',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                  // The warm butter pill means "you are here", never "press
-                  // me" — the near-black fill is spent on the step footer.
+                  'group/step flex min-w-0 flex-1 flex-col items-center gap-1.5 rounded-xl px-1 py-1.5',
+                  'transition-colors duration-fast motion-reduce:transition-none',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'lg:min-h-control lg:flex-row lg:items-center lg:gap-2.5 lg:px-3 lg:py-2 lg:text-left',
                   active
-                    ? 'bg-nav-active text-nav-active-foreground hover:bg-nav-active-hover'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ? 'lg:bg-nav-active lg:text-nav-active-foreground'
+                    : 'text-muted-foreground lg:hover:bg-muted lg:hover:text-foreground',
                 )}
               >
                 <span
                   className={cn(
-                    'inline-flex size-5 shrink-0 items-center justify-center rounded-full text-caption tabular-nums',
+                    'inline-flex size-7 shrink-0 items-center justify-center rounded-full text-caption tabular-nums lg:size-5',
+                    // OPAQUE on purpose: it is what hides the connector stub
+                    // at the start of a wrapped row.
                     state === 'error'
                       ? 'bg-destructive text-destructive-foreground'
                       : state === 'done'
                         ? 'bg-success text-success-foreground'
-                        : 'border border-current',
+                        : active
+                          ? 'bg-primary text-primary-foreground'
+                          : 'border border-border bg-surface text-muted-foreground',
                   )}
                   aria-hidden
                 >
                   {state === 'error' ? (
-                    <AlertTriangle className="size-3" />
+                    <AlertTriangle className="size-3.5 lg:size-3" />
                   ) : state === 'done' ? (
-                    <Check className="size-3" />
+                    <Check className="size-3.5 lg:size-3" />
                   ) : (
                     position + 1
                   )}
                 </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-label">{entry.label}</span>
+                <span className="min-w-0 lg:flex-1">
                   <span
                     className={cn(
-                      // A ratio that can be computed, rather than `opacity-70`
-                      // over whatever happens to be behind it.
+                      'block truncate text-caption lg:text-label',
+                      active ? 'font-semibold text-foreground lg:font-medium' : '',
+                    )}
+                  >
+                    {entry.label}
+                  </span>
+                  <span
+                    className={cn(
                       'hidden truncate text-caption lg:block',
                       active ? 'text-nav-active-foreground/75' : 'text-foreground-subtle',
                     )}

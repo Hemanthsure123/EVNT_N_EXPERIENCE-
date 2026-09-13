@@ -38,7 +38,6 @@ import {
   fieldMessageId,
   type DraftSave,
 } from './fields';
-import { DescriptionExample } from './description-example';
 import { CATEGORIES } from '@/lib/discovery/categories';
 import { CategoryScene } from '@/components/illustrations/category-scenes';
 import { SessionsEditor } from '@/components/organizer/wizard/sessions-editor';
@@ -119,7 +118,6 @@ export function BasicsStep({
         label="Event title"
         value={draft.title}
         onChange={(title) => update({ title })}
-        placeholder="Sunburn Arena ft. Martin Garrix"
         max={TITLE_MAX}
         error={errorFor(issues, 'title')}
         autoFocus
@@ -136,15 +134,8 @@ export function BasicsStep({
         label="Description"
         value={draft.description}
         onChange={(description) => update({ description })}
-        placeholder="What happens, who is playing, what is included, and anything an attendee needs to know before buying."
         softMax={DESCRIPTION_SOFT_MAX}
         overHint={`Past ${DESCRIPTION_SOFT_MAX} characters people stop reading — but this saves and publishes exactly as written.`}
-        action={
-          <DescriptionExample
-            value={draft.description}
-            onInsert={(description) => update({ description })}
-          />
-        }
       />
 
       <Section
@@ -524,15 +515,7 @@ function CategoryPicker({
             <p role="alert" className="text-caption text-muted-foreground">
               {failure}
             </p>
-          ) : (
-            <p className="text-caption text-muted-foreground">
-              {/* Says what it does and does NOT do. Somebody typing here would
-                  otherwise reasonably assume they had made a new browse
-                  category for the whole platform. */}
-              Kept on your organisation and offered on your next event. It is your label — it
-              does not add a tile to the public browse pages.
-            </p>
-          )}
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -219,7 +219,10 @@ export type TicketTier = {
    * and the resolver has to read that as "no bands" rather than crash a
    * checkout.
    */
-  group_bands?: { min_quantity: number; price_minor: number }[];
+  /** `description` is the organizer's own name for the band ("Couples",
+   *  "Family") — display only, optional, and absent on every band written
+   *  before the field existed. */
+  group_bands?: { min_quantity: number; price_minor: number; description?: string }[];
   max_per_order: number;
   is_on_sale: boolean;
   version: number;
