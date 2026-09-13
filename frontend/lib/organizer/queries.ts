@@ -13,6 +13,7 @@ import {
   fetchCustomers,
   fetchEventAnalytics,
   fetchEventRows,
+  fetchEventSettlement,
   fetchOrganizerActivity,
   fetchOrganizerBookings,
   fetchOrganizerBreakdown,
@@ -67,6 +68,7 @@ const KEY = {
   customer: (id: string) => ['organizer', 'customer', id] as const,
   analytics: (id: string, days: number) => ['organizer', 'analytics', id, days] as const,
   settlements: ['organizer', 'settlements'] as const,
+  settlement: (eventId: string) => ['organizer', 'settlement', eventId] as const,
   feed: (limit: number) => ['organizer', 'feed', limit] as const,
   refunds: (eventId: string) => ['organizer', 'refunds', eventId] as const,
   earnings: ['organizer', 'earnings'] as const,
@@ -270,6 +272,29 @@ export function useEventAnalytics(eventId: string | null, days = 30) {
     queryFn: () => fetchEventAnalytics(eventId as string, days),
     enabled: Boolean(eventId),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * ONE event's settlement — what the organizer will actually be paid.
+ *
+ * `404 settlement_not_found` is a NORMAL answer, not a failure: a settlement
+ * row is created once an event starts selling, so every event has a window in
+ * which there is genuinely nothing to report. `retry: false` stops react-query
+ * spending three round trips discovering that, and the caller reads
+ * `error.status === 404` as "nothing yet" rather than drawing an error state
+ * over a page that is otherwise fine.
+ *
+ * `staleTime` is short because this is money and the release job moves it
+ * without the browser being told.
+ */
+export function useEventSettlement(eventId: string | null) {
+  return useQuery({
+    queryKey: KEY.settlement(eventId ?? ''),
+    queryFn: () => fetchEventSettlement(eventId as string),
+    enabled: Boolean(eventId),
+    retry: false,
+    staleTime: 30_000,
   });
 }
 

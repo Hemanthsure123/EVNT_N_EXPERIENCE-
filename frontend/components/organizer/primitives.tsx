@@ -29,6 +29,21 @@ import { cn } from '@/lib/utils/cn';
  * panel on every screen of this portal indents its content by the same amount.
  */
 
+/**
+ * The frosted variant of a `Panel`, as one string.
+ *
+ * `Panel` paints `bg-surface`, which is OPAQUE — laying `glass-card` over it
+ * gives the pane nothing to be translucent against, so both halves are needed
+ * and writing them out per call site is how one surface ends up frosted and
+ * the next one merely tinted. Pass it as `className`; `cn` drops the
+ * `bg-surface` for the `bg-transparent`.
+ *
+ * Use it where a panel sits on the page CANVAS. Inside another opaque card it
+ * will look like an ordinary panel, which is the honest outcome — see the note
+ * beside `.glass-card` in `globals.css`.
+ */
+export const GLASS_PANEL = 'glass-card border bg-transparent';
+
 export function Panel({
   id,
   title,
