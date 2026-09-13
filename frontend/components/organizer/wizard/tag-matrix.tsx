@@ -85,7 +85,6 @@ export function TagMatrix({
       {TAG_DIMENSIONS.map((dimension) => (
         <fieldset key={dimension.key} className="flex flex-col gap-2">
           <legend className="text-body-sm font-semibold text-foreground">{dimension.label}</legend>
-          <p className="text-caption text-muted-foreground">{dimension.help}</p>
           <ul className="flex flex-wrap gap-2">
             {dimension.tags.map((tag) => {
               const active = chosen.has(tag.value);

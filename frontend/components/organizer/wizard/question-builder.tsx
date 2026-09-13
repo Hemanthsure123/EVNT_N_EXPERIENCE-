@@ -11,6 +11,7 @@ import {
   type EventQuestion,
 } from '@/lib/api/event-content';
 import { errorMessage } from '@/lib/api/errors';
+import type { PendingQuestion } from '@/lib/organizer/wizard/model';
 import { EmptyState, ErrorState, Skeleton } from '@/components/organizer/primitives';
 import { Button, Input } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
@@ -54,21 +55,66 @@ const KINDS = [
 /** Mirrors `EventContentService.MAX_QUESTIONS`. */
 const MAX_QUESTIONS = 5;
 
-export function QuestionBuilder({ eventId }: { eventId: string }) {
+/**
+ * QUESTIONS, WITH OR WITHOUT A SAVED DRAFT.
+ *
+ * This was gated behind a "Questions unlock once the draft is saved" panel.
+ * It is staged in the draft now and flushed by the save engine on the first
+ * create, exactly as the FAQs, the running order and the sessions already are.
+ *
+ * A staged row supports the same three operations as a saved one — add, edit,
+ * remove — because a question somebody cannot correct before the draft saves
+ * is a question they have to delete and retype. The local editor is the array
+ * setter; the server editor is the mutation. Same component, same row UI.
+ */
+export function QuestionBuilder({
+  eventId,
+  pending,
+  onPending,
+}: {
+  /** `null` until the draft has been saved. */
+  eventId: string | null;
+  pending: PendingQuestion[];
+  onPending: (next: PendingQuestion[]) => void;
+}) {
   const client = useQueryClient();
   const [error, setError] = React.useState<string | null>(null);
 
   const query = useQuery({
     queryKey: ['event-questions', eventId],
-    queryFn: () => fetchEventQuestions(eventId),
+    queryFn: () => fetchEventQuestions(eventId as string),
+    // Nothing to fetch until the event exists; the staged list is the view.
+    enabled: Boolean(eventId),
   });
-  const questions = React.useMemo(() => query.data ?? [], [query.data]);
+
+  /**
+   * The saved rows, or the staged ones shaped to match.
+   *
+   * `id` is the temp id while staged, which is also what edit and remove
+   * address — so the row component below needs no knowledge of which mode it
+   * is in.
+   */
+  const questions = React.useMemo<EventQuestion[]>(
+    () =>
+      eventId
+        ? (query.data ?? [])
+        : pending.map((row) => ({
+            id: row.tempId,
+            prompt: row.prompt,
+            help_text: '',
+            kind: row.kind,
+            choices: row.choices,
+            is_required: row.isRequired,
+            position: 0,
+          })),
+    [eventId, query.data, pending],
+  );
 
   const refresh = () => client.invalidateQueries({ queryKey: ['event-questions', eventId] });
 
   const add = useMutation({
     mutationFn: (input: { prompt: string; kind: string; choices: string[] }) =>
-      addQuestion(eventId, {
+      addQuestion(eventId as string, {
         prompt: input.prompt,
         kind: input.kind,
         choices: input.choices,
@@ -83,7 +129,7 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
 
   const patch = useMutation({
     mutationFn: (input: { id: string; changes: Partial<EventQuestion> }) =>
-      updateQuestion(eventId, input.id, input.changes),
+      updateQuestion(eventId as string, input.id, input.changes),
     onSuccess: () => {
       setError(null);
       void refresh();
@@ -92,7 +138,7 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
   });
 
   const drop = useMutation({
-    mutationFn: (id: string) => removeQuestion(eventId, id),
+    mutationFn: (id: string) => removeQuestion(eventId as string, id),
     onSuccess: () => {
       setError(null);
       void refresh();
@@ -100,8 +146,8 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
     onError: (thrown: Error) => setError(errorMessage(thrown)),
   });
 
-  if (query.isPending) return <Skeleton className="h-40 w-full" />;
-  if (query.isError) {
+  if (eventId && query.isPending) return <Skeleton className="h-40 w-full" />;
+  if (eventId && query.isError) {
     return (
       <ErrorState message="Could not load your questions." onRetry={() => void query.refetch()} />
     );
@@ -109,13 +155,59 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
 
   const full = questions.length >= MAX_QUESTIONS;
 
+  const addRow = (input: { prompt: string; kind: string; choices: string[] }) => {
+    if (eventId) {
+      add.mutate(input);
+      return;
+    }
+    onPending([
+      ...pending,
+      {
+        tempId: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        prompt: input.prompt,
+        kind: input.kind,
+        choices: input.choices,
+        // Matches the server's own default for a new question, so a row does
+        // not change meaning when it is flushed.
+        isRequired: false,
+      },
+    ]);
+  };
+
+  const editRow = (id: string, changes: Partial<EventQuestion>) => {
+    if (eventId) {
+      patch.mutate({ id, changes });
+      return;
+    }
+    onPending(
+      pending.map((row) =>
+        row.tempId === id
+          ? {
+              ...row,
+              prompt: changes.prompt ?? row.prompt,
+              kind: changes.kind ?? row.kind,
+              choices: changes.choices ?? row.choices,
+              isRequired: changes.is_required ?? row.isRequired,
+            }
+          : row,
+      ),
+    );
+  };
+
+  const removeRow = (id: string) => {
+    if (eventId) {
+      drop.mutate(id);
+      return;
+    }
+    onPending(pending.filter((row) => row.tempId !== id));
+  };
+
   return (
     <div className="flex flex-col gap-stack">
       {questions.length === 0 ? (
         <EmptyState
           icon={MessageSquare}
           title="No questions yet"
-          body="Ask for anything you need before somebody turns up — dietary requirements, a T-shirt size, whether they have played before. Most events ask none."
         />
       ) : (
         <ul className="flex flex-col gap-2">
@@ -123,9 +215,9 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
             <li key={question.id}>
               <QuestionRow
                 question={question}
-                onChange={(changes) => patch.mutate({ id: question.id, changes })}
-                onRemove={() => drop.mutate(question.id)}
-                busy={patch.isPending || drop.isPending}
+                onChange={(changes) => editRow(question.id, changes)}
+                onRemove={() => removeRow(question.id)}
+                busy={Boolean(eventId) && (patch.isPending || drop.isPending)}
               />
             </li>
           ))}
@@ -137,7 +229,7 @@ export function QuestionBuilder({ eventId }: { eventId: string }) {
           That is the maximum ({MAX_QUESTIONS}). A checkout that asks more is one people leave.
         </p>
       ) : (
-        <QuestionComposer onAdd={(input) => add.mutate(input)} busy={add.isPending} />
+        <QuestionComposer onAdd={addRow} busy={Boolean(eventId) && add.isPending} />
       )}
 
       {error ? (

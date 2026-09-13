@@ -17,6 +17,8 @@ import {
   type Issue,
 } from '@/lib/organizer/wizard/model';
 import { POPULAR_CITIES } from '@/lib/discovery/cities';
+import { CityCombobox } from '@/components/ui/city-combobox';
+import { parseMapsLink } from '@/lib/maps/parse-maps-link';
 import { directionsUrl } from '@/lib/api/maps';
 import { createOrganizerCategory } from '@/lib/api/categories';
 import { errorMessage } from '@/lib/api/errors';
@@ -161,22 +163,88 @@ export function BasicsStep({
             drawn as artwork would out-shout the eight that decide which
             landing page the event lives on. */}
         <div className="mt-stack">
-          <SelectField
-            id="event-type"
-            label="More specifically"
+          <EventTypeField
             value={draft.eventType}
             onChange={(eventType) => update({ eventType })}
-            options={EVENT_TYPES.map((type) => ({ value: type.value, label: type.label }))}
-            /* "Not sure yet" is a REAL state, distinct from every value in the
-               list, and it has to stay reachable — an organiser who picks by
-               accident must be able to clear it. The server stores `''` for
-               exactly this. */
-            placeholder="Not sure yet"
-            hint="Optional. It helps people searching for this kind of night find you."
           />
         </div>
       </Section>
 
+    </div>
+  );
+}
+
+/** The sentinel the select uses for "+ Add anything". Never stored: choosing
+ *  it opens the input, and what gets saved is whatever is typed there. */
+const ADD_ANYTHING = '__add_anything__';
+
+/**
+ * "More specifically", with a way out of the list.
+ *
+ * ── WHY A SENTINEL AND NOT A SEPARATE CONTROL ────────────────────────────
+ *
+ * The forty-eight built-ins cover most nights and none of somebody's. A second
+ * "or type your own" field beside the select would be two controls answering
+ * one question, with a rule about which wins. One control that can become a
+ * text input has no such rule — the select's value is either a built-in or the
+ * door to typing one.
+ *
+ * `event_type` is a free-text column on the server, so a custom value needs no
+ * migration and no allow-list. It is a SEARCH hint, not a browse facet: the
+ * eight categories decide which landing page an event lives on, and this does
+ * not, which is why it can be open without fragmenting the catalogue.
+ *
+ * A value that is not in the list means custom mode on arrival — reopening a
+ * draft has to show the typed text, not silently fall back to "Not sure yet"
+ * and lose it on the next save.
+ */
+function EventTypeField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const isBuiltIn = EVENT_TYPES.some((type) => type.value === value);
+  const [custom, setCustom] = React.useState(Boolean(value) && !isBuiltIn);
+
+  return (
+    <div className="flex flex-col gap-stack">
+      <SelectField
+        id="event-type"
+        label="More specifically"
+        value={custom ? ADD_ANYTHING : value}
+        onChange={(next) => {
+          if (next === ADD_ANYTHING) {
+            setCustom(true);
+            // NOT cleared: somebody who picked a built-in and then chose to
+            // type their own starts from what they had, rather than from
+            // nothing.
+            return;
+          }
+          setCustom(false);
+          onChange(next);
+        }}
+        options={[
+          ...EVENT_TYPES.map((type) => ({ value: type.value, label: type.label })),
+          { value: ADD_ANYTHING, label: '+ Add anything' },
+        ]}
+        /* "Not sure yet" is a REAL state, distinct from every value in the
+           list, and it has to stay reachable — an organiser who picks by
+           accident must be able to clear it. The server stores `''` for
+           exactly this. */
+        placeholder="Not sure yet"
+      />
+
+      {custom ? (
+        <TextField
+          id="event-type-custom"
+          label="Your own"
+          value={isBuiltIn ? '' : value}
+          onChange={onChange}
+          max={60}
+        />
+      ) : null}
     </div>
   );
 }
@@ -245,7 +313,7 @@ export function VenueStep({ draft, update, issues }: StepProps) {
           in the header — the reference has one and this platform has no
           `is_virtual` column, no streaming URL and no online-event read path,
           so the control would set nothing. */}
-      <FieldGroup title="Location" icon={<MapPin className="size-4" />}>
+      <Section title="Location">
         <FieldFrame
           id="event-venue"
           label="Venue"
@@ -262,15 +330,21 @@ export function VenueStep({ draft, update, issues }: StepProps) {
           />
         </FieldFrame>
 
+        {/* THE SAME CITY CONTROL AS "HIRE A BAND", deliberately. That form
+            already solved this: a `datalist` renders nothing until somebody
+            types, so a field beside nine chips reads as an offer of nine
+            cities. `CityCombobox` opens on focus over all 186 and filters as
+            you type, and it stays free text — somebody in a town we do not
+            list can type it and be heard. The chips remain as the shortcut
+            for the popular few. */}
         <div className="flex flex-col gap-1.5">
-          <TextField
+          <label htmlFor="event-city" className="text-body-sm font-medium">
+            City
+          </label>
+          <CityCombobox
             id="event-city"
-            label="City"
             value={draft.city}
-            onChange={(city) => update({ city })}
-            placeholder="Mumbai"
-            max={CITY_MAX}
-            error={errorFor(issues, 'city')}
+            onChange={(next: string) => update({ city: next.slice(0, CITY_MAX) })}
           />
           <ul className="flex flex-wrap gap-1.5">
             {POPULAR_CITIES.slice(0, 8).map((city) => (
@@ -284,34 +358,17 @@ export function VenueStep({ draft, update, issues }: StepProps) {
             ))}
           </ul>
         </div>
-      </FieldGroup>
+      </Section>
 
-      {/* Renders nothing where this deployment has no browser Maps key — a map
-          is the only way to place a pin, so the honest answer is no pin section
-          rather than Google's "didn't load correctly" watermark.
-
-          NOT wrapped in a `FieldGroup`: it draws its own titled card, and it
-          renders NOTHING without a Maps key. A group around it would leave an
-          empty titled card promising a map that is never coming. */}
-      <PinPicker
-        venue={draft.venue}
-        city={draft.city}
-        latitude={draft.latitude}
-        longitude={draft.longitude}
-        onPick={(pin) =>
-          update({
-            latitude: pin.latitude,
-            longitude: pin.longitude,
-            // A hand-placed pin is nobody's place id — see the invariant above.
-            placeId: '',
-            // The reverse geocode's city fills a BLANK field and never
-            // overwrites one: it is what Google calls the area around the pin,
-            // which for an event on the edge of a metro is often the suburb
-            // rather than the city people search for.
-            city: draft.city.trim() ? draft.city : pin.city.slice(0, CITY_MAX),
-          })
-        }
-        onClear={() => update({ placeId: '', latitude: null, longitude: null })}
+      {/* ── ONE LOCATION, TWO WAYS TO GIVE IT ──────────────────────────
+          A pin and a pasted link are INPUT METHODS for the same pair of
+          columns (`latitude`/`longitude`), which is what makes the choice
+          genuinely exclusive rather than two half-answers to reconcile: the
+          event page, the directions link and the JSON-LD all read those two
+          numbers and there is nowhere for a second answer to live. */}
+      <LocationMethod
+        draft={draft}
+        update={update}
       />
 
       {/* The outbound link stays, next to a map rather than instead of one. It
@@ -519,6 +576,124 @@ function CategoryPicker({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Pin on a map, or paste a Google Maps link. One at a time.
+ *
+ * ── WHY EXCLUSIVE IS HONEST HERE AND NOT MERELY TIDY ─────────────────────
+ *
+ * Both write `latitude` and `longitude`. There is no third column for "the
+ * link they pasted", deliberately — storing the URL as well would be a second
+ * source of truth for where the event is, and the two would disagree the first
+ * time somebody moved the pin. So the toggle is not a preference, it is which
+ * control is currently allowed to write the pair.
+ *
+ * Switching method does NOT clear the coordinates. Somebody who pins, then
+ * pastes a link to check it, then switches back should not find their pin
+ * gone — the pair is the answer, and neither control owns it.
+ */
+function LocationMethod({
+  draft,
+  update,
+}: {
+  draft: Draft;
+  update: (patch: Partial<Draft>) => void;
+}) {
+  const [method, setMethod] = React.useState<'pin' | 'link'>('pin');
+  const [link, setLink] = React.useState('');
+  const [linkError, setLinkError] = React.useState<string | null>(null);
+
+  const pinned = draft.latitude !== null && draft.longitude !== null;
+
+  const applyLink = (raw: string) => {
+    setLink(raw);
+    if (!raw.trim()) {
+      setLinkError(null);
+      return;
+    }
+    const parsed = parseMapsLink(raw);
+    if (!parsed) {
+      // NAMED, because the commonest paste is the short share link and the
+      // fix is one press in Google Maps. "Invalid link" would send nobody
+      // anywhere.
+      setLinkError(
+        'That link has no coordinates in it. Open it in Google Maps and copy the full address-bar link, or paste the latitude and longitude.',
+      );
+      return;
+    }
+    setLinkError(null);
+    // A pasted place is nobody's place id — the same invariant a hand-placed
+    // pin follows.
+    update({ latitude: parsed.latitude, longitude: parsed.longitude, placeId: '' });
+  };
+
+  return (
+    <Section title="Exact location" count={pinned ? 'Set' : undefined}>
+      <div className="flex flex-col gap-stack">
+        {/* A radiogroup, not two switches: two switches can both be off, or
+            both on, and neither state means anything here. */}
+        <div role="radiogroup" aria-label="How to give the exact location" className="flex gap-2">
+          {(
+            [
+              { value: 'pin' as const, label: 'Pin on the map' },
+              { value: 'link' as const, label: 'Paste a Google Maps link' },
+            ]
+          ).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={method === option.value}
+              onClick={() => setMethod(option.value)}
+              className={cn(
+                'inline-flex min-h-control flex-1 items-center justify-center rounded-xl border px-3 text-body-sm transition-colors duration-fast',
+                'motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                method === option.value
+                  ? 'border-primary bg-primary/10 font-medium text-foreground'
+                  : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        {method === 'pin' ? (
+          <PinPicker
+            venue={draft.venue}
+            city={draft.city}
+            latitude={draft.latitude}
+            longitude={draft.longitude}
+            onPick={(pin) =>
+              update({
+                latitude: pin.latitude,
+                longitude: pin.longitude,
+                placeId: '',
+                city: draft.city.trim() ? draft.city : pin.city.slice(0, CITY_MAX),
+              })
+            }
+            onClear={() => update({ placeId: '', latitude: null, longitude: null })}
+          />
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <TextField
+              id="event-maps-link"
+              label="Google Maps link"
+              value={link}
+              onChange={applyLink}
+              error={linkError ?? undefined}
+            />
+            {pinned && !linkError ? (
+              <p className="text-caption text-success-subtle-foreground">
+                Location set from the link.
+              </p>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }
 

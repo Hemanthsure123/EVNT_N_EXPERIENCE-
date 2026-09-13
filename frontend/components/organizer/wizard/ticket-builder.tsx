@@ -26,6 +26,7 @@ import {
   type DraftTier,
 } from '@/lib/organizer/wizard/model';
 import { Button, Input } from '@/components/ui';
+import { AccordionCard } from './fields';
 import { cn } from '@/lib/utils/cn';
 import { EmptyState } from '../primitives';
 
@@ -452,12 +453,14 @@ function GroupBandEditor({
   const update = (key: string, changes: Partial<DraftGroupBand>) =>
     onChange(bands.map((band) => (band.key === key ? { ...band, ...changes } : band)));
 
+  // TOGGLED, at the owner's instruction. Most tiers have no group price, so the
+  // editor is a heading until it is wanted. The COUNT rides on the header:
+  // collapsing a section that holds real values and saying nothing about them
+  // is how an organizer forgets a band exists.
   return (
-    <section className="mt-stack-lg flex flex-col gap-stack border-t border-border pt-stack-lg">
+    <AccordionCard title="Group prices" count={bands.length ? `${bands.length}` : undefined}>
       <div className="flex flex-wrap items-start justify-between gap-stack">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h4 className="text-body-sm font-medium text-foreground">Group prices</h4>
-        </div>
+        <div className="flex min-w-0 flex-col gap-1" />
         <Button
           variant="outline"
           size="sm"
@@ -550,7 +553,7 @@ function GroupBandEditor({
           That is the maximum ({MAX_GROUP_BANDS}).
         </p>
       ) : null}
-    </section>
+    </AccordionCard>
   );
 }
 
@@ -568,11 +571,9 @@ function PhaseEditor({
     onChange(phases.map((phase) => (phase.key === key ? { ...phase, ...changes } : phase)));
 
   return (
-    <section className="mt-stack-lg flex flex-col gap-stack border-t border-border pt-stack-lg">
+    <AccordionCard title="Pricing phases" count={phases.length ? `${phases.length}` : undefined}>
       <div className="flex flex-wrap items-start justify-between gap-stack">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h4 className="text-body-sm font-medium text-foreground">Pricing phases</h4>
-        </div>
+        <div className="flex min-w-0 flex-col gap-1" />
         <Button
           variant="outline"
           size="sm"
@@ -675,7 +676,7 @@ function PhaseEditor({
           That is the limit of {MAX_PHASES} phases.
         </p>
       ) : null}
-    </section>
+    </AccordionCard>
   );
 }
 

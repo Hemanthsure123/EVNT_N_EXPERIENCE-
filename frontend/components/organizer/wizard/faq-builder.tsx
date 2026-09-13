@@ -163,7 +163,6 @@ export function FaqBuilder({
         <EmptyState
           icon={HelpCircle}
           title="No questions yet"
-          body="Answers shown on the event page, under the description."
         />
       ) : (
         <ol className="flex flex-col gap-2">

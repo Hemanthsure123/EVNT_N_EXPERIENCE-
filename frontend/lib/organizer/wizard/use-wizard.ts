@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { ApiError } from '@/lib/api/errors';
-import { addFaq, addSlot, addTimelineEntry, type TimelineKind } from '@/lib/api/event-content';
+import { addFaq, addQuestion, addSlot, addTimelineEntry, type TimelineKind } from '@/lib/api/event-content';
 import { setEventCrew } from '@/lib/api/crew';
 import {
   createEvent,
@@ -540,6 +540,7 @@ export function useWizard({ userId, organizationIds, ready, existing, cloneSourc
       const flushedSlots: string[] = [];
       const flushedEntries: string[] = [];
       const flushedFaqs: string[] = [];
+      const flushedQuestions: string[] = [];
       let crewSynced = false;
 
       if (working.eventId) {
@@ -579,6 +580,21 @@ export function useWizard({ userId, organizationIds, ready, existing, cloneSourc
               position: 0,
             });
             flushedFaqs.push(faq.tempId);
+          } catch {
+            // Left staged.
+          }
+        }
+
+        for (const question of working.pendingQuestions) {
+          try {
+            await addQuestion(working.eventId, {
+              prompt: question.prompt.trim(),
+              kind: question.kind,
+              choices: question.choices,
+              is_required: question.isRequired,
+              position: 0,
+            });
+            flushedQuestions.push(question.tempId);
           } catch {
             // Left staged.
           }
@@ -665,6 +681,9 @@ export function useWizard({ userId, organizationIds, ready, existing, cloneSourc
           ),
           pendingFaqs: latest.current.pendingFaqs.filter(
             (faq) => !flushedFaqs.includes(faq.tempId),
+          ),
+          pendingQuestions: latest.current.pendingQuestions.filter(
+            (question) => !flushedQuestions.includes(question.tempId),
           ),
           // Cleared only when the PUT actually landed. From here the picker
           // reads the server, which is the source of truth for a lineup.

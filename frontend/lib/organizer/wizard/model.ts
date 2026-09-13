@@ -213,6 +213,7 @@ export type Draft = {
    * version of cloning that looks like it worked.
    */
   pendingFaqs: PendingFaq[];
+  pendingQuestions: PendingQuestion[];
   /**
    * The lineup, as an ORDERED list of roster ids.
    *
@@ -389,6 +390,27 @@ export type PendingFaq = {
   answer: string;
 };
 
+/**
+ * A question staged before the event exists.
+ *
+ * The same arrangement `PendingFaq` has, for the same reason: a question is a
+ * row keyed on an event, and the wizard is local-first, so there is a window
+ * where somebody has written one and there is nothing to POST it to. It is
+ * flushed by the save engine on the first create.
+ *
+ * `isRequired` is carried because it is the one field that changes what the
+ * CHECKOUT does — `create_booking` refuses a booking missing a required
+ * answer — so dropping it while staged would silently downgrade a question
+ * between typing it and the draft saving.
+ */
+export type PendingQuestion = {
+  tempId: string;
+  prompt: string;
+  kind: string;
+  choices: string[];
+  isRequired: boolean;
+};
+
 /** Client-side only; never sent. `crypto.randomUUID` where available, because
  *  a counter resets on reload and would collide with a restored draft. */
 export function tempId(): string {
@@ -411,6 +433,7 @@ export function emptyDraft(organizationId = ''): Draft {
     pendingSlots: [],
     pendingTimeline: [],
     pendingFaqs: [],
+    pendingQuestions: [],
     crewIds: [],
     placeId: '',
     latitude: null,
@@ -586,6 +609,13 @@ export function restoreDraft(
     // stored `null` round-trips intact and overwrites the fresh `[]`. A draft
     // written by a build that predates these fields is exactly that case, and
     // `draft.tags.length` on `null` is a white screen over real work.
+    // A draft written before questions could be staged has no array here, and
+    // `.map` on `undefined` is the white screen the band rows already caused
+    // once. Normalised for the same reason `tiers` and `tags` are.
+    pendingQuestions: Array.isArray(stored.pendingQuestions) ? stored.pendingQuestions : [],
+    pendingFaqs: Array.isArray(stored.pendingFaqs) ? stored.pendingFaqs : [],
+    pendingSlots: Array.isArray(stored.pendingSlots) ? stored.pendingSlots : [],
+    pendingTimeline: Array.isArray(stored.pendingTimeline) ? stored.pendingTimeline : [],
     highlightsIncluded: asStrings(stored.highlightsIncluded),
     highlightsExcluded: asStrings(stored.highlightsExcluded),
     guidelines: asStrings(stored.guidelines),
@@ -1524,6 +1554,7 @@ export function draftFromEvent(
     pendingSlots: [],
     pendingTimeline: [],
     pendingFaqs: [],
+    pendingQuestions: [],
     crewIds: [],
     placeId: event.place_id ?? '',
     latitude: toCoordinate(event.latitude),

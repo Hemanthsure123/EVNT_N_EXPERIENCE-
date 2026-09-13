@@ -266,6 +266,25 @@ export function EventWizard({
 
   const [step, setStep] = React.useState<StepId>('basics');
   const [previewOpen, setPreviewOpen] = React.useState(false);
+
+  /**
+   * PREVIEW OPENS A TAB, not an embedded pane.
+   *
+   * It can, because the draft is in `localStorage` and a second tab on the
+   * same origin reads the same store — so this needs no save, no event id and
+   * no endpoint. `?eventId=` only picks WHICH draft key, mirroring the
+   * wizard's own two-keys rule for a new event versus an edit.
+   *
+   * The draft is flushed to storage first. Autosave is debounced, so pressing
+   * Preview seconds after typing would otherwise open a tab showing the draft
+   * as it was before the last few keystrokes — the one moment that is
+   * guaranteed to look like a bug.
+   */
+  const openPreview = () => {
+    const query = wizard.draft.eventId ? `?eventId=${encodeURIComponent(wizard.draft.eventId)}` : '';
+    window.open(`/dashboard/events/preview${query}`, '_blank', 'noopener,noreferrer');
+  };
+
   const [posterFile, setPosterFile] = React.useState<File | null>(null);
   const [publishing, setPublishing] = React.useState(false);
   // Guards the submit itself, not its appearance. `publishing` disables the
@@ -508,8 +527,7 @@ export function EventWizard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setPreviewOpen((open) => !open)}
-            aria-pressed={previewOpen}
+            onClick={openPreview}
             leftIcon={<Eye className="size-4" aria-hidden />}
             className="xl:hidden"
           >
@@ -549,7 +567,7 @@ export function EventWizard({
             ) : step === 'media' ? (
               <MediaStep draft={draft} onPoster={onPoster} posterFile={posterFile} save={save} />
             ) : step === 'details' ? (
-              <DetailsStep draft={draft} update={update} issues={issues} save={save} />
+              <DetailsStep draft={draft} update={update} issues={issues} />
             ) : step === 'seo' ? (
               <SeoStep draft={draft} update={update} issues={issues} />
             ) : (
@@ -621,7 +639,7 @@ export function EventWizard({
               error={wizard.error}
               savedAt={wizard.savedAt}
               onSaveDraft={() => void wizard.saveNow()}
-              onPreview={() => setPreviewOpen((open) => !open)}
+              onPreview={openPreview}
               previewOpen={previewOpen}
               forward={next ? { label: next.label, onClick: () => setStep(next.id) } : null}
             />

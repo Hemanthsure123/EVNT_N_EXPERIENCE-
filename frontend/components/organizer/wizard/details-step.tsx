@@ -19,12 +19,10 @@ const MAX_HIGHLIGHTS = 8;
 import { FaqBuilder } from './faq-builder';
 import { QuestionBuilder } from './question-builder';
 import {
-  NeedsSavedDraft,
   Section,
   StepHeader,
   TextArea,
   TextField,
-  type DraftSave,
 } from './fields';
 
 /**
@@ -51,8 +49,6 @@ type Props = {
   draft: Draft;
   update: (patch: Partial<Draft>) => void;
   issues: Issue[];
-  /** The save engine's health, for the FAQ panel's honest closing line. */
-  save?: DraftSave;
 };
 
 const errorFor = (issues: Issue[], field: string) =>
@@ -60,7 +56,7 @@ const errorFor = (issues: Issue[], field: string) =>
 
 const AGE_PRESETS = ['All ages', 'Under 18s with an adult', '16+', '18+', '21+'];
 
-export function DetailsStep({ draft, update, issues, save }: Props) {
+export function DetailsStep({ draft, update, issues }: Props) {
   return (
     <div className="flex flex-col gap-block">
       <StepHeader
@@ -119,7 +115,7 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
             label="Accessibility"
             value={draft.accessibilityNotes}
             onChange={(accessibilityNotes) => update({ accessibilityNotes })}
-            placeholder="Step-free access from Gate 2. Accessible viewing platform beside the sound desk. Assistance dogs welcome. Accessible toilets on the concourse."
+            placeholder="Step-free access, accessible toilets, assistance dogs welcome"
             rows={4}
             error={errorFor(issues, 'accessibilityNotes')}
           />
@@ -201,22 +197,14 @@ export function DetailsStep({ draft, update, issues, save }: Props) {
 
       {/* AFTER the FAQs, because the two are opposites and the order says so:
           an FAQ is what the organiser TELLS a buyer, a question is what they
-          ASK them. Gated on a saved draft like every other server-backed
-          collection — a question is a row keyed on an event that has to
-          exist. */}
-      <Section
-        title="Questions for attendees"
-      >
-        {draft.eventId ? (
-          <QuestionBuilder eventId={draft.eventId} />
-        ) : (
-          <NeedsSavedDraft
-            title="Questions unlock once the draft is saved"
-            what="Ask for anything you need before somebody turns up. Most events ask none."
-            missing={missingForSave(draft)}
-            save={save}
-          />
-        )}
+          ASK them. No draft gate on either any more — both are staged in the
+          draft and flushed by the save engine on the first create. */}
+      <Section title="Questions for attendees">
+        <QuestionBuilder
+          eventId={draft.eventId || null}
+          pending={draft.pendingQuestions}
+          onPending={(pendingQuestions) => update({ pendingQuestions })}
+        />
       </Section>
 
     </div>
