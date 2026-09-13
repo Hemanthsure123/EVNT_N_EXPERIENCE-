@@ -85,6 +85,16 @@ describe('the action row', () => {
     );
   });
 
+  it('offers the GATE LIST once the event is past its sale window', () => {
+    // After the night, "who came" is the question and the desk has nothing
+    // left to scan — the same tile position, the other half of the job.
+    deck([row({ status: 'finished' })]);
+    expect(screen.getByRole('link', { name: 'Attendees' }).getAttribute('href')).toBe(
+      '/dashboard/events/evt-1/attendees',
+    );
+    expect(screen.queryByRole('link', { name: 'Scan desk' })).toBeNull();
+  });
+
   it('refuses the scan desk on an event that is not published, and says why', () => {
     // `event_id` is what the backend authorizes and wrong-event-checks
     // against. A gate stationed at an event it cannot scan denies a whole

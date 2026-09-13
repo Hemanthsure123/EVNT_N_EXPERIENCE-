@@ -95,6 +95,44 @@ class EventRowSerializer(serializers.Serializer):
     submitted_at = serializers.DateTimeField(allow_null=True)
 
 
+class AttendeeRowSerializer(serializers.Serializer):
+    """One TICKET, as the door list reads it.
+
+    ── THE HOLDER IS NOT ALWAYS THE BUYER ───────────────────────────────────
+
+    `Ticket.attendee_name`/`attendee_email` are set when somebody who booked
+    six seats names the other five people. `holder_*` is therefore the
+    resolved answer to "who does this admit", and `buyer_*` is kept beside it
+    because the organizer's other question — who paid for this — has no other
+    way to be asked once a ticket has been re-addressed.
+
+    ── AND THE PHONE NUMBER BELONGS TO THE BUYER ────────────────────────────
+
+    Nothing stores an assigned attendee's phone; only a name and an email are
+    collected. So `phone` is blank on a re-addressed ticket rather than
+    carrying the buyer's number under somebody else's name, which would be the
+    quietest possible way for a steward to ring the wrong person.
+    """
+
+    ticket_id = serializers.UUIDField()
+    holder_name = serializers.CharField(allow_blank=True)
+    holder_email = serializers.CharField(allow_blank=True)
+    #: True when this ticket was addressed to somebody other than the buyer.
+    is_reassigned = serializers.BooleanField()
+    buyer_name = serializers.CharField(allow_blank=True)
+    buyer_email = serializers.CharField(allow_blank=True)
+    #: The BUYER's, and only when they are the one being admitted. See above.
+    phone = serializers.CharField(allow_blank=True)
+    ticket_type_id = serializers.UUIDField()
+    ticket_type = serializers.CharField(allow_blank=True)
+    #: `active` (expected), `used` (admitted), `void` (refunded or cancelled).
+    status = serializers.CharField()
+    used_at = serializers.DateTimeField(allow_null=True)
+    gate = serializers.CharField(allow_blank=True)
+    booking_id = serializers.UUIDField()
+    created_at = serializers.DateTimeField()
+
+
 class OrganizerBookingSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     status = serializers.CharField()

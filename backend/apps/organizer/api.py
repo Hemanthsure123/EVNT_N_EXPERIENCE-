@@ -29,6 +29,9 @@ from core.query_params import datetime_param, int_param, uuid_param
 
 from . import selectors
 from .pagination import (
+    OrganizerAttendeeAdmittedPagination,
+    OrganizerAttendeeOldestPagination,
+    OrganizerAttendeePagination,
     OrganizerBookingPagination,
     OrganizerCustomerPagination,
     OrganizerEventRowPagination,
@@ -39,6 +42,7 @@ from .permissions import IsOrganizer
 from .repositories import OrganizerRepository
 from .schemas import (
     ActivitySerializer,
+    AttendeeRowSerializer,
     AudienceSerializer,
     BreakdownSerializer,
     CustomerProfileSerializer,
@@ -298,6 +302,66 @@ class EventAnalyticsView(OrganizerView):
             self.owner_id, event_id, _int_param(request, "days", selectors.DEFAULT_SERIES_DAYS)
         )
         return _no_store(Response(EventAnalyticsSerializer(payload).data))
+
+
+class EventAttendeeListView(OrganizerView):
+    """Everybody this event will admit — one row per ticket.
+
+    THE GATE LIST, and the read side of `checkin`. The scan desk resolves ONE
+    QR token at a time, which is the right shape at a door and the wrong one
+    for "has Priya arrived", "who is on the guest list", or "export the list
+    before we lose signal". Neither of those questions had an endpoint.
+
+    Not a second rendering of `GET /organizer/bookings`: that is one row per
+    PURCHASE and answers who paid what. A booking for six seats is six people
+    through a door, and the two lists have different lengths for the same event.
+
+    ── THE PAGINATOR IS CHOSEN WITH THE SORT, NEVER SEPARATELY ──────────────
+
+    Cursor pagination does not check that its `ordering` matches the queryset's
+    — given a mismatch it returns wrong pages silently. So the sort key selects
+    BOTH, from one mapping, and an unrecognised value falls back to the default
+    pair rather than pairing a default paginator with a custom ordering.
+    """
+
+    #: sort -> paginator. The orderings themselves live on the repository,
+    #: beside the query they order.
+    PAGINATORS = {
+        "recent": OrganizerAttendeePagination,
+        "oldest": OrganizerAttendeeOldestPagination,
+        "admitted": OrganizerAttendeeAdmittedPagination,
+    }
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("q", str, description="Name, email, or a full ticket id"),
+            OpenApiParameter("state", str, description="checked_in | expected | void"),
+            OpenApiParameter("sort", str, description="recent | oldest | admitted"),
+        ],
+        responses={200: AttendeeRowSerializer(many=True)},
+    )
+    def get(self, request: Request, event_id: UUID) -> Response:
+        if not OrganizerRepository().owns_event(self.owner_id, event_id):
+            # NotFound, not PermissionDenied — see permissions.py. A 403 here
+            # would confirm the event exists to anyone guessing ids, and this
+            # list is somebody's attendees by name, email and phone.
+            raise NotFoundError("Event not found.")
+
+        sort = request.query_params.get("sort") or "recent"
+        if sort not in self.PAGINATORS:
+            sort = "recent"
+
+        queryset = OrganizerRepository().event_attendees(
+            event_id,
+            search=(request.query_params.get("q") or "").strip() or None,
+            state=request.query_params.get("state") or None,
+            sort=sort,
+        )
+        paginator = self.PAGINATORS[sort]()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        rows = selectors.decorate_attendees(list(page or []))
+        data = cast(list, AttendeeRowSerializer(rows, many=True).data)
+        return _no_store(paginator.get_paginated_response(data))
 
 
 class RefundListView(OrganizerView):

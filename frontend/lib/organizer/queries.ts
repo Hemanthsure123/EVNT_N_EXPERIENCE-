@@ -12,6 +12,7 @@ import {
   fetchCustomerProfile,
   fetchCustomers,
   fetchEventAnalytics,
+  fetchEventAttendees,
   fetchEventRows,
   fetchEventSettlement,
   fetchOrganizerActivity,
@@ -26,6 +27,7 @@ import {
   fetchOrganizerReviews,
   fetchOrganizerTimeseries,
   fetchSettlements,
+  type AttendeeFilters,
   type BookingFilters,
   type BreakdownKind,
   type EventRowFilters,
@@ -69,6 +71,8 @@ const KEY = {
   analytics: (id: string, days: number) => ['organizer', 'analytics', id, days] as const,
   settlements: ['organizer', 'settlements'] as const,
   settlement: (eventId: string) => ['organizer', 'settlement', eventId] as const,
+  attendees: (eventId: string, filters: AttendeeFilters) =>
+    ['organizer', 'attendees', eventId, filters] as const,
   feed: (limit: number) => ['organizer', 'feed', limit] as const,
   refunds: (eventId: string) => ['organizer', 'refunds', eventId] as const,
   earnings: ['organizer', 'earnings'] as const,
@@ -295,6 +299,28 @@ export function useEventSettlement(eventId: string | null) {
     enabled: Boolean(eventId),
     retry: false,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * The gate list for one event.
+ *
+ * `staleTime: 0` like the other TABLES, and for a sharper reason than theirs:
+ * this is read while people are queueing, and a cached row saying somebody is
+ * still expected when they walked in two minutes ago is the one error a door
+ * list must not make. `keepPreviousData` so typing in the search box does not
+ * unmount the list on every keystroke.
+ */
+export function useEventAttendees(eventId: string | null, filters: AttendeeFilters) {
+  return useInfiniteQuery({
+    queryKey: KEY.attendees(eventId ?? '', filters),
+    queryFn: ({ pageParam }) =>
+      fetchEventAttendees(eventId as string, { ...filters, cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => cursorFromNextLink(last.meta.next),
+    enabled: Boolean(eventId),
+    staleTime: 0,
+    placeholderData: keepPreviousData,
   });
 }
 

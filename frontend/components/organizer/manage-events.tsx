@@ -11,6 +11,7 @@ import {
   QrCode,
   Star,
   Ticket,
+  Users,
   Wallet,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -308,17 +309,45 @@ function DeckCard({
  *   an event whose row is simply on the next one.
  */
 function ActionRow({ row }: { row: EventRow }) {
+  // Selling: the door is the job. Past its sale window: "who came" is.
   const scannable = row.status === 'live';
+  const hasSold =
+    row.status === 'finished' ||
+    row.status === 'paused' ||
+    row.status === 'cancelled' ||
+    row.status === 'archived';
 
   return (
     <div className="mt-auto grid grid-cols-4 gap-1.5 border-t border-border pt-stack">
-      <ActionTile
-        icon={QrCode}
-        label="Scan desk"
-        href={`/dashboard/check-in?event=${row.id}`}
-        disabled={!scannable}
-        disabledReason="The scan desk opens once the event is published."
-      />
+      {/* ── THE DOOR, AT THE TWO POINTS IT MATTERS ────────────────────
+          While the event is selling, the job is scanning; once its sale window
+          has passed, the job is "who came". Same tile position, because it is
+          the same question at two points in an event's life.
+
+          An event that was NEVER live has neither: there are no tickets to
+          scan and nobody to list, so the tile refuses with the reason rather
+          than linking to a page that can only be empty. */}
+      {scannable ? (
+        <ActionTile
+          icon={QrCode}
+          label="Scan desk"
+          href={`/dashboard/check-in?event=${row.id}`}
+        />
+      ) : hasSold ? (
+        <ActionTile
+          icon={Users}
+          label="Attendees"
+          href={`/dashboard/events/${row.id}/attendees`}
+        />
+      ) : (
+        <ActionTile
+          icon={QrCode}
+          label="Scan desk"
+          disabled
+          href={`/dashboard/check-in?event=${row.id}`}
+          disabledReason="The scan desk opens once the event is published."
+        />
+      )}
       <ActionTile
         icon={BarChart3}
         label="Analytics"

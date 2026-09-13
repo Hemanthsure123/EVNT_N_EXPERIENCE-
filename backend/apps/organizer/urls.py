@@ -44,4 +44,9 @@ urlpatterns = [
         api.EventAnalyticsView.as_view(),
         name="organizer-event-analytics",
     ),
+    path(
+        "organizer/events/<uuid:event_id>/attendees",
+        api.EventAttendeeListView.as_view(),
+        name="organizer-event-attendees",
+    ),
 ]

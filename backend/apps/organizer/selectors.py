@@ -631,6 +631,45 @@ def get_activity(
     ]
 
 
+def decorate_attendees(tickets: list[Any]) -> list[dict[str, Any]]:
+    """Flatten a page of tickets into the row the door list renders.
+
+    The holder is RESOLVED here rather than in the serializer or the client:
+    "who does this ticket admit" is one question with one answer, and deciding
+    it in two places is how a gate list and a ticket email end up disagreeing
+    about whose name is on a seat.
+
+    Nothing here queries — every field comes off the page the repository
+    already read with `select_related`, so this stays a fixed two queries for a
+    page of any size.
+    """
+    rows: list[dict[str, Any]] = []
+    for ticket in tickets:
+        buyer = ticket.booking.user
+        reassigned = bool(ticket.attendee_name or ticket.attendee_email)
+        rows.append(
+            {
+                "ticket_id": str(ticket.id),
+                "holder_name": ticket.attendee_name or buyer.full_name,
+                "holder_email": ticket.attendee_email or buyer.email,
+                "is_reassigned": reassigned,
+                "buyer_name": buyer.full_name,
+                "buyer_email": buyer.email,
+                # Blank rather than the buyer's number on a re-addressed
+                # ticket — see the serializer's note.
+                "phone": "" if reassigned else (buyer.phone or ""),
+                "ticket_type_id": str(ticket.ticket_type_id),
+                "ticket_type": ticket.ticket_type.name,
+                "status": ticket.status,
+                "used_at": ticket.used_at.isoformat() if ticket.used_at else None,
+                "gate": ticket.gate,
+                "booking_id": str(ticket.booking_id),
+                "created_at": ticket.created_at.isoformat(),
+            }
+        )
+    return rows
+
+
 def decorate_refunds(refunds: list[Any]) -> list[dict[str, Any]]:
     """Flatten a page of refunds into the row the table renders.
 

@@ -48,6 +48,18 @@ from apps.settlements.models import PayoutAttempt
 from apps.ticketing.models import TicketType
 
 
+def _as_uuid(value: str) -> UUID | None:
+    """A search term as a UUID, or None if it is an ordinary word.
+
+    `UUID(...)` raises on anything that is not one, and a search box is where
+    people type ordinary words — so this is a parse, never a validation.
+    """
+    try:
+        return UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 class OrganizerRepository:
     """Read-only aggregates over ONE organizer's events."""
 
@@ -428,6 +440,119 @@ class OrganizerRepository:
                 | Q(payment_ref__icontains=search)
             )
         return queryset
+
+    # --------------------------------------------------- the attendee list
+
+    #: What `state` may be, and the ticket status each one means. A dict rather
+    #: than an if-chain so an unknown value falls through to "no filter" instead
+    #: of raising — these arrive from a dropdown in a browser, and the list is
+    #: already scoped to the caller's own event, so the worst a junk value can
+    #: do is widen to everybody.
+    ATTENDEE_STATES = {
+        "checked_in": TicketStatus.USED,
+        "expected": TicketStatus.ACTIVE,
+        "void": TicketStatus.VOID,
+    }
+
+    #: The orderings this list may be paged by. Each one is matched EXACTLY by a
+    #: paginator class — cursor pagination does not validate that its `ordering`
+    #: agrees with the queryset's, and given a mismatch it silently returns
+    #: wrong pages rather than failing. Kept here, beside the query, so the two
+    #: cannot drift apart in separate files.
+    ATTENDEE_ORDERINGS = {
+        "recent": ("-created_at", "-id"),
+        "oldest": ("created_at", "id"),
+        "admitted": ("-used_at", "-id"),
+    }
+
+    def event_attendees(
+        self,
+        event_id: UUID,
+        *,
+        search: str | None = None,
+        state: str | None = None,
+        sort: str = "recent",
+    ) -> QuerySet[Ticket]:
+        """One row per TICKET — the people this event will actually admit.
+
+        NOT one row per booking. A booking for six seats is six people through
+        a door, and a gate list that shows the buyer once cannot answer "has
+        Priya arrived". `GET /organizer/bookings` is the other question (who
+        paid what) and already exists; this is deliberately not a second
+        rendering of it.
+
+        ── IT NEEDS NO NEW INDEX, AND THAT IS WORTH STATING ─────────────────
+
+        The filter is `booking__event_id` and the sort is on the ticket's own
+        `created_at`. `Booking.event` is an FK (so Postgres has its index) and
+        `ticket_booking_created_idx` covers `(booking, created_at)`, so the
+        join is index-backed at both ends and the sort is over ONE event's
+        tickets — which is exactly the set being paginated. CLAUDE.md's rule is
+        to add the index the query actually needs; here it already exists, and
+        adding a speculative one to a money-path table for a read screen is the
+        opposite of that rule.
+
+        ── VOID TICKETS ARE INCLUDED, ON PURPOSE ────────────────────────────
+
+        A refund voids the booking's tickets, and the person whose ticket was
+        voided is exactly the person who turns up at the door anyway. Hiding
+        them would leave a gate steward with no way to see why somebody was
+        refused. They carry their status and the UI says what it means.
+        """
+        queryset = (
+            Ticket.objects.filter(
+                booking__event_id=event_id,
+                booking__event__deleted_at__isnull=True,
+            )
+            .select_related("booking", "booking__user", "ticket_type")
+            .only(
+                "id",
+                "status",
+                "used_at",
+                "gate",
+                "attendee_name",
+                "attendee_email",
+                "created_at",
+                "booking__id",
+                "booking__user__id",
+                "booking__user__email",
+                "booking__user__full_name",
+                "booking__user__phone",
+                "ticket_type__id",
+                "ticket_type__name",
+            )
+        )
+
+        status = self.ATTENDEE_STATES.get(state or "")
+        if status is not None:
+            queryset = queryset.filter(status=status)
+
+        ordering = self.ATTENDEE_ORDERINGS.get(sort, self.ATTENDEE_ORDERINGS["recent"])
+        if sort == "admitted":
+            # `used_at` is NULL for everybody who has not come through the door,
+            # and a NULL in a keyset makes cursor paging skip rows — the same
+            # trap the console's moderation queue documents. Ordering by it
+            # therefore only ever covers tickets that HAVE one.
+            queryset = queryset.filter(used_at__isnull=False)
+
+        if search:
+            # The four names a door list is searched by, plus the ticket's own
+            # id. A UUID is matched EXACTLY rather than by substring: the column
+            # is a uuid, not text, so a LIKE on it needs a cast that throws away
+            # the index — and a support desk pastes a whole id, never four
+            # characters of one.
+            filters = (
+                Q(attendee_name__icontains=search)
+                | Q(attendee_email__icontains=search)
+                | Q(booking__user__full_name__icontains=search)
+                | Q(booking__user__email__icontains=search)
+            )
+            ticket_id = _as_uuid(search)
+            if ticket_id is not None:
+                filters = filters | Q(id=ticket_id)
+            queryset = queryset.filter(filters)
+
+        return queryset.order_by(*ordering)
 
     def booking_item_counts(self, booking_ids: Sequence[UUID]) -> dict[UUID, int]:
         """Ticket quantity per booking, in one GROUP BY rather than per row."""

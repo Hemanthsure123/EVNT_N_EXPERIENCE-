@@ -146,7 +146,7 @@ function Loaded({
       <RevenuePerformance data={data} eventId={eventId} />
       <SalesOverTime data={data} days={days} onDays={onDays} />
       <BookingInsights data={data} />
-      <Attendance data={data} />
+      <Attendance data={data} eventId={eventId} />
       <TierSales data={data} eventTitle={event?.title ?? 'event'} />
       <CouponUsage eventId={eventId} />
       <Feedback eventId={eventId} />
@@ -479,11 +479,19 @@ function BookingInsights({ data }: { data: EventAnalyticsData }) {
  * of truth — while `scans_by_result` is the gate's parallel audit trail, which
  * answers a different question: how many were REFUSED, and why.
  */
-function Attendance({ data }: { data: EventAnalyticsData }) {
+function Attendance({ data, eventId }: { data: EventAnalyticsData; eventId: string }) {
   const noShows = data.sold > 0 ? Math.max(0, data.sold - data.checkins) : null;
 
   return (
-    <Section title="Attendance" hint="Who came, and what happened at the gate">
+    <Section
+      title="Attendance"
+      hint="Who came, and what happened at the gate"
+      actions={
+        <Button asChild variant="ghost" size="sm" className="shrink-0 text-muted-foreground">
+          <Link href={`/dashboard/events/${eventId}/attendees`}>See everyone</Link>
+        </Button>
+      }
+    >
       <div className="grid gap-stack lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         <div className={cn(GLASS_PANEL, 'flex flex-col gap-stack rounded-xl p-card shadow-sm')}>
           <div className="flex items-baseline justify-between gap-2">

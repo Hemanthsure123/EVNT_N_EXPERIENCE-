@@ -337,6 +337,66 @@ export const fetchCustomers = (params: { q?: string; cursor?: string } = {}) =>
 export const fetchCustomerProfile = (customerId: string) =>
   api.get<CustomerProfile>(`/organizer/customers/${encodeURIComponent(customerId)}`);
 
+/* ──────────────────────────── the gate list ───────────────────────────── */
+
+/**
+ * ONE TICKET — the row the door list renders.
+ *
+ * One row per TICKET, not per booking: a booking for six seats is six people
+ * through a door, and `GET /organizer/bookings` (one row per purchase) is the
+ * other question. The two lists have different lengths for the same event.
+ *
+ * `holder_*` is RESOLVED server-side — the assigned attendee when somebody who
+ * booked six seats named the other five, otherwise the buyer. Deciding that in
+ * the client as well is how a gate list and a ticket email end up disagreeing
+ * about whose name is on a seat.
+ */
+export type AttendeeRow = {
+  ticket_id: string;
+  holder_name: string;
+  holder_email: string;
+  /** This ticket was addressed to somebody other than the buyer. */
+  is_reassigned: boolean;
+  buyer_name: string;
+  buyer_email: string;
+  /**
+   * The BUYER's, and blank on a re-addressed ticket.
+   *
+   * Nothing stores an assigned attendee's phone — only a name and an email are
+   * collected — so a number here under somebody else's name would be the
+   * quietest possible way for a steward to ring the wrong person.
+   */
+  phone: string;
+  ticket_type_id: string;
+  ticket_type: string;
+  /** `active` (expected), `used` (admitted), `void` (refunded or cancelled). */
+  status: 'active' | 'used' | 'void';
+  used_at: string | null;
+  gate: string;
+  booking_id: string;
+  created_at: string;
+};
+
+export type AttendeeState = '' | 'checked_in' | 'expected' | 'void';
+export type AttendeeSort = 'recent' | 'oldest' | 'admitted';
+
+export type AttendeeFilters = {
+  q?: string;
+  state?: AttendeeState;
+  sort?: AttendeeSort;
+  cursor?: string;
+};
+
+export const fetchEventAttendees = (eventId: string, params: AttendeeFilters = {}) =>
+  api.get<Paginated<AttendeeRow>>(
+    `/organizer/events/${encodeURIComponent(eventId)}/attendees${query({
+      q: params.q,
+      state: params.state || undefined,
+      sort: params.sort,
+      cursor: params.cursor,
+    })}`,
+  );
+
 export const fetchEventAnalytics = (eventId: string, days = 30) =>
   api.get<EventAnalytics>(
     `/organizer/events/${encodeURIComponent(eventId)}/analytics?days=${days}`,

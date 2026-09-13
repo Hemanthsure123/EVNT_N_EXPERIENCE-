@@ -34,6 +34,27 @@ class OrganizerCustomerPagination(CursorPagination):
     ordering = ("-lifetime_value_minor", "email")
 
 
+class OrganizerAttendeePagination(CursorPagination):
+    #: Matches `OrganizerRepository.event_attendees(sort="recent")`. Two keys:
+    #: a confirm issues every ticket in a booking inside ONE transaction, so a
+    #: six-seat booking produces six rows with the same `created_at` to the
+    #: microsecond. Without the tiebreak those six can straddle a page boundary
+    #: and one of them vanishes from the gate list.
+    ordering = ("-created_at", "-id")
+
+
+class OrganizerAttendeeOldestPagination(CursorPagination):
+    #: The same list, read from the first sale forwards.
+    ordering = ("created_at", "id")
+
+
+class OrganizerAttendeeAdmittedPagination(CursorPagination):
+    #: Matches `sort="admitted"`, which the repository restricts to tickets
+    #: that HAVE a `used_at` — a NULL in a keyset makes cursor paging skip
+    #: rows.
+    ordering = ("-used_at", "-id")
+
+
 class OrganizerReviewPagination(CursorPagination):
     #: Matches `OrganizerRepository.reviews()`. Two keys: `created_at` alone is
     #: not unique — two reviews written in the same second can straddle a page
