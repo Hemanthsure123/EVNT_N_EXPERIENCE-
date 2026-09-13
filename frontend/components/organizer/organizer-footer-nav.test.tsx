@@ -17,8 +17,12 @@ describe('OrganizerFooterNav', () => {
     render(<OrganizerFooterNav />);
     const nav = screen.getByRole('navigation', { name: 'Organizer' });
 
-    // THE PUBLIC LANDING PAGE, not an internal dashboard screen.
-    expect(within(nav).getByRole('link', { name: 'Home' }).getAttribute('href')).toBe('/');
+    // THE LANDING PAGE, rendered inside the dashboard. Pointing this at `/`
+    // swaps the whole route group, so the attendee's four-tab bar replaces
+    // this one — the chrome changing under somebody is the bug this pins.
+    expect(within(nav).getByRole('link', { name: 'Home' }).getAttribute('href')).toBe(
+      '/dashboard/home',
+    );
     expect(within(nav).getByRole('link', { name: 'My events' }).getAttribute('href')).toBe(
       '/dashboard/events',
     );
@@ -50,6 +54,20 @@ describe('OrganizerFooterNav', () => {
     // screen. Home is `/`, which `isActive` special-cases for the same reason.
     expect(screen.getByRole('link', { name: 'Dashboard' }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBeNull();
+  });
+
+  it('wears the DEEPER frost, and carries its own elevation', () => {
+    // `glass-strong` over `glass`: a 28px blur is affordable on a 384px pill
+    // and not on the full-width sticky header, which is why they are two
+    // utilities. The `shadow-lg` CLASS must stay off — the utility's rim
+    // highlight and drop shadow are one `box-shadow` list, and a Tailwind
+    // utility would replace both.
+    render(<OrganizerFooterNav />);
+    const bar = screen.getByRole('navigation', { name: 'Organizer' });
+    const classes = bar.className.split(' ');
+    expect(classes).toContain('glass-strong');
+    expect(classes).not.toContain('glass');
+    expect(classes).not.toContain('shadow-lg');
   });
 
   it('marks the current tab in VIOLET, not butter', () => {

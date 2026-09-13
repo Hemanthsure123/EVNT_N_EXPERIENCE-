@@ -578,6 +578,33 @@
   --glass-card-top: 0.96;
   --glass-card-bottom: 0.74;
 
+  /* THE DEEPER FROST — the organizer's floating bottom bar, and anything else
+     that is a small, isolated pane the whole page runs under.
+
+     Three differences from `--blur-glass`, and each is doing a job:
+
+     1. A BIGGER RADIUS (28 vs 16). At 16px over a poster grid the bar reads as
+        tinted glass with the artwork still legible through it; past ~24px the
+        content behind dissolves into colour, which is what actually reads as
+        "frosted" rather than "translucent".
+     2. A LOWER ALPHA. More transparent, not less: the blur is the effect, and
+        a denser fill hides the thing being blurred. The legibility that buys
+        back comes from the sheen and the hairline below, not from opacity.
+     3. MORE SATURATION (180%). A heavy blur averages colour toward grey;
+        pushing saturation back up is what keeps a warm poster warm under it
+        instead of turning the bar into a smudge.
+
+     It is NOT the default `.glass`: that one is the full-width sticky header,
+     where a 28px blur is a per-frame paint across the whole viewport. This is
+     a 384px pill. */
+  --blur-glass-strong: 28px;
+  --glass-strong-surface: 0.62;
+  --glass-strong-hairline: 0.16;
+  /* The lit top edge. Glass catches light on the rim facing it, and this one
+     line is most of why a flat translucent rectangle starts reading as an
+     object with a thickness. */
+  --glass-strong-sheen: 0.55;
+
   /* Elevation. Two layers each -- a tight contact shadow plus a wide ambient
      one -- because a single blur at low alpha reads as a smudge, while the pair
      reads as an object above a surface. Tinted with `--ink-950` (warm) rather
@@ -763,6 +790,12 @@
      disappears long before it does on white. */
   --glass-card-top: 0.94;
   --glass-card-bottom: 0.68;
+
+  /* Denser and a brighter rim: on a dark ground a thin pane disappears, and
+     the sheen is the only thing that gives the bar an edge at all. */
+  --glass-strong-surface: 0.7;
+  --glass-strong-hairline: 0.2;
+  --glass-strong-sheen: 0.22;
 
   color-scheme: dark;
 }

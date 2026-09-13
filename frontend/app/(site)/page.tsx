@@ -1,52 +1,21 @@
 import * as React from 'react';
-import { Suspense } from 'react';
 import type { Metadata } from 'next';
-import { AllEvents, AllEventsSkeleton } from '@/components/discovery/all-events';
-import { CategoryTiles } from '@/components/discovery/category-tiles';
-import { LocationPrompt } from '@/components/discovery/location-prompt';
-import { Showcase } from '@/components/discovery/showcase';
-import { Section, SectionHeader } from '@/components/discovery/section';
-import { SubscribeCard } from '@/components/discovery/subscribe-card';
-import { TrendingSection, SellingFastSection, RailSectionSkeleton } from '@/components/discovery/home-sections';
-import { WhyCuratix } from '@/components/discovery/why-curatix';
-import { HireABandSection } from '@/components/hire/hire-a-band-section';
-import { fetchHomepageSafe } from '@/lib/api/cms';
+import { HomeBody } from '@/components/discovery/home-body';
 import { PUBLIC_LIST_REVALIDATE_SECONDS } from '@/lib/api/events';
 import { JsonLd, webSiteJsonLd } from '@/lib/seo/json-ld';
 import { SITE_NAME, SITE_URL, pageMetadata } from '@/lib/seo/metadata';
 
 /**
- * The landing page.
+ * The landing page, on its public URL.
  *
- * ── RECOMMEND, THEN LIST, THEN NAVIGATE ───────────────────────────────────
+ * The sections themselves are `HomeBody`, which the organizer dashboard also
+ * renders at `/dashboard/home` — an organizer pressing Home in their bottom
+ * bar stays inside the product instead of being handed to the attendee shell.
+ * One arrangement of those nine blocks, two mounts.
  *
- *   hero          ONE event, full width, with its own colour   (recommend)
- *   all events    chips + a poster grid of what is on sale     (list)
- *   categories    eight ways in for somebody with no plan      (navigate)
- *   HIRE A BAND   the second product, its own band             (the other job)
- *   why / signup  the trust argument and the one ask           (last)
- *
- * That order is the whole layout argument. A visitor arrives in one of three
- * states — "show me something good", "show me what's on", "I know roughly what
- * I want" — and each of the first three blocks answers exactly one of them, in
- * descending order of how many people are in that state.
- *
- * ── WHAT CHANGED, AND WHY IT IS NOT A RESTYLE ─────────────────────────────
- *
- * This page used to open on a marquee of five posters and then run more rails
- * under it: featured, then trending, each one the same card doing the same job
- * under a different heading. Repeating a card is how a page gets long without
- * getting more useful — by the second rail nobody reads the heading, so the
- * editorial distinction stops paying for the scroll it costs.
- *
- * There is now ONE recommendation surface (the hero, which commits to a single
- * event and can therefore give it a date, a venue, a price and a CTA) and ONE
- * listing surface (`AllEvents`, a grid with the browse page's own filter
- * vocabulary along the top). `TrendingSection` is gone from this page for that
- * reason: its cards carried urgency badges computed from remaining stock, and
- * `PosterCard` carries the same badge from the same helper — so the rail was
- * showing the same events again under a heading that implied they were
- * different ones.
+ * What stays HERE is everything that is a claim about this URL: the canonical,
+ * the page metadata and the `WebSite` structured data. The dashboard copy is
+ * `noindex` and must never tell a crawler it is the same document.
  *
  * ── STILL STATIC + ISR ────────────────────────────────────────────────────
  *
@@ -65,11 +34,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/' },
 };
 
-export default async function HomePage() {
-  // Server-side, ISR'd and NEVER throws — the hero is the LCP element, and a
-  // failing upstream must not take the front page down.
-  const cms = await fetchHomepageSafe();
-
+export default function HomePage() {
   return (
     <>
       <JsonLd
@@ -79,60 +44,7 @@ export default async function HomePage() {
           searchUrlTemplate: `${SITE_URL}/events?q={search_term_string}`,
         })}
       />
-
-      {/* ── THE DOCUMENT'S ONE h1, AND IT IS NOT DRAWN ───────────────────
-          The reference design has no page heading: the biggest text on the
-          first screen is the name of an EVENT, and adding a "Live events in
-          India" banner above the hero to satisfy an outline would be chrome
-          nobody asked for on the screen that decides whether somebody stays.
-
-          But the hero's title cannot be the h1 either — it changes every time
-          somebody presses a chevron, and a document whose heading mutates on a
-          carousel click has no stable outline for a screen reader or a
-          crawler.
-
-          So the h1 is real, correct and visually hidden: one per page, first
-          in the document, naming the page rather than one of its items. Every
-          section below is an h2 under it. */}
-      <h1 className="sr-only">Live events, concerts and experiences in India</h1>
-
-      {/* CURATED FIRST, and it says which it is. An operator's picks outrank
-          whatever the index returned; with nothing pinned the hero falls back
-          to the soonest live events and RELABELS itself, so a visitor is never
-          shown "Featured" that nobody featured. */}
-      {/* 1. Hero Carousel Showcase */}
-      <Showcase collections={cms?.collections} />
-
-      {/* 2. Browse by Mood Horizontal Carousel (District App Layout) */}
-      <Section className="py-4 sm:py-6">
-        <SectionHeader title="Browse by mood" />
-        <CategoryTiles categories={cms?.categories} />
-      </Section>
-
-      {/* 3. Trending Events Horizontal Rail */}
-      <Suspense fallback={<RailSectionSkeleton />}>
-        <TrendingSection />
-      </Suspense>
-
-      {/* 4. Selling Fast Scarcity Shelf */}
-      <Suspense fallback={null}>
-        <SellingFastSection />
-      </Suspense>
-
-      <LocationPrompt />
-
-      {/* 5. All Events Discovery Grid */}
-      <Suspense fallback={<AllEventsSkeleton />}>
-        <AllEvents />
-      </Suspense>
-
-      <HireABandSection />
-
-      <WhyCuratix />
-
-      <Section>
-        <SubscribeCard />
-      </Section>
+      <HomeBody />
     </>
   );
 }

@@ -12,8 +12,7 @@ import { cn } from '@/lib/utils/cn';
 import { SiteFooter } from '@/components/shell/site-footer';
 import { SiteBottomNav } from '@/components/shell/site-bottom-nav';
 import { SiteHeader } from '@/components/shell/site-header';
-import { SearchProvider } from '@/components/search/search-context';
-import { LocationProvider } from '@/lib/location/location-context';
+import { DiscoveryProviders } from '@/components/discovery/discovery-providers';
 import { SOCIAL_HANDLES } from '@/lib/brand';
 import { JsonLd, organizationJsonLd } from '@/lib/seo/json-ld';
 import { SITE_NAME, SITE_URL } from '@/lib/seo/metadata';
@@ -23,13 +22,14 @@ import { SITE_NAME, SITE_URL } from '@/lib/seo/metadata';
  * account — there is no auth gate anywhere in this layout, by design; sign-in
  * arrives with the booking flow and gates checkout, not browsing.
  *
- * The two providers are the only always-mounted client state: the shared
- * location (city switcher <-> "trending near you") and the shared search
- * overlay (header, hero and ⌘K all drive one instance, code-split until first
- * opened).
+ * The always-mounted client state — the shared location (city switcher <->
+ * "trending near you"), the shared search overlay (header, hero and ⌘K all
+ * drive one instance, code-split until first opened) and the mobile event deck
+ * — is `DiscoveryProviders`. It is a component rather than three nested
+ * providers written out here because the organizer dashboard renders the same
+ * landing page at `/dashboard/home`, and a second hand-assembled stack is how
+ * one of them ends up missing a provider.
  */
-import { EventDeckProvider } from '@/lib/discovery/event-deck-context';
-import { EventWidgetDeck } from '@/components/event/event-widget-deck';
 
 export default async function SiteLayout({ children }: { children: React.ReactNode }) {
   const announcements = await fetchAnnouncementsSafe('home');
@@ -40,39 +40,35 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
   }));
 
   return (
-    <LocationProvider>
-      <SearchProvider terms={terms}>
-        <EventDeckProvider>
-          <JsonLd
-            data={organizationJsonLd({
-              name: SITE_NAME,
-              url: SITE_URL,
-              logo: `${SITE_URL}/icon`,
-              sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
-            })}
-          />
-          <SkipToContent targetId="main" />
-          <div id="site-shell">
-            <div className="flex min-h-dvh flex-col">
-              <AnnouncementBar announcements={announcements} />
-              <SiteHeader />
-              <main
-                id="main"
-                className={cn('flex-1', BOTTOM_NAV_CLEARANCE)}
-              >
-                {children}
-              </main>
-              <SiteFooter className={BOTTOM_NAV_CLEARANCE} />
-            </div>
-            <SiteBottomNav />
-            <CookieConsent />
-            <Onboarding />
-            <ReviewPrompt />
-            <FavouritesSync />
-            <EventWidgetDeck />
-          </div>
-        </EventDeckProvider>
-      </SearchProvider>
-    </LocationProvider>
+    <>
+      <JsonLd
+        data={organizationJsonLd({
+          name: SITE_NAME,
+          url: SITE_URL,
+          logo: `${SITE_URL}/icon`,
+          sameAs: Object.values(SOCIAL_HANDLES).filter(Boolean),
+        })}
+      />
+      {/* OUTSIDE the providers' `#site-shell` wrapper, deliberately: an open
+          overlay hides that subtree from assistive technology, and the skip
+          link is the one control that has to survive it. */}
+      <SkipToContent targetId="main" />
+
+      <DiscoveryProviders terms={terms}>
+        <div className="flex min-h-dvh flex-col">
+          <AnnouncementBar announcements={announcements} />
+          <SiteHeader />
+          <main id="main" className={cn('flex-1', BOTTOM_NAV_CLEARANCE)}>
+            {children}
+          </main>
+          <SiteFooter className={BOTTOM_NAV_CLEARANCE} />
+        </div>
+        <SiteBottomNav />
+        <CookieConsent />
+        <Onboarding />
+        <ReviewPrompt />
+        <FavouritesSync />
+      </DiscoveryProviders>
+    </>
   );
 }

@@ -55,6 +55,15 @@ import { OrganizerPalette } from './command-palette';
  * This only decides what to render while the browser waits, and spares a
  * signed-out visitor a screenful of failing widgets.
  */
+/**
+ * Routes that lay themselves out.
+ *
+ * `/dashboard/home` is the attendee landing page rendered inside the
+ * organizer shell — it is built from `Section`/`Container`, which already own
+ * the gutter and the max width, so the shell must not add a second set.
+ */
+const FULL_BLEED_ROUTES = new Set(['/dashboard/home']);
+
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? '/dashboard';
   const { status } = useAuth();
@@ -102,6 +111,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   // organizer on every page load.
   if (scopeReady && !isOrganizer) return <AwaitingApproval hasOrganization={hasOrganization} />;
 
+  // The dashboard's own chrome is right for tables and forms and wrong for a
+  // page that is itself a layout. One route qualifies today; the set is named
+  // rather than inlined so the next one is a line here instead of a condition
+  // grown inside the JSX.
+  const bleed = FULL_BLEED_ROUTES.has(pathname);
+
   return (
     <div className="flex min-h-dvh bg-background">
       <Sidebar
@@ -116,12 +131,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             palette is still opened by ⌘K, which the shell listens for above. */}
         <TopBar />
         {/* Capped at 1600px and centred — a table stretched across an
-            ultrawide is unreadable, not impressive. */}
+            ultrawide is unreadable, not impressive.
+
+            ── EXCEPT WHERE THE PAGE BRINGS ITS OWN WIDTH ──────────────────
+            The landing page is built from `Section`/`Container`, which set
+            their own gutter and their own max width. Nesting it inside this
+            one gives it two of each: a hero that should be full-bleed sits
+            inset by 24px inside a 1600px column inside the viewport, and every
+            rail below it is gutter-on-gutter. Those routes get a bare `main`
+            and lay themselves out. */}
         <main
           id="organizer-main"
-          className={cn('min-w-0 flex-1 p-card lg:p-card-lg', ORGANIZER_NAV_CLEARANCE)}
+          className={cn(
+            'min-w-0 flex-1',
+            bleed ? null : 'p-card lg:p-card-lg',
+            ORGANIZER_NAV_CLEARANCE,
+          )}
         >
-          <div className="mx-auto w-full max-w-dashboard">{children}</div>
+          {bleed ? children : <div className="mx-auto w-full max-w-dashboard">{children}</div>}
         </main>
       </div>
 

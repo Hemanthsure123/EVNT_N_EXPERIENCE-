@@ -24,18 +24,31 @@ import { cn } from '@/lib/utils/cn';
  * both bars. Two navigations that disagree about which page you are on is the
  * drift that avoids.
  *
- * ── HOME LEAVES THE DASHBOARD, AND `Dashboard` IS WHERE IT USED TO GO ────
+ * ── HOME IS THE LANDING PAGE, RENDERED INSIDE THE DASHBOARD ─────────────
  *
- * Home is `/` — the public landing page — at the owner's instruction. That
- * moved a real destination out of the bar, and `/dashboard` is not optional:
- * it is the landing that carries the attention panel, today's figures AND the
- * sections grid, which is the only route to the eight organizer screens this
- * bar has no room for. So `Dashboard` points at `/dashboard` rather than at
- * `/dashboard/analytics`, and analytics is reached from that grid.
+ * Home used to point at `/`, and that was the bug: `/` is a different route
+ * GROUP, so pressing it swapped the whole shell and the four-tab attendee bar
+ * (Home, Events, Saved, Hire) replaced this one. Somebody asking for the
+ * landing page was shown the landing page AND handed a different product.
+ *
+ * `/dashboard/home` renders the identical `HomeBody` under the dashboard
+ * layout, so the header, this bar and the active tab all stay exactly where
+ * they were. Nothing about the chrome moves; only the content does.
+ *
+ * That still moved a real destination out of the bar, and `/dashboard` is not
+ * optional: it is the landing that carries the attention panel, today's
+ * figures AND the sections grid, which is the only route to the eight
+ * organizer screens this bar has no room for. So `Dashboard` points at
+ * `/dashboard` rather than at `/dashboard/analytics`, and analytics is reached
+ * from that grid.
  *
  * Without that swap, taking Home off `/dashboard` would have stranded
  * Bookings, Customers, Promotions, Payouts, Refunds, Crew, Reviews, Support
  * and Activity behind no link at all on a phone.
+ *
+ * The PUBLIC `/` is still reachable, from the account menu's own links — an
+ * organizer who wants to leave the dashboard should do it deliberately, not by
+ * pressing the tab labelled Home.
  *
  * ── THE ACTIVE MARK IS VIOLET HERE, AND BUTTER ON THE PUBLIC SITE ────────
  *
@@ -92,8 +105,8 @@ type NavItem = {
 };
 
 const LEFT: NavItem[] = [
-  // THE PUBLIC LANDING PAGE, not the dashboard's own. See the note above.
-  { href: '/', label: 'Home', icon: <Home className="size-5" />, exact: true },
+  // The landing page, rendered INSIDE the dashboard. See the note above.
+  { href: '/dashboard/home', label: 'Home', icon: <Home className="size-5" />, exact: true },
   { href: '/dashboard/events', label: 'My events', icon: <CalendarDays className="size-5" /> },
 ];
 
@@ -140,12 +153,17 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
       <nav
         aria-label="Organizer"
         className={cn(
-          // `glass` is the shared surface — `backdrop-blur` over a
-          // semi-transparent ground, with its own fallback for browsers that
-          // cannot blur. Not a hand-rolled rgba, so the two bars stay one
-          // material.
-          'glass pointer-events-auto flex w-full max-w-sm items-center justify-between',
-          'rounded-full border px-2 shadow-lg',
+          // `glass-strong`, not `glass`: a deeper blur, more saturation, a
+          // thinner fill and a lit top edge — see the note beside it in
+          // `globals.css`. The heavier radius is affordable HERE and not on the
+          // sticky header because a backdrop-filter's cost scales with area,
+          // and this is a 384px pill rather than the full viewport width.
+          //
+          // NO `shadow-lg` class: the utility carries the elevation itself,
+          // because the rim highlight and the drop shadow are one `box-shadow`
+          // list and a Tailwind utility would replace both.
+          'glass-strong pointer-events-auto flex w-full max-w-sm items-center justify-between',
+          'rounded-full border px-2',
         )}
       >
         {LEFT.map((item) => (
