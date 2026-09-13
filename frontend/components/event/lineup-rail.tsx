@@ -4,6 +4,7 @@ import * as React from 'react';
 import { UserRound } from 'lucide-react';
 import type { EventCrewEntry } from '@/lib/api/event-content';
 import { RemoteImage } from '@/components/ui/remote-image';
+import { Lightbox, type LightboxImage } from './lightbox';
 import {
   PEEK_RAIL_SURFACE,
   PEEK_RAIL_TRACK,
@@ -98,9 +99,52 @@ export function LineupRail({
    */
   onOpenPortrait?: (personId: string) => void;
 }) {
+  /**
+   * ── THE RAIL OPENS ITS OWN VIEWER WHEN NOBODY ELSE WILL ────────────────
+   *
+   * The mobile deck passes `onOpenPortrait` so a portrait joins the deck's
+   * own lightbox — one viewer per surface, and the deck already has one.
+   *
+   * The DESKTOP event page could not: `event-page-body.tsx` is a SERVER
+   * component, so it cannot hold `useState` for an index, and marking it
+   * `'use client'` to add one would pull the whole sticky rail and the
+   * disclosure sheets into the client bundle on the platform's hottest public
+   * route. So the rail — which is already a client component — falls back to
+   * its own. Faces are clickable on both surfaces now, and neither page grew
+   * a boundary it did not need.
+   */
+  const [ownAt, setOwnAt] = React.useState<number | null>(null);
+
+  const portraits = React.useMemo(
+    () => crew.filter((person) => Boolean(person.photo_url)),
+    [crew],
+  );
+  const ownImages = React.useMemo<LightboxImage[]>(
+    () =>
+      portraits.map((person) => ({
+        url: person.photo_url,
+        // The name is the caption. `photo_alt_text` describes the picture for
+        // somebody who cannot see it; the person looking at it wants to know
+        // who this is.
+        alt: [person.name, person.role].filter(Boolean).join(' — '),
+      })),
+    [portraits],
+  );
+
+  // Addressed by ID, never by position: this rail draws EVERY member and the
+  // viewer holds only those with a photograph, so a position handed across
+  // that boundary opens a stranger the moment somebody has no picture.
+  const openPortrait =
+    onOpenPortrait ??
+    ((personId: string) => {
+      const index = portraits.findIndex((person) => person.id === personId);
+      if (index >= 0) setOwnAt(index);
+    });
   const { ref, activeIndex, mode, looping, scrollable } = useSnapRail<HTMLUListElement>(
     crew.length,
-    { loop: true },
+    // Hard stops at the first and last item — no wrap-around. `useSnapRail`
+    // ignores this now; it is left explicit so the intent is readable here.
+    { loop: false },
   );
   const { domCount, realFor } = loopedIndex(crew.length, looping);
 
@@ -168,10 +212,10 @@ export function LineupRail({
                     a disabled control in a rail of enabled ones reads as
                     broken, where a picture that simply is not a control reads
                     as a picture. */}
-                {onOpenPortrait && person.photo_url && !isClone ? (
+                {person.photo_url && !isClone ? (
                   <button
                     type="button"
-                    onClick={() => onOpenPortrait(person.id)}
+                    onClick={() => openPortrait(person.id)}
                     aria-label={`View ${person.name}${person.role ? `, ${person.role}` : ''}`}
                     className={cn(
                       'relative aspect-square w-full overflow-hidden rounded-full bg-muted ring-1 ring-border',
@@ -256,6 +300,18 @@ export function LineupRail({
             />
           ))}
         </div>
+      ) : null}
+
+      {/* Mounted only when this rail is the one that opened it. Two viewers
+          never coexist: the deck passes `onOpenPortrait`, so `ownAt` stays
+          null on that surface. */}
+      {ownAt !== null && ownImages.length > 0 ? (
+        <Lightbox
+          images={ownImages}
+          index={ownAt}
+          onIndexChange={setOwnAt}
+          onClose={() => setOwnAt(null)}
+        />
       ) : null}
     </section>
   );

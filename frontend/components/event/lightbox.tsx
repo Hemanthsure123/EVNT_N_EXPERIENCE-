@@ -161,7 +161,12 @@ export function Lightbox({
     <div
       // `z-[100]` and not the `z-modal` token: this has to sit above the deck,
       // which IS `z-modal`, and above any sub-sheet it has opened.
-      className="fixed inset-0 z-[100] flex flex-col bg-black/95 animate-in fade-in-0"
+      // `backdrop-blur-md` behind the 90% ink: the page underneath stops being
+      // legible shapes and becomes texture, so the photograph is the only
+      // thing with edges. `z-[100]` and not the `z-modal` token — this has to
+      // sit above the deck, which IS `z-modal`, and above any sub-sheet it has
+      // already opened.
+      className="fixed inset-0 z-[100] flex flex-col bg-black/90 backdrop-blur-md animate-in fade-in-0"
       onClick={onClose}
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}

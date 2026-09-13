@@ -268,7 +268,9 @@ function MobileFeaturedCarousel({
    */
   const { ref, activeIndex, mode, looping, scrollable } = useSnapRail<HTMLUListElement>(
     events.length,
-    { loop: true },
+    // Hard stops at the first and last item — no wrap-around. `useSnapRail`
+    // ignores this now; it is left explicit so the intent is readable here.
+    { loop: false },
   );
   const { domCount, realFor } = loopedIndex(events.length, looping);
   const centred = mode === 'centred';

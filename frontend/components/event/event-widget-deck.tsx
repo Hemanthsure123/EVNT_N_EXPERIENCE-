@@ -116,8 +116,21 @@ const DOCK_MS = 320;
  * swipe reverses the effect in the same frame. Small on purpose: enough that
  * the outgoing photograph visibly steps back as the next one arrives, not so
  * much that a poster's own edges shrink away from the frame it is shown in.
+ *
+ * ── DEEPENED TO 0.15 ─────────────────────────────────────────────────────
+ *
+ * 0.06 put a neighbour at 0.94, which reads as a rendering artefact rather
+ * than as depth — the brief asks for the centre slide to be unmistakably
+ * upfront and the sides unmistakably behind. 0.15 lands a full step away at
+ * 0.85, matching the `peekRailItemState` the two other carousels use, so all
+ * three rails on the platform now share one sense of distance.
+ *
+ * It is still INTERPOLATED rather than switched, which is the part that
+ * matters more than the number: a slide halfway in is halfway forward, and a
+ * reversed swipe reverses in the same frame because nothing is running that
+ * has to be cancelled first.
  */
-const SLIDE_DEPTH_SCALE = 0.06;
+const SLIDE_DEPTH_SCALE = 0.15;
 const SLIDE_DEPTH_FADE = 0.3;
 
 /** How long the gallery's blurred backdrop takes to cross-fade to a new slide. */

@@ -33,10 +33,18 @@ import * as React from 'react';
  * With two, centring the first leaves the second half off screen and the rail
  * opens looking broken.
  *
- * So three is the floor, and below it the rail is an ordinary left-aligned row
- * that starts at the container's gutter like every other list on the site.
+ * TWO is the floor now, and the objection that used to make it three has been
+ * answered by `centredRailPadding`: with `(100 - itemWidth) / 2` either side,
+ * the FIRST item reaches the centre and the second peeks in from the right —
+ * which is exactly the two-item behaviour the brief describes. The original
+ * note assumed no padding, and said centring the first would push the second
+ * half off screen. With the padding it does not.
+ *
+ * ONE is still a row. There is no centre to be in when there is nothing to be
+ * centred against, and a lone item floating in the middle with a void each side
+ * reads as a layout bug rather than as a carousel.
  */
-export const CENTRED_RAIL_MIN_ITEMS = 3;
+export const CENTRED_RAIL_MIN_ITEMS = 2;
 
 export type RailMode = 'centred' | 'start';
 
@@ -138,9 +146,20 @@ export const PEEK_RAIL_ITEM = peekRailItem('centred');
  */
 export const peekRailItemState = (isActive: boolean, mode: RailMode = 'centred'): string => {
   if (mode === 'start') return 'scale-100 opacity-100';
+  // ── THE DEPTH IS DELIBERATE, AND IT USED TO BE TOO SHALLOW ────────────
+  //
+  // The neighbours were `scale-95 opacity-75`: a five-percent difference that
+  // reads as a rendering artefact rather than as depth. At 0.85 and 0.7 the
+  // centre item is unmistakably in front and the sides are unmistakably
+  // behind, which is the whole effect.
+  //
+  // `z-10` / `z-0` matter as much as the scale: without them a scaled-up
+  // centre card is still painted UNDER whichever sibling comes after it in
+  // the DOM, so the item nearest the middle would be overlapped on one side
+  // and not the other.
   return isActive
-    ? 'scale-110 -translate-y-1.5 opacity-100 z-10'
-    : 'scale-95 translate-y-1 opacity-75 z-0';
+    ? 'scale-105 -translate-y-1.5 opacity-100 z-10'
+    : 'scale-[0.85] translate-y-1 opacity-70 z-0';
 };
 
 /** The elevation, on the item's own surface so the shadow follows its shape. */
@@ -218,11 +237,21 @@ const SETTLE_MS = 120;
 
 export function useSnapRail<T extends HTMLElement>(
   count: number,
-  options: { loop?: boolean } = {},
+  /** Accepted and ignored — see the note on `looping` below. */
+  _options: { loop?: boolean } = {},
 ): SnapRail<T> {
   const ref = React.useRef<T>(null);
   const mode = railModeFor(count);
-  const looping = Boolean(options.loop) && mode === 'centred' && count >= CENTRED_RAIL_MIN_ITEMS;
+  // ── NO INFINITE LOOP, BY CONTRACT ────────────────────────────────────
+  //
+  // The rails are required to stop hard at the first and last item. `loop`
+  // survives as an option so no call site breaks, and is IGNORED — a flag
+  // that silently does nothing is better here than removing the parameter and
+  // leaving `{ loop: true }` at two call sites looking like it still works.
+  // `loopedIndex` below returns the identity mapping whenever `looping` is
+  // false, so no clones are rendered and `activeIndex` is already a real
+  // index.
+  const looping = false;
 
   const [activeIndex, setActiveIndex] = React.useState(0);
   // ── STARTS TRUE, AND THAT IS ABOUT THE FIRST PAINT ────────────────────
