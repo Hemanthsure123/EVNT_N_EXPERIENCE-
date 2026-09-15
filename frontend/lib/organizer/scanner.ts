@@ -13,15 +13,15 @@ import * as React from 'react';
  * hardware-accelerated where the platform offers it, and costs zero bytes.
  *
  * The trade is coverage: it is in Chrome and Edge (desktop and Android) and
- * NOT in Safari or Firefox. That is handled by SAYING SO — `isSupported()` is
- * checked before the camera button is offered at all, so a gate steward on an
- * iPhone sees "your browser cannot decode QR, use a handheld scanner" rather
- * than a button that opens a black rectangle. A silently broken camera at a
- * queue is worse than an honest absence.
+ * NOT in Safari or Firefox. That bundled decoder now EXISTS — `jsqr`, behind a
+ * dynamic import, loaded only where the native detector is absent, so the cost
+ * falls solely on the browsers that need it. See `fallbackDecoder` below.
  *
- * That bundled decoder now EXISTS — `jsqr`, behind a dynamic import, loaded
- * only where the native detector is absent, so the cost falls solely on the
- * browsers that need it. See `fallbackDecoder` below.
+ * It was asked whether this should move to `html5-qrcode` or `react-qr-reader`.
+ * It should not: both are wrappers over the same two decoders this file
+ * already chooses between, and both bring their own camera management —
+ * a second owner of the MediaStream is exactly how a camera light stays on
+ * after the page has moved on.
  *
  * ── THE DECODER NEVER DECIDES ANYTHING ────────────────────────────────────
  *
@@ -69,8 +69,7 @@ function nativeDecoder(): FrameDecoder | null {
  * steward downloads none of it. It was chosen over the alternatives on ONE
  * property above all: it has zero dependencies. A decoder with a transitive
  * tree is a decoder that can fail the release's image scan months later for a
- * reason nobody connects to check-in. Verified before adding — the npm audit
- * totals were identical before and after.
+ * reason nobody connects to check-in.
  *
  * ── WHY THE FRAME IS SHRUNK ───────────────────────────────────────────────
  *
@@ -112,13 +111,13 @@ async function fallbackDecoder(): Promise<FrameDecoder | null> {
     };
   } catch {
     // A failed chunk fetch must not take the scanner down — the typed field
-    // below it still admits people.
+    // still admits people.
     return null;
   }
 }
 
 /**
- * Support is now about the CAMERA, not the decoder.
+ * Support is about the CAMERA, not the decoder.
  *
  * This used to require `BarcodeDetector`, so Safari and Firefox were told to
  * use a handheld reader or type the code — which is the manual entry a gate
@@ -132,6 +131,17 @@ export function isScannerSupported(): boolean {
 
 export type ScannerState = 'idle' | 'starting' | 'running' | 'denied' | 'unsupported' | 'error';
 
+/** Which lens. `environment` is the rear camera on a phone. */
+export type Facing = 'environment' | 'user';
+
+/**
+ * `MediaTrackCapabilities` in lib.dom has no `torch`, because it is not in
+ * the spec's base set — it is an image-capture extension Chrome on Android
+ * implements and Safari does not. Typed narrowly here rather than widened to
+ * `any`, so the one property read is the one property that exists.
+ */
+type TorchCapabilities = { torch?: boolean };
+
 /**
  * A running camera scanner bound to a `<video>`.
  *
@@ -144,6 +154,23 @@ export type ScannerState = 'idle' | 'starting' | 'running' | 'denied' | 'unsuppo
  * So an identical value is ignored until `repeatAfterMs` has passed, which is
  * long enough to cover a person walking through and short enough that a
  * deliberate re-scan still works.
+ *
+ * ── TORCH AND FLIP ARE OFFERED ONLY WHERE THEY WORK ───────────────────────
+ *
+ * `torchSupported` comes from the running track's own capabilities, and
+ * `canFlip` from counting the device's video inputs AFTER permission (before
+ * it, `enumerateDevices` hides them). A torch button on an iPhone — where the
+ * constraint is silently ignored — would be a control that does nothing, which
+ * this codebase refuses everywhere else; the caller draws neither until the
+ * hardware has said yes.
+ *
+ * ── ONE DECODE LOOP AT A TIME ─────────────────────────────────────────────
+ *
+ * Flipping restarts the stream, and a loop can be mid-`await` on a frame when
+ * that happens — cancelling its pending animation frame does not stop it
+ * scheduling the next one when the decode resolves, so the old loop and the
+ * new one would both run, each posting scans. `runRef` is a generation: every
+ * start takes a new number and a loop that finds it has changed stops.
  */
 export function useCameraScanner({
   onDecode,
@@ -155,6 +182,7 @@ export function useCameraScanner({
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const frameRef = React.useRef<number | null>(null);
+  const runRef = React.useRef(0);
   const lastRef = React.useRef<{ value: string; at: number }>({ value: '', at: 0 });
   // Held in a ref as well as state: the animation loop closes over its first
   // render, so reading `onDecode` from state there would call a stale handler
@@ -162,10 +190,19 @@ export function useCameraScanner({
   const handlerRef = React.useRef(onDecode);
   handlerRef.current = onDecode;
 
+  const facingRef = React.useRef<Facing>('environment');
+  const torchRef = React.useRef(false);
+
   const [state, setState] = React.useState<ScannerState>('idle');
   const [message, setMessage] = React.useState('');
+  const [facing, setFacing] = React.useState<Facing>('environment');
+  const [torchSupported, setTorchSupported] = React.useState(false);
+  const [torchOn, setTorchOn] = React.useState(false);
+  const [canFlip, setCanFlip] = React.useState(false);
 
-  const stop = React.useCallback(() => {
+  /** Tear the stream down without deciding what state the UI is in. */
+  const release = React.useCallback(() => {
+    runRef.current += 1;
     if (frameRef.current !== null) {
       cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
@@ -175,101 +212,180 @@ export function useCameraScanner({
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
-    setState('idle');
+    // A stopped track takes its torch with it; the button must agree.
+    torchRef.current = false;
+    setTorchOn(false);
   }, []);
 
-  const start = React.useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setState('unsupported');
-      return;
-    }
+  const stop = React.useCallback(() => {
+    release();
+    setState('idle');
+  }, [release]);
 
-    setState('starting');
-    setMessage('');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        // The REAR camera on a phone. `facingMode` is a hint rather than a
-        // guarantee, but without it a handheld steward gets a selfie view.
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      });
-      streamRef.current = stream;
-
-      const video = videoRef.current;
-      if (!video) {
-        stream.getTracks().forEach((track) => track.stop());
-        setState('idle');
+  const start = React.useCallback(
+    async (nextFacing?: Facing) => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setState('unsupported');
         return;
       }
-      video.srcObject = stream;
-      // `playsInline` matters on iOS, where a video otherwise goes fullscreen
-      // and hides the whole scanner UI behind the system player.
-      video.playsInline = true;
-      video.muted = true;
-      await video.play();
 
-      // Native if the browser has it, otherwise the lazily-imported decoder.
-      // Resolved AFTER the camera is up so the import overlaps with the
-      // permission prompt rather than delaying it.
-      const decoder = nativeDecoder() ?? (await fallbackDecoder());
-      if (!decoder) {
-        stream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-        setState('error');
-        setMessage('The QR reader could not be loaded. Use a handheld scanner or type the code.');
-        return;
-      }
-      setState('running');
+      // Anything still running belongs to a previous start. Released FIRST, or
+      // a flip holds two cameras open for the length of the permission call.
+      if (streamRef.current) release();
+      const run = ++runRef.current;
 
-      const tick = async () => {
-        const element = videoRef.current;
-        if (!element || !streamRef.current) return;
-        // `readyState < 2` means no frame has decoded yet; passing that to the
-        // detector throws rather than returning nothing.
-        if (element.readyState >= 2) {
-          try {
-            const value = await decoder.decode(element);
-            if (value) {
-              const now = Date.now();
-              const last = lastRef.current;
-              if (value !== last.value || now - last.at > repeatAfterMs) {
-                lastRef.current = { value, at: now };
-                handlerRef.current(value);
-              }
-            }
-          } catch {
-            // A single failed frame is normal — motion blur, a partial code,
-            // a frame delivered mid-resize. Stopping the loop over one is how
-            // a scanner dies silently halfway through a queue.
-          }
+      const mode = nextFacing ?? facingRef.current;
+      facingRef.current = mode;
+      setFacing(mode);
+
+      setState('starting');
+      setMessage('');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          // `facingMode` is a hint rather than a guarantee, but without it a
+          // handheld steward gets a selfie view.
+          video: { facingMode: { ideal: mode } },
+          audio: false,
+        });
+
+        // A stop or another start landed while the permission prompt was up.
+        if (run !== runRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
         }
+        streamRef.current = stream;
+
+        const video = videoRef.current;
+        if (!video) {
+          stream.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+          setState('idle');
+          return;
+        }
+        video.srcObject = stream;
+        // `playsInline` matters on iOS, where a video otherwise goes fullscreen
+        // and hides the whole scanner UI behind the system player.
+        video.playsInline = true;
+        video.muted = true;
+        await video.play();
+
+        const track = stream.getVideoTracks()[0];
+        const capabilities = (track?.getCapabilities?.() ?? {}) as TorchCapabilities;
+        setTorchSupported(Boolean(capabilities.torch));
+        // Labels and the full device list only appear once permission is
+        // granted, which is why this is counted here and not on mount.
+        navigator.mediaDevices
+          .enumerateDevices?.()
+          .then((devices) =>
+            setCanFlip(devices.filter((device) => device.kind === 'videoinput').length > 1),
+          )
+          .catch(() => setCanFlip(false));
+
+        // Native if the browser has it, otherwise the lazily-imported decoder.
+        // Resolved AFTER the camera is up so the import overlaps with the
+        // permission prompt rather than delaying it.
+        const decoder = nativeDecoder() ?? (await fallbackDecoder());
+        if (!decoder) {
+          release();
+          setState('error');
+          setMessage('The QR reader could not be loaded. Enter the code manually instead.');
+          return;
+        }
+        if (run !== runRef.current) return;
+        setState('running');
+
+        const tick = async () => {
+          if (run !== runRef.current) return;
+          const element = videoRef.current;
+          if (!element || !streamRef.current) return;
+          // `readyState < 2` means no frame has decoded yet; passing that to the
+          // detector throws rather than returning nothing.
+          if (element.readyState >= 2) {
+            try {
+              const value = await decoder.decode(element);
+              if (value && run === runRef.current) {
+                const now = Date.now();
+                const last = lastRef.current;
+                if (value !== last.value || now - last.at > repeatAfterMs) {
+                  lastRef.current = { value, at: now };
+                  handlerRef.current(value);
+                }
+              }
+            } catch {
+              // A single failed frame is normal — motion blur, a partial code,
+              // a frame delivered mid-resize. Stopping the loop over one is how
+              // a scanner dies silently halfway through a queue.
+            }
+          }
+          if (run !== runRef.current) return;
+          frameRef.current = requestAnimationFrame(() => void tick());
+        };
         frameRef.current = requestAnimationFrame(() => void tick());
-      };
-      frameRef.current = requestAnimationFrame(() => void tick());
-    } catch (thrown) {
-      const error = thrown as { name?: string };
-      if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
-        setState('denied');
-        setMessage(
-          'Camera access was refused. Allow it in your browser’s site settings, or use a handheld scanner.',
-        );
-      } else if (error?.name === 'NotFoundError') {
-        setState('error');
-        setMessage('No camera found on this device.');
-      } else {
-        setState('error');
-        setMessage('The camera could not be started.');
+      } catch (thrown) {
+        const error = thrown as { name?: string };
+        if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+          setState('denied');
+          setMessage(
+            'Camera access was refused. Allow it in your browser’s site settings, or enter the code manually.',
+          );
+        } else if (error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError') {
+          setState('error');
+          setMessage('No camera found on this device.');
+        } else {
+          setState('error');
+          setMessage('The camera could not be started.');
+        }
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+    },
+    [release, repeatAfterMs],
+  );
+
+  /** Swap lenses. A restart, because a track's `facingMode` cannot be changed
+   *  in place on every browser — and a half-supported in-place switch is a
+   *  frozen frame on the other half. */
+  const flip = React.useCallback(() => {
+    const next: Facing = facingRef.current === 'environment' ? 'user' : 'environment';
+    void start(next);
+  }, [start]);
+
+  const toggleTorch = React.useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    const next = !torchRef.current;
+    try {
+      await track.applyConstraints({
+        advanced: [{ torch: next } as unknown as MediaTrackConstraintSet],
+      });
+      torchRef.current = next;
+      setTorchOn(next);
+    } catch {
+      // The capability said yes and the device said no — some Android builds
+      // do exactly this. The button goes rather than staying as a control
+      // that does nothing.
+      setTorchSupported(false);
     }
-  }, [repeatAfterMs]);
+  }, []);
 
   // Stop on unmount. A camera left running after navigation is both a battery
   // drain and a privacy indicator nobody can explain.
   React.useEffect(() => stop, [stop]);
 
-  return { videoRef, state, message, start, stop, supported: isScannerSupported() };
+  return {
+    videoRef,
+    state,
+    message,
+    start,
+    stop,
+    supported: isScannerSupported(),
+    facing,
+    flip,
+    canFlip,
+    torchSupported,
+    torchOn,
+    toggleTorch,
+  };
 }
 
 /**

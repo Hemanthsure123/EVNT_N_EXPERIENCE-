@@ -26,27 +26,10 @@ import { ApiError } from '@/lib/api/errors';
 import { useDataTable, type ColumnDef } from '@/lib/organizer/table';
 import { cn } from '@/lib/utils/cn';
 import { EmptyState, ErrorState, Poster } from './primitives';
-import {
-  BulkBar,
-  ColumnChooser,
-  DataGrid,
-  ExportButton,
-  TableCard,
-  TableSkeleton,
-  TableToolbar,
-  TOOLBAR_CONTROL,
-} from './data-table';
-import {
-  DateRangeFilter,
-  FilterChips,
-  FilterCluster,
-  SearchField,
-  SelectFilter,
-  presetRange,
-  useUrlFilters,
-  type DateRange,
-} from './filters';
-import { EventDeck, LifecyclePills } from './manage-events';
+import { BulkBar, DataGrid, TableCard, TableSkeleton, TOOLBAR_CONTROL } from './data-table';
+import { FilterChips, presetRange, useUrlFilters, type DateRange } from './filters';
+import { EventsFilterBar } from './events-filter-bar';
+import { EventDeck } from './manage-events';
 import { EventPanel } from './event-panel';
 import { StatusBadge } from './status-badge';
 
@@ -63,9 +46,10 @@ import { StatusBadge } from './status-badge';
  *
  * ── ONE FILLED BUTTON ON THE SCREEN ───────────────────────────────────────
  *
- * "New event" is it. Everything else in the toolbar — Columns, Export, the
- * view toggle, the filters — is outlined or a butter state pill, because a
- * toolbar with five filled buttons has no primary action at all. The empty
+ * "New event" is it. Everything else on the filter row — the view toggle, the
+ * Filters tile, the lifecycle pills — is outlined or a state pill, because a
+ * row with five filled buttons has no primary action at all. (Columns and
+ * Export were removed from this screen at the owner's instruction.) The empty
  * state's "Create your first event" is outlined for the same reason: the
  * filled pill for that job is already on screen, four inches above it.
  *
@@ -144,7 +128,11 @@ export function EventsTable() {
   );
 
   const table = useDataTable<EventRow>({
-    id: 'events',
+    // `-v2` because the column chooser is gone. Preferences are stored per id,
+    // and a column somebody hid through the chooser would otherwise stay
+    // hidden FOREVER with no control left to bring it back. A new id starts
+    // every organizer from the table's own defaults, once.
+    id: 'events-v2',
     columns: COLUMNS,
     rows,
     rowId: (row) => row.id,
@@ -237,92 +225,37 @@ export function EventsTable() {
       // sits on the page canvas instead, which is what the frost is for.
       className="border-transparent bg-transparent shadow-none lg:border-border lg:bg-surface lg:shadow-sm"
     >
-      <TableToolbar>
-        <SearchField
-          value={values.q}
-          onChange={(q) => set({ q })}
-          placeholder="Search title or venue"
-          label="Search your events"
-        />
-
-        {/* Status, city and dates are the SECONDARY filters — search is how
-            people actually narrow a list of their own events, so it stays
-            visible and these collapse behind one button on a phone. */}
-        <FilterCluster count={chips.filter((chip) => chip.key !== 'q').length}>
-          <SelectFilter
-            value={values.status}
-            onChange={(status) => set({ status })}
-            options={STATUS_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
-            label="Filter by status"
-          />
-
-          {/* The city filter had a chip and a query param but no control, so it
-              could be cleared and never set. Suggestions come from the rows on
-              screen — a real subset, never a claim to be the complete list,
-              which is why it is a datalist over a free-text field rather than a
-              `<select>` that would silently omit a city whose events are all on
-              the next page. */}
-          <SearchField
-            value={values.city}
-            onChange={(city) => set({ city })}
-            placeholder="City"
-            label="Filter by city"
-            suggestions={cityOptions}
-          />
-
-          <DateRangeFilter
-            preset={values.preset}
-            onPreset={(preset) => set({ preset })}
-            custom={{ from: values.from, to: values.to }}
-            onCustom={(next) => set({ from: next.from, to: next.to })}
-            label="Event date"
-          />
-        </FilterCluster>
-
-        {/* No divider between the two groups. One was tried here and the
-            screenshot killed it: the toolbar WRAPS, so a separator that was
-            meant to sit between filtering and acting landed at the far right
-            end of the filter row, reading as a stray tick rather than a seam.
-            A rule can only divide things that are reliably on the same line,
-            and nothing in a wrapping toolbar is. The row break itself is now
-            the separation. */}
-
-        {/* `flex-wrap` here as well as on the toolbar: at 390px this group is
-            wider than the card, and an inner nowrap row is exactly how a
-            toolbar pushes a page into horizontal scroll. */}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* Below `lg` there is only the deck, so a control that offers a
-              choice between two views would offer one that does not exist. */}
-          <ViewToggle view={values.view} onChange={(view) => set({ view })} className="hidden lg:flex" />
-          {cards ? null : <ColumnChooser table={table} />}
-          <ExportButton table={table} filename="events.csv" disabled={query.isPending} />
-          {/* THE filled action on this screen — above `lg`. Below it the
-              raised `+` in the organizer's bottom bar is already this action,
-              and two primary buttons for one job is neither of them being
-              primary. */}
-          <Button asChild className={cn(TOOLBAR_CONTROL, 'hidden lg:inline-flex')}>
-            <Link href="/dashboard/events/new">
-              <CalendarPlus className="size-3.5" aria-hidden />
-              <span className="hidden sm:inline">New event</span>
-              <span className="sr-only sm:hidden">New event</span>
-            </Link>
-          </Button>
-        </div>
-      </TableToolbar>
-
-      {/* ── THE LIFECYCLE PILLS, BELOW `lg` ───────────────────────────
-          This replaces a horizontal scroller of all NINE stored statuses. Nine
-          is a scroller, and a filter you have to scroll to find is a filter
-          nobody uses; these four are the question an organizer actually
-          arrives with. Same `?status=` param as the toolbar's select, so the
-          two controls cannot disagree — see `LIFECYCLE_FILTERS`.
-
-          At `lg` the select in `FilterCluster` takes over, because a toolbar
-          with four filters wants a dropdown and a phone does not. */}
-      <LifecyclePills
-        value={values.status}
-        onChange={(status) => set({ status })}
-        className="lg:hidden"
+      {/* ── ONE ROW: SEARCH, FILTERS, AND THE LIFECYCLE ─────────────────
+          This was a wrapping toolbar — search, a collapsible cluster of three
+          filters, a view toggle, Columns, Export and New event — with the
+          lifecycle pills in a second sticky rail under it. Columns and Export
+          are gone at the owner's instruction; what remains is ONE horizontally
+          scrolling glass row, and the secondary filters open a bottom sheet
+          instead of expanding inline. See `events-filter-bar.tsx`. */}
+      <EventsFilterBar
+        values={values}
+        onChange={set}
+        cityOptions={cityOptions}
+        trailing={
+          <>
+            {/* Below `lg` there is only the deck, so a control that offers a
+                choice between two views would offer one that does not exist. */}
+            <ViewToggle
+              view={values.view}
+              onChange={(view) => set({ view })}
+              className="hidden lg:flex"
+            />
+            {/* THE filled action on this screen — above `lg`. Below it the
+                raised `+` in the organizer's bottom bar is already this action,
+                and two primary buttons for one job is neither being primary. */}
+            <Button asChild className={cn(TOOLBAR_CONTROL, 'hidden lg:inline-flex')}>
+              <Link href="/dashboard/events/new">
+                <CalendarPlus className="size-3.5" aria-hidden />
+                New event
+              </Link>
+            </Button>
+          </>
+        }
       />
 
       {chips.length ? (

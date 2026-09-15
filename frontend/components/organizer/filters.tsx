@@ -44,6 +44,7 @@ export function SearchField({
   placeholder,
   label,
   suggestions,
+  className,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -59,6 +60,9 @@ export function SearchField({
    * a subset silently makes the missing cities unreachable.
    */
   suggestions?: string[];
+  /** Layout for the wrapper. A search inside a horizontal scroller needs a
+   *  fixed width — `flex-1` there collapses it to nothing. */
+  className?: string;
 }) {
   const [draft, setDraft] = React.useState(value);
   const id = React.useId();
@@ -76,7 +80,7 @@ export function SearchField({
   }, [draft]);
 
   return (
-    <div className="relative min-w-0 flex-1 sm:max-w-xs">
+    <div className={cn('relative min-w-0 flex-1 sm:max-w-xs', className)}>
       <label htmlFor={id} className="sr-only">
         {label}
       </label>
@@ -391,7 +395,7 @@ export function DateRangeFilter({
   );
 }
 
-function toDateInput(iso: string): string {
+export function toDateInput(iso: string): string {
   if (!iso) return '';
   const date = new Date(iso);
   return Number.isNaN(date.valueOf()) ? '' : date.toISOString().slice(0, 10);
@@ -404,7 +408,7 @@ function toDateInput(iso: string): string {
  * with `<`. Without that, "to 14 March" would exclude everything that happened
  * ON 14 March — the classic off-by-one-day that makes a report quietly wrong.
  */
-function fromDateInput(value: string, edge: 'start' | 'end'): string {
+export function fromDateInput(value: string, edge: 'start' | 'end'): string {
   if (!value) return '';
   const [year, month, day] = value.split('-').map(Number);
   const date = new Date(year, month - 1, edge === 'end' ? day + 1 : day);

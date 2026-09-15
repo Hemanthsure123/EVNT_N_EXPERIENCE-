@@ -134,12 +134,13 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
         // over the page. One transform on the parent moves both in lockstep,
         // which is also why it is the parent that owns the transition.
         //
-        // `150%`, not `translate-y-full`. "Full" is this element's own height
-        // and the button overhangs it — at exactly 100% the plus stays visible
-        // as a black semicircle on the bottom edge. The extra half also covers
-        // the float gap and the safe-area inset below it.
+        // Its own height PLUS 6rem, not `translate-y-full`. "Full" is this
+        // element's own height, and the centred button overhangs the bar by
+        // half of its 56px — at exactly 100% the plus stays visible as a
+        // semicircle on the bottom edge. The 6rem covers that overhang, the
+        // float gap and the tallest safe-area inset (34px on a notched iPhone).
         'transition-transform duration-slow ease-out motion-reduce:transition-none',
-        hidden ? 'translate-y-[150%]' : 'translate-y-0',
+        hidden ? 'translate-y-[calc(100%_+_6rem)]' : 'translate-y-0',
         className,
       )}
       style={{ bottom: `calc(${FLOAT_GAP} + env(safe-area-inset-bottom))` }}
@@ -162,7 +163,7 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
           // NO `shadow-lg` class: the utility carries the elevation itself,
           // because the rim highlight and the drop shadow are one `box-shadow`
           // list and a Tailwind utility would replace both.
-          'glass-strong pointer-events-auto flex w-full max-w-sm items-center justify-between',
+          'glass-strong pointer-events-auto relative flex w-full max-w-sm items-center justify-between',
           'rounded-full border px-2',
         )}
       >
@@ -173,27 +174,47 @@ export function OrganizerFooterNav({ className }: { className?: string }) {
         {/* ── THE ACTION, NOT A DESTINATION ──────────────────────────────
             Raised out of the bar so it reads as the primary thing you can do
             here rather than the third of five places you can go. It keeps a
-            real `aria-label` because a lone glyph has no accessible name, and
-            "Create" is what it does — the plus is the picture of that.
+            real `aria-label` because a lone glyph has no accessible name.
 
-            It is also the ONLY create control on a phone now: the header's
-            filled "Create event" button is gone, so this is not a duplicate of
-            it — it is the replacement. */}
+            ── WHY IT IS ABSOLUTELY POSITIONED NOW ─────────────────────────
+            It used to sit IN the flex row, nudged up with `-translate-y-4`.
+            That centred it only as long as the four tabs either side happened
+            to be the same width — and "My events" is not "Home". Now a fixed
+            spacer holds its slot in the row, and the button itself is pinned
+            to the bar's exact horizontal centre (`left-1/2`, `-translate-x-1/2`)
+            and to its top edge (`top-0`, `-translate-y-1/2`), so it overlaps
+            the bar by exactly half its height whatever the labels are.
+
+            It stays a CHILD of the bar in the DOM — between the two halves, so
+            the tab order is still Home, My events, Create, Scan, Dashboard —
+            and inside the positioner that auto-hides, so it moves with the bar.
+
+            VIOLET, not the near-black CTA it was. The violet glow under a black
+            disc read as a rendering fault, and the organizer bar already says
+            "active" in violet: the one action and the current tab are the same
+            family now. The ring is the canvas colour at 80%, which is what makes
+            it look SEATED in the glass rather than stuck on top of it. */}
+        <span aria-hidden className="w-16 shrink-0" />
         <Link
           href="/dashboard/events/new"
           aria-label="Create an event"
           className={cn(
-            'group/create -translate-y-4 inline-flex size-14 shrink-0 items-center justify-center rounded-full',
-            'bg-cta text-cta-foreground shadow-lg ring-4 ring-background',
+            'absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2',
+            'inline-flex size-14 items-center justify-center rounded-full',
+            'bg-primary text-primary-foreground shadow-xl shadow-primary/30 ring-4 ring-background/80',
             // A spring on press rather than a fade: the button is round and
-            // raised, so scale is the motion that matches its shape.
+            // raised, so scale is the motion that matches its shape. Tailwind
+            // composes translate and scale into one transform, so the press
+            // scales the button in place instead of undoing the centring.
             'transition-transform duration-fast ease-spring',
             'hover:scale-105 active:scale-95',
             'motion-reduce:transition-none motion-reduce:hover:scale-100 motion-reduce:active:scale-100',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            // OUTLINE, not ring: the ring utility is already the seat, and a
+            // focus ring would replace it rather than sit outside it.
+            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring',
           )}
         >
-          <Plus className="size-6" aria-hidden />
+          <Plus className="size-6" strokeWidth={2.5} aria-hidden />
         </Link>
 
         {RIGHT.map((item) => (

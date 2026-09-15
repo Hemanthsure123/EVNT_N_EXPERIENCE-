@@ -106,6 +106,22 @@ describe('OrganizerFooterNav', () => {
     expect(positioner.querySelector('a[aria-label="Create an event"]')).not.toBeNull();
   });
 
+  it('pins the + to the exact centre of the bar, overlapping its top edge', () => {
+    // It used to sit IN the flex row, centred only while the tabs either side
+    // happened to be equal widths. The centring is now geometry, not luck —
+    // and the button stays inside the element that auto-hides.
+    render(<OrganizerFooterNav />);
+    const create = screen.getByRole('link', { name: 'Create an event' });
+    const classes = create.className.split(' ');
+    for (const token of ['absolute', 'left-1/2', '-translate-x-1/2', 'top-0', '-translate-y-1/2']) {
+      expect(classes).toContain(token);
+    }
+    expect(classes).toContain('rounded-full');
+    expect(classes).toContain('active:scale-95');
+    // The bar is its positioning context.
+    expect(screen.getByRole('navigation', { name: 'Organizer' }).className).toContain('relative');
+  });
+
   it('keeps every label in the DOM', () => {
     // A nav whose items lose their names is four anonymous glyphs to a screen
     // reader.

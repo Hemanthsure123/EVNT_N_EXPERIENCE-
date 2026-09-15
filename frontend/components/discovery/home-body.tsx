@@ -82,12 +82,12 @@ export async function HomeBody() {
           section below is an h2 under it. */}
       <h1 className="sr-only">Live events, concerts and experiences in India</h1>
 
-      {/* CURATED FIRST, and it says which it is. An operator's picks outrank
-          whatever the index returned; with nothing pinned the hero falls back
-          to the soonest live events and RELABELS itself, so a visitor is never
-          shown "Featured" that nobody featured. */}
+      {/* THE FIRST FIVE OF "ALL EVENTS", not a separately curated row. The
+          two sections used to read two sources and could disagree about what
+          was on next; both now read `fetchUpcomingEvents` — one memoised
+          request — and the hero is a prefix of the grid below it. */}
       {/* 1. Hero Carousel Showcase */}
-      <Showcase collections={cms?.collections} />
+      <Showcase />
 
       {/* 2. Browse by Mood Horizontal Carousel (District App Layout) */}
       <Section className="py-4 sm:py-6">

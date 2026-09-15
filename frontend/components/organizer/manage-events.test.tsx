@@ -3,10 +3,6 @@ import { render, screen, within } from '@testing-library/react';
 import type { EventRow } from '@/lib/api/organizer';
 import { LIFECYCLE_FILTERS, STATUS_FILTERS } from '@/lib/organizer/event-status';
 
-vi.mock('@/lib/organizer/queries', () => ({
-  useInvalidateOrganizer: () => vi.fn(),
-}));
-
 import { EventDeck } from './manage-events';
 
 /**
@@ -106,19 +102,13 @@ describe('the action row', () => {
   });
 });
 
-describe('archive, and the delete that does not exist', () => {
-  it('offers archive on a draft', () => {
-    deck([row({ status: 'draft' })]);
-    expect(screen.getByRole('button', { name: 'Archive Midnight Comedy' })).toBeTruthy();
-  });
-
-  it('refuses it on a published event, with the reason on the control', () => {
-    // `POST /events/{id}/archive` takes draft, rejected and finished only —
-    // archiving something people hold tickets to hides it while the tickets
-    // stay valid.
-    deck([row({ status: 'live' })]);
-    expect(screen.queryByRole('button', { name: 'Archive Midnight Comedy' })).toBeNull();
-    expect(screen.getByText(/Archive Midnight Comedy \(not available\)/)).toBeTruthy();
+describe('the card carries no destructive control', () => {
+  it('has no archive icon on a card', () => {
+    // Removed at the owner's instruction. Archiving is a desktop bulk action
+    // now; a one-way retirement a thumb's width from Edit was the risk.
+    deck([row({ status: 'draft' }), row({ id: 'evt-2', status: 'finished' })]);
+    expect(screen.queryByRole('button', { name: /archive/i })).toBeNull();
+    expect(screen.queryByText(/archive/i)).toBeNull();
   });
 
   it('never offers a delete', () => {
@@ -127,6 +117,13 @@ describe('archive, and the delete that does not exist', () => {
     // the reference design has one and this must not grow one.
     deck([row({ status: 'draft' }), row({ id: 'evt-2', status: 'finished' })]);
     expect(screen.queryByText(/delete/i)).toBeNull();
+  });
+
+  it('keeps Edit', () => {
+    deck([row()]);
+    expect(screen.getByRole('link', { name: 'Edit' }).getAttribute('href')).toBe(
+      '/dashboard/events/evt-1/edit',
+    );
   });
 });
 

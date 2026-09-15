@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  Archive,
   BarChart3,
   CalendarDays,
   MapPin,
@@ -15,22 +14,9 @@ import {
   Wallet,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Chip, ProgressBar } from '@/components/ui';
-import {
-  Modal,
-  ModalContent,
-  ModalDescription,
-  ModalFooter,
-  ModalHeader,
-  ModalTitle,
-} from '@/components/ui/modal';
+import { ProgressBar } from '@/components/ui';
 import { formatMoney } from '@/lib/discovery/format';
 import type { EventRow } from '@/lib/api/organizer';
-import { LIFECYCLE_FILTERS } from '@/lib/organizer/event-status';
-import { useInvalidateOrganizer } from '@/lib/organizer/queries';
-import { archiveEvent } from '@/lib/api/organizer-writes';
-import { ApiError } from '@/lib/api/errors';
-import { NOTICE_TEXT } from '@/components/ui/notice';
 import { cn } from '@/lib/utils/cn';
 import { Poster } from './primitives';
 import { StatusBadge } from './status-badge';
@@ -114,48 +100,6 @@ export function EventDeck({
   );
 }
 
-/**
- * THE LIFECYCLE PILLS.
- *
- * Four, over the same `?status=` param the desktop select writes — see
- * `LIFECYCLE_FILTERS` for why four and for why they carry no counts.
- *
- * It is a sticky rail and therefore wears the REAL `glass`: this is chrome the
- * deck scrolls under, which is the one thing that utility is for. `z-[999]`
- * puts it one below the shell header's `z-sticky` (1000), so it pins beneath
- * the header instead of sliding over its bottom edge.
- */
-export function LifecyclePills({
-  value,
-  onChange,
-  className,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        'glass sticky top-14 z-[999] flex gap-2 overflow-x-auto border-b px-card py-2.5',
-        'touch-manipulation [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
-        className,
-      )}
-    >
-      {LIFECYCLE_FILTERS.map((option) => (
-        <Chip
-          key={option.value || 'all'}
-          selected={value === option.value}
-          onClick={() => onChange(option.value)}
-          className="shrink-0"
-        >
-          {option.label}
-        </Chip>
-      ))}
-    </div>
-  );
-}
-
 /* --------------------------------------------------------------- one card */
 
 function DeckCard({
@@ -225,14 +169,14 @@ function DeckCard({
           </span>
         </div>
 
-        {/* ── EDIT AND ARCHIVE, WHERE THE REFERENCE PUTS EDIT AND DELETE ──
-            There is no delete and there must not be: an event is referenced by
-            bookings, tickets and a settlement, every one of them `PROTECT`ed,
-            so the control would either refuse or orphan real money. Archive is
-            the real retirement, and it is one-way, which is why it asks. */}
+        {/* ── EDIT, AND ONLY EDIT ─────────────────────────────────────────
+            The card's Archive icon was removed at the owner's instruction —
+            archiving is still a bulk action on the desktop table. There is no
+            delete and there must not be: an event is referenced by bookings,
+            tickets and a settlement, every one of them `PROTECT`ed, so the
+            control would either refuse or orphan real money. */}
         <div className="flex shrink-0 items-center gap-0.5">
           <IconLink icon={Pencil} label="Edit" href={`/dashboard/events/${row.id}/edit`} />
-          <ArchiveButton row={row} />
         </div>
       </div>
 
@@ -423,106 +367,5 @@ function IconLink({
         <Icon className="size-4" aria-hidden />
       </Link>
     </Button>
-  );
-}
-
-/**
- * ARCHIVE, AND WHY IT ASKS FIRST.
- *
- * The house rule is that a reversible action gets UNDO rather than a dialog.
- * This is not one: `POST /events/{id}/archive` has no counterpart, so an
- * accidental press on a phone — where this icon is a thumb's width from Edit —
- * retires an event with nothing to press to bring it back.
- *
- * It is drawn for every row and REFUSES with the reason on the ones the
- * endpoint would refuse (`draft`, `rejected` and `finished` are the whole
- * eligible set). Hiding it instead would make the icon appear and disappear as
- * an organizer scrolled, which is harder to learn than a control that is
- * always there and says what it needs.
- */
-function ArchiveButton({ row }: { row: EventRow }) {
-  const invalidate = useInvalidateOrganizer();
-  const [open, setOpen] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  const [failure, setFailure] = React.useState<string | null>(null);
-
-  const eligible =
-    row.status === 'draft' || row.status === 'rejected' || row.status === 'finished';
-
-  if (!eligible) {
-    return (
-      <span
-        className="inline-flex size-8 cursor-not-allowed items-center justify-center rounded-full text-muted-foreground opacity-50"
-        title={
-          row.status === 'live'
-            ? 'A published event cannot be archived — people hold tickets to it. Cancel it instead.'
-            : 'Only drafts, events sent back, and finished events can be archived.'
-        }
-      >
-        <Archive className="size-4" aria-hidden />
-        <span className="sr-only">Archive {row.title} (not available)</span>
-      </span>
-    );
-  }
-
-  const run = async () => {
-    setBusy(true);
-    setFailure(null);
-    try {
-      await archiveEvent(row.id);
-      void invalidate();
-      setOpen(false);
-    } catch (thrown) {
-      setFailure(thrown instanceof ApiError ? thrown.message : 'That request failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-8 rounded-full"
-        onClick={() => setOpen(true)}
-        aria-label={`Archive ${row.title}`}
-        title="Archive"
-      >
-        <Archive className="size-4" aria-hidden />
-      </Button>
-
-      <Modal open={open} onOpenChange={setOpen}>
-        <ModalContent>
-          <ModalHeader>
-            <ModalTitle>Archive “{row.title}”?</ModalTitle>
-            <ModalDescription>
-              It leaves your events list and stops appearing anywhere public. There is no undo —
-              bringing it back means creating it again.
-            </ModalDescription>
-          </ModalHeader>
-
-          {/* NOT red. A failure message is words, never a colour — see
-              `notice.tsx`; red is reserved for a control that DESTROYS and for
-              an indicator reporting a fact, and neither carries `role="alert"`. */}
-          {failure ? (
-            <p role="alert" className={NOTICE_TEXT}>
-              {failure}
-            </p>
-          ) : null}
-
-          <ModalFooter>
-            {/* The SAFE action is the primary one. A destructive default is how
-                a mis-tap costs somebody their event. */}
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
-              Keep it
-            </Button>
-            <Button variant="ghost" onClick={() => void run()} disabled={busy}>
-              {busy ? 'Archiving…' : 'Archive'}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-    </>
   );
 }

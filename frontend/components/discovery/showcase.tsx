@@ -1,9 +1,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { Container } from '@/components/shell/container';
-import type { Homepage, HomepageCard } from '@/lib/api/cms';
-import { fetchEventsSafe } from '@/lib/api/events';
-import type { EventCard as EventCardModel } from '@/lib/api/types';
+import { featuredFrom, fetchUpcomingEvents } from '@/lib/discovery/upcoming';
 import { eventToJsonLd } from '@/lib/discovery/seo';
 import { JsonLd, eventItemListJsonLd } from '@/lib/seo/json-ld';
 import { HeroCarousel } from './hero-carousel';
@@ -28,37 +26,28 @@ import { HeroCarousel } from './hero-carousel';
  * behind it, and the grid of everything moved to its own section below. The
  * hero recommends; the grid lists. Neither is trying to do both.
  *
- * ── THE HEADING IS HONEST ABOUT WHERE THE ROW CAME FROM ───────────────────
+ * ── IT IS THE FIRST FIVE OF "ALL EVENTS", AND NOTHING ELSE ───────────────
  *
- * Curated and derived are DIFFERENT rows and they say so. With events pinned
- * by an operator this is "Featured events"; with none it falls back to the
- * soonest live events and calls itself "Events on sale now". The fallback
- * exists because this is the top of the front page and an empty top is a
- * broken site; the RELABEL exists because quietly presenting an index query as
- * an editor's choice is the fabrication this codebase refuses everywhere else.
+ * This used to read an operator-curated CMS collection and fall back to the
+ * index only when nothing was pinned — so with one event pinned, the hero
+ * showed that event while the grid below led with a different one, and the
+ * page contradicted itself about what was on next. It now reads the SAME rows
+ * as `AllEvents` through `fetchUpcomingEvents` (one memoised request for
+ * both) and takes the first five: soonest first, most recently published
+ * first among events that start together.
+ *
+ * The CMS `collections.featured` field is no longer read here. It still
+ * exists on the backend; nothing on the landing page consumes it.
  *
  * With no events at all — a fresh platform — it shows neither, and offers the
  * other side of the marketplace instead of a rail of grey boxes.
  */
 
-/** How many slides the hero carries when nothing is curated. */
-const FALLBACK_SIZE = 8;
-
-export async function Showcase({
-  collections,
-}: {
-  collections: Homepage['collections'] | undefined;
-}) {
-  const curated = (collections?.featured ?? []).map(toEventCard);
-
-  // Only asked for when nothing is curated — an operator who has done the work
-  // costs no extra request. `fetchEventsSafe` never throws: the front page must
-  // survive an upstream that does not.
-  const fallback = curated.length
-    ? []
-    : (await fetchEventsSafe({ page_size: FALLBACK_SIZE })).events;
-
-  const events = curated.length ? curated : fallback;
+export async function Showcase() {
+  // Never throws: the front page must survive an upstream that does not. The
+  // identical call in `AllEvents` is memoised by Next into one request.
+  const { events: upcoming } = await fetchUpcomingEvents();
+  const events = featuredFrom(upcoming);
   // ── ONE NAME, WHATEVER FILLED IT ──────────────────────────────────────
   //
   // The heading used to change with the SOURCE: "Featured events" when an
@@ -84,23 +73,6 @@ export async function Showcase({
       <HeroCarousel events={events} label={label} />
     </>
   );
-}
-
-function toEventCard(card: HomepageCard): EventCardModel {
-  return {
-    id: card.id,
-    slug: card.slug,
-    title: card.title,
-    venue: card.venue,
-    city: card.city,
-    category: '',
-    starts_at: card.starts_at,
-    poster_url: card.poster_url,
-    from_price: card.from_price,
-    tickets_available: card.tickets_available,
-    organization_id: card.organization_id,
-    organization_name: card.organization_name,
-  };
 }
 
 /**

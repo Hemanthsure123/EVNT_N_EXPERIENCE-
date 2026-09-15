@@ -20,6 +20,7 @@ import { SpotListing } from '@/components/illustrations/spots';
 import { cn } from '@/lib/utils/cn';
 import { NotificationBell } from './notification-bell';
 import { OrganizerPalette } from './command-palette';
+import { LeaveDashboardGuard } from './leave-dashboard-guard';
 
 /**
  * The organizer dashboard's frame: sidebar, top bar, and the guard around both.
@@ -153,6 +154,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <OrganizerFooterNav />
+
+      {/* Asks before any link hands the organizer to the attendee shell. Only
+          in the signed-in, approved shell: the sign-in and awaiting-approval
+          branches above link out ON PURPOSE and must not be intercepted. */}
+      <LeaveDashboardGuard />
 
       <OrganizerPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
