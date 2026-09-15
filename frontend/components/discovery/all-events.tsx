@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { AllEventsChips } from './all-events-chips';
 import { ArrowRight } from 'lucide-react';
 import { Container } from '@/components/shell/container';
-import { fetchEventsSafe } from '@/lib/api/events';
+import { fetchUpcomingEvents } from '@/lib/discovery/upcoming';
 import { addDays, istToday } from '@/lib/discovery/calendar';
 import { browseHref } from '@/lib/discovery/filters';
 import { AutoRail } from '@/components/discovery/auto-rail';
@@ -41,9 +41,6 @@ import { PosterCard } from './poster-card';
  * panel, drifting from the first. The chip goes to the panel.
  */
 
-/** How many cards the front page shows before handing over to browse. */
-const HOME_GRID_SIZE = 12;
-
 /**
  * The quick filters, in the order the reference puts them: time first (the
  * most common question), then kind.
@@ -74,7 +71,9 @@ function quickFilters(): ReadonlyArray<{ label: string; href: string }> {
 export async function AllEvents() {
   // Never throws: the front page's main content must not depend on an upstream
   // being healthy, and an empty grid is a state this renders honestly below.
-  const { events } = await fetchEventsSafe({ page_size: HOME_GRID_SIZE });
+  // The SAME call `Showcase` makes, so Next serves both from one request and
+  // the featured rail is always the first five of this list.
+  const { events } = await fetchUpcomingEvents();
 
   return (
     <section aria-labelledby="all-events-heading">

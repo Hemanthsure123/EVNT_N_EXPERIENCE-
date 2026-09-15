@@ -199,6 +199,35 @@ _WRITE_LOAD_FIELDS = (
 SITEMAP_MAX_URLS = 45_000
 
 
+#: THE PUBLIC LIST'S ORDER, IN ONE PLACE.
+#:
+#: Read by `EventRepository.list_published` AND by `EventCursorPagination`,
+#: because DRF's cursor paginator re-applies `order_by(*ordering)` itself —
+#: whatever the queryset said is replaced. That is how this list used to page:
+#: the repository ordered by `("starts_at", "id")` and the paginator by
+#: `"starts_at"` alone, so the `id` tie-break was silently discarded and
+#: events starting at the same instant came back in whatever order Postgres
+#: chose that time. Cursor pagination resolves ties by OFFSET, so an unstable
+#: tie order can skip or repeat an event across a page boundary.
+#:
+#: The three columns, in the order they decide:
+#:
+#: - `starts_at` — soonest first. Also the cursor's position column (DRF uses
+#:   the first entry), and the second column of `(status, starts_at)`, so the
+#:   range scan stays an index scan.
+#: - `-moderated_at` — among events that start together, the most recently
+#:   PUBLISHED first. Every route to `live` stamps it: an operator's approval
+#:   and the verified-organisation auto-publish (`publish_if_draft`) both do,
+#:   so on this list it is the go-live instant. Postgres sorts NULLs first on a
+#:   DESC column; a live event without one predates that stamp.
+#: - `id` — the final tie-break, so two rows can never compare equal and the
+#:   OFFSET that resolves a tie is stable from one request to the next.
+#:
+#: The landing page's "Featured events" and "All events" both read this list
+#: (`frontend/lib/discovery/upcoming.ts`), which is what makes them agree.
+PUBLIC_LIST_ORDERING: tuple[str, ...] = ("starts_at", "-moderated_at", "id")
+
+
 class EventRepository(BaseRepository[Event]):
     model = Event
 
@@ -334,8 +363,10 @@ class EventRepository(BaseRepository[Event]):
           event_status_category_idx when `category` is, or
           event_status_org_starts_idx when `organization_id` is);
         - `search` -> the GIN index on search_vector via `@@`.
-        Ordered by starts_at so results stay index-ordered and cursor-paginate
-        cleanly (relevance ranking would defeat both — a deliberate tradeoff).
+        Ordered by `PUBLIC_LIST_ORDERING` — soonest first, then the most
+        recently published among events that start together, then the id — so
+        results stay index-ordered and cursor-paginate cleanly (relevance
+        ranking would defeat both, a deliberate tradeoff).
         """
         lower_bound = starts_after or timezone.now()
         qs = (
@@ -391,7 +422,7 @@ class EventRepository(BaseRepository[Event]):
             qs = qs.filter(
                 search_vector=SearchQuery(search, config="english", search_type="websearch")
             )
-        return qs.only(*_CARD_FIELDS).order_by("starts_at", "id")
+        return qs.only(*_CARD_FIELDS).order_by(*PUBLIC_LIST_ORDERING)
 
     def list_for_sitemap(self, *, limit: int = SITEMAP_MAX_URLS) -> QuerySet[Event]:
         """Every publicly-reachable event, for `/sitemap.xml`.

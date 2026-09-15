@@ -406,6 +406,19 @@ const config: Config = {
           '60%': { transform: 'scaleX(0.72)' },
           '100%': { transform: 'scaleX(0.9)' },
         },
+        // The scan desk's sweep. A `translateY` PERCENTAGE is of the element's
+        // own height, and the sweeping layer is the reticle's full height — so
+        // this travels the target top to bottom and back without the laser
+        // ever touching layout.
+        'scan-laser': {
+          '0%, 100%': { transform: 'translateY(3%)' },
+          '50%': { transform: 'translateY(95%)' },
+        },
+        // The idle scanner's ticket, breathing. Transform only.
+        'float-y': {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-6px)' },
+        },
       },
       animation: {
         'fade-rise': 'fade-rise var(--duration-slow) var(--ease-out)',
@@ -414,6 +427,8 @@ const config: Config = {
         progress: 'progress 5000ms linear forwards',
         'heart-pop': 'heart-pop 420ms var(--ease-out)',
         'ring-out': 'ring-out 520ms var(--ease-out) forwards',
+        'scan-laser': 'scan-laser 2400ms ease-in-out infinite',
+        'float-y': 'float-y 4000ms ease-in-out infinite',
       },
     },
   },
