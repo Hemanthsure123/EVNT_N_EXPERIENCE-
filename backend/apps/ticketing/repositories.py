@@ -288,6 +288,11 @@ class TicketTypeRepository(BaseRepository[TicketType]):
                 name=src.name,
                 description=src.description,
                 perks=list(src.perks or []),
+                # BY VALUE, like `perks` above and for the same reason. Group
+                # bands are part of what the tier IS — a clone that silently
+                # dropped them sold the copy at full price per head, with no
+                # sign on either event that the offer had gone.
+                group_bands=[dict(band) for band in (src.group_bands or [])],
                 position=src.position,
                 price_minor=src.price_minor,
                 quantity=src.quantity,
