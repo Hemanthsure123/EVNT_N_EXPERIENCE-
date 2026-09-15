@@ -171,7 +171,19 @@ export type TierAnalytics = {
   quantity: number;
   sold: number;
   reserved: number;
+  /** Sold x LIST price. Kept for the operator console. */
   revenue_minor: number;
+  /** Paid orders containing this tier. */
+  orders: number;
+  /** Seats in those orders. */
+  seats: number;
+  /** What those seats were BILLED — early-bird and group prices included. */
+  charged_minor: number;
+  /** `charged_minor / seats`; null when nothing has sold. */
+  per_person_minor: number | null;
+  /** Withdrawn, or its sale window has closed. */
+  is_past: boolean;
+  is_deleted: boolean;
 };
 
 /** The event's own identity, so an analytics page is one request, not two. */
@@ -183,7 +195,69 @@ export type EventAnalyticsHeader = {
   ends_at: string | null;
   venue: string;
   city: string;
+  /** Where "Since event creation" starts on the booking-window chart. */
+  created_at: string;
 };
+
+/**
+ * Views, impressions and click-through — counted by the browser, because the
+ * public event page is edge-cached and a CDN hit never reaches the server.
+ *
+ * EVERY figure is null for an event with no recorded day. That means "nothing
+ * was recorded" — true of every event that ended before counting began — and
+ * must never be rendered as zero, which would tell an organizer nobody looked
+ * at a sold-out show. Both rates are over the recorded window only.
+ */
+export type EventEngagement = {
+  tracked_since: string | null;
+  views: number | null;
+  impressions: number | null;
+  feed_views: number | null;
+  located_views: number | null;
+  local_views: number | null;
+  view_cvr_pct: number | null;
+  ctr_pct: number | null;
+  local_pct: number | null;
+};
+
+export type OrderSlice = { orders: number; revenue_minor: number };
+
+export type BookingWindowDay = { date: string; orders: number; seats: number };
+
+export type PricePeriod = {
+  tier_id: string;
+  tier_name: string;
+  price_minor: number;
+  started_at: string;
+  ended_at: string | null;
+  seats: number;
+  revenue_minor: number;
+  status: 'active' | 'ended';
+  kind: 'created' | 'edited' | 'baseline';
+};
+
+/** Sales a tier made before its price history began. */
+export type UntrackedSales = {
+  tier_id: string;
+  tier_name: string;
+  until: string | null;
+  seats: number;
+  revenue_minor: number;
+};
+
+export type FeaturePeriod = {
+  tier_id: string;
+  tier_name: string;
+  feature: 'early_bird' | 'group_offers';
+  /** Null: on since before the log could see. */
+  enabled_at: string | null;
+  disabled_at: string | null;
+  /** Seats the FEATURE priced in this period. */
+  seats: number;
+  status: 'enabled' | 'disabled';
+};
+
+export type GroupBand = { min_quantity: number; orders: number; seats: number; revenue_minor: number };
 
 export type EventAnalytics = {
   event_id: string;
@@ -205,6 +279,59 @@ export type EventAnalytics = {
   scans_by_result: LabelValue[];
   tiers: TierAnalytics[];
   sales_timeline: SeriesPoint[];
+  /** When the server computed this. It is cached for a minute. */
+  generated_at: string;
+  /** Every booking ever started, lapsed holds included — a hold is a cart. */
+  add_to_cart: number;
+  /** Paid bookings, and the seats in them. */
+  orders: number;
+  seats: number;
+  avg_per_attendee_minor: number | null;
+  /** Null until the event is over. */
+  no_shows: number | null;
+  event_ended: boolean;
+  engagement: EventEngagement;
+  order_split: { single: OrderSlice; multiple: OrderSlice };
+  booking_insights: {
+    first_booking_at: string | null;
+    last_booking_at: string | null;
+    period_days: number | null;
+    late_window_hours: number;
+    /** Null until the event has started — the final window is not over. */
+    late_seats: number | null;
+    late_pct: number | null;
+  };
+  /** DENSE: every day from creation to today (or the event), zeros included. */
+  booking_window: BookingWindowDay[];
+  price_timeline: PricePeriod[];
+  untracked_sales: UntrackedSales[];
+  feature_log: FeaturePeriod[];
+  history_truncated: boolean;
+  group_offers: {
+    enabled: boolean;
+    orders: number;
+    seats: number;
+    revenue_minor: number;
+    bands: GroupBand[];
+  };
+  coupons: { orders: number; pct_of_orders: number | null; discount_minor: number };
+  audience: {
+    attendees: number;
+    first_time: number;
+    repeat: number;
+    first_time_pct: number | null;
+    repeat_pct: number | null;
+    savers: number;
+    saved_then_booked: number;
+    interest_conversion_pct: number | null;
+    located_views: number | null;
+    local_pct: number | null;
+  };
+  feedback: {
+    count: number;
+    average: number | null;
+    breakdown: { rating: number; count: number }[];
+  };
 };
 
 export type OrganizerActivity = {

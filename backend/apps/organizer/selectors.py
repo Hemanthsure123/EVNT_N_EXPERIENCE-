@@ -38,6 +38,7 @@ from apps.ticketing.repositories import TicketTypeRepository
 from core.errors import NotFoundError
 from core.ports.cache_port import CachePort
 
+from .event_insights import build_event_insights
 from .repositories import OrganizerRepository
 
 OVERVIEW_TTL_SECONDS = 30
@@ -487,9 +488,13 @@ def get_event_analytics(
 
     header = repository.event_header(event_id)
     refunded_minor, refunded_count = repository.event_refund_totals(event_id)
-    tiers = repository.event_tier_breakdown(event_id)
-    capacity = sum(int(tier["quantity"]) for tier in tiers)
-    sold = sum(int(tier["sold"]) for tier in tiers)
+    # Live tiers AND the withdrawn ones that sold something — see
+    # `event_tiers_detail`. Capacity and sold stay over the LIVE ones, exactly
+    # as before: a withdrawn tier's quantity is not seats anybody can buy.
+    tiers = repository.event_tiers_detail(event_id)
+    live_tiers = [tier for tier in tiers if tier["deleted_at"] is None]
+    capacity = sum(int(tier["quantity"]) for tier in live_tiers)
+    sold = sum(int(tier["sold"]) for tier in live_tiers)
     by_status = repository.event_bookings_by_status(event_id)
     started = sum(by_status.values())
     paid = by_status.get("paid", 0)
@@ -515,6 +520,22 @@ def get_event_analytics(
         for offset in range(days)
     ]
 
+    now = timezone.now()
+    insights = build_event_insights(
+        repository,
+        event_id,
+        created_at=header.created_at if header is not None else None,
+        starts_at=header.starts_at if header is not None else None,
+        ends_at=header.ends_at if header is not None else None,
+        tiers=tiers,
+        sold=sold,
+        checkins=checkins,
+        started=started,
+        now=now,
+        tz=PLATFORM_TZ,
+    )
+    tier_rows = insights.pop("tiers")
+
     payload = {
         "event_id": str(event_id),
         # The event's own identity, so an analytics ROUTE can render its own
@@ -530,6 +551,9 @@ def get_event_analytics(
                 "ends_at": header.ends_at.isoformat() if header.ends_at else None,
                 "venue": header.venue,
                 "city": header.city,
+                # "Since event creation" is the booking-window chart's first
+                # range, so the page needs the date it starts from.
+                "created_at": header.created_at.isoformat(),
             }
             if header is not None
             else None
@@ -556,19 +580,19 @@ def get_event_analytics(
         "scans_by_result": [
             {"label": label, "value": value} for label, value in sorted(scans.items())
         ],
-        "tiers": [
-            {
-                "id": str(tier["id"]),
-                "name": tier["name"],
-                "price_minor": int(tier["price_minor"]),
-                "quantity": int(tier["quantity"]),
-                "sold": int(tier["sold"]),
-                "reserved": int(tier["reserved"]),
-                "revenue_minor": int(tier["sold"]) * int(tier["price_minor"]),
-            }
-            for tier in tiers
-        ],
+        "tiers": tier_rows,
         "sales_timeline": timeline,
+        # Revenue held, over the seats it paid for. Null with no seats — "no
+        # attendees" and "attendees who paid nothing" are different facts.
+        "avg_per_attendee_minor": (revenue // insights["seats"]) if insights["seats"] else None,
+        # When this payload was computed. It is cached for
+        # EVENT_ANALYTICS_TTL_SECONDS, so a refresh inside that window returns
+        # the same figures, and the page says how old they are.
+        "generated_at": now.isoformat(),
+        # ── EVERYTHING THE PAGE USED TO LIST AS "NOT MEASURED YET" ────────
+        # See `event_insights.py`. Additive: every key above is unchanged, so
+        # the operator console, which renders this same payload, is unaffected.
+        **insights,
     }
     cache.set(key, payload, timeout_seconds=EVENT_ANALYTICS_TTL_SECONDS)
     return payload

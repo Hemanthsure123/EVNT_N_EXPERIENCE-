@@ -13,8 +13,11 @@ Every read is lean and index-aware (see CLAUDE.md's Performance checklist):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from django.contrib.postgres.search import SearchQuery
+from django.db import connection
 from django.db.models import Count, Exists, F, OuterRef, Q, QuerySet, Value
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -26,6 +29,7 @@ from .models import (
     CrewMember,
     Event,
     EventCrew,
+    EventEngagementDay,
     EventFaq,
     EventMedia,
     EventQuestion,
@@ -37,6 +41,9 @@ from .models import (
     OrganizerCategory,
     SavedEvent,
 )
+
+if TYPE_CHECKING:
+    from .engagement import EngagementIncrement
 
 # Columns a public event *card* (list item) needs — plus the org name via the
 # select_related join. Deliberately tiny: this is the highest-volume payload.
@@ -2045,3 +2052,81 @@ class EventWaitlistRepository:
             )
             == 1
         )
+
+
+class EventEngagementRepository:
+    """The daily view and impression counters. See `EventEngagementDay`.
+
+    Both methods sit on the beacon's path, and each is one statement.
+    """
+
+    def cities_for(self, event_ids: set[str]) -> dict[str, str]:
+        """Which of these ids are events a visitor could have seen — and each
+        one's city.
+
+        Anything else is DROPPED, never raised on. A tab left open reports an
+        event deleted since it loaded, and the other ids in that beacon are
+        real; an unknown id must not fail the batch, and must not reach the
+        INSERT, where the foreign key would refuse the whole statement.
+
+        "Could have seen" is `PUBLICLY_RESOLVABLE_STATUSES`, not only live: a
+        cancelled or finished event keeps its page on purpose, and a view of it
+        is a real view. A DRAFT is not — the beacon is sent only from public
+        surfaces, so a draft id in one is a stale tab or somebody writing into
+        another organizer's numbers.
+        """
+        if not event_ids:
+            return {}
+        rows = Event.objects.filter(
+            id__in=list(event_ids),
+            deleted_at__isnull=True,
+            status__in=EventRepository.PUBLICLY_RESOLVABLE_STATUSES,
+        ).values_list("id", "city")
+        return {str(pk): city for pk, city in rows}
+
+    def add(self, increments: Sequence[EngagementIncrement]) -> None:
+        """Add one beacon's counts: ONE `INSERT ... ON CONFLICT DO UPDATE`.
+
+        Raw SQL because the ORM's `bulk_create(update_conflicts=True)` can only
+        OVERWRITE a conflicting row with the incoming values. A counter has to
+        ADD to them, and doing that through the ORM is a read-modify-write per
+        row that loses increments the moment two beacons race.
+
+        ── A STABLE ORDER IS A STABLE LOCK ORDER ──────────────────────────
+
+        The rows are written sorted by (event, day). Two beacons landing at
+        once each lock the rows they touch as they go; if one took A then B
+        and the other B then A, Postgres would have to kill one as a deadlock.
+        Sorted, the second simply waits.
+
+        The table name comes from the model and every value is a bound
+        parameter; nothing a caller sends is formatted into the statement.
+        """
+        if not increments:
+            return
+        table = EventEngagementDay._meta.db_table
+        counters = ("impressions", "views", "feed_views", "located_views", "local_views")
+        rows = sorted(increments, key=lambda row: (row.event_id, row.date))
+        params: list[Any] = []
+        for row in rows:
+            params.extend(
+                [
+                    str(uuid.uuid4()),
+                    row.event_id,
+                    row.date,
+                    row.impressions,
+                    row.views,
+                    row.feed_views,
+                    row.located_views,
+                    row.local_views,
+                ]
+            )
+        placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s)"] * len(rows))
+        additions = ", ".join(f"{name} = {table}.{name} + EXCLUDED.{name}" for name in counters)
+        statement = (
+            f"INSERT INTO {table} (id, event_id, date, {', '.join(counters)}) "  # noqa: S608
+            f"VALUES {placeholders} "
+            f"ON CONFLICT (event_id, date) DO UPDATE SET {additions}"
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(statement, params)

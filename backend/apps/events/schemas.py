@@ -18,6 +18,7 @@ from rest_framework import serializers
 
 from apps.organizations.models import VerifiedLevel
 
+from .engagement import MAX_IMPRESSIONS, MAX_VIEWS, VIEW_SOURCES
 from .models import (
     Event,
     EventCategory,
@@ -1320,3 +1321,40 @@ class WaitlistStateSerializer(serializers.Serializer):
 
     joined = serializers.BooleanField()
     event_ids = serializers.ListField(child=serializers.CharField())
+
+
+class EngagementViewSerializer(serializers.Serializer):
+    event_id = serializers.UUIDField()
+    #: `feed` when the view began with a press on one of the event's cards;
+    #: `direct` for everything else — a shared link, a bookmark, an email.
+    # `source` collides with an attribute DRF's `Field` already defines, so mypy
+    # reads it as a bad override — the same note `LabelValueSerializer.label`
+    # carries in the organizer schemas. The wire name is what the beacon sends.
+    source = serializers.ChoiceField(  # type: ignore[assignment]
+        choices=VIEW_SOURCES, default="direct"
+    )
+
+
+class EngagementBeaconSerializer(serializers.Serializer):
+    """What one browser saw since its last beacon.
+
+    Bounded, because it is anonymous: a real page flushes every few seconds and
+    never comes near these limits, and one request must not be a bulk write.
+    `city` is the visitor's OWN choice in the header — never inferred from an
+    address — and is compared with each event's city on the way in, then
+    discarded (see `apps/events/engagement.py`).
+    """
+
+    impressions = serializers.ListField(
+        child=serializers.UUIDField(), default=list, max_length=MAX_IMPRESSIONS
+    )
+    views = EngagementViewSerializer(many=True, default=list)
+    city = serializers.CharField(allow_blank=True, allow_null=True, max_length=120, default=None)
+
+    def validate_views(self, value: list) -> list:
+        # Stated here rather than as the ListSerializer's `max_length`, which
+        # not every DRF release this project has pinned honours on a nested
+        # `many=True` — a bound that can silently stop applying is not a bound.
+        if len(value) > MAX_VIEWS:
+            raise serializers.ValidationError(f"At most {MAX_VIEWS} views per beacon.")
+        return value

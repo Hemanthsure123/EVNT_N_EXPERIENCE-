@@ -225,13 +225,15 @@ class TestQueryBudget:
         `select_related` costs three extra queries per attendee — invisible on
         a fixture of three and fatal on a five-hundred-seat event.
 
-        TWO: the ownership check, then the page. There is no third for the
-        caller because `force_authenticate` skips the token lookup a real
-        request pays — the same harness every other test in this module uses,
-        so the number is comparable with theirs.
+        THREE: the ownership check, the page, and the FILTERED count the list
+        prints as "Showing X of Y" — one COUNT over one event's tickets through
+        an FK index, and a constant, so it cannot grow with the page. There is
+        no fourth for the caller because `force_authenticate` skips the token
+        lookup a real request pays — the same harness every other test in this
+        module uses, so the number is comparable with theirs.
         """
         client = auth(world.owner)
-        with django_assert_num_queries(2):
+        with django_assert_num_queries(3):
             client.get(path(world.event.id))
 
         # Same page, more rows: a booking of ten, whose tickets each carry a
@@ -240,6 +242,6 @@ class TestQueryBudget:
 
         _paid_booking(world.other_customer, world.event, world.tier, quantity=10, amount=250_000)
 
-        with django_assert_num_queries(2):
+        with django_assert_num_queries(3):
             response = client.get(path(world.event.id))
         assert len(response.json()["data"]) == 13

@@ -28,12 +28,18 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
-from config.di import build_event_service, build_waitlist_service, cache_port
+from config.di import (
+    build_engagement_service,
+    build_event_service,
+    build_waitlist_service,
+    cache_port,
+)
 from core.errors import InvalidInputError
 from core.http_caching import is_not_modified, make_etag, with_cache_headers
-from core.throttling import UploadThrottle, WriteThrottle
+from core.throttling import AnonWriteThrottle, UploadThrottle, WriteThrottle
 from core.uploads import CATEGORY_TILE_SPEC, MAX_CREW_PHOTO_BYTES, validate_image
 
+from .engagement import is_automated
 from .exceptions import EventNotFoundError
 from .models import MediaKind
 from .pagination import EventCursorPagination, OrganizerEventCursorPagination
@@ -49,6 +55,7 @@ from .schemas import (
     CrewMemberSerializer,
     CrewPhotoAltTextRequestSerializer,
     CrewPhotoRequestSerializer,
+    EngagementBeaconSerializer,
     EventCardSerializer,
     EventContentSerializer,
     EventCrewEntrySerializer,
@@ -1216,3 +1223,44 @@ class MyWaitlistView(APIView):
                 }
             )
         )
+
+
+class EventEngagementView(APIView):
+    """The beacon every public page sends: what was seen, and what was opened.
+
+    ── IT TAKES NO CREDENTIALS, ON PURPOSE ──────────────────────────────
+
+    The browser posts it with `keepalive` as a page is left, and a signed-in
+    reader's access token may have expired by then. An authenticated endpoint
+    would answer that with a 401, and the view would be lost for the crime of
+    the reader being signed in. Nothing here is per-user anyway — no user is
+    recorded, so there is nothing for a credential to authorize. With no
+    authenticator DRF also skips the session CSRF check, which a beacon cannot
+    satisfy and does not need: it adds to counts, and touches nothing of the
+    caller's.
+
+    ── BOUNDED, THROTTLED, AND QUIET ────────────────────────────────────
+
+    `AnonWriteThrottle` keys on IP. A machine — a crawler, a chat app
+    unfurling a shared link, the e2e suite — is answered 204 and counted as
+    nothing. A valid beacon is always 204, including one naming ids that are
+    not events: the browser does nothing with the answer, and a response that
+    distinguished them would be an oracle for which ids are real.
+    """
+
+    authentication_classes = ()
+    permission_classes = [AllowAny]
+    throttle_classes = [AnonWriteThrottle]
+
+    @extend_schema(request=EngagementBeaconSerializer, responses={204: None})
+    def post(self, request: Request) -> Response:
+        if is_automated(request.META.get("HTTP_USER_AGENT", "")):
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        payload = EngagementBeaconSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        build_engagement_service().record(
+            impressions=payload.validated_data["impressions"],
+            views=payload.validated_data["views"],
+            city=payload.validated_data["city"],
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)

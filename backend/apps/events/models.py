@@ -1125,3 +1125,70 @@ class EventWaitlist(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id} waiting for {self.event_id}"
+
+
+class EventEngagementDay(models.Model):
+    """How often an event was SEEN — one row per event per platform day.
+
+    ── WHY THE BROWSER COUNTS, NOT THE SERVER ────────────────────────────
+
+    The public event read is edge-cached with a warm path of ZERO queries (see
+    CLAUDE.md, "The public read path"). A request a CDN answers never reaches
+    Django, so a middleware counter would count cache misses, not people — a
+    number that goes DOWN as a page gets more popular. The page reports itself
+    instead (`apps/events/engagement.py`), and nothing on the read path moved.
+
+    ── A DAILY COUNTER, NOT A ROW PER VIEW ───────────────────────────────
+
+    Every question the organizer dashboard asks of this is a SUM over one
+    event's days. A row per view would grow by one on every card scrolled past,
+    for figures nobody reads individually, and would keep a per-person trail
+    this platform has no reason to hold. One upsert per beacon feeds it.
+
+    ── WHAT IS NOT STORED ───────────────────────────────────────────────
+
+    No user, no IP, no user agent, no session. Only the counts survive; the
+    visitor's chosen city is compared on the way in and discarded.
+
+    ── WHAT THE COLUMNS MEAN ────────────────────────────────────────────
+
+    - `impressions`   a card for the event was at least half on screen in a
+                      list — once per card per page load.
+    - `views`         the event page, or the mobile event widget, was opened
+                      on it — once per event per browser tab per half hour.
+    - `feed_views`    the views that began with a press on one of its cards:
+                      the numerator of click-through. `views` also counts a
+                      shared link, a bookmark, an email.
+    - `located_views` views from a visitor who had chosen a city in the header
+                      ("All cities" is no choice at all).
+    - `local_views`   the subset of those whose city was the event's own.
+
+    INDICATIVE, not audited: the beacon is anonymous and can be replayed. A
+    per-IP throttle and once-per-beacon counting bound inflation rather than
+    prevent it, and nothing about money is ever decided by these.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # CASCADE, like `SavedEvent`: a count means nothing without its event.
+    event = models.ForeignKey(
+        "events.Event", on_delete=models.CASCADE, related_name="engagement_days"
+    )
+    #: The calendar day in IST — the platform's day, the same anchor the
+    #: organizer dashboard's "today" uses.
+    date = models.DateField()
+    impressions = models.PositiveIntegerField(default=0)
+    views = models.PositiveIntegerField(default=0)
+    feed_views = models.PositiveIntegerField(default=0)
+    located_views = models.PositiveIntegerField(default=0)
+    local_views = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "events_engagement_day"
+        constraints = [
+            # The upsert's conflict target AND the only read path (one event's
+            # days). Its backing index serves both, so there is no other.
+            models.UniqueConstraint(fields=["event", "date"], name="event_engagement_day_uniq"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event_id} on {self.date}: {self.views} views"

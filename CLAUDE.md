@@ -1297,9 +1297,16 @@ measures none of them — there is no view, impression, session or analytics-eve
 model anywhere in the backend, no beacon and no middleware — so they are ABSENT
 rather than faked or shown empty. An organizer reading "Impressions: 0"
 concludes nobody saw their event, which is a specific and false claim; a column
-that was never promised makes no claim at all. Getting them means a tracking
+that was never promised makes no claim at all. Getting them meant a tracking
 pipeline, a decision about the CDN-cached public read whose warm path is 0
 queries, and its own release.
+
+**That release has happened — for ONE EVENT at a time.** Views, impressions and
+click-through are now counted (see "Event analytics: what the browser counts, and
+the history nobody back-dates" at the end of this file) and shown on the event
+analytics page. The funnel LIST still carries none of them, and the rule above
+still holds for it: a column is added when it can be true for every row, and an
+event that ended before counting began has nothing to put in one.
 
 `bookings_started` counts EVERY booking row including expired holds — a
 reserved-then-lapsed hold IS the abandonment conversion measures, so it belongs
@@ -3313,3 +3320,67 @@ but NOT used to match leads, because matching a radius needs coordinates and
   `asm-exec` so the secret resolves at runtime without entering context.
 
 <!-- END aws-agent-toolkit -->
+
+
+## Event analytics: what the browser counts, and the history nobody back-dates
+
+The event analytics page (`/dashboard/events/{id}/analytics`) used to end with a
+list headed "Not measured yet". Everything on it is measured now, and the page
+follows a supplied reference layout. Six rules came out of it.
+
+**1. Views and impressions are counted BY THE BROWSER.** The public event read is
+edge-cached with a warm path of zero queries, so a server-side counter would
+count cache misses — a number that falls as a page gets more popular. The page
+reports what it showed through `POST /events/engagement`
+(`apps/events/engagement.py`), into `EventEngagementDay`: one counter row per
+event per IST day, fed by one `INSERT ... ON CONFLICT DO UPDATE` per beacon with
+the rows sorted so two beacons cannot deadlock. No user, IP, user agent or session
+is stored; the visitor's header city is compared and discarded. The endpoint
+takes NO credentials (a signed-in reader's expired token must not lose the view),
+is `AnonWriteThrottle`d, answers machines 204 and counts them as nothing, and
+counts each event once per kind per beacon. The figures are INDICATIVE, not
+audited — nothing about money is decided by them.
+
+**2. Counting happens only on the public site.** `EngagementTracker`
+(`components/analytics/`) is mounted by `app/(site)/layout.tsx` alone and ARMS
+counting in a layout effect; `recordView`/`recordImpression` do nothing unarmed.
+An organizer previewing their own draft inside the dashboard is not an audience.
+Impressions are one `IntersectionObserver` over the `data-event-poster` attribute
+every card already carries, so no card component had to change. A view is once
+per event per tab per half hour; a view within a minute of pressing that event's
+card is a FEED view, the numerator of click-through.
+
+**3. "Nothing recorded" is null, never zero.** An event with no engagement rows
+reports every view figure as `null`, and the page says why. Rates are taken over
+the RECORDED window only: conversion over views divides the seats sold since the
+first recorded day by those views, because an event's lifetime sales over a week
+of views is a conversion rate many times the truth.
+
+**4. Pricing history is written in the edit's own transaction, and never
+back-dated.** `TicketPriceChange` and `PricingFeatureChange` (`apps/ticketing`)
+are appended inside `update_ticket_type`'s UnitOfWork, after the version-bump
+UPDATE, so a 409'd edit writes nothing. There is NO backfill migration: a tier at
+`version == 1` has never been edited, so its current price and features ARE its
+history and the analytics read derives that period from the row. A tier edited
+before the log existed has an unknown past — its log begins at its next edit (a
+`BASELINE` when that edit leaves the value alone), and its earlier sales are
+reported as made "before price history began", at what they were billed.
+Feature entries are TRANSITIONS only: swapping one early-bird schedule for
+another is not a change to whether the tier has early bird.
+
+**5. Everything the page shows is from real rows, and says what it measures.**
+Group-offer uptake is attributed by `BookingItem.group_min_quantity` (exactly one
+of it and `phase_name` is set, so no seat counts under both features). First-time
+vs returning is asked of THIS event's buyers. "Interest conversion" is people who
+saved the event and then booked it — the reference said "matched preferences",
+and nothing here records a preference. "Local distribution" is from views that
+carried a header city. Where the reference counts purchases as "tickets", this
+page keeps the platform's words: a ticket is a seat, a purchase is an order.
+
+**6. The analytics payload is ADDITIVE, and the operator console renders it.**
+`GET /organizer/events/{id}/analytics` keeps every key it had, so
+`AdminEventAnalyticsView` needed no change. Its cold read is 21 queries, pinned by
+`test_event_insights.py`; per-period sales are ONE statement of conditional
+aggregates (`event_sales_in_windows`), never a query per period. The attendee list
+(`GET /organizer/events/{id}/attendees`) now returns its FILTERED `meta.count`, so
+"Showing X of Y" is a real total — one COUNT over one event's tickets.

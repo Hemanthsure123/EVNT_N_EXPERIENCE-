@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from core.base_repository import BaseRepository
 
-from .models import SalePhase, TicketType
+from .models import PricingFeatureChange, SalePhase, TicketPriceChange, TicketType
 from .pricing import Phase
 
 # Columns the locked reservation path needs — nothing heavy, so the critical
@@ -328,3 +328,46 @@ class TicketTypeRepository(BaseRepository[TicketType]):
             .update(version=expected_version + 1, updated_at=timezone.now(), **changes)
         )
         return updated == 1
+
+
+class PricingHistoryRepository:
+    """Append-only writes to a tier's pricing history.
+
+    Every method runs inside the caller's UnitOfWork — the tier edit's own
+    transaction — so an entry can never outlive an edit that rolled back. See
+    `TicketPriceChange` for what the log is and why it needed no backfill.
+    """
+
+    def has_price_history(self, ticket_type_id: uuid.UUID | str) -> bool:
+        return TicketPriceChange.objects.filter(ticket_type__pk=ticket_type_id).exists()
+
+    def features_with_history(self, ticket_type_id: uuid.UUID | str) -> set[str]:
+        return set(
+            PricingFeatureChange.objects.filter(ticket_type__pk=ticket_type_id)
+            .values_list("feature", flat=True)
+            .distinct()
+        )
+
+    def record_price(
+        self, *, ticket_type_id: uuid.UUID | str, price_minor: int, kind: str, at: datetime
+    ) -> None:
+        TicketPriceChange.objects.create(
+            ticket_type_id=ticket_type_id, price_minor=price_minor, changed_at=at, kind=kind
+        )
+
+    def record_feature(
+        self,
+        *,
+        ticket_type_id: uuid.UUID | str,
+        feature: str,
+        enabled: bool,
+        kind: str,
+        at: datetime,
+    ) -> None:
+        PricingFeatureChange.objects.create(
+            ticket_type_id=ticket_type_id,
+            feature=feature,
+            enabled=enabled,
+            changed_at=at,
+            kind=kind,
+        )

@@ -361,7 +361,17 @@ class EventAttendeeListView(OrganizerView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         rows = selectors.decorate_attendees(list(page or []))
         data = cast(list, AttendeeRowSerializer(rows, many=True).data)
-        return _no_store(paginator.get_paginated_response(data))
+        response = paginator.get_paginated_response(data)
+        # ── A REAL TOTAL, FOR "SHOWING X OF Y" ──────────────────────────
+        #
+        # The cursor paginators omit `count` on purpose — over an unbounded
+        # list a COUNT is a second full scan. This list is ONE event's tickets
+        # through an FK index, which is the cheap case, and the screen needs
+        # the number: without it "Showing 50 attendees" cannot say whether
+        # that is everybody or the first page of a thousand. It counts the
+        # FILTERED set, like every `count` on this API.
+        response.data["meta"]["count"] = queryset.count()
+        return _no_store(response)
 
 
 class RefundListView(OrganizerView):

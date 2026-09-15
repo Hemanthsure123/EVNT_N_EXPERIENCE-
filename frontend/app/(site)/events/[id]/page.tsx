@@ -4,6 +4,7 @@ import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { EventGrid, EventGridSkeleton } from '@/components/discovery/event-grid';
+import { TrackEventView } from '@/components/analytics/track-event-view';
 import { DeckBoot } from '@/components/event/deck-boot';
 import { EventPageBody } from '@/components/event/event-page-body';
 import { SectionHeading } from '@/components/event/sections';
@@ -224,6 +225,10 @@ export default async function EventDetailPage({ params }: { params: { id: string
           overlay on top of a complete server render, never in place of one.
           See the component for why the route is not redirected or hidden. */}
       <DeckBoot event={event} content={content} />
+
+      {/* One view of this event. On a phone the deck mounts over this page
+          and records one too; the per-tab window makes that a single view. */}
+      <TrackEventView eventId={event.id} />
     </>
   );
 }

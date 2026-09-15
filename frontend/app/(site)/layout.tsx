@@ -7,6 +7,7 @@ import { Onboarding } from '@/components/account/onboarding';
 import { ReviewPrompt } from '@/components/reviews/review-prompt';
 import { CookieConsent } from '@/components/consent/cookie-consent';
 import { FavouritesSync } from '@/components/account/favourites-sync';
+import { EngagementTracker } from '@/components/analytics/engagement-tracker';
 import { BOTTOM_NAV_CLEARANCE } from '@/components/shell/bottom-nav';
 import { cn } from '@/lib/utils/cn';
 import { SiteFooter } from '@/components/shell/site-footer';
@@ -68,6 +69,11 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
         <Onboarding />
         <ReviewPrompt />
         <FavouritesSync />
+        {/* Counts what the public site SHOWED, for the organizer's views,
+            impressions and click-through. Here and nowhere else: the
+            dashboard renders event components too, and an organizer
+            previewing their own draft is not an audience. */}
+        <EngagementTracker />
       </DiscoveryProviders>
     </>
   );

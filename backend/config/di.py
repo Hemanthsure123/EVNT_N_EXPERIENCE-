@@ -679,7 +679,7 @@ def build_event_service() -> EventService:
 
 def build_ticketing_service() -> TicketingService:
     from apps.events.repositories import EventRepository
-    from apps.ticketing.repositories import TicketTypeRepository
+    from apps.ticketing.repositories import PricingHistoryRepository, TicketTypeRepository
     from apps.ticketing.services import TicketingService
     from apps.ticketing.strategies import RowLockReservationStrategy
 
@@ -688,6 +688,7 @@ def build_ticketing_service() -> TicketingService:
         ticket_types=ticket_types,
         events=EventRepository(),
         reservation=RowLockReservationStrategy(ticket_types=ticket_types),
+        history=PricingHistoryRepository(),
     )
 
 
@@ -868,3 +869,12 @@ def build_settlement_service() -> SettlementService:
         max_attempts=settings.SETTLEMENT_MAX_ATTEMPTS,
         retry_backoff_seconds=settings.SETTLEMENT_RETRY_BACKOFF_SECONDS,
     )
+
+
+def build_engagement_service():
+    """How often events are seen — the beacon behind the organizer's views,
+    impressions and click-through. See `apps/events/engagement.py`."""
+    from apps.events.engagement import EngagementService
+    from apps.events.repositories import EventEngagementRepository
+
+    return EngagementService(engagement=EventEngagementRepository())

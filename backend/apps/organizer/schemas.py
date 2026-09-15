@@ -196,7 +196,19 @@ class TierAnalyticsSerializer(serializers.Serializer):
     quantity = serializers.IntegerField()
     sold = serializers.IntegerField()
     reserved = serializers.IntegerField()
+    #: Sold x LIST price — the old figure, kept for the operator console.
     revenue_minor = serializers.IntegerField()
+    #: Paid orders that contain this tier.
+    orders = serializers.IntegerField()
+    #: Seats in those orders.
+    seats = serializers.IntegerField()
+    #: What those seats were BILLED — early-bird and group prices included.
+    charged_minor = serializers.IntegerField()
+    #: `charged_minor / seats`. Null when nothing has sold.
+    per_person_minor = serializers.IntegerField(allow_null=True)
+    #: Withdrawn, or its sale window has closed.
+    is_past = serializers.BooleanField()
+    is_deleted = serializers.BooleanField()
 
 
 class EventAnalyticsHeaderSerializer(serializers.Serializer):
@@ -209,6 +221,136 @@ class EventAnalyticsHeaderSerializer(serializers.Serializer):
     ends_at = serializers.CharField(allow_null=True)
     venue = serializers.CharField(allow_blank=True)
     city = serializers.CharField(allow_blank=True)
+    created_at = serializers.CharField()
+
+
+class EngagementSerializer(serializers.Serializer):
+    """Views, impressions and click-through, from `events.EventEngagementDay`.
+
+    Every figure is NULL for an event with no recorded day — "nothing was
+    recorded", which is not "nobody looked". `tracked_since` is the first day
+    recorded, and both rates are computed over that window only.
+    """
+
+    tracked_since = serializers.CharField(allow_null=True)
+    views = serializers.IntegerField(allow_null=True)
+    impressions = serializers.IntegerField(allow_null=True)
+    feed_views = serializers.IntegerField(allow_null=True)
+    located_views = serializers.IntegerField(allow_null=True)
+    local_views = serializers.IntegerField(allow_null=True)
+    view_cvr_pct = serializers.FloatField(allow_null=True)
+    ctr_pct = serializers.FloatField(allow_null=True)
+    local_pct = serializers.FloatField(allow_null=True)
+
+
+class OrderSliceSerializer(serializers.Serializer):
+    orders = serializers.IntegerField()
+    revenue_minor = serializers.IntegerField()
+
+
+class OrderSplitSerializer(serializers.Serializer):
+    """Paid orders of exactly one seat, and of more than one — billed gross."""
+
+    single = OrderSliceSerializer()
+    multiple = OrderSliceSerializer()
+
+
+class BookingInsightsSerializer(serializers.Serializer):
+    first_booking_at = serializers.CharField(allow_null=True)
+    last_booking_at = serializers.CharField(allow_null=True)
+    period_days = serializers.IntegerField(allow_null=True)
+    late_window_hours = serializers.IntegerField()
+    #: Null until the event has started — the final window is not over yet.
+    late_seats = serializers.IntegerField(allow_null=True)
+    late_pct = serializers.FloatField(allow_null=True)
+
+
+class BookingWindowDaySerializer(serializers.Serializer):
+    date = serializers.CharField()
+    orders = serializers.IntegerField()
+    seats = serializers.IntegerField()
+
+
+class PricePeriodSerializer(serializers.Serializer):
+    tier_id = serializers.CharField()
+    tier_name = serializers.CharField()
+    price_minor = serializers.IntegerField()
+    started_at = serializers.CharField()
+    ended_at = serializers.CharField(allow_null=True)
+    seats = serializers.IntegerField()
+    revenue_minor = serializers.IntegerField()
+    #: active | ended
+    status = serializers.CharField()
+    #: created | edited | baseline
+    kind = serializers.CharField()
+
+
+class UntrackedSalesSerializer(serializers.Serializer):
+    """Sales a tier made before its price history began."""
+
+    tier_id = serializers.CharField()
+    tier_name = serializers.CharField()
+    until = serializers.CharField(allow_null=True)
+    seats = serializers.IntegerField()
+    revenue_minor = serializers.IntegerField()
+
+
+class FeaturePeriodSerializer(serializers.Serializer):
+    tier_id = serializers.CharField()
+    tier_name = serializers.CharField()
+    #: early_bird | group_offers
+    feature = serializers.CharField()
+    #: Null when it was on since before the log could see.
+    enabled_at = serializers.CharField(allow_null=True)
+    disabled_at = serializers.CharField(allow_null=True)
+    seats = serializers.IntegerField()
+    #: enabled | disabled
+    status = serializers.CharField()
+
+
+class GroupBandSerializer(serializers.Serializer):
+    min_quantity = serializers.IntegerField()
+    orders = serializers.IntegerField()
+    seats = serializers.IntegerField()
+    revenue_minor = serializers.IntegerField()
+
+
+class GroupOffersSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    orders = serializers.IntegerField()
+    seats = serializers.IntegerField()
+    revenue_minor = serializers.IntegerField()
+    bands = GroupBandSerializer(many=True)
+
+
+class CouponUsageSerializer(serializers.Serializer):
+    orders = serializers.IntegerField()
+    pct_of_orders = serializers.FloatField(allow_null=True)
+    discount_minor = serializers.IntegerField()
+
+
+class EventAudienceSerializer(serializers.Serializer):
+    attendees = serializers.IntegerField()
+    first_time = serializers.IntegerField()
+    repeat = serializers.IntegerField()
+    first_time_pct = serializers.FloatField(allow_null=True)
+    repeat_pct = serializers.FloatField(allow_null=True)
+    savers = serializers.IntegerField()
+    saved_then_booked = serializers.IntegerField()
+    interest_conversion_pct = serializers.FloatField(allow_null=True)
+    located_views = serializers.IntegerField(allow_null=True)
+    local_pct = serializers.FloatField(allow_null=True)
+
+
+class RatingCountSerializer(serializers.Serializer):
+    rating = serializers.IntegerField()
+    count = serializers.IntegerField()
+
+
+class EventFeedbackSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    average = serializers.FloatField(allow_null=True)
+    breakdown = RatingCountSerializer(many=True)
 
 
 class EventAnalyticsSerializer(serializers.Serializer):
@@ -228,6 +370,28 @@ class EventAnalyticsSerializer(serializers.Serializer):
     scans_by_result = LabelValueSerializer(many=True)
     tiers = TierAnalyticsSerializer(many=True)
     sales_timeline = SeriesPointSerializer(many=True)
+    generated_at = serializers.CharField()
+    #: Every booking ever started, lapsed holds included.
+    add_to_cart = serializers.IntegerField()
+    #: Paid bookings, and the seats in them.
+    orders = serializers.IntegerField()
+    seats = serializers.IntegerField()
+    avg_per_attendee_minor = serializers.IntegerField(allow_null=True)
+    #: Null until the event is over.
+    no_shows = serializers.IntegerField(allow_null=True)
+    event_ended = serializers.BooleanField()
+    engagement = EngagementSerializer()
+    order_split = OrderSplitSerializer()
+    booking_insights = BookingInsightsSerializer()
+    booking_window = BookingWindowDaySerializer(many=True)
+    price_timeline = PricePeriodSerializer(many=True)
+    untracked_sales = UntrackedSalesSerializer(many=True)
+    feature_log = FeaturePeriodSerializer(many=True)
+    history_truncated = serializers.BooleanField()
+    group_offers = GroupOffersSerializer()
+    coupons = CouponUsageSerializer()
+    audience = EventAudienceSerializer()
+    feedback = EventFeedbackSerializer()
 
 
 class ActivitySerializer(serializers.Serializer):
@@ -309,11 +473,13 @@ class OrganizerEarningsSerializer(serializers.Serializer):
 class OrganizerFunnelRowSerializer(serializers.Serializer):
     """One event's booking funnel, from real rows only.
 
-    There is deliberately NO impressions, detail-views, add-to-cart or
-    click-through column: the platform records no page view, no impression and
-    no cart, so each would be an invented number on a screen an organizer makes
-    pricing and scheduling decisions from. The funnel starts at the first thing
-    that exists — a booking row.
+    There is deliberately NO impressions, detail-views or click-through
+    column. Views and impressions ARE recorded now — per event, from the day the
+    browser began reporting them (`events.EventEngagementDay`) — and the event
+    analytics page shows them. This LIST does not, because a column here has to
+    be true for every row, and for every event that ended before counting began
+    it would be an invented zero. The funnel starts at the first thing that
+    exists for every event — a booking row.
     """
 
     id = serializers.UUIDField()

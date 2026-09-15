@@ -156,11 +156,13 @@ class CheckinThrottle(_IpScopedThrottle):
 class AnonWriteThrottle(_IpScopedThrottle):
     """An unauthenticated write, keyed on IP.
 
-    Exactly one endpoint needs this: the push-subscription rotation the
-    service worker calls, which cannot carry a token because a service worker
-    has none. `WriteThrottle` would be wrong there — it keys on the user id
-    and returns `None` for an anonymous caller, so the one endpoint that most
-    needs a limit would have had none at all.
+    Two endpoints need this, for one reason — neither can carry a token: the
+    push-subscription rotation the service worker calls (a service worker has
+    none), and the engagement beacon every public page sends, which is posted
+    as a page is left and must not fail because a signed-in reader's access
+    token expired in the meantime. `WriteThrottle` would be wrong for both — it
+    keys on the user id and returns `None` for an anonymous caller, so the
+    endpoints that most need a limit would have had none at all.
     """
 
     scope = "write"

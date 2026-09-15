@@ -235,3 +235,106 @@ class SalePhase(models.Model):
             quantity=self.quantity,
             position=self.position,
         )
+
+
+class PricingChangeKind(models.TextChoices):
+    #: The tier was created at this price, or with this feature switched on.
+    CREATED = "created", "Created"
+    #: An organizer changed it.
+    EDITED = "edited", "Edited"
+    #: The state when the log BEGAN, for a tier already edited before it
+    #: existed: "from this moment the price was X", which is true, where
+    #: back-dating it to the tier's creation would be a guess.
+    BASELINE = "baseline", "Baseline"
+
+
+class PricingFeature(models.TextChoices):
+    #: A sale-phase schedule (`SalePhase` rows) — an early-bird price.
+    EARLY_BIRD = "early_bird", "Early bird"
+    #: Group bands (`TicketType.group_bands`) — a cheaper price per head once
+    #: an order reaches a size.
+    GROUP_OFFERS = "group_offers", "Group offers"
+
+
+class TicketPriceChange(models.Model):
+    """One entry in a tier's FACE-price history. Append-only.
+
+    ── WHY IT EXISTS ─────────────────────────────────────────────────────
+
+    `TicketType.price_minor` is overwritten on edit, so "what were we charging
+    last week, and how did it sell" was gone the moment anybody changed a tier.
+    What a buyer was BILLED was never lost — it is on the booking item — but a
+    price that was on offer while nobody bought was, and that is the most
+    useful row in a price timeline.
+
+    ── WRITTEN IN THE EDIT'S OWN TRANSACTION ────────────────────────────
+
+    `TicketingService` writes it inside the same UnitOfWork as the tier's
+    version-bump UPDATE, so the log and the price cannot disagree: a rolled-back
+    edit rolls its entry back with it.
+
+    ── NO BACKFILL, AND NOTHING INVENTED ─────────────────────────────────
+
+    A tier whose `version` is still 1 has never been edited, so the price on
+    its row IS its whole history, and the analytics read derives that period
+    rather than storing a copy (`apps/organizer/event_insights.py`). A tier
+    edited before this log existed has an unknown past: its first entry is
+    written at its next edit, as a `BASELINE`, and the sales before it are
+    reported as made before history began, at what they were billed.
+
+    CASCADE, like `SalePhase`: a tier that has sold is soft-deleted and never
+    hard-deleted, and a price entry for a tier that never sold means nothing.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket_type = models.ForeignKey(
+        TicketType, on_delete=models.CASCADE, related_name="price_changes"
+    )
+    price_minor = models.PositiveIntegerField()
+    #: From this instant the tier was on offer at `price_minor`, until the
+    #: tier's next entry.
+    changed_at = models.DateTimeField()
+    kind = models.CharField(max_length=16, choices=PricingChangeKind.choices)
+
+    class Meta:
+        db_table = "ticketing_price_change"
+        indexes = [
+            # The only read: one tier's history in order. The analytics read
+            # walks one event's tiers, which is this index once per tier.
+            models.Index(fields=["ticket_type", "changed_at"], name="price_change_tier_time_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ticket_type_id} at {self.price_minor} from {self.changed_at:%Y-%m-%d}"
+
+
+class PricingFeatureChange(models.Model):
+    """When a tier's early-bird schedule or group offers were switched ON or OFF.
+
+    Append-only, and written on a TRANSITION only — replacing one early-bird
+    schedule with another is not a change to whether the tier has early bird,
+    so it is not an entry. The same transaction and the same no-backfill rule
+    as `TicketPriceChange`.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket_type = models.ForeignKey(
+        TicketType, on_delete=models.CASCADE, related_name="feature_changes"
+    )
+    feature = models.CharField(max_length=20, choices=PricingFeature.choices)
+    enabled = models.BooleanField()
+    changed_at = models.DateTimeField()
+    kind = models.CharField(max_length=16, choices=PricingChangeKind.choices)
+
+    class Meta:
+        db_table = "ticketing_pricing_feature_change"
+        indexes = [
+            models.Index(
+                fields=["ticket_type", "feature", "changed_at"],
+                name="feature_change_tier_time_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        state = "on" if self.enabled else "off"
+        return f"{self.ticket_type_id} {self.feature} {state} at {self.changed_at:%Y-%m-%d}"

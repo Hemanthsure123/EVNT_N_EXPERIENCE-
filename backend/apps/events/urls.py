@@ -11,6 +11,9 @@ urlpatterns = [
     # declaring it first means nobody has to work that out, and it is the
     # ordering that stays correct if a looser converter is ever introduced.
     path("events/sitemap", api.EventSitemapView.as_view(), name="event-sitemap"),
+    # Before the uuid route for the same reason as `sitemap` above. The beacon
+    # every public page sends — see `apps/events/engagement.py`.
+    path("events/engagement", api.EventEngagementView.as_view(), name="event-engagement"),
     path("events/<uuid:event_id>", api.EventDetailView.as_view(), name="event-detail"),
     path(
         "events/<uuid:event_id>/publish",

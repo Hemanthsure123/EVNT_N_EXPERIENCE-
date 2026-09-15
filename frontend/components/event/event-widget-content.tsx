@@ -21,6 +21,7 @@ import { availabilityLabel, sellableTiers, summariseTiers, unitPriceFor } from '
 import { eventPath } from '@/lib/events/ref';
 import { cn } from '@/lib/utils/cn';
 import type { TicketTier } from '@/lib/api/types';
+import { TrackEventView } from '@/components/analytics/track-event-view';
 import { AddToCalendar } from './add-to-calendar';
 import { Countdown } from './countdown';
 import { type GalleryImage } from './hero-gallery';
@@ -204,6 +205,9 @@ export function EventWidgetContent({
 
   return (
     <div className="flex flex-col gap-6 px-4 pt-6">
+      {/* One view of this event — the deck mounts one page per event, and
+          the similar-events rail switches it in place, so each is a view. */}
+      <TrackEventView eventId={event.id} />
       {/* Actions. All three are the existing implementations — none of them
              navigates away from the widget. */}
       <div className="flex items-center gap-2">

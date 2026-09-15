@@ -33,19 +33,60 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
-from django.db.models import Count, F, Max, OuterRef, Q, QuerySet, Subquery, Sum
+from django.db.models import (
+    Count,
+    Exists,
+    F,
+    Max,
+    Min,
+    OuterRef,
+    Q,
+    QuerySet,
+    Subquery,
+    Sum,
+)
 from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDate
 
-from apps.booking.models import Booking, BookingStatus, Ticket, TicketStatus
+from apps.booking.models import Booking, BookingItem, BookingStatus, Ticket, TicketStatus
 from apps.checkin.models import ScanLog, ScanResult
-from apps.events.models import Event, EventStatus, EventWaitlist
+from apps.events.models import (
+    Event,
+    EventEngagementDay,
+    EventStatus,
+    EventWaitlist,
+    SavedEvent,
+)
 from apps.organizations.models import Organization
 from apps.payments.models import Payment, PaymentStatus, Refund
 from apps.reviews.models import EventReview, ReviewStatus
 from apps.settlements.models import PayoutAttempt
-from apps.ticketing.models import TicketType
+from apps.ticketing.models import (
+    PricingFeatureChange,
+    SalePhase,
+    TicketPriceChange,
+    TicketType,
+)
+
+
+@dataclass(frozen=True)
+class SalesWindow:
+    """One stretch of one tier's sales, for `event_sales_in_windows`.
+
+    `start`/`end` bound the BOOKING's `created_at` — the moment the price was
+    decided under the tier lock, which is the moment that matters for "what was
+    on offer when this sold". `None` leaves that side open.
+    """
+
+    key: str
+    ticket_type_id: UUID
+    start: dt.datetime | None
+    end: dt.datetime | None
+    #: "" for every sale; "phase" for sales an early-bird phase priced; "band"
+    #: for sales a group band priced.
+    priced_by: str = ""
 
 
 def _as_uuid(value: str) -> UUID | None:
@@ -717,7 +758,7 @@ class OrganizerRepository:
         """
         return (
             Event.objects.filter(id=event_id, deleted_at__isnull=True)
-            .only("id", "title", "status", "starts_at", "ends_at", "venue", "city")
+            .only("id", "title", "status", "starts_at", "ends_at", "venue", "city", "created_at")
             .first()
         )
 
@@ -735,6 +776,280 @@ class OrganizerRepository:
             total=Sum("amount_minor"), count=Count("id")
         )
         return int(row["total"] or 0), int(row["count"] or 0)
+
+    # ------------------------------------------- event analytics: the rest
+    #
+    # Everything below serves `event_insights.py` — the sections the analytics
+    # page used to list as "Not measured yet". Each is a grouped aggregate
+    # computed in Postgres, and each is scoped by the BOOKING's event rather
+    # than a tier's: "this event's sales" is a question about the booking.
+
+    def event_tiers_detail(self, event_id: UUID) -> list[dict]:
+        """Every tier the analytics page can talk about, with what its history
+        read needs.
+
+        Live tiers, plus the soft-deleted ones that SOLD something: a past tier
+        is still part of how this event made its money, and dropping it would
+        stop the tier table summing to the sales above it. A deleted tier that
+        never sold is noise and stays gone. `has_phases` is an EXISTS, not a
+        prefetch — the history read only needs to know whether a schedule is
+        configured.
+        """
+        rows = (
+            TicketType.objects.filter(event_id=event_id)
+            .filter(Q(deleted_at__isnull=True) | Q(sold__gt=0))
+            .annotate(has_phases=Exists(SalePhase.objects.filter(ticket_type_id=OuterRef("pk"))))
+            .values(
+                "id",
+                "name",
+                "price_minor",
+                "quantity",
+                "sold",
+                "reserved",
+                "version",
+                "created_at",
+                "deleted_at",
+                "sale_end",
+                "group_bands",
+                "has_phases",
+            )
+            .order_by("price_minor", "created_at")
+        )
+        return [dict(row) for row in rows]
+
+    def event_order_summary(self, event_id: UUID, *, late_since: dt.datetime) -> dict:
+        """The paid ORDERS of one event, summarised in one statement.
+
+        Each booking's seat count and billed gross are correlated subqueries,
+        and every figure — the single/multiple split, the first and last sale,
+        the late share, coupon use — is a conditional aggregate over them.
+        Postgres does the counting; nothing iterates bookings in Python.
+        """
+        per_booking = BookingItem.objects.filter(booking_id=OuterRef("pk")).values("booking_id")
+        seat_count = Subquery(per_booking.annotate(total=Sum("quantity")).values("total")[:1])
+        gross = Subquery(
+            per_booking.annotate(total=Sum(F("unit_price_minor") * F("quantity"))).values("total")[
+                :1
+            ]
+        )
+        band_priced = BookingItem.objects.filter(
+            booking_id=OuterRef("pk"), group_min_quantity__isnull=False
+        )
+        row = (
+            Booking.objects.filter(event_id=event_id, status=BookingStatus.PAID)
+            .annotate(seat_count=seat_count, gross_minor=gross, band_priced=Exists(band_priced))
+            .aggregate(
+                orders=Count("id"),
+                seats=Sum("seat_count"),
+                single_orders=Count("id", filter=Q(seat_count=1)),
+                single_minor=Sum("gross_minor", filter=Q(seat_count=1)),
+                multiple_orders=Count("id", filter=Q(seat_count__gt=1)),
+                multiple_minor=Sum("gross_minor", filter=Q(seat_count__gt=1)),
+                first_at=Min("created_at"),
+                last_at=Max("created_at"),
+                late_seats=Sum("seat_count", filter=Q(created_at__gte=late_since)),
+                coupon_orders=Count("id", filter=Q(discount_amount_minor__gt=0)),
+                discount_minor=Sum("discount_amount_minor"),
+                group_orders=Count("id", filter=Q(band_priced=True)),
+            )
+        )
+        return dict(row)
+
+    def event_seats_by_day(
+        self, event_id: UUID, *, tzinfo: dt.tzinfo
+    ) -> list[tuple[dt.date, int, int]]:
+        """(day, orders, seats) for every day a paid booking was made.
+
+        From the ITEMS, grouped by the booking's day, so the seats are a plain
+        SUM rather than a sum over a subquery — and `orders` is DISTINCT
+        bookings, because a booking with two tiers is two items and one order.
+        The day is truncated in the platform timezone the caller passes, so
+        "5 Sep" here is the same 5 Sep as the dashboard's "today".
+        """
+        rows = (
+            BookingItem.objects.filter(
+                booking__event_id=event_id, booking__status=BookingStatus.PAID
+            )
+            .annotate(day=TruncDate("booking__created_at", tzinfo=tzinfo))
+            .values("day")
+            .annotate(orders=Count("booking_id", distinct=True), seats=Sum("quantity"))
+            .order_by("day")
+        )
+        return [(row["day"], int(row["orders"]), int(row["seats"] or 0)) for row in rows]
+
+    def event_tier_sales(self, event_id: UUID) -> dict[UUID, dict]:
+        """Per tier: paid orders containing it, seats, and what they were billed."""
+        rows = _grouped(
+            BookingItem.objects.filter(
+                booking__event_id=event_id, booking__status=BookingStatus.PAID
+            ),
+            "ticket_type_id",
+            orders=Count("booking_id", distinct=True),
+            seats=Sum("quantity"),
+            gross=Sum(F("unit_price_minor") * F("quantity")),
+        )
+        return {
+            row["ticket_type_id"]: {
+                "orders": int(row["orders"]),
+                "seats": int(row["seats"] or 0),
+                "gross": int(row["gross"] or 0),
+            }
+            for row in rows
+        }
+
+    def event_group_band_sales(self, event_id: UUID) -> list[dict]:
+        """Sales a group band PRICED, per band size — `group_min_quantity` is
+        written by the locked reserve decision, so this is attribution by what
+        actually happened rather than by what was configured."""
+        rows = _grouped(
+            BookingItem.objects.filter(
+                booking__event_id=event_id,
+                booking__status=BookingStatus.PAID,
+                group_min_quantity__isnull=False,
+            ),
+            "group_min_quantity",
+            orders=Count("booking_id", distinct=True),
+            seats=Sum("quantity"),
+            gross=Sum(F("unit_price_minor") * F("quantity")),
+            order_by="group_min_quantity",
+        )
+        return [
+            {
+                "min_quantity": int(row["group_min_quantity"]),
+                "orders": int(row["orders"]),
+                "seats": int(row["seats"] or 0),
+                "revenue_minor": int(row["gross"] or 0),
+            }
+            for row in rows
+        ]
+
+    def event_price_changes(self, event_id: UUID, *, limit: int) -> list[dict]:
+        """The most recent `limit` price entries across this event's tiers, in
+        time order. Newest-first for the LIMIT, so a capped read drops the
+        oldest history rather than the current prices."""
+        rows = (
+            TicketPriceChange.objects.filter(ticket_type__event_id=event_id)
+            .values("ticket_type_id", "price_minor", "changed_at", "kind")
+            .order_by("-changed_at", "-id")[:limit]
+        )
+        return list(reversed([dict(row) for row in rows]))
+
+    def event_feature_changes(self, event_id: UUID, *, limit: int) -> list[dict]:
+        rows = (
+            PricingFeatureChange.objects.filter(ticket_type__event_id=event_id)
+            .values("ticket_type_id", "feature", "enabled", "changed_at", "kind")
+            .order_by("-changed_at", "-id")[:limit]
+        )
+        return list(reversed([dict(row) for row in rows]))
+
+    def event_sales_in_windows(
+        self, event_id: UUID, windows: Sequence[SalesWindow]
+    ) -> dict[str, tuple[int, int]]:
+        """(seats, billed gross) inside each window — ONE statement.
+
+        A window is a WHERE, not a query: every one becomes two conditional
+        aggregates (`SUM(...) FILTER (WHERE ...)`) over the event's paid items.
+        The caller bounds how many windows it passes, which bounds the width of
+        the SELECT; the number of statements is always one.
+        """
+        if not windows:
+            return {}
+        aggregates = {}
+        for window in windows:
+            condition = Q(ticket_type_id=window.ticket_type_id)
+            if window.start is not None:
+                condition &= Q(booking__created_at__gte=window.start)
+            if window.end is not None:
+                condition &= Q(booking__created_at__lt=window.end)
+            if window.priced_by == "phase":
+                condition &= Q(phase_name__isnull=False)
+            elif window.priced_by == "band":
+                condition &= Q(group_min_quantity__isnull=False)
+            aggregates[f"s_{window.key}"] = Sum("quantity", filter=condition)
+            aggregates[f"g_{window.key}"] = Sum(
+                F("unit_price_minor") * F("quantity"), filter=condition
+            )
+        row = BookingItem.objects.filter(
+            booking__event_id=event_id, booking__status=BookingStatus.PAID
+        ).aggregate(**aggregates)
+        return {
+            window.key: (int(row[f"s_{window.key}"] or 0), int(row[f"g_{window.key}"] or 0))
+            for window in windows
+        }
+
+    def event_audience(self, event_id: UUID) -> tuple[int, int]:
+        """(paying buyers, of whom RETURNING).
+
+        Returning: a paid booking for a DIFFERENT event, made before this
+        buyer's FIRST paid booking for this one. Each buyer is reduced to that
+        first booking (a correlated MIN), and the question is one EXISTS on it.
+        """
+        first_here = (
+            Booking.objects.filter(
+                event_id=event_id, status=BookingStatus.PAID, user_id=OuterRef("user_id")
+            )
+            .order_by("created_at")
+            .values("created_at")[:1]
+        )
+        earlier_elsewhere = Booking.objects.filter(
+            user_id=OuterRef("user_id"),
+            status=BookingStatus.PAID,
+            created_at__lt=OuterRef("created_at"),
+        ).exclude(event_id=event_id)
+        row = (
+            Booking.objects.filter(event_id=event_id, status=BookingStatus.PAID)
+            .annotate(first_here=Subquery(first_here))
+            .filter(created_at=F("first_here"))
+            .annotate(returning=Exists(earlier_elsewhere))
+            .aggregate(
+                attendees=Count("user_id", distinct=True),
+                repeat=Count("user_id", distinct=True, filter=Q(returning=True)),
+            )
+        )
+        return int(row["attendees"] or 0), int(row["repeat"] or 0)
+
+    def event_interest_conversion(self, event_id: UUID) -> tuple[int, int]:
+        """(people who saved this event, of whom booked it AFTER saving).
+
+        "After" matters: somebody who booked and then saved the page to find
+        their ticket again did not convert from interest, they were already in.
+        """
+        booked_after = Booking.objects.filter(
+            event_id=event_id,
+            status=BookingStatus.PAID,
+            user_id=OuterRef("user_id"),
+            created_at__gte=OuterRef("created_at"),
+        )
+        row = SavedEvent.objects.filter(event_id=event_id).aggregate(
+            savers=Count("id"), converted=Count("id", filter=Exists(booked_after))
+        )
+        return int(row["savers"] or 0), int(row["converted"] or 0)
+
+    def event_rating_counts(self, event_id: UUID) -> dict[int, int]:
+        """Published reviews per star. Hidden ones are a moderation outcome,
+        not an opinion the organizer can weigh — the same rule the reviews list
+        applies."""
+        rows = _grouped(
+            EventReview.objects.filter(event_id=event_id, status=ReviewStatus.PUBLISHED),
+            "rating",
+            total=Count("id"),
+        )
+        return {int(row["rating"]): int(row["total"]) for row in rows}
+
+    def event_engagement_totals(self, event_id: UUID) -> dict:
+        """Sums over the event's engagement days, plus the first day recorded
+        and how many days there are — `days == 0` is "never recorded", which
+        the caller must not confuse with "nobody looked"."""
+        row = EventEngagementDay.objects.filter(event_id=event_id).aggregate(
+            impressions=Sum("impressions"),
+            views=Sum("views"),
+            feed_views=Sum("feed_views"),
+            located_views=Sum("located_views"),
+            local_views=Sum("local_views"),
+            first_day=Min("date"),
+            days=Count("id"),
+        )
+        return dict(row)
 
     # ---------------------------------------------------------- breakdowns
 

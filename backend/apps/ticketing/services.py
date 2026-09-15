@@ -38,6 +38,7 @@ import uuid
 from datetime import datetime
 
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.events.exceptions import EventNotFoundError
 from apps.events.repositories import EventRepository
@@ -56,8 +57,8 @@ from .exceptions import (
     StaleTicketTypeVersionError,
     TicketTypeNotFoundError,
 )
-from .models import TicketType
-from .repositories import TicketTypeRepository
+from .models import PricingChangeKind, PricingFeature, TicketType
+from .repositories import PricingHistoryRepository, TicketTypeRepository
 from .strategies import ReservationOutcome, ReservationStrategy
 
 logger = logging.getLogger(__name__)
@@ -196,10 +197,14 @@ class TicketingService:
         ticket_types: TicketTypeRepository,
         events: EventRepository,
         reservation: ReservationStrategy,
+        history: PricingHistoryRepository | None = None,
     ) -> None:
         self._ticket_types = ticket_types
         self._events = events
         self._reservation = reservation
+        # Optional so the many tests that build this service by hand keep
+        # working; `config.di` always passes one.
+        self._history = history or PricingHistoryRepository()
 
     # --- display-refresh helpers (run AFTER commit, outside the lock) -------
 
@@ -283,6 +288,7 @@ class TicketingService:
             )
             if phases:
                 self._ticket_types.set_phases(ticket_type_id=tt.id, phases=phases)
+            self._record_creation_history(tt, has_phases=bool(phases), has_bands=bool(group_bands))
             uow.publish(
                 TICKET_TYPE_ADDED,
                 {"ticket_type_id": str(tt.id), "event_id": str(event_id), "name": tt.name},
@@ -363,6 +369,10 @@ class TicketingService:
                 merged_bands, face_price_minor=merged_price, max_per_order=merged_max
             )
 
+        # Read BEFORE the edit: the schedule is about to be replaced wholesale,
+        # and the pricing history has to know what it replaced.
+        had_phases = tt.phases.exists()
+
         with UnitOfWork() as uow:
             try:
                 ok = self._ticket_types.update_if_version_matches(
@@ -383,6 +393,12 @@ class TicketingService:
                 # the schedule swap lands strictly between two locked reserves,
                 # never interleaved with one.
                 self._ticket_types.set_phases(ticket_type_id=ticket_type_id, phases=phases)
+            self._record_edit_history(
+                tt,
+                applied=applied,
+                had_phases=had_phases,
+                has_phases=bool(phases) if phases is not None else had_phases,
+            )
 
             uow.publish(
                 TICKET_TYPE_UPDATED,
@@ -401,6 +417,105 @@ class TicketingService:
         if refreshed is None:  # pragma: no cover — just deleted mid-request
             raise TicketTypeNotFoundError(str(ticket_type_id))
         return refreshed
+
+    # --- pricing history (written inside the edit's own transaction) -------
+
+    def _record_creation_history(
+        self, tt: TicketType, *, has_phases: bool, has_bands: bool
+    ) -> None:
+        """A new tier's first entries: its price, and any feature it was born
+        with — dated at the tier's own `created_at`, so its first price period
+        starts exactly when the tier did."""
+        at = tt.created_at
+        created = PricingChangeKind.CREATED.value
+        self._history.record_price(
+            ticket_type_id=tt.id, price_minor=tt.price_minor, kind=created, at=at
+        )
+        if has_phases:
+            self._history.record_feature(
+                ticket_type_id=tt.id,
+                feature=PricingFeature.EARLY_BIRD.value,
+                enabled=True,
+                kind=created,
+                at=at,
+            )
+        if has_bands:
+            self._history.record_feature(
+                ticket_type_id=tt.id,
+                feature=PricingFeature.GROUP_OFFERS.value,
+                enabled=True,
+                kind=created,
+                at=at,
+            )
+
+    def _record_edit_history(
+        self, tt: TicketType, *, applied: dict, had_phases: bool, has_phases: bool
+    ) -> None:
+        """Append this edit to the tier's pricing history.
+
+        Runs inside the edit's UnitOfWork, after the version-bump UPDATE has
+        succeeded, so an entry and its change commit or roll back together — a
+        409'd edit writes nothing.
+
+        ── A TIER WITH NO HISTORY PREDATES THE LOG ──────────────────────────
+
+        `tt` is the row as it was BEFORE this edit, so `tt.version == 1` means
+        this is its first edit ever: the price and features on it have held
+        since creation. That fact is written down now, dated at creation, before
+        this edit's own entry — the analytics read would otherwise derive it,
+        and this edit is about to make it underivable.
+
+        A tier edited before the log existed has an unknown past. When this
+        edit leaves a value alone, a BASELINE records "it was X from now"; when
+        it changes the value, the EDITED entry already says that. Nothing is
+        back-dated past what is known.
+        """
+        at = timezone.now()
+        never_edited = tt.version == 1
+        created = PricingChangeKind.CREATED.value
+        baseline = PricingChangeKind.BASELINE.value
+        edited = PricingChangeKind.EDITED.value
+
+        new_price = int(applied.get("price_minor", tt.price_minor))
+        price_changed = new_price != tt.price_minor
+        if not self._history.has_price_history(tt.id):
+            if never_edited:
+                self._history.record_price(
+                    ticket_type_id=tt.id, price_minor=tt.price_minor, kind=created, at=tt.created_at
+                )
+            elif not price_changed:
+                self._history.record_price(
+                    ticket_type_id=tt.id, price_minor=tt.price_minor, kind=baseline, at=at
+                )
+        if price_changed:
+            self._history.record_price(
+                ticket_type_id=tt.id, price_minor=new_price, kind=edited, at=at
+            )
+
+        had_bands = bool(tt.group_bands)
+        has_bands = bool(applied["group_bands"]) if "group_bands" in applied else had_bands
+        known = self._history.features_with_history(tt.id)
+        for feature, was_on, now_on in (
+            (PricingFeature.EARLY_BIRD.value, had_phases, has_phases),
+            (PricingFeature.GROUP_OFFERS.value, had_bands, has_bands),
+        ):
+            if feature not in known and was_on:
+                if never_edited:
+                    self._history.record_feature(
+                        ticket_type_id=tt.id,
+                        feature=feature,
+                        enabled=True,
+                        kind=created,
+                        at=tt.created_at,
+                    )
+                elif was_on == now_on:
+                    self._history.record_feature(
+                        ticket_type_id=tt.id, feature=feature, enabled=True, kind=baseline, at=at
+                    )
+            if was_on != now_on:
+                self._history.record_feature(
+                    ticket_type_id=tt.id, feature=feature, enabled=now_on, kind=edited, at=at
+                )
 
     # --- reservation primitives (booking calls these) ----------------------
 

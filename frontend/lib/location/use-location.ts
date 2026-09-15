@@ -25,7 +25,10 @@ import { type FixFailure, resolveCityFromFix } from './resolve-city';
  *    components/discovery/trending-near-you.tsx.
  */
 
-const STORAGE_KEY = 'ee-city';
+/** Exported because the engagement beacon reports the SAME city the header
+ *  shows — one key, so the two cannot disagree about where somebody is. */
+export const CITY_STORAGE_KEY = 'ee-city';
+const STORAGE_KEY = CITY_STORAGE_KEY;
 const DISMISS_KEY = 'ee-location-dismissed';
 /** Set once we have attempted the silent first-visit detect — never repeated. */
 const AUTO_KEY = 'ee-location-auto';
