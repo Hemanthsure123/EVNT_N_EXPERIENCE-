@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { rememberProvider, resolveProvider } from './payment-provider';
+import { rememberProvider, resolveProvider, selectableProviders } from './payment-provider';
 
 /**
  * These guard one specific shipped bug: the pay step deciding whether a real
@@ -33,5 +33,59 @@ describe('resolveProvider', () => {
     rememberProvider('stripe');
     expect(resolveProvider('paypal')).toBe('razorpay');
     expect(window.sessionStorage.getItem('ee-payment-provider')).toBeNull();
+  });
+});
+
+/**
+ * What the selector may draw.
+ *
+ * The rule this enforces is the one `PayUsing` was originally written around:
+ * a chevron promising a choice we cannot honour is a control that lies about
+ * what pressing it does, on the last screen before money moves. So the
+ * affordance appears only when there is genuinely more than one thing to pick.
+ */
+describe('selectableProviders', () => {
+  it('offers both when the server lists both', () => {
+    expect(selectableProviders(['cashfree', 'razorpay'])).toEqual(['cashfree', 'razorpay']);
+  });
+
+  it('preserves the server order, so the default the server chose reads first', () => {
+    expect(selectableProviders(['razorpay', 'cashfree'])).toEqual(['razorpay', 'cashfree']);
+  });
+
+  it('offers NOTHING for a single gateway — one option is not a choice', () => {
+    // A dropdown whose menu holds one already-ticked row is a control that
+    // wastes a press to tell you what the trigger already said.
+    expect(selectableProviders(['razorpay'])).toEqual([]);
+  });
+
+  it('drops a gateway this build has no SDK for', () => {
+    // Rendering it would draw a row that cannot open a checkout — the same
+    // class of lie as a nav item pointing at a 404.
+    expect(selectableProviders(['cashfree', 'stripe', 'razorpay'])).toEqual([
+      'cashfree',
+      'razorpay',
+    ]);
+  });
+
+  it('never offers the demo provider beside a real one', () => {
+    // A "simulate payment" row next to a live gateway is a pay-nothing button.
+    expect(selectableProviders(['cashfree', 'fake'])).toEqual([]);
+  });
+
+  it('is empty for a demo deployment, so the plain-text control renders', () => {
+    expect(selectableProviders(['fake'])).toEqual([]);
+  });
+
+  it('survives a missing or empty list rather than throwing on the money path', () => {
+    expect(selectableProviders(undefined)).toEqual([]);
+    expect(selectableProviders([])).toEqual([]);
+  });
+
+  it('collapses duplicates', () => {
+    expect(selectableProviders(['cashfree', 'cashfree', 'razorpay'])).toEqual([
+      'cashfree',
+      'razorpay',
+    ]);
   });
 });

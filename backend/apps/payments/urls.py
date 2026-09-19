@@ -5,6 +5,15 @@ from . import api
 # Mounted under /api/v1/ (see config/urls.py).
 urlpatterns = [
     path("payments/webhook", api.WebhookView.as_view(), name="payment-webhook"),
+    # A ROUTE PER PROVIDER. The gateway is decided by where the delivery
+    # arrived, never by a field in a body that has not been verified yet — see
+    # `_RAZORPAY_WEBHOOK_GATEWAY` in api.py. Razorpay keeps the original path,
+    # so an already-configured dashboard webhook needs no change.
+    path(
+        "payments/webhook/cashfree",
+        api.CashfreeWebhookView.as_view(),
+        name="payment-webhook-cashfree",
+    ),
     # Ahead of the <uuid:payment_id> route: "verify" is not a UUID, so
     # order is not strictly required here — but a literal path that can
     # be shadowed by a converter route is a trap worth not setting.

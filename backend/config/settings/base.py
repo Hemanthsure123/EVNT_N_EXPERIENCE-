@@ -368,6 +368,73 @@ else:
 RAZORPAY_KEY_ID = env.str("RAZORPAY_KEY_ID", default="")
 RAZORPAY_KEY_SECRET = env.str("RAZORPAY_KEY_SECRET", default="")
 RAZORPAY_WEBHOOK_SECRET = env.str("RAZORPAY_WEBHOOK_SECRET", default="")
+
+# --- Cashfree Payments ---------------------------------------------------
+#
+# The SECOND checkout gateway. Everything about how these three combine with
+# `PAYMENTS_BACKEND` is in the block below them — read that before changing
+# any of it, because two of the four combinations look reasonable and are not.
+CASHFREE_APP_ID = env.str("CASHFREE_APP_ID", default="")
+CASHFREE_SECRET_KEY = env.str("CASHFREE_SECRET_KEY", default="")
+# "sandbox" | "production". A STRING and not a boolean `CASHFREE_IS_PROD`,
+# because Cashfree's own dashboard, docs and SDK all name these two
+# environments — and a flag inverted by a typo silently points test
+# credentials at the live API, which answers 401 on the first real checkout.
+CASHFREE_ENVIRONMENT = env.str("CASHFREE_ENVIRONMENT", default="sandbox")
+
+# ── WHICH GATEWAYS A CUSTOMER MAY CHOOSE BETWEEN ─────────────────────────
+#
+# `PAYMENTS_BACKEND` is unchanged and still does exactly what it did: it names
+# the DEFAULT adapter, and it is the one `organizations` and `settlements` are
+# given — the Route provider that holds linked accounts and releases payouts.
+# It is deliberately NOT widened into a list, because those two modules need
+# one answer and would have no way to choose.
+#
+# This is the separate, smaller question: which gateways may take a payment.
+# Empty (the default) means "just the one `PAYMENTS_BACKEND` names", so a
+# deployment that never sets this behaves precisely as it did before Cashfree
+# existed — no selector, no second webhook, nothing to configure.
+#
+# A gateway listed here WITHOUT its credentials is dropped by
+# `config.di.enabled_payment_gateways()` rather than offered and then failing
+# at the press. Advertising a payment method that cannot open is the checkout
+# equivalent of a nav item pointing at a 404, on the one screen where it costs
+# money.
+PAYMENTS_ENABLED_GATEWAYS = env.list("PAYMENTS_ENABLED_GATEWAYS", default=[])
+
+# Which one the checkout pre-selects. Must appear in the enabled set; if it
+# does not, `enabled_payment_gateways()` falls back to the first that is
+# actually usable rather than defaulting to something nobody can pay with.
+PAYMENTS_DEFAULT_GATEWAY = env.str("PAYMENTS_DEFAULT_GATEWAY", default="")
+
+# ── WHO HOLDS THE ORGANIZER PAYOUT RELATIONSHIP ──────────────────────────
+#
+# A THIRD question, and it is not the same as either above.
+#
+#   PAYMENTS_BACKEND          the default adapter, and the one a booking gets
+#                             when nothing else is chosen.
+#   PAYMENTS_ENABLED_GATEWAYS which gateways may TAKE a payment.
+#   PAYMENTS_ROUTE_PROVIDER   which gateway holds LINKED ACCOUNTS and releases
+#                             PAYOUTS.
+#
+# Taking a payment is per booking. Paying an organizer is not: a linked account
+# is a vendor record created once, `organizations.payout_account_id` stores THAT
+# vendor's id, and `settlements` later releases an on-hold transfer against it.
+# Asking a second provider to release a payout to an account id it never issued
+# is not a degraded outcome, it is a refusal — and it arrives weeks after the
+# event, on the money an organizer is owed.
+#
+# It DEFAULTS to `PAYMENTS_BACKEND`, so every existing deployment is unchanged
+# and a single-gateway platform never has to think about it. It exists so that
+# `PAYMENTS_BACKEND` can be Cashfree — or anything else — WITHOUT silently
+# moving the payout relationship along with it. Previously that coupling was
+# implicit: `config/di.py` handed `organizations` and `settlements` whatever
+# `payment_port()` returned, so changing the default backend would have pointed
+# payouts at a provider with no linked accounts, and nothing would have said so
+# until a settlement failed.
+#
+# Production preflight refuses a provider here that cannot actually do it.
+PAYMENTS_ROUTE_PROVIDER = env.str("PAYMENTS_ROUTE_PROVIDER", default="")
 # ── THE PLATFORM FEE IS A PERCENTAGE, AND IT IS ADDED ON TOP ──────────────
 #
 # It was `PLATFORM_FEE_PER_TICKET` — a flat 10 paise per ticket DEDUCTED from

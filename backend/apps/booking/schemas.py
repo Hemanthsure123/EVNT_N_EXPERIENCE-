@@ -37,6 +37,26 @@ class CreateBookingRequestSerializer(serializers.Serializer):
         required=False,
         default=dict,
     )
+    #: Which gateway to open the order with. Optional, and NOT validated
+    #: against the offered set here: the service treats it as a request and
+    #: falls back to the deployment default for anything it cannot honour.
+    #: Refusing the whole booking because a cached tab sent a gateway name this
+    #: deployment has since stopped offering would lose a sale over a
+    #: presentational detail the customer never saw.
+    payment_gateway = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=32
+    )
+
+
+class SetPaymentGatewayRequestSerializer(serializers.Serializer):
+    """Move a live hold onto a different gateway.
+
+    `allow_blank=False`, unlike the field on create: this is a deliberate press
+    on a control, so an empty value is a client bug rather than an absent
+    preference, and the service names the gateways it will accept.
+    """
+
+    payment_gateway = serializers.CharField(max_length=32)
 
 
 class SetDonationRequestSerializer(serializers.Serializer):
@@ -127,6 +147,20 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             "coupon_code",
             "hold_expires_at",
             "payment_order_id",
+            # ── THE GATEWAY TRAVELS WITH EVERY BOOKING READ ──────────────
+            #
+            # On the SUMMARY (not only the create response) because the
+            # re-issue endpoints — donation, coupon, gateway — all answer with
+            # this serializer, and each of them can MOVE the order. A screen
+            # that learned the provider once at create and then applied a
+            # coupon would be holding a session id for an order that no longer
+            # exists, and would open a checkout the provider refuses.
+            #
+            # `payment_session_id` is the public, expiring handle for one order
+            # (see the model), not a credential. Every booking read is
+            # `private, no-store` and owner-scoped regardless.
+            "payment_gateway",
+            "payment_session_id",
             "created_at",
         ]
         read_only_fields = fields
@@ -196,6 +230,12 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "coupon_code",
             "hold_expires_at",
             "payment_order_id",
+            # Same pair as the summary carries, for the same reason — and this
+            # is the serializer `GET /bookings/{id}` answers with, so a reload
+            # of the review screen recovers the handle it needs to pay rather
+            # than depending on session storage the way `key_id` has to.
+            "payment_gateway",
+            "payment_session_id",
             "items",
             "tickets",
             "created_at",

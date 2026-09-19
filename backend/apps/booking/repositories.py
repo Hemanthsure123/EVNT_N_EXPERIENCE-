@@ -355,9 +355,16 @@ class BookingRepository(BaseRepository[Booking]):
         created_before: datetime,
         terminal_since: datetime,
         limit: int = 100,
-    ) -> list[tuple[uuid.UUID, str]]:
-        """`(booking_id, payment_order_id)` for bookings that hold a payment
-        order the platform has not resolved — the reconciliation work list.
+    ) -> list[tuple[uuid.UUID, str, str]]:
+        """`(booking_id, payment_order_id, payment_gateway)` for bookings that
+        hold a payment order the platform has not resolved — the reconciliation
+        work list.
+
+        The GATEWAY is selected here rather than looked up per candidate,
+        because the sweep asks about up to `limit` bookings on every tick and
+        almost always finds nothing: re-reading each row to discover which
+        provider to ask would be a query per abandoned checkout, every two
+        minutes, to learn a single column this query already has in hand.
 
         Two disjoint sets, and the reason for each:
 
@@ -388,9 +395,9 @@ class BookingRepository(BaseRepository[Booking]):
                 )
             )
             .order_by("created_at")
-            .values_list("id", "payment_order_id")[:limit]
+            .values_list("id", "payment_order_id", "payment_gateway")[:limit]
         )
-        return [(row[0], row[1]) for row in rows]
+        return [(row[0], row[1], row[2]) for row in rows]
 
 
 class TicketRepository(BaseRepository[Ticket]):

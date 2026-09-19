@@ -22,7 +22,7 @@ from apps.accounts.models import User
 # accepted a 40-character code the coupon module refuses would 422 from the
 # service instead of 400 from the boundary, for the same input.
 from apps.coupons.schemas import ApplyCouponRequestSerializer
-from config.di import build_booking_service
+from config.di import build_booking_service, enabled_payment_gateways
 from core.throttling import ShareReceiptThrottle
 
 from .exceptions import BookingNotFoundError, NotBookingOwnerError
@@ -34,6 +34,7 @@ from .schemas import (
     CreateBookingRequestSerializer,
     MyBookingSerializer,
     SetDonationRequestSerializer,
+    SetPaymentGatewayRequestSerializer,
     ShareReceiptRequestSerializer,
     ShareReceiptResponseSerializer,
     TicketSerializer,
@@ -67,6 +68,7 @@ class BookingCreateView(APIView):
             donation_minor=data.get("donation_minor", 0),
             idempotency_key=idempotency_key,
             answers=dict(data.get("answers") or {}),
+            gateway=data.get("payment_gateway") or "",
         )
 
         # WHICH PROVIDER, STATED PLAINLY.
@@ -90,7 +92,14 @@ class BookingCreateView(APIView):
         # the reserve transaction commits.
         detail = get_booking_detail(result.booking.id) or result.booking
 
-        is_razorpay = settings.PAYMENTS_BACKEND == "razorpay"
+        # WHICH GATEWAYS THE CHECKOUT MAY OFFER, and which one actually took
+        # this order. `result.gateway` comes off the BOOKING ROW, never from
+        # settings — a response that named the default while the order was
+        # created on the other gateway would send the browser to the wrong
+        # SDK with an id it cannot open.
+        offered, _default = enabled_payment_gateways()
+        gateway = result.gateway
+        is_razorpay = gateway == "razorpay"
         body = {
             # ── THE DETAIL SERIALIZER, NOT THE SUMMARY ───────────────────
             #
@@ -117,12 +126,27 @@ class BookingCreateView(APIView):
                 "order_id": result.payment_order_id,
                 "amount_minor": result.amount_minor,
                 "currency": result.currency,
-                # "razorpay" | "fake" — what actually created the order above.
-                "provider": settings.PAYMENTS_BACKEND,
+                # "razorpay" | "cashfree" | "fake" — what actually created the
+                # order above, read off the booking row.
+                "provider": gateway,
                 # Public checkout key for the frontend (safe to expose — it is
                 # the public half; the secret signs webhooks and never leaves
-                # the backend). Empty unless Razorpay is the live provider.
+                # the backend). Empty unless Razorpay is this order's gateway.
                 "key_id": settings.RAZORPAY_KEY_ID if is_razorpay else "",
+                # The browser-side handle for gateways that need one distinct
+                # from the order id — Cashfree's `payment_session_id`. Empty
+                # for Razorpay, whose Checkout opens on the order id.
+                "session_id": result.checkout_token,
+                # Cashfree's SDK is instantiated with its own environment name,
+                # and getting it wrong points a sandbox session at the live API.
+                # Sent rather than duplicated in a NEXT_PUBLIC_ var, so the
+                # browser and the order can never disagree about which it is.
+                "environment": (settings.CASHFREE_ENVIRONMENT if gateway == "cashfree" else ""),
+                # What the selector may draw. A list, so the UI never has to
+                # infer the set from a single name — and so a gateway missing
+                # its credentials is simply absent rather than rendered and
+                # then failing at the press.
+                "available_providers": list(offered),
             },
         }
         return _no_store(Response(body, status=status.HTTP_201_CREATED))
@@ -176,6 +200,44 @@ class BookingDonationView(APIView):
             booking_id=booking_id,
             actor_id=cast(User, request.user).id,
             donation_minor=payload.validated_data["donation_minor"],
+        )
+        return _no_store(Response(BookingSummarySerializer(booking).data))
+
+
+class BookingPaymentGatewayView(APIView):
+    """Move a live hold onto a different payment gateway.
+
+    Beside the donation and coupon endpoints, and for exactly the same reason
+    those exist: the hold is taken when the review screen OPENS, and the
+    payment method is chosen while reading that screen — so the order already
+    exists by the time anybody presses "Cashfree". Without this, the selector
+    in the checkout footer would be decoration and the customer would be handed
+    the default gateway's order whatever they pressed.
+
+    It does NOT re-reserve. Only the gateway moves, under the booking row lock;
+    the new order is created afterwards, outside it. Re-reserving would mean a
+    tier could be gone by the second reserve, so choosing a payment method
+    could cost somebody their seats.
+
+    Answers with the booking summary, which carries `payment_order_id`,
+    `payment_gateway` and `payment_session_id` — everything the browser needs
+    to open the newly-issued order, in the response to the press that moved it.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=SetPaymentGatewayRequestSerializer, responses={200: BookingSummarySerializer}
+    )
+    def post(self, request: Request, booking_id: str) -> Response:
+        payload = SetPaymentGatewayRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        service = build_booking_service()
+        booking = service.set_payment_gateway(
+            booking_id=booking_id,
+            actor_id=cast(User, request.user).id,
+            gateway=payload.validated_data["payment_gateway"],
         )
         return _no_store(Response(BookingSummarySerializer(booking).data))
 

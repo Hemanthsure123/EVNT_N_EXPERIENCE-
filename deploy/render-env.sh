@@ -129,6 +129,68 @@ fi
 
 echo "[RENDER][4] Verified all ${#required_keys[@]} required keys are present"
 
+# ── CONDITIONAL KEYS: A GATEWAY YOU TURNED ON MUST BE USABLE ──────────────
+#
+# Cashfree is OPTIONAL, so its keys cannot join `required_keys` above — a
+# single-gateway deployment must keep deploying with none of them set.
+#
+# But the moment `PAYMENTS_ENABLED_GATEWAYS` names it, production preflight
+# REFUSES to boot without its credentials. That is the correct behaviour and it
+# is also a crash loop discovered from `docker compose logs` — precisely what
+# the ALLOWED_HOSTS comment above says this block exists to turn into one
+# precise line before anything is deployed. So the same rule is enforced here,
+# from the same file, at the same moment.
+#
+# Read from the RENDERED file rather than the shell environment: what matters
+# is what the instance will actually run, not what happens to be exported in
+# whatever shell invoked this script.
+#
+# ── EVERY VALUE IS READ THROUGH `env_value`, AND THAT IS NOT PEDANTRY ─────
+#
+# The renderer QUOTES every value, so an empty one is written `KEY=''` — two
+# characters. The obvious presence test, `grep -q "^KEY=."`, therefore matches
+# the opening QUOTE and passes for a key whose value is empty, which is exactly
+# the case this block exists to catch. Strip the quotes first and test the
+# value.
+env_value() {
+  grep "^$1=" "$TMP" | head -n1 | cut -d= -f2- | tr -d "'\"" || true
+}
+
+enabled_gateways=$(env_value PAYMENTS_ENABLED_GATEWAYS)
+route_provider=$(env_value PAYMENTS_ROUTE_PROVIDER)
+
+case ",${enabled_gateways}," in
+  *,cashfree,*)
+    cashfree_missing=()
+    for required in CASHFREE_APP_ID CASHFREE_SECRET_KEY; do
+      if [ -z "$(env_value "$required")" ]; then
+        cashfree_missing+=("$required")
+      fi
+    done
+    if [ ${#cashfree_missing[@]} -gt 0 ]; then
+      echo "[RENDER][FAILURE] REFUSING: PAYMENTS_ENABLED_GATEWAYS includes 'cashfree'" >&2
+      echo "  but these are missing or empty in secret $SECRET_ID: ${cashfree_missing[*]}" >&2
+      echo "  Production preflight would refuse to boot, so the containers would" >&2
+      echo "  crash-loop instead of failing here." >&2
+      echo "The existing $TARGET has been left untouched." >&2
+      exit 6
+    fi
+    echo "[RENDER][4a] Cashfree is enabled and its credentials are present"
+    ;;
+esac
+
+# `release_payout` settles an ON-HOLD transfer against a linked account, and
+# only the provider that ISSUED that account can do it. Cashfree's adapter
+# raises, so naming it here means organizers are never paid — weeks later,
+# silently, on money that is owed.
+if [ "$route_provider" = "cashfree" ]; then
+  echo "[RENDER][FAILURE] REFUSING: PAYMENTS_ROUTE_PROVIDER=cashfree cannot release payouts." >&2
+  echo "  Cashfree may still TAKE payments — list it in PAYMENTS_ENABLED_GATEWAYS" >&2
+  echo "  and leave PAYMENTS_ROUTE_PROVIDER unset (or 'razorpay')." >&2
+  echo "The existing $TARGET has been left untouched." >&2
+  exit 7
+fi
+
 [ -f "$TARGET" ] && cp -p "$TARGET" "$TARGET.prev"
 
 mv "$TMP" "$TARGET"

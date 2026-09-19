@@ -42,6 +42,24 @@ def _no_store(response: Response) -> Response:
     return response
 
 
+#: The gateway each webhook route speaks for.
+#:
+#: ── THE ROUTE IS THE PROVIDER, AND THE BODY NEVER GETS A VOTE ─────────────
+#:
+#: Each provider posts to its OWN url and the view hard-codes which one that
+#: is. Reading the gateway out of the payload instead would mean choosing a
+#: verifier from unverified bytes — a forger could nominate whichever adapter's
+#: secret they had guessed, or simply the one with no secret configured, and
+#: the signature check would then pass against a key of the attacker's
+#: choosing. One route, one provider, one secret, decided before the body is
+#: read.
+#:
+#: The Razorpay route keeps its original path so an already-configured
+#: dashboard webhook is untouched by any of this.
+_RAZORPAY_WEBHOOK_GATEWAY = "razorpay"
+_CASHFREE_WEBHOOK_GATEWAY = "cashfree"
+
+
 class WebhookView(APIView):
     # No user auth — Razorpay calls this server-to-server. The signature over
     # the raw body is the only credential (verified in the service).
@@ -59,8 +77,50 @@ class WebhookView(APIView):
         signature = request.headers.get("X-Razorpay-Signature", "")
 
         service = build_payment_service()
-        outcome = service.handle_webhook(raw_body=raw_body, signature=signature)
+        outcome = service.handle_webhook(
+            raw_body=raw_body, signature=signature, gateway=_RAZORPAY_WEBHOOK_GATEWAY
+        )
         # Always 200 once safely recorded (verification failures raise -> 400).
+        return Response({"status": outcome.status}, status=status.HTTP_200_OK)
+
+
+class CashfreeWebhookView(APIView):
+    """`POST /payments/webhook/cashfree` — the signed, server-to-server fact.
+
+    Its OWN route rather than a branch inside `WebhookView`, for the reason
+    above: the gateway must be decided by where the request arrived, not by
+    anything inside a body that has not been verified yet.
+
+    Cashfree signs `base64(HMAC-SHA256(timestamp + rawBody, secret))`, so the
+    timestamp header travels with the signature. A delivery missing either is
+    refused — there is no lenient mode for the one check that decides whether
+    money is real.
+
+    Everything after verification is the SAME path a Razorpay delivery takes:
+    the same `payment.captured:{id}` ledger row, the same amount check, the
+    same idempotent `confirm_booking`. No entry point gets to be the lenient
+    one, and a second gateway must never be able to issue a second ticket.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    throttle_classes = [WebhookThrottle]
+
+    @extend_schema(request=None, responses={200: None})
+    def post(self, request: Request) -> Response:
+        # The RAW bytes, never the re-serialised parsed data — the HMAC is over
+        # exactly what Cashfree sent.
+        raw_body = request.body
+        signature = request.headers.get("x-webhook-signature", "")
+        timestamp = request.headers.get("x-webhook-timestamp", "")
+
+        service = build_payment_service()
+        outcome = service.handle_webhook(
+            raw_body=raw_body,
+            signature=signature,
+            gateway=_CASHFREE_WEBHOOK_GATEWAY,
+            timestamp=timestamp,
+        )
         return Response({"status": outcome.status}, status=status.HTTP_200_OK)
 
 
@@ -100,6 +160,9 @@ class VerifyPaymentView(APIView):
         service = build_payment_service()
         outcome = service.verify_and_confirm(
             provider_payment_id=payload.validated_data["razorpay_payment_id"],
+            # Selects which provider to ask and, for Cashfree, which order the
+            # payment lives under. Still only a lookup key — see the serializer.
+            order_id=payload.validated_data.get("order_id") or "",
         )
         return _no_store(Response({"status": outcome.status}, status=status.HTTP_200_OK))
 

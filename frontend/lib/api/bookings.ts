@@ -35,14 +35,62 @@ export function createBooking(
    * platform's hottest write.
    */
   answers?: Record<string, string>,
+  /**
+   * Which gateway to open the order with, when the customer has already
+   * expressed a preference this session. Deliberately NOT part of the
+   * idempotency key — that key is derived from the SELECTION, and folding a
+   * payment-method choice into it would mint a new key every time somebody
+   * changed their mind, which is precisely the double-tap protection the
+   * derived key exists to provide, switched off on the money path.
+   */
+  gateway?: string,
 ): Promise<CreateBookingResponse> {
   const hasAnswers = answers && Object.keys(answers).length > 0;
   return api.post<CreateBookingResponse>(
     '/bookings',
-    { event_id: eventId, items, ...(hasAnswers ? { answers } : {}) },
+    {
+      event_id: eventId,
+      items,
+      ...(hasAnswers ? { answers } : {}),
+      // A REQUEST, not an instruction: the server falls back to the
+      // deployment default for anything it does not offer, so a stale value
+      // in a cached tab can never refuse a sale. Omitted entirely when the
+      // caller has no preference yet, which is the ordinary first reserve.
+      ...(gateway ? { payment_gateway: gateway } : {}),
+    },
     { headers: { 'Idempotency-Key': idempotencyKey } },
   );
 }
+
+/**
+ * Move a live hold onto a different payment gateway.
+ *
+ * ── ITS OWN CALL, BESIDE THE DONATION AND THE COUPON ─────────────────────
+ *
+ * For the same reason those two are: the reservation happens when the review
+ * screen OPENS (the countdown has to be counting something) and the payment
+ * method is chosen while reading that screen — so the order already exists by
+ * the time anybody presses "Cashfree". Folding the gateway into
+ * `createBooking` alone would make the selector decoration: the customer would
+ * press one thing and be handed the default gateway's order.
+ *
+ * The backend moves ONLY the gateway, under the booking's row lock, and
+ * re-issues the payment order outside it. It never releases and re-reserves: a
+ * tier could be gone by the time a second reserve ran, so choosing a payment
+ * method would be able to cost somebody their seats.
+ *
+ * No `Idempotency-Key`: idempotent by construction. It sets an absolute value
+ * rather than applying a delta, and setting the gateway it already has is the
+ * documented REPAIR for a hold whose order call failed.
+ *
+ * The response carries `payment_order_id`, `payment_gateway` and
+ * `payment_session_id` — everything the browser needs to open the order this
+ * press just created.
+ */
+export const setBookingGateway = (bookingId: string, gateway: string) =>
+  api.post<Booking>(`/bookings/${encodeURIComponent(bookingId)}/payment-gateway`, {
+    payment_gateway: gateway,
+  });
 
 export const fetchBooking = (bookingId: string) =>
   api.get<Booking>(`/bookings/${encodeURIComponent(bookingId)}`);

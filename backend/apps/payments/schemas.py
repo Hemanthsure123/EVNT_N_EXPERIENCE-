@@ -11,13 +11,48 @@ from .models import Payment
 class VerifyPaymentRequestSerializer(serializers.Serializer):
     """What the browser may say after the provider's checkout closes.
 
-    ONE FIELD, and it is an id. Not an amount, not a status, not an order —
-    every one of those is read back from the provider inside the service. A
-    request body that could carry "amount" would be a request body somebody
-    could carry a *different* amount in.
+    TWO IDS, AND NOTHING ELSE. Not an amount, not a status — every one of
+    those is read back from the provider inside the service. A request body
+    that could carry "amount" would be a request body somebody could carry a
+    *different* amount in.
+
+    ── WHY THE ORDER ID JOINED IT, AND WHY IT IS STILL NOT A CLAIM ──────────
+
+    Cashfree addresses a payment only within its order, so a bare payment id
+    cannot be looked up at all there. The order id also selects WHICH provider
+    to ask, since the booking behind it names the gateway that took the money.
+
+    Neither of those is trust. The id is a lookup key: it decides whom to ask
+    and what to ask about, and every figure that follows comes from the
+    provider's answer. Somebody who posts another customer's order gets a
+    payment whose order resolves to that customer's booking — already paid, so
+    it dedupes and issues nothing. There is still no id that makes this
+    endpoint grant a ticket nobody paid for.
+
+    Optional, because the Razorpay path has only ever had the payment id and
+    must keep working unchanged.
     """
 
-    razorpay_payment_id = serializers.CharField(max_length=64, trim_whitespace=True)
+    razorpay_payment_id = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, default="", trim_whitespace=True
+    )
+    order_id = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default="", trim_whitespace=True
+    )
+
+    def validate(self, attrs: dict) -> dict:
+        """At least one id, or there is nothing to ask the provider about.
+
+        Both are optional individually because the two gateways hand the
+        browser different things — Razorpay a payment id, Cashfree the order it
+        opened — and requiring either one specifically would break the other.
+        An empty body is still a client bug and is named as one rather than
+        quietly answering "ignored", which would look identical to a payment
+        the provider had never heard of.
+        """
+        if not (attrs.get("razorpay_payment_id") or attrs.get("order_id")):
+            raise serializers.ValidationError("Provide razorpay_payment_id or order_id.")
+        return attrs
 
 
 class SimulatePaymentRequestSerializer(serializers.Serializer):

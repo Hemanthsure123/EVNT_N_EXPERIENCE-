@@ -49,6 +49,7 @@ from core.events import (
 )
 from core.ports.cache_port import CachePort
 from core.ports.payment_port import (
+    CreatedOrder,
     OrderTransfer,
     PaymentOrderRejected,
     PaymentPort,
@@ -102,6 +103,11 @@ class BookingCreationResult:
     payment_order_id: str
     amount_minor: int
     currency: str
+    #: Which gateway created the order above, and the browser-side handle it
+    #: needs. Both come off the booking row rather than from settings, so the
+    #: response can never name a gateway other than the one that was used.
+    gateway: str = ""
+    checkout_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -275,6 +281,18 @@ class BookingService:
         donation_minor: int = 0,
         idempotency_key: str | None = None,
         answers: dict[str, str] | None = None,
+        #: Which gateway the customer asked to pay through. A REQUEST, not an
+        #: instruction — `config.di.resolve_payment_gateway` falls back to the
+        #: deployment default for anything not on offer, so a stale value in a
+        #: cached tab cannot refuse a sale.
+        #:
+        #: It is NOT part of the idempotency key, deliberately. The key is
+        #: derived from the SELECTION, and folding a presentational choice into
+        #: it would mint a new key every time somebody changed their mind about
+        #: the payment method — which is precisely the double-tap protection
+        #: the derived key exists to provide, switched off on the money path.
+        #: Changing gateway after the fact is `set_payment_gateway`.
+        gateway: str = "",
     ) -> BookingCreationResult:
         if not items:
             raise InvalidBookingItemsError("At least one item is required.")
@@ -311,7 +329,9 @@ class BookingService:
             existing = self._bookings.get_replayable_by_idempotency_key(user_id, idempotency_key)
             if existing is not None:
                 return self._creation_result(
-                    self._ensure_payment_order(existing, release_hold_on_failure=True)
+                    self._ensure_payment_order(
+                        existing, release_hold_on_failure=True, gateway=gateway
+                    )
                 )
             # Serialise concurrent same-key creates so a double-click doesn't do a
             # second (doomed) reserve. Correctness doesn't depend on this — the DB
@@ -327,7 +347,9 @@ class BookingService:
                 )
                 if existing is not None:
                     return self._creation_result(
-                        self._ensure_payment_order(existing, release_hold_on_failure=True)
+                        self._ensure_payment_order(
+                            existing, release_hold_on_failure=True, gateway=gateway
+                        )
                     )
                 # Nothing replayable, so anything still holding this key is a
                 # booking that ended — expired, cancelled, or reserved past its
@@ -351,7 +373,7 @@ class BookingService:
 
         # OUTSIDE the transaction/lock: the external payment-order call.
         return self._creation_result(
-            self._ensure_payment_order(booking, release_hold_on_failure=True)
+            self._ensure_payment_order(booking, release_hold_on_failure=True, gateway=gateway)
         )
 
     def _validate_donation(self, donation_minor: int) -> int:
@@ -590,7 +612,9 @@ class BookingService:
         logger.info("booking_created", extra={"booking_id": str(booking.id)})
         return booking
 
-    def _ensure_payment_order(self, booking: Booking, *, release_hold_on_failure: bool) -> Booking:
+    def _ensure_payment_order(
+        self, booking: Booking, *, release_hold_on_failure: bool, gateway: str = ""
+    ) -> Booking:
         """Create the payment order if this reserved booking doesn't have one
         yet (external call — always outside any DB lock). Idempotent, so a
         retry after a crash between commit and this call just fills it in.
@@ -627,8 +651,17 @@ class BookingService:
         if booking.payment_order_id or booking.status != BookingStatus.RESERVED:
             return booking
 
+        # THE GATEWAY IS DECIDED HERE, ONCE PER ORDER. A booking that ALREADY
+        # names one keeps it: the re-issue paths (a donation, a coupon) must
+        # not silently move a live hold onto a different provider because the
+        # deployment default changed since the order was created. Changing it
+        # deliberately is `set_payment_gateway`, which clears the column first.
+        from config.di import resolve_payment_gateway
+
+        chosen = booking.payment_gateway or resolve_payment_gateway(gateway)
+
         try:
-            order_id = self._create_order_with_fallback(booking)
+            created = self._create_order_with_fallback(booking, chosen)
         except (PaymentOrderRejected, PaymentProviderUnavailable) as failed:
             if release_hold_on_failure:
                 self._release_unstartable(booking.id, reason=failed.reason)
@@ -642,11 +675,29 @@ class BookingService:
                 "held and nothing has been charged — please try again."
             ) from failed
 
-        booking.payment_order_id = order_id
+        booking.payment_order_id = created.order_id
+        booking.payment_session_id = created.checkout_token
+        booking.payment_gateway = chosen
         self._bookings.save(booking)
         return booking
 
-    def _create_order_with_fallback(self, booking: Booking) -> str:
+    def _port_for(self, gateway: str) -> PaymentPort:
+        """The adapter for one gateway.
+
+        `self._payments` — the injected port — stays the DEFAULT, so every
+        existing test that constructs this service by hand with a fake adapter
+        behaves exactly as it did. Only a request naming a DIFFERENT gateway
+        reaches the composition root, and that import is deliberately inside
+        the method: a service importing `config.di` at module scope would
+        invert the dependency the layering rules exist to keep pointing one way.
+        """
+        if not gateway or gateway == getattr(self._payments, "name", ""):
+            return self._payments
+        from config.di import payment_port
+
+        return payment_port(gateway)
+
+    def _create_order_with_fallback(self, booking: Booking, gateway: str) -> CreatedOrder:
         """The order, with the organizer's Route split — or without it, if
         Razorpay refuses the split. See `ROUTE_TRANSFER_FALLBACK`.
 
@@ -656,9 +707,20 @@ class BookingService:
         split was never the problem, and the warning below has already recorded
         the first refusal for whoever reads the log.
         """
-        transfers = self._build_transfers(booking)
+        port = self._port_for(gateway)
+        # A SPLIT IS ONLY BUILT FOR A PROVIDER THAT HONOURS ONE. Cashfree's
+        # Easy Split is not onboarded, so its adapter would accept `transfers`
+        # and drop them. Building one anyway would be worse than pointless: the
+        # fallback below exists to notice a REFUSED split, and a split that is
+        # accepted and ignored is refused by nobody — the log would stay clean
+        # while the organizer's share was never held.
+        transfers = (
+            self._build_transfers(booking)
+            if getattr(port, "supports_order_time_split", True)
+            else None
+        )
         try:
-            return self._create_order(booking, transfers)
+            return self._create_order(booking, transfers, port)
         except PaymentOrderRejected as rejected:
             if not (transfers and ROUTE_TRANSFER_FALLBACK):
                 raise
@@ -667,19 +729,58 @@ class BookingService:
                 extra={
                     "booking_id": str(booking.id),
                     "event_id": str(booking.event_id),
+                    "gateway": gateway,
                     "reason": rejected.reason,
                 },
             )
-            return self._create_order(booking, None)
+            return self._create_order(booking, None, port)
 
-    def _create_order(self, booking: Booking, transfers: list[OrderTransfer] | None) -> str:
-        return self._payments.create_order(
+    def _create_order(
+        self,
+        booking: Booking,
+        transfers: list[OrderTransfer] | None,
+        port: PaymentPort | None = None,
+    ) -> CreatedOrder:
+        return (port or self._payments).create_order(
             amount_minor=booking.total_amount_minor,
             currency=_CURRENCY,
             receipt=str(booking.id),
-            notes={"booking_id": str(booking.id)},
+            notes=self._order_notes(booking, port or self._payments),
             transfers=transfers,
         )
+
+    @staticmethod
+    def _order_notes(booking: Booking, port: PaymentPort) -> dict:
+        """What travels with the order.
+
+        The booking id always — it is how a human reads a provider dashboard
+        back to a row here. The BUYER only for a provider that requires one:
+        Cashfree refuses an order with no customer phone, Razorpay collects
+        those details inside its own Checkout, and assembling them costs a lazy
+        load of the related user on the platform's hottest write. So the port
+        declares the need (`requires_customer_details`) and this pays for it
+        only where it is real.
+
+        Read defensively when it IS needed: a missing related user must degrade
+        to an order carrying the adapter's placeholder rather than to an
+        exception, which on this path would cancel a live hold over a profile
+        field nobody was asked for.
+        """
+        notes: dict = {"booking_id": str(booking.id)}
+        if not getattr(port, "requires_customer_details", False):
+            return notes
+        user = getattr(booking, "user", None)
+        notes["customer"] = (
+            {"id": str(booking.user_id)}
+            if user is None
+            else {
+                "id": str(booking.user_id),
+                "email": getattr(user, "email", "") or "",
+                "name": getattr(user, "full_name", "") or "",
+                "phone": getattr(user, "phone", "") or "",
+            }
+        )
+        return notes
 
     def _release_unstartable(self, booking_id: uuid.UUID | str, *, reason: str) -> None:
         """Cancel a hold whose payment could not be started.
@@ -743,6 +844,8 @@ class BookingService:
             payment_order_id=booking.payment_order_id,
             amount_minor=booking.total_amount_minor,
             currency=_CURRENCY,
+            gateway=booking.gateway_or_default(),
+            checkout_token=booking.payment_session_id,
         )
 
     # --- CancelBooking -----------------------------------------------------
@@ -851,6 +954,90 @@ class BookingService:
                 self._bookings.save(booking)
 
         return self._ensure_payment_order(booking, release_hold_on_failure=False)
+
+    # --- SetPaymentGateway -------------------------------------------------
+
+    def set_payment_gateway(self, *, booking_id, actor_id, gateway: str) -> Booking:
+        """Move a LIVE hold onto a different payment gateway.
+
+        ── WHY THIS IS AN ENDPOINT AND NOT A FIELD ON CREATE ────────────────
+
+        It is `set_donation`'s twin, for the same reason that one exists. The
+        reservation happens when the review screen OPENS — the countdown has to
+        be counting something — and the payment method is chosen while reading
+        that screen. So the order already exists by the time anybody presses
+        "Cashfree", and an order belongs to exactly one provider.
+
+        `create_booking` does take a `gateway`, and it is the right default for
+        the first order. What it cannot be is the only way to choose one, or
+        the selector in the checkout footer would be decoration: the customer
+        would press Cashfree and be handed a Razorpay order.
+
+        ── AND WHY IT DOES NOT RE-RESERVE ───────────────────────────────────
+
+        The tempting implementation — cancel and re-reserve on the new gateway
+        — would put a live hold through a release/reserve cycle over a decision
+        with nothing to do with stock. The tier could be gone by the time the
+        second reserve ran, so CHOOSING A PAYMENT METHOD COULD COST SOMEBODY
+        THEIR SEATS. Exactly the harm `set_donation` was written to avoid.
+
+        Only the gateway columns move, under the booking row lock. The
+        abandoned order is never handed to a browser again and expires at the
+        provider on its own; nothing was charged against it, because an order
+        is an intent to collect and not a collection.
+
+        ── FAILURE KEEPS THE HOLD ───────────────────────────────────────────
+
+        `release_hold_on_failure=False`, like every other re-issue path: the
+        customer is reading a screen about this hold, and cancelling it because
+        a provider blipped while they switched payment method would be the
+        harm this method exists to prevent, arrived at from the other side.
+        The booking is left with its new gateway and an empty order id, and the
+        next call — the same press again — fills it in.
+        """
+        from config.di import enabled_payment_gateways
+
+        offered, _default = enabled_payment_gateways()
+        wanted = str(gateway or "").strip().lower()
+        if wanted not in offered:
+            # Named rather than silently coerced to the default. Unlike
+            # `create_booking` — where a stale value must never refuse a sale —
+            # this is a deliberate press on a control the client just rendered,
+            # so disagreeing about what is on offer is a real bug worth
+            # surfacing rather than papering over.
+            raise InvalidBookingItemsError(f"Unknown payment gateway: {gateway!r}")
+
+        with UnitOfWork():
+            booking = self._bookings.lock_for_update(booking_id)
+            if booking is None:
+                raise BookingNotFoundError(str(booking_id))
+            if str(booking.user_id) != str(actor_id):
+                raise NotBookingOwnerError()
+            if booking.status != BookingStatus.RESERVED:
+                raise BookingNotModifiableError(booking.status)
+            # ── COMPARED AGAINST `gateway_or_default()`, NOT THE RAW COLUMN ──
+            #
+            # A booking created before this column existed has it BLANK while
+            # holding a perfectly real order on `PAYMENTS_BACKEND`. Testing the
+            # raw column would read blank as falsy, skip the reset, and leave
+            # that booking claiming the new gateway while still carrying the
+            # old provider's order id — so Pay would open one provider's SDK
+            # against another's order, which is refused only after the customer
+            # has committed. The window is small (a hold live across a deploy)
+            # and the failure is on the money path, which is the combination
+            # worth spending three lines on.
+            #
+            # An UNCHANGED gateway falls through to the order check below rather
+            # than returning early — which makes pressing the already-selected
+            # option the REPAIR for a hold whose order call failed, exactly as
+            # `set_donation` does for an unchanged amount.
+            if booking.payment_order_id and booking.gateway_or_default() != wanted:
+                booking.payment_order_id = ""
+                booking.payment_session_id = ""
+            booking.payment_gateway = wanted
+            self._bookings.save(booking)
+
+        return self._ensure_payment_order(booking, release_hold_on_failure=False, gateway=wanted)
 
     # --- SetCoupon ---------------------------------------------------------
 

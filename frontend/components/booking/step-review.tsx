@@ -21,6 +21,7 @@ import { attemptFor, bumpAttempt } from '@/lib/booking/attempt';
 import { answersFor, clearAnswers } from '@/lib/booking/answers';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { rememberProvider } from '@/lib/booking/payment-provider';
+import { rememberCashfreeMode } from '@/lib/booking/cashfree';
 import { rememberKeyId } from '@/lib/booking/razorpay';
 import {
   DONATION_MAX_MINOR,
@@ -103,6 +104,7 @@ export function ReviewStep() {
     setBooking,
     setPaymentKeyId,
     setPaymentProvider,
+    setAvailableProviders,
   } = useBooking();
   const { status, user } = useAuth();
   const router = useRouter();
@@ -326,6 +328,17 @@ export function ReviewStep() {
         const provider = (result.payment as { provider?: string }).provider ?? '';
         setPaymentProvider(provider);
         rememberProvider(provider);
+        // What the selector may draw. From the server, never inferred from
+        // which NEXT_PUBLIC_ key happens to be set — that inference is the
+        // original "live Pay button over a fake order" bug with a second way
+        // to reach it.
+        setAvailableProviders(
+          (result.payment as { available_providers?: string[] }).available_providers ?? [],
+        );
+        // Which Cashfree API minted the session. Kept for the session for the
+        // same reason the Razorpay key is: a reload here would otherwise leave
+        // the page holding a session it cannot say which API to open against.
+        rememberCashfreeMode((result.payment as { environment?: string }).environment ?? '');
         // Put the booking id in the URL. Context alone would lose it on a
         // refresh — the one place someone is most likely to reload, and the one
         // place losing it means reserving a second time.
@@ -394,6 +407,7 @@ export function ReviewStep() {
     setBooking,
     setPaymentKeyId,
     setPaymentProvider,
+    setAvailableProviders,
     toast,
   ]);
 

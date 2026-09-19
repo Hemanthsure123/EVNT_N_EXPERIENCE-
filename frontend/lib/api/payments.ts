@@ -33,9 +33,33 @@ export type VerifyPaymentOutcome =
   | 'hold_expired_refunding'
   | 'ignored';
 
-export function verifyPayment(razorpayPaymentId: string): Promise<{ status: VerifyPaymentOutcome }> {
+/**
+ * `orderId` joined the payload when the second gateway did, and it is still
+ * not a claim.
+ *
+ * Cashfree addresses a payment only WITHIN its order and its modal does not
+ * reliably hand the browser a payment id at all — so for that gateway the
+ * order is the only handle there is, and without it the browser-side
+ * confirmation would be impossible and fulfilment would rest entirely on the
+ * webhook. That is fine with a public HTTPS endpoint and is exactly the
+ * "paid, nothing delivered" hole on a deployment without one.
+ *
+ * It also selects WHICH provider the server asks, because the booking behind
+ * the order names the gateway that took the money. Neither use is trust: both
+ * ids are lookup keys, and every figure still comes back from the provider.
+ * Somebody who posts another customer's order gets a booking that is already
+ * paid, which dedupes to nothing.
+ *
+ * Either id alone is accepted; an empty body is refused as the client bug it
+ * would be.
+ */
+export function verifyPayment(
+  razorpayPaymentId: string,
+  orderId?: string,
+): Promise<{ status: VerifyPaymentOutcome }> {
   return api.post<{ status: VerifyPaymentOutcome }>('/payments/verify', {
     razorpay_payment_id: razorpayPaymentId,
+    ...(orderId ? { order_id: orderId } : {}),
   });
 }
 

@@ -17,6 +17,11 @@ urlpatterns = [
         name="booking-donation",
     ),
     path(
+        "bookings/<uuid:booking_id>/payment-gateway",
+        api.BookingPaymentGatewayView.as_view(),
+        name="booking-payment-gateway",
+    ),
+    path(
         "bookings/<uuid:booking_id>/coupon",
         api.BookingCouponView.as_view(),
         name="booking-coupon",

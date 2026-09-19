@@ -1200,6 +1200,30 @@ const etagFor = (body) => `"${createHash('md5').update(JSON.stringify(body)).dig
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Which gateways this fixture says the deployment offers.
+ *
+ * ── A FIXTURE MUST BE EXACTLY AS GENEROUS AS THE CONTRACT AND NO MORE ─────
+ *
+ * The cancel endpoint was MISSING here for a long time, and because every
+ * `cancelBooking` call site swallows its error (a 409 legitimately means the
+ * sweeper won), all four paths 404'd silently and no cancel had ever worked in
+ * local dev. That is the bug this comment exists to prevent repeating: an
+ * absent endpoint the client already forgives is invisible.
+ *
+ * So `POST /bookings/{id}/payment-gateway` is implemented below rather than
+ * left to 404 — its failure is swallowed too, and without it the selector would
+ * appear to do nothing while quietly reverting.
+ *
+ * ONE gateway by default, because that is what a deployment with an unset
+ * `PAYMENTS_ENABLED_GATEWAYS` reports, and the fixture should show the ordinary
+ * case. `MOCK_PAYMENT_GATEWAYS=cashfree,razorpay` turns the picker on.
+ */
+const MOCK_GATEWAYS = (process.env.MOCK_PAYMENT_GATEWAYS ?? 'razorpay')
+  .split(',')
+  .map((name) => name.trim().toLowerCase())
+  .filter(Boolean);
+
+/**
  * The create-booking response, matching apps/booking/api.py: the booking plus a
  * payment block carrying the order id and the PUBLIC Razorpay key.
  *
@@ -1229,6 +1253,26 @@ function bookingResponse(booking) {
       amount_minor: booking.total_amount,
       currency: 'INR',
       key_id: process.env.MOCK_RAZORPAY_KEY_ID ?? '',
+      // ── THE GATEWAY BLOCK, AS GENEROUS AS THE CONTRACT AND NO MORE ────
+      //
+      // `provider` comes off the BOOKING, never a constant, because that is
+      // what the real endpoint does — it reads `result.gateway` from the row
+      // so the response can never name a gateway other than the one that
+      // created the order.
+      //
+      // `available_providers` is driven by MOCK_PAYMENT_GATEWAYS, and the
+      // default is a SINGLE entry on purpose: the selector renders as plain
+      // text for one option, which is the behaviour a single-gateway
+      // deployment gets and therefore the one the fixture should show by
+      // default. Set `MOCK_PAYMENT_GATEWAYS=cashfree,razorpay` to exercise
+      // the picker locally.
+      provider: booking.payment_gateway ?? MOCK_GATEWAYS[0],
+      session_id: booking.payment_session_id ?? '',
+      environment:
+        (booking.payment_gateway ?? MOCK_GATEWAYS[0]) === 'cashfree'
+          ? (process.env.MOCK_CASHFREE_ENVIRONMENT ?? 'sandbox')
+          : '',
+      available_providers: MOCK_GATEWAYS,
     },
   };
 }
@@ -1645,9 +1689,22 @@ const server = createServer((req, res) => {
         coupon_code: null,
         hold_expires_at: new Date(Date.now() + HOLD_MS).toISOString(),
         payment_order_id: `order_fixture_${bookings.size + 1}`,
+        // The gateway the order was created on. A REQUEST from the client that
+        // falls back to the default when it is not on offer — never a 400, so
+        // a stale value in a cached tab cannot refuse a sale, exactly as
+        // `config.di.resolve_payment_gateway` behaves.
+        payment_gateway: MOCK_GATEWAYS.includes(String(body.payment_gateway ?? '').toLowerCase())
+          ? String(body.payment_gateway).toLowerCase()
+          : MOCK_GATEWAYS[0],
+        payment_session_id: '',
         items,
         created_at: new Date().toISOString(),
       };
+      // Only a session-based gateway carries a browser handle — empty for
+      // Razorpay, whose Checkout opens on the order id alone.
+      if (booking.payment_gateway === 'cashfree') {
+        booking.payment_session_id = `session_fixture_${booking.payment_order_id}`;
+      }
       bookings.set(booking.id, booking);
       // Hold the stock, so the next read of this event's tiers reflects it.
       for (const item of items) {
@@ -2098,6 +2155,63 @@ const server = createServer((req, res) => {
         // webhook's amount check.
         booking.payment_order_id = `order_fixture_${booking.id}_${next}`;
       }
+      const { user_email: _ignored, ...payload } = booking;
+      sendJson(req, res, 200, payload, 'private, no-store');
+    });
+    return;
+  }
+
+  // ── Move a live hold onto a different payment gateway ───────────────
+  //
+  // Mirrors `apps/booking.set_payment_gateway`. Beside the donation endpoint
+  // because it is the same shape: it moves ONLY the gateway and the order, and
+  // never touches `reservedByTier` — a payment method is not inventory, and
+  // re-reserving to change it could cost somebody their seats.
+  //
+  // It exists here at all because `PayUsing` swallows this call's failure (a
+  // refusal legitimately means the hold moved on), so a missing endpoint would
+  // look exactly like a selector that quietly reverts — the same invisible
+  // failure the absent cancel endpoint caused.
+  const gatewayMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/payment-gateway\/?$/);
+  if (gatewayMatch && req.method === 'POST') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(gatewayMatch[1]);
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    void readBody(req).then((body) => {
+      if (booking.status !== 'reserved') {
+        return authError(
+          res,
+          req,
+          409,
+          'booking_not_modifiable',
+          booking.status === 'paid'
+            ? 'This booking is already paid, so its payment method can no longer change.'
+            : 'Your hold has expired and these tickets were released.',
+        );
+      }
+      const next = String(body.payment_gateway ?? '')
+        .trim()
+        .toLowerCase();
+      // The real service NAMES an unoffered gateway rather than coercing it:
+      // unlike create, this is a deliberate press on a control the client just
+      // rendered, so a disagreement about what is on offer is a real bug.
+      if (!MOCK_GATEWAYS.includes(next)) {
+        return authError(res, req, 400, 'invalid_input', `Unknown payment gateway: '${next}'`);
+      }
+      if (booking.payment_gateway !== next) {
+        booking.payment_gateway = next;
+        // A NEW order for the new gateway — an order belongs to exactly one
+        // provider, and the old one is abandoned rather than reused.
+        booking.payment_order_id = `order_fixture_${next}_${booking.id}_${Date.now()}`;
+      }
+      // Only a session-based gateway carries a browser handle; Razorpay's
+      // Checkout opens on the order id, so this stays empty for it, exactly as
+      // `CreatedOrder.checkout_token` does.
+      booking.payment_session_id =
+        next === 'cashfree' ? `session_fixture_${booking.payment_order_id}` : '';
       const { user_email: _ignored, ...payload } = booking;
       sendJson(req, res, 200, payload, 'private, no-store');
     });
