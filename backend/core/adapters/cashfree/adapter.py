@@ -285,8 +285,38 @@ class CashfreePaymentAdapter(PaymentPort):
                     "status_code": status_code,
                     "reason": reason,
                     "had_transfers": bool(transfers),
+                    "environment": self._environment,
                 },
             )
+            # ── 401/403 IS THE KEY/ENVIRONMENT MISMATCH, SAID AT THE ONE
+            #    MOMENT THERE IS EVIDENCE FOR IT ────────────────────────────
+            #
+            # Preflight used to GUESS at this from whether the App ID started
+            # with `TEST`, refuse to boot on the guess, and take a production
+            # deploy down over a configuration that was fine. The prefix is a
+            # convention, not a guarantee.
+            #
+            # Here there is no guessing: the provider itself has rejected the
+            # credential. Logged as its own line, naming the configured
+            # environment and the host it was sent to, because the customer-
+            # facing symptom ("We could not hold your tickets") names no
+            # provider at all and this is the only place the real cause is
+            # written down.
+            if status_code in (401, 403):
+                logger.error(
+                    "cashfree.credentials_rejected",
+                    extra={
+                        "environment": self._environment,
+                        "base_url": self._base_url,
+                        "reason": reason,
+                        "hint": (
+                            "Cashfree rejected the App ID/secret for this host. "
+                            "The usual cause is a key issued for the OTHER "
+                            "environment — check CASHFREE_ENVIRONMENT against "
+                            "which Cashfree dashboard tab issued the key."
+                        ),
+                    },
+                )
             # Split exactly where `RazorpayPaymentAdapter` splits, on the one
             # distinction a caller can act on: a 4xx is a definite refusal of
             # THIS request, anything else is an outcome nobody knows.
