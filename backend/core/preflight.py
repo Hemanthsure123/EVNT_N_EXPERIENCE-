@@ -584,46 +584,89 @@ def check_production_settings(
                         "time, long after the event."
                     )
 
-    # ── A TEST KEY POINTED AT THE LIVE API 401s ON EVERY CHECKOUT ─────────
+    # ── WEB PUSH TURNED ON HALFWAY ────────────────────────────────────────
     #
-    # Cashfree issues its sandbox App ID with a `TEST` prefix and keys the two
-    # environments to DIFFERENT hosts. Send a sandbox credential to
-    # api.cashfree.com and every order creation is refused — which
-    # `_ensure_payment_order` correctly reads as a provider rejection, so it
-    # cancels the hold and the customer is told "We could not hold your
-    # tickets". Nothing names a payment provider anywhere on that screen, and
-    # the deploy that caused it is green.
+    # The VAPID KEYS are what enable push, and `WebPushAdapter` ALSO requires a
+    # contact — the VAPID `sub` claim, which push services reject a token
+    # without. Keys with no contact is therefore not "push with a gap", it is
+    # push that cannot be constructed.
     #
-    # It is a PROBLEM and not a warning because the two values cannot work
-    # together at all: it is not a degraded mode, it is a checkout that refuses
-    # every sale. The reverse pairing — a live key against the sandbox host —
-    # fails just as totally, so both directions are caught.
+    # It used to raise out of `push_port()`, and the blast radius was nothing
+    # like "push is broken": `build_notification_service` holds every channel
+    # and sits on the path of email verification, which sits on the path of
+    # Google sign-in — so the visible symptom was a 500 from
+    # `/auth/oauth/google/signin/config` and a sign-in panel apologising for a
+    # service it could not reach, caused by a push setting nobody would connect
+    # to authentication.
+    #
+    # `push_port()` degrades to the disabled adapter now, so runtime is safe.
+    # This is the half that stops the degradation being permanent and silent:
+    # somebody set those keys because they wanted push, and a deployment that
+    # quietly never delivers one is the failure this module exists to prevent.
+    if getattr(settings, "VAPID_PUBLIC_KEY", "") or getattr(settings, "VAPID_PRIVATE_KEY", ""):
+        for key in ("VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_CONTACT"):
+            if not str(getattr(settings, key, "") or ""):
+                problems.append(
+                    f"Web Push is half-configured: {key} is unset while the "
+                    "other VAPID settings are present. Push will be DISABLED "
+                    "and no reminder can be delivered. Set it (VAPID_CONTACT "
+                    "is a mailto: or https URL a push service can reach you "
+                    "at), or clear the VAPID keys to turn push off cleanly."
+                )
+
+    # ── A SUSPECTED KEY/HOST MISMATCH IS A WARNING, NEVER A REFUSAL ───────
+    #
+    # Cashfree serves sandbox and live from DIFFERENT hosts, so a credential
+    # sent to the wrong one is refused on every order — and a refused order
+    # cancels the hold, which reaches the customer as "We could not hold your
+    # tickets" with nothing naming a payment provider. Worth flagging.
+    #
+    # ── WHY THIS IS NO LONGER A PROBLEM, HAVING BEEN ONE ─────────────────
+    #
+    # It refused to boot when the App ID did not start with `TEST` while
+    # `CASHFREE_ENVIRONMENT=sandbox`, on the reasoning that Cashfree prefixes
+    # its sandbox keys that way. That prefix is a CONVENTION, not a guarantee —
+    # newer accounts issue sandbox App IDs with no prefix at all — so the check
+    # refused a configuration that was perfectly correct and failed a
+    # production deploy at the migrate step.
+    #
+    # Everything else this module refuses is DEFINITE: a fake adapter really is
+    # fake, a missing credential really is missing, an adapter that raises
+    # `NotImplementedError` really cannot pay anybody. A guess about a vendor's
+    # naming convention is not in that class, and a boot gate is the worst
+    # place to put an inference — the cost of being wrong is the whole site,
+    # while the thing it guards against is loud, immediate and recoverable.
+    #
+    # So it warns, every boot, and the adapter reports the real answer at the
+    # point where there IS evidence: `cashfree.order_create_failed` names a 401
+    # explicitly as a probable key/environment mismatch (see the adapter).
     cashfree_app_id = str(getattr(settings, "CASHFREE_APP_ID", "") or "")
     cashfree_env = str(getattr(settings, "CASHFREE_ENVIRONMENT", "") or "sandbox")
     if cashfree_app_id:
         looks_like_test = cashfree_app_id.upper().startswith("TEST")
         if looks_like_test and cashfree_env == "production":
-            problems.append(
-                "CASHFREE_APP_ID looks like a SANDBOX key (TEST prefix) but "
-                "CASHFREE_ENVIRONMENT=production. Cashfree serves the two from "
-                "different hosts, so every order creation would be refused and "
-                "every checkout would fail to hold tickets. Set "
-                "CASHFREE_ENVIRONMENT=sandbox, or supply the live credentials."
+            warnings.append(
+                "CASHFREE_APP_ID starts with TEST, which is usually a SANDBOX "
+                "key, but CASHFREE_ENVIRONMENT=production. If they really do "
+                "disagree, every Cashfree order will be refused and no checkout "
+                "will hold tickets. Verify in the Cashfree dashboard which "
+                "environment issued this key."
             )
         elif not looks_like_test and cashfree_env != "production":
-            problems.append(
-                "CASHFREE_APP_ID does not look like a sandbox key but "
-                "CASHFREE_ENVIRONMENT=sandbox, so live credentials would be "
-                "sent to the sandbox host and every order would be refused. "
-                "Set CASHFREE_ENVIRONMENT=production, or use the TEST keys."
+            warnings.append(
+                f"CASHFREE_ENVIRONMENT={cashfree_env} with an App ID that has no "
+                "TEST prefix. That prefix is only a convention and newer sandbox "
+                "keys do not carry it, so this is probably fine — but if the key "
+                "is in fact a LIVE one, every Cashfree order will be refused. "
+                "Verify which environment issued it."
             )
-        elif looks_like_test:
+        if cashfree_env != "production":
             # Legitimate — a soft launch takes no real money on purpose — but
             # never silent, for the same reason `SMS_PROVIDER=disabled` warns.
             warnings.append(
-                "CASHFREE_ENVIRONMENT=sandbox with a TEST key: Cashfree "
-                "checkouts complete against the sandbox and NO REAL MONEY "
-                "moves. Deliberate for a soft launch; switch both together."
+                f"CASHFREE_ENVIRONMENT={cashfree_env}: Cashfree checkouts "
+                "complete against the sandbox and NO REAL MONEY moves. "
+                "Deliberate for a soft launch; switch the key and this together."
             )
 
     default_gateway = str(getattr(settings, "PAYMENTS_DEFAULT_GATEWAY", "") or "")

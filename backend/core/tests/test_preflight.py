@@ -61,7 +61,11 @@ class _Settings:
             "SMS_DLT_ENTITY_ID": "1234567890",
             "PUBSUB_TOPIC_EVENTS": "platform-events",
             "SENTRY_DSN": "https://x@sentry.io/1",
+            # All THREE, because `WebPushAdapter` requires a contact and a
+            # fixture that calls itself fully-real must be constructible.
+            "VAPID_PUBLIC_KEY": "BPublicKey",
             "VAPID_PRIVATE_KEY": "key",
+            "VAPID_CONTACT": "mailto:ops@example.com",
             "PUBLIC_SITE_URL": "https://curatix.example",
             "GOOGLE_OAUTH_REDIRECT_URI": "https://api.curatix.example/api/v1/calendar/callback",
             "REST_FRAMEWORK": {"NUM_PROXIES": 1},
@@ -269,7 +273,13 @@ class TestOptionalIntegrations:
         assert any("SENTRY_DSN" in warning for warning in warnings)
 
     def test_missing_vapid_warns_but_starts(self):
-        warnings = check_production_settings(_Settings(VAPID_PRIVATE_KEY=""), strict=True)
+        # ALL THREE cleared: push switched off entirely is a legitimate
+        # deployment and warns. Clearing only one would be the HALF-configured
+        # state, which is refused — see TestWebPushTurnedOnHalfway.
+        warnings = check_production_settings(
+            _Settings(VAPID_PRIVATE_KEY="", VAPID_PUBLIC_KEY="", VAPID_CONTACT=""),
+            strict=True,
+        )
         assert any("VAPID" in warning for warning in warnings)
 
 
@@ -645,50 +655,60 @@ class TestDevelopmentInfrastructureInProduction:
 
 
 class TestCashfreeEnvironmentMatchesItsKeys:
-    """The configuration that took the checkout down.
+    """A SUSPECTED key/host mismatch warns. It must never refuse.
 
-    Cashfree serves sandbox and live from DIFFERENT hosts and prefixes its
-    sandbox App ID with `TEST`. Cross the two and every order creation is
-    refused — which `_ensure_payment_order` correctly reads as a provider
-    rejection, so it CANCELS THE HOLD. The customer is told "We could not hold
-    your tickets", nothing on that screen names a payment provider, and the
-    deploy that caused it is green.
+    ── THIS CLASS RECORDS A MISTAKE, SO IT IS NOT REPEATED ──────────────
 
-    Both directions are refused, because both fail totally rather than partly.
+    It first asserted a REFUSAL: App ID without a `TEST` prefix while
+    `CASHFREE_ENVIRONMENT=sandbox` was treated as a definite misconfiguration,
+    on the reasoning that Cashfree prefixes sandbox keys that way. That prefix
+    is a CONVENTION and newer accounts do not use it — so the gate refused a
+    correct configuration and failed a production deploy at the migrate step.
+
+    Everything else this module refuses is DEFINITE: a fake adapter really is
+    fake, a missing credential really is missing. An inference about a vendor's
+    naming is not, and a boot gate is the worst place to put one — being wrong
+    costs the whole site, while the thing it guards against is loud, immediate
+    and recoverable. The real answer is reported by the ADAPTER on a 401, where
+    the provider itself has supplied the evidence.
     """
 
-    def test_a_test_key_against_the_live_host_is_refused(self):
-        message = _refuses(
-            _Settings(
-                CASHFREE_APP_ID="TEST430329ae80e0f32e41a393d78b923034",
-                CASHFREE_SECRET_KEY="cfsk_ma_test_x",
-                CASHFREE_ENVIRONMENT="production",
-            )
-        )
-        assert "CASHFREE_ENVIRONMENT=sandbox" in message
-
-    def test_a_live_key_against_the_sandbox_host_is_refused(self):
-        message = _refuses(
-            _Settings(
-                CASHFREE_APP_ID="1043289abc2e1f0e9a4b8c7d6e5f4a21",
-                CASHFREE_SECRET_KEY="cfsk_ma_prod_x",
-                CASHFREE_ENVIRONMENT="sandbox",
-            )
-        )
-        assert "CASHFREE_ENVIRONMENT=production" in message
-
-    def test_a_matched_sandbox_pair_boots_but_says_no_money_moves(self):
-        """A soft launch in Test Mode is legitimate — and never silent, for the
-        same reason `SMS_PROVIDER=disabled` warns rather than passing."""
+    def test_a_suspected_mismatch_warns_and_still_boots(self):
+        """The exact configuration that failed the deploy."""
         warnings = check_production_settings(
             _Settings(
-                CASHFREE_APP_ID="TEST430329ae80e0f32e41a393d78b923034",
-                CASHFREE_SECRET_KEY="cfsk_ma_test_x",
+                CASHFREE_APP_ID="1043289abc2e1f0e9a4b8c7d6e5f4a21",
+                CASHFREE_SECRET_KEY="cfsk_ma_x",
                 CASHFREE_ENVIRONMENT="sandbox",
             ),
             strict=True,
         )
-        assert any("NO REAL MONEY" in w for w in warnings)
+        assert any("no TEST prefix" in w for w in warnings)
+
+    def test_a_test_key_against_the_live_host_warns_and_still_boots(self):
+        warnings = check_production_settings(
+            _Settings(
+                CASHFREE_APP_ID="TEST430329ae80e0f32e41a393d78b923034",
+                CASHFREE_SECRET_KEY="cfsk_ma_test_x",
+                CASHFREE_ENVIRONMENT="production",
+            ),
+            strict=True,
+        )
+        assert any("usually a SANDBOX key" in w for w in warnings)
+
+    def test_sandbox_always_says_no_real_money_moves(self):
+        """Regardless of what the key looks like. A soft launch is legitimate
+        and never silent — the same rule `SMS_PROVIDER=disabled` follows."""
+        for app_id in ("TEST430329ae80e0f32e41a393d78b923034", "1043289abc2e1f"):
+            warnings = check_production_settings(
+                _Settings(
+                    CASHFREE_APP_ID=app_id,
+                    CASHFREE_SECRET_KEY="cfsk_ma_x",
+                    CASHFREE_ENVIRONMENT="sandbox",
+                ),
+                strict=True,
+            )
+            assert any("NO REAL MONEY" in w for w in warnings)
 
     def test_a_matched_live_pair_is_clean(self):
         assert (
@@ -707,3 +727,84 @@ class TestCashfreeEnvironmentMatchesItsKeys:
         """The overwhelming majority of deployments have one gateway. Saying
         anything at all about Cashfree there would be noise on every boot."""
         assert check_production_settings(_Settings(), strict=True) == []
+
+    def test_no_cashfree_configuration_can_refuse_a_boot(self):
+        """The property that matters, stated directly: this module may WARN
+        about Cashfree and must never REFUSE over it. A payment gateway that
+        might be misconfigured is not a reason to take the site down."""
+        for app_id in ("TEST_abc", "1043289abc"):
+            for env in ("sandbox", "production", "", "staging"):
+                check_production_settings(
+                    _Settings(
+                        CASHFREE_APP_ID=app_id,
+                        CASHFREE_SECRET_KEY="cfsk_ma_x",
+                        CASHFREE_ENVIRONMENT=env,
+                    ),
+                    strict=True,
+                )
+
+
+class TestWebPushTurnedOnHalfway:
+    """The configuration that 500'd Google sign-in in production.
+
+    VAPID keys were added without `VAPID_CONTACT`. `WebPushAdapter` requires
+    the contact and raised, and because `build_notification_service` holds
+    every channel and sits on the path of email verification — which sits on
+    the path of Google sign-in — the visible symptom was a 500 from
+    `/auth/oauth/google/signin/config` and a sign-in panel apologising for a
+    service it could not reach. Nothing pointed at push.
+
+    `push_port()` degrades now so runtime survives; this refuses the
+    configuration at boot so the degradation cannot be permanent and silent.
+    """
+
+    def test_keys_without_a_contact_are_refused(self):
+        """Exactly the production configuration: the two keys were added and
+        the contact was not."""
+        message = _refuses(
+            _Settings(VAPID_PUBLIC_KEY="BPublic", VAPID_PRIVATE_KEY="private", VAPID_CONTACT="")
+        )
+        assert "VAPID_CONTACT" in message
+
+    def test_a_leftover_contact_with_no_keys_is_not_refused(self):
+        """The other direction is NOT symmetrical, and saying so matters.
+
+        A contact with no keys is push switched OFF with a harmless string left
+        behind — `push_port()` returns the disabled adapter and nothing can
+        break. Refusing it would be exactly the over-strictness that failed a
+        production deploy over a Cashfree naming convention: this module may
+        refuse what is DEFINITELY broken, and a stray contact is not.
+
+        Push being off is still reported, by the warning in
+        TestOptionalFeatures.
+        """
+        problems = check_production_settings(
+            _Settings(
+                VAPID_CONTACT="mailto:ops@example.com",
+                VAPID_PUBLIC_KEY="",
+                VAPID_PRIVATE_KEY="",
+            ),
+            strict=True,
+        )
+        assert not any("half-configured" in w for w in problems)
+
+    def test_a_complete_push_configuration_is_clean(self):
+        assert (
+            check_production_settings(
+                _Settings(
+                    VAPID_PUBLIC_KEY="BPublic",
+                    VAPID_PRIVATE_KEY="private",
+                    VAPID_CONTACT="mailto:ops@example.com",
+                ),
+                strict=True,
+            )
+            == []
+        )
+
+    def test_push_left_entirely_off_is_not_refused(self):
+        """Most deployments do not use push. Off is a legitimate state — it
+        warns (see TestOptionalFeatures) and must never refuse a boot."""
+        check_production_settings(
+            _Settings(VAPID_PUBLIC_KEY="", VAPID_PRIVATE_KEY="", VAPID_CONTACT=""),
+            strict=True,
+        )

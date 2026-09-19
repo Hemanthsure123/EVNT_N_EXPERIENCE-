@@ -359,6 +359,48 @@ def push_port() -> PushPort:
         raise ValueError(f"Unknown PUSH_BACKEND: {settings.PUSH_BACKEND!r}")
     if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY):
         return DisabledPushAdapter()
+
+    # ── A HALF-CONFIGURED OPTIONAL CHANNEL MUST NOT TAKE DOWN SIGN-IN ────
+    #
+    # `WebPushAdapter` REQUIRES a contact (the VAPID `sub` claim; push services
+    # reject a token without one) and raises when it is missing. This factory
+    # used to let that raise escape, and the blast radius was nothing like
+    # "push is broken":
+    #
+    #   /auth/oauth/google/signin/config
+    #     -> build_google_sign_in_service -> build_auth_service
+    #     -> build_email_verification_service -> build_notification_service
+    #     -> push_port() -> ValueError -> 500
+    #
+    # `build_notification_service` holds every channel, and it sits on the path
+    # of email verification, which sits on the path of Google sign-in. So VAPID
+    # keys added without `VAPID_CONTACT` returned 500 from the sign-in config
+    # endpoint, the panel showed "we can't reach the sign-in service", and the
+    # cause was a push setting nobody had connected to authentication.
+    #
+    # Push is OPTIONAL and sign-in is not. So an incomplete configuration
+    # degrades to the disabled adapter — the same state the deployment was in
+    # before the keys were added, which is known-good — and is logged at ERROR
+    # so it is never silent. This is the rule `RedisCacheAdapter` already
+    # follows and the one `/health/` learned: a non-essential dependency may
+    # make the product smaller, never make it refuse.
+    #
+    # `core/preflight.py` REFUSES this configuration at boot, so on a
+    # production deploy it is caught before serving rather than degraded
+    # forever. The two together are the SMS_PROVIDER=disabled shape: loud at
+    # boot, safe at runtime.
+    if not settings.VAPID_CONTACT:
+        logger.error(
+            "push.disabled_incomplete_config",
+            extra={
+                "reason": "VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY are set but "
+                "VAPID_CONTACT is empty. Web Push is DISABLED. Set "
+                "VAPID_CONTACT to a mailto: or https URL a push service can "
+                "reach you at."
+            },
+        )
+        return DisabledPushAdapter()
+
     return WebPushAdapter(
         public_key=settings.VAPID_PUBLIC_KEY,
         private_key=settings.VAPID_PRIVATE_KEY,
