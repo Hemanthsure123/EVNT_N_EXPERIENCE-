@@ -92,6 +92,26 @@ export const setBookingGateway = (bookingId: string, gateway: string) =>
     payment_gateway: gateway,
   });
 
+/**
+ * Is this checkout still live?
+ *
+ * ── THE ONE QUESTION THE BROWSER CANNOT ANSWER ITSELF ────────────────────
+ *
+ * A `?booking=` id survives in history, in a restored tab and in a pasted
+ * link. `release_expired` runs on a SCHEDULE, and the back arrow's cancel is a
+ * request that may or may not have landed. So a checkout that remounts holding
+ * an id knows nothing about whether the hold behind it still exists — and it
+ * used to respond by reserving again, taking inventory back off sale for
+ * somebody who had just deliberately given it up.
+ *
+ * Resolves the booking while the hold is genuinely payable, and rejects with
+ * `ApiError` `hold_not_live` (409) otherwise. `error.details.status` says which
+ * dead state it is, because a PAID booking belongs on the confirmation screen
+ * and everything else belongs back at the event.
+ */
+export const fetchBookingHold = (bookingId: string) =>
+  api.get<Booking>(`/bookings/${encodeURIComponent(bookingId)}/hold`);
+
 export const fetchBooking = (bookingId: string) =>
   api.get<Booking>(`/bookings/${encodeURIComponent(bookingId)}`);
 

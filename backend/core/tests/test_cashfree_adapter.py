@@ -20,7 +20,7 @@ import hmac
 
 import pytest
 
-from core.adapters.cashfree.adapter import CashfreePaymentAdapter
+from core.adapters.cashfree.adapter import _PLACEHOLDER_PHONE, CashfreePaymentAdapter
 from core.ports.payment_port import PaymentProviderUnavailable
 
 SECRET = "test_cashfree_secret_key"
@@ -213,6 +213,93 @@ def test_it_declares_that_it_cannot_do_an_order_time_split():
 
 def test_it_declares_that_it_needs_customer_details():
     assert _adapter().requires_customer_details is True
+
+
+# --- the order payload: omit what you do not have -------------------------
+#
+# This is the shipped bug. `customer_email` went out as `""` for a user with no
+# stored address; Cashfree VALIDATES that field as an email, so empty-and-present
+# is invalid rather than absent. The order was refused with a 4xx, which
+# `_ensure_payment_order` reads as `PaymentOrderRejected` and answers by
+# CANCELLING THE HOLD — so the customer saw "We could not hold your tickets",
+# with nothing on screen naming a payment provider, because of a profile field
+# nobody had asked them for.
+
+
+class _CapturedRequest(CashfreePaymentAdapter):
+    """Captures the outgoing payload instead of making a request."""
+
+    def __init__(self, **kwargs):
+        super().__init__(app_id="TEST_APP", secret_key=SECRET, **kwargs)
+        self.sent: dict = {}
+
+    def _request(self, method, path, *, json=None):
+        self.sent = {"method": method, "path": path, "json": json}
+        return 200, {"order_id": "ord_1", "payment_session_id": "sess_1"}
+
+
+def _order_with_customer(customer: dict) -> dict:
+    adapter = _CapturedRequest()
+    adapter.create_order(
+        amount_minor=79800,
+        currency="INR",
+        receipt="11111111-2222-3333-4444-555555555555",
+        notes={"booking_id": "11111111-2222-3333-4444-555555555555", "customer": customer},
+    )
+    return adapter.sent["json"]
+
+
+def test_an_absent_email_is_omitted_rather_than_sent_empty():
+    payload = _order_with_customer({"id": "u-1", "phone": "9876543210"})
+    details = payload["customer_details"]
+
+    assert "customer_email" not in details
+    assert "customer_name" not in details
+    # The two Cashfree REQUIRES are always there.
+    assert details["customer_id"] == "u-1"
+    assert details["customer_phone"] == "9876543210"
+
+
+def test_a_blank_email_counts_as_absent():
+    payload = _order_with_customer({"id": "u-1", "email": "   ", "name": ""})
+    assert "customer_email" not in payload["customer_details"]
+    assert "customer_name" not in payload["customer_details"]
+
+
+def test_a_real_email_and_name_are_sent():
+    payload = _order_with_customer({"id": "u-1", "email": "a@example.com", "name": "Asha"})
+    details = payload["customer_details"]
+
+    assert details["customer_email"] == "a@example.com"
+    assert details["customer_name"] == "Asha"
+
+
+def test_a_user_with_no_phone_still_gets_a_usable_order():
+    """Cashfree REQUIRES a phone and `User.phone` is nullable here, so the
+    placeholder stands in. The customer enters their real details inside
+    Cashfree's own checkout; refusing the sale over a field we never asked for
+    would be the worse outcome."""
+    details = _order_with_customer({"id": "u-1"})["customer_details"]
+    assert details["customer_phone"] == _PLACEHOLDER_PHONE
+
+
+def test_an_empty_order_meta_is_omitted_entirely():
+    payload = _order_with_customer({"id": "u-1"})
+    assert "order_meta" not in payload
+
+
+def test_the_order_id_is_unique_per_attempt_so_a_re_issue_is_not_a_duplicate():
+    """`_ensure_payment_order` clears `payment_order_id` and creates a NEW order
+    every time a donation or coupon changes the total. Cashfree requires
+    `order_id` to be unique per merchant forever, so the booking id alone would
+    be refused as a duplicate the second time somebody pressed a donation chip."""
+    receipt = "11111111-2222-3333-4444-555555555555"
+    first = _order_with_customer({"id": "u-1"})["order_id"]
+    second = _order_with_customer({"id": "u-1"})["order_id"]
+
+    assert first != second
+    assert first.startswith(receipt) and second.startswith(receipt)
+    assert len(first) <= 50  # Cashfree's limit
 
 
 def test_it_names_itself_so_a_booking_row_can_record_the_gateway():

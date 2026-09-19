@@ -2172,6 +2172,43 @@ const server = createServer((req, res) => {
   // refusal legitimately means the hold moved on), so a missing endpoint would
   // look exactly like a selector that quietly reverts — the same invisible
   // failure the absent cancel endpoint caused.
+  // ── Is this checkout still live? ────────────────────────────────────
+  //
+  // Mirrors `BookingService.get_live_hold`. It MUST exist here: the review
+  // screen now gates its reserve on this call, so a fixture that 404'd would
+  // send every local checkout down the "not proof the hold is gone" branch and
+  // the zombie-checkout guard would never once be exercised in dev — the same
+  // way the absent cancel endpoint hid four swallowed calls.
+  const holdMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/hold\/?$/);
+  if (holdMatch && req.method === 'GET') {
+    const user = authenticate(req);
+    if (!user) return authError(res, req, 401, 'not_authenticated', 'Sign in to continue.');
+    const booking = bookings.get(holdMatch[1]);
+    // Same answer for "not yours" and "does not exist", so this cannot be used
+    // to test whether a booking id is real.
+    if (!booking || booking.user_email !== user.email) {
+      return authError(res, req, 404, 'booking_not_found', 'Booking not found.');
+    }
+    const lapsed =
+      !booking.hold_expires_at || Date.parse(booking.hold_expires_at) <= Date.now();
+    if (booking.status !== 'reserved' || lapsed) {
+      // `expired` is what the sweeper WILL write for a lapsed reserve, and
+      // naming that rather than `reserved` keeps the client from routing
+      // somebody back into a checkout the next minute would end.
+      const status = booking.status !== 'reserved' ? booking.status : 'expired';
+      return authError(
+        res,
+        req,
+        409,
+        'hold_not_live',
+        'This checkout is no longer active. Nothing has been charged.',
+        { status },
+      );
+    }
+    const { user_email: _ignored, ...payload } = booking;
+    return sendJson(req, res, 200, payload, 'private, no-store');
+  }
+
   const gatewayMatch = path.match(/^\/api\/v1\/bookings\/([^/]+)\/payment-gateway\/?$/);
   if (gatewayMatch && req.method === 'POST') {
     const user = authenticate(req);

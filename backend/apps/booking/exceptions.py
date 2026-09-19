@@ -115,3 +115,42 @@ class BookingNotModifiableError(DomainError):
                 "Your hold has expired and these tickets were released, "
                 "so nothing can be added to this booking."
             )
+
+
+class HoldNotLiveError(DomainError):
+    """The checkout was reopened over a hold that is no longer payable.
+
+    ── THE ZOMBIE CHECKOUT ────────────────────────────────────────────────
+
+    A customer cancels at the review screen (the back arrow releases the seats
+    via `ticketing.release`), leaves, and then presses the browser's BACK
+    button. The checkout remounts. Nothing in the page knew the hold was dead,
+    so it reserved again — silently taking inventory back off sale for somebody
+    who had just deliberately given it up, and starting a fresh countdown over
+    a session they had ended.
+
+    The same shape reaches here three other ways: a hold that simply lapsed, a
+    booking already paid for and reopened from history, and a `?booking=` id
+    pasted or restored by the browser. In every one of them the right answer is
+    the same — do not treat this as a live checkout — and only the SERVER can
+    say so, because the sweeper releases holds on a schedule the browser cannot
+    see.
+
+    `409` rather than `404`: the booking exists and the caller may well own it.
+    What has gone is the CONDITION, and a 404 would send the client looking for
+    a missing row instead of a finished one. `status` travels in `details` so
+    the client can route rather than guess — a paid booking belongs on the
+    confirmation screen, everything else back at the event.
+    """
+
+    code = "hold_not_live"
+    status_code = 409
+
+    def __init__(self, status: str) -> None:
+        # `**details` kwargs, not a dict — `DomainError` spreads them into the
+        # error envelope's `details` object itself.
+        super().__init__(
+            "This checkout is no longer active. Nothing has been charged.",
+            status=status,
+        )
+        self.status = status

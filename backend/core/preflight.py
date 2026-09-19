@@ -584,6 +584,48 @@ def check_production_settings(
                         "time, long after the event."
                     )
 
+    # ── A TEST KEY POINTED AT THE LIVE API 401s ON EVERY CHECKOUT ─────────
+    #
+    # Cashfree issues its sandbox App ID with a `TEST` prefix and keys the two
+    # environments to DIFFERENT hosts. Send a sandbox credential to
+    # api.cashfree.com and every order creation is refused — which
+    # `_ensure_payment_order` correctly reads as a provider rejection, so it
+    # cancels the hold and the customer is told "We could not hold your
+    # tickets". Nothing names a payment provider anywhere on that screen, and
+    # the deploy that caused it is green.
+    #
+    # It is a PROBLEM and not a warning because the two values cannot work
+    # together at all: it is not a degraded mode, it is a checkout that refuses
+    # every sale. The reverse pairing — a live key against the sandbox host —
+    # fails just as totally, so both directions are caught.
+    cashfree_app_id = str(getattr(settings, "CASHFREE_APP_ID", "") or "")
+    cashfree_env = str(getattr(settings, "CASHFREE_ENVIRONMENT", "") or "sandbox")
+    if cashfree_app_id:
+        looks_like_test = cashfree_app_id.upper().startswith("TEST")
+        if looks_like_test and cashfree_env == "production":
+            problems.append(
+                "CASHFREE_APP_ID looks like a SANDBOX key (TEST prefix) but "
+                "CASHFREE_ENVIRONMENT=production. Cashfree serves the two from "
+                "different hosts, so every order creation would be refused and "
+                "every checkout would fail to hold tickets. Set "
+                "CASHFREE_ENVIRONMENT=sandbox, or supply the live credentials."
+            )
+        elif not looks_like_test and cashfree_env != "production":
+            problems.append(
+                "CASHFREE_APP_ID does not look like a sandbox key but "
+                "CASHFREE_ENVIRONMENT=sandbox, so live credentials would be "
+                "sent to the sandbox host and every order would be refused. "
+                "Set CASHFREE_ENVIRONMENT=production, or use the TEST keys."
+            )
+        elif looks_like_test:
+            # Legitimate — a soft launch takes no real money on purpose — but
+            # never silent, for the same reason `SMS_PROVIDER=disabled` warns.
+            warnings.append(
+                "CASHFREE_ENVIRONMENT=sandbox with a TEST key: Cashfree "
+                "checkouts complete against the sandbox and NO REAL MONEY "
+                "moves. Deliberate for a soft launch; switch both together."
+            )
+
     default_gateway = str(getattr(settings, "PAYMENTS_DEFAULT_GATEWAY", "") or "")
     if default_gateway:
         offered = {str(getattr(settings, "PAYMENTS_BACKEND", ""))} | {

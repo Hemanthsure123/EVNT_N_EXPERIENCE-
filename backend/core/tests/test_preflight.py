@@ -642,3 +642,68 @@ class TestDevelopmentInfrastructureInProduction:
         )
         warnings = check_production_settings(settings, strict=False)
         assert not any("docker-compose" in warning for warning in warnings)
+
+
+class TestCashfreeEnvironmentMatchesItsKeys:
+    """The configuration that took the checkout down.
+
+    Cashfree serves sandbox and live from DIFFERENT hosts and prefixes its
+    sandbox App ID with `TEST`. Cross the two and every order creation is
+    refused — which `_ensure_payment_order` correctly reads as a provider
+    rejection, so it CANCELS THE HOLD. The customer is told "We could not hold
+    your tickets", nothing on that screen names a payment provider, and the
+    deploy that caused it is green.
+
+    Both directions are refused, because both fail totally rather than partly.
+    """
+
+    def test_a_test_key_against_the_live_host_is_refused(self):
+        message = _refuses(
+            _Settings(
+                CASHFREE_APP_ID="TEST430329ae80e0f32e41a393d78b923034",
+                CASHFREE_SECRET_KEY="cfsk_ma_test_x",
+                CASHFREE_ENVIRONMENT="production",
+            )
+        )
+        assert "CASHFREE_ENVIRONMENT=sandbox" in message
+
+    def test_a_live_key_against_the_sandbox_host_is_refused(self):
+        message = _refuses(
+            _Settings(
+                CASHFREE_APP_ID="1043289abc2e1f0e9a4b8c7d6e5f4a21",
+                CASHFREE_SECRET_KEY="cfsk_ma_prod_x",
+                CASHFREE_ENVIRONMENT="sandbox",
+            )
+        )
+        assert "CASHFREE_ENVIRONMENT=production" in message
+
+    def test_a_matched_sandbox_pair_boots_but_says_no_money_moves(self):
+        """A soft launch in Test Mode is legitimate — and never silent, for the
+        same reason `SMS_PROVIDER=disabled` warns rather than passing."""
+        warnings = check_production_settings(
+            _Settings(
+                CASHFREE_APP_ID="TEST430329ae80e0f32e41a393d78b923034",
+                CASHFREE_SECRET_KEY="cfsk_ma_test_x",
+                CASHFREE_ENVIRONMENT="sandbox",
+            ),
+            strict=True,
+        )
+        assert any("NO REAL MONEY" in w for w in warnings)
+
+    def test_a_matched_live_pair_is_clean(self):
+        assert (
+            check_production_settings(
+                _Settings(
+                    CASHFREE_APP_ID="1043289abc2e1f0e9a4b8c7d6e5f4a21",
+                    CASHFREE_SECRET_KEY="cfsk_ma_prod_x",
+                    CASHFREE_ENVIRONMENT="production",
+                ),
+                strict=True,
+            )
+            == []
+        )
+
+    def test_no_cashfree_configured_is_not_an_opinion(self):
+        """The overwhelming majority of deployments have one gateway. Saying
+        anything at all about Cashfree there would be noise on every boot."""
+        assert check_production_settings(_Settings(), strict=True) == []

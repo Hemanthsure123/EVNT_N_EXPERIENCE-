@@ -63,6 +63,7 @@ from .exceptions import (
     BookingNotFoundError,
     BookingNotModifiableError,
     EventNotBookableError,
+    HoldNotLiveError,
     InvalidAttendeeAssignmentsError,
     InvalidBookingItemsError,
     NotBookingOwnerError,
@@ -954,6 +955,47 @@ class BookingService:
                 self._bookings.save(booking)
 
         return self._ensure_payment_order(booking, release_hold_on_failure=False)
+
+    # --- GetLiveHold -------------------------------------------------------
+
+    def get_live_hold(self, *, booking_id, actor_id) -> Booking:
+        """The booking behind a checkout, ONLY while it is still payable.
+
+        ── WHY THE SERVER HAS TO BE ASKED ───────────────────────────────────
+
+        The browser cannot answer this. `release_expired` runs on a schedule,
+        the back arrow's cancel is a request that may or may not have landed,
+        and a `?booking=` id survives in history, in a restored tab and in a
+        pasted link long after the hold behind it has gone. Every one of those
+        leaves a page that looks like a live checkout and is not.
+
+        So the checkout asks before it does anything, and this is deliberately
+        the SAME predicate the pay button uses (`status == reserved` AND the
+        deadline is still ahead) rather than a looser "does it exist". A
+        reserved booking past its deadline is not payable — the sweeper simply
+        has not reached it yet — and answering 200 for one would hand the
+        screen a countdown that was already over.
+
+        It takes no lock and writes nothing: this is a read on the checkout's
+        hot path, and the authoritative decision still happens under the row
+        lock when somebody actually pays. What it prevents is a screen that
+        re-reserves inventory somebody just gave up.
+        """
+        booking = self._bookings.get_by_id(booking_id)
+        if booking is None:
+            raise BookingNotFoundError(str(booking_id))
+        if str(booking.user_id) != str(actor_id):
+            # Same answer as a missing booking, so this cannot be used to test
+            # whether an id is real — the rule the organizer reads use.
+            raise BookingNotFoundError(str(booking_id))
+        if booking.status != BookingStatus.RESERVED:
+            raise HoldNotLiveError(str(booking.status))
+        if not booking.hold_expires_at or booking.hold_expires_at <= timezone.now():
+            # Reserved but lapsed. `expired` is what the sweeper WILL write, and
+            # naming that rather than `reserved` keeps the client from routing
+            # somebody back into a checkout the next minute would have ended.
+            raise HoldNotLiveError(str(BookingStatus.EXPIRED))
+        return booking
 
     # --- SetPaymentGateway -------------------------------------------------
 
