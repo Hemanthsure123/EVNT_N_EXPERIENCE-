@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, Loader2, Ticket, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import {
   clearBookingCoupon,
   createBooking,
   fetchBooking,
+  fetchBookingHold,
   setBookingDonation,
 } from '@/lib/api/bookings';
 import { fetchEventOffersSafe } from '@/lib/api/events';
@@ -179,6 +180,80 @@ export function ReviewStep() {
   }, [status, selection.length, router, pickerHref]);
 
   /**
+   * ── THE ZOMBIE-CHECKOUT GUARD ──────────────────────────────────────────
+   *
+   * `?booking=` is written to the URL on every reserve so a reload does not
+   * lose the hold. It was never READ back, and that is the whole bug: a
+   * customer cancels at this screen (the back arrow releases the seats),
+   * leaves, and presses the browser's BACK button. The page remounts, context
+   * is empty, the id in the URL is ignored — and the reserve effect below
+   * fires, taking inventory back off sale for somebody who had just
+   * deliberately given it up, with a fresh countdown over a session they had
+   * ended.
+   *
+   * So the id is checked FIRST, against the server, because the server is the
+   * only thing that can answer. `release_expired` runs on a schedule, the
+   * cancel is a request that may not have landed, and the id outlives both in
+   * history and in a restored tab.
+   *
+   *   live  -> adopt it. No second hold, and the countdown is the REAL
+   *            remaining time rather than a new ten minutes.
+   *   paid  -> the confirmation screen. Sending somebody who has already paid
+   *            back to the event page is how they buy the same thing twice.
+   *   dead  -> out of the funnel entirely, to the event page.
+   *
+   * The reserve effect is gated on `holdChecked`, so nothing reserves while
+   * this is in flight. With no `?booking=` there is nothing to check and the
+   * gate opens immediately — the ordinary first arrival pays nothing for this.
+   */
+  const searchParams = useSearchParams();
+  const bookingParam = searchParams?.get('booking') ?? '';
+  const [holdChecked, setHoldChecked] = React.useState(!bookingParam);
+  const holdCheckStarted = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!bookingParam || holdCheckStarted.current) return;
+    // A booking already in context came from this session's own reserve and
+    // has been validated by the code that produced it.
+    if (booking) {
+      holdCheckStarted.current = true;
+      setHoldChecked(true);
+      return;
+    }
+    if (status !== 'authenticated') return;
+    holdCheckStarted.current = true;
+
+    void (async () => {
+      try {
+        const live = await fetchBookingHold(bookingParam);
+        // Adopted WITH the selection signature, so the stale-order guard above
+        // keeps working on a hold this screen did not itself create.
+        setBooking(live, selectionSignature(selection));
+        attempted.current = true; // there is a hold; do not reserve a second
+        setHoldChecked(true);
+      } catch (thrown) {
+        const dead =
+          thrown instanceof ApiError && thrown.code === 'hold_not_live'
+            ? String(thrown.details?.status ?? '')
+            : '';
+        if (dead === 'paid') {
+          router.replace(`/booking/${event.id}/confirmation?booking=${bookingParam}`);
+          return;
+        }
+        if (dead) {
+          router.replace(`/events/${event.id}`);
+          return;
+        }
+        // Anything else — offline, a 500, a token that expired mid-check — is
+        // NOT proof the hold is gone. Opening the gate lets the ordinary
+        // reserve path run and report its own failure, which is a better
+        // outcome than ejecting somebody from a checkout over a blip.
+        setHoldChecked(true);
+      }
+    })();
+  }, [bookingParam, booking, status, selection, setBooking, router, event.id]);
+
+  /**
    * ── THE BOOKING IN CONTEXT MAY DESCRIBE A DIFFERENT ORDER ──────────────
    *
    * `BookingProvider` lives in the checkout LAYOUT, so a reserved booking
@@ -250,6 +325,11 @@ export function ReviewStep() {
     Date.parse(row.hold_expires_at as string) > Date.now();
 
   React.useEffect(() => {
+    // `holdChecked` is the zombie-checkout gate: with a `?booking=` in the URL
+    // nothing reserves until the server has said whether that hold is still
+    // live. Without it, a Back-navigation into a cancelled checkout reserved a
+    // second time before the check could land.
+    if (!holdChecked) return;
     if (status !== 'authenticated' || !selection.length || booking || attempted.current) return;
     attempted.current = true;
     setReserving(true);
@@ -398,6 +478,7 @@ export function ReviewStep() {
       }
     })();
   }, [
+    holdChecked,
     status,
     selection,
     booking,

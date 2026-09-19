@@ -137,27 +137,35 @@ export function BookTicketsAction({
           className="max-h-[85vh] gap-5 overflow-y-auto sm:max-w-md"
         >
           <div className="flex flex-col items-center gap-3 text-center">
-            {age ? (
-              /* The organiser's own value, drawn as the badge — never parsed
-                 into a number this then reasons about. "18+", "21+", "All ages"
-                 and "Under 16s with an adult" are all things a real organiser
-                 types, and only the first two look like a number. */
-              <span
-                aria-hidden
-                className="inline-flex size-20 items-center justify-center rounded-full border-2 border-destructive px-2 text-center text-h4 font-extrabold leading-none text-destructive"
-              >
-                {age}
-              </span>
-            ) : (
-              <span
-                aria-hidden
-                className="inline-flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground"
-              >
-                <ShieldAlert className="size-7" />
-              </span>
-            )}
-            <ModalTitle className="text-h4">
-              {age ? `This event is ${age}` : 'Before you book'}
+            {/* ── THE TEXT CHOOSES THE SHAPE, RATHER THAN BEING FORCED INTO
+                   ONE ────────────────────────────────────────────────────
+
+                `Event.age_restriction` is FREE TEXT. "18+" and "21+" are what
+                the old fixed 80px circle was designed around; "Under 18s with
+                an adult" is equally real and was rendered into that same
+                circle, where it wrapped to four lines, overflowed the border
+                and struck through its own ring. The badge was unreadable on
+                exactly the events whose rule most needs reading.
+
+                So LENGTH picks the presentation. That is not the parsing the
+                old comment rightly forbade — nothing here reasons about what
+                the number MEANS, decides who may attend, or reformats the
+                organiser's words. It asks one question: does this fit in a
+                disc? A short token gets the crisp numeric badge; anything
+                longer gets a pill that can breathe, under a warning mark that
+                carries the same meaning without pretending to be a number. */}
+            <AgeBadge age={age} />
+            {/* "This event is 18+" reads as a sentence. "This event is Under
+                18s with an adult" does not, and on the deployed site it also
+                repeated the badge word for word two lines apart. A long rule
+                is already shown in full by the pill above, so the heading
+                names the SUBJECT and lets the rule speak once. */}
+            <ModalTitle className="text-balance text-h4">
+              {!age
+                ? 'Before you book'
+                : isShortAgeToken(age)
+                  ? `This event is ${age}`
+                  : 'Age restriction'}
             </ModalTitle>
             <ModalDescription id="pre-book-gate-body">
               {age
@@ -200,5 +208,85 @@ export function BookTicketsAction({
         </ModalContent>
       </Modal>
     </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The age badge                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many characters still read as a NUMBER at badge size.
+ *
+ * "18+", "21+" and "16+" are the tokens the disc was designed for and the ones
+ * that carry at a glance. Past this the string is a sentence, and a sentence
+ * inside a 5rem circle is what wrapped to four lines and struck through its own
+ * border on the deployed site.
+ */
+const AGE_TOKEN_MAX = 5;
+
+export function isShortAgeToken(age: string): boolean {
+  return age.trim().length > 0 && age.trim().length <= AGE_TOKEN_MAX;
+}
+
+/**
+ * The warning mark on the pre-book gate.
+ *
+ * Three states, and each is a different SHAPE rather than the same shape with
+ * different text crammed in:
+ *
+ *   "18+"                     a crisp numeric disc — the token IS the graphic
+ *   "Under 18s with an adult" a shield mark, with the rule as a pill beneath
+ *   (blank)                   a neutral shield, because no claim is being made
+ *
+ * The ring is drawn with `ring` rather than `border` so it sits OUTSIDE the
+ * box: a border eats into the 5rem the glyph has to live in, which is part of
+ * how the old badge ran out of room. The soft `bg-destructive/10` disc behind
+ * it is what makes this read as a deliberate badge rather than an outline with
+ * text in it.
+ */
+export function AgeBadge({ age }: { age: string }) {
+  const value = age.trim();
+
+  if (!value) {
+    return (
+      <span
+        aria-hidden
+        className="inline-flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground"
+      >
+        <ShieldAlert className="size-7" />
+      </span>
+    );
+  }
+
+  if (isShortAgeToken(value)) {
+    return (
+      <span
+        aria-hidden
+        className="inline-flex size-20 items-center justify-center rounded-full bg-destructive/10 text-h3 font-extrabold leading-none tracking-tight text-destructive ring-2 ring-destructive/40"
+      >
+        {value}
+      </span>
+    );
+  }
+
+  // Long-form rule: the mark carries the warning, the words carry the detail.
+  // `max-w-full` + `text-balance` keep a two-line rule centred and even rather
+  // than leaving one orphaned word on the second line.
+  return (
+    <span className="flex flex-col items-center gap-2.5">
+      <span
+        aria-hidden
+        className="inline-flex size-16 items-center justify-center rounded-full bg-destructive/10 text-destructive ring-2 ring-destructive/40"
+      >
+        <ShieldAlert className="size-8" />
+      </span>
+      <span
+        aria-hidden
+        className="max-w-full text-balance rounded-full bg-destructive/10 px-4 py-1.5 text-caption font-semibold uppercase tracking-wide text-destructive"
+      >
+        {value}
+      </span>
+    </span>
   );
 }

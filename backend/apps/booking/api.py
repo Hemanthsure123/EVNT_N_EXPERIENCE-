@@ -204,6 +204,39 @@ class BookingDonationView(APIView):
         return _no_store(Response(BookingSummarySerializer(booking).data))
 
 
+class BookingHoldView(APIView):
+    """`GET /bookings/{id}/hold` — is this checkout still live?
+
+    ── THE ZOMBIE CHECKOUT THIS EXISTS TO END ─────────────────────────────
+
+    A customer cancels at the review screen (the back arrow releases the seats),
+    leaves, then presses the browser's BACK button. The checkout remounts with a
+    `?booking=` id in the URL and no way to know the hold behind it is dead — so
+    it reserved again, taking inventory back off sale for somebody who had just
+    given it up, and starting a fresh countdown over a session they had ended.
+
+    Only the SERVER can answer this. `release_expired` runs on a schedule, the
+    cancel is a request that may not have landed, and the id survives in
+    history, in a restored tab and in a pasted link long after the hold is gone.
+
+    `409 hold_not_live` rather than 404: the booking exists and the caller
+    usually owns it — what has gone is the CONDITION. `details.status` lets the
+    client route rather than guess, because a PAID booking belongs on the
+    confirmation screen and everything else belongs back at the event.
+
+    `private, no-store`: it describes one person's live checkout, and a cached
+    "yes" is exactly the stale answer this endpoint exists to stop.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: BookingSummarySerializer})
+    def get(self, request: Request, booking_id: str) -> Response:
+        service = build_booking_service()
+        booking = service.get_live_hold(booking_id=booking_id, actor_id=cast(User, request.user).id)
+        return _no_store(Response(BookingSummarySerializer(booking).data))
+
+
 class BookingPaymentGatewayView(APIView):
     """Move a live hold onto a different payment gateway.
 

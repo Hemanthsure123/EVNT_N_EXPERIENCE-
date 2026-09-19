@@ -233,23 +233,46 @@ class CashfreePaymentAdapter(PaymentPort):
             # were wired when they are not.
             order_meta["return_url"] = return_url
 
+        # ── AN ABSENT OPTIONAL FIELD IS OMITTED, NEVER SENT EMPTY ─────────
+        #
+        # This shipped sending `"customer_email": ""` and `"customer_name": ""`
+        # when the user had neither. Cashfree VALIDATES `customer_email` as an
+        # email address, and an empty string is present-and-invalid rather than
+        # absent — so the order was refused with a 4xx, which
+        # `_ensure_payment_order` correctly treats as `PaymentOrderRejected`,
+        # which cancels the hold. The customer saw "We could not hold your
+        # tickets", with nothing on screen naming a payment provider, for a
+        # profile field nobody had asked them for.
+        #
+        # `customer_id` and `customer_phone` are REQUIRED by Cashfree and keep
+        # their fallbacks; the two optional ones are only included when they
+        # carry something. "Omit what you do not have" is the rule — a blank is
+        # not a value.
+        customer_details: dict = {
+            # The user's uuid, never their email — a customer id travels in
+            # Cashfree's dashboard and logs, and this one identifies without
+            # disclosing. Same reasoning as the QR token's ids-only payload.
+            "customer_id": str(customer.get("id") or receipt),
+            "customer_phone": str(customer.get("phone") or _PLACEHOLDER_PHONE),
+        }
+        email = str(customer.get("email") or "").strip()
+        if email:
+            customer_details["customer_email"] = email
+        name = str(customer.get("name") or "").strip()
+        if name:
+            customer_details["customer_name"] = name
+
         payload: dict = {
             "order_id": order_id,
             "order_amount": self._to_rupees(amount_minor),
             "order_currency": currency,
-            "customer_details": {
-                # The user's uuid, never their email — a customer id travels in
-                # Cashfree's dashboard and logs, and this one identifies without
-                # disclosing. Same reasoning as the QR token's ids-only payload.
-                "customer_id": str(customer.get("id") or receipt),
-                "customer_phone": str(customer.get("phone") or _PLACEHOLDER_PHONE),
-                "customer_email": str(customer.get("email") or ""),
-                "customer_name": str(customer.get("name") or ""),
-            },
-            "order_meta": order_meta,
+            "customer_details": customer_details,
             "order_note": f"booking:{notes.get('booking_id', receipt)}",
             "order_tags": {"booking_id": str(notes.get("booking_id") or receipt)},
         }
+        # Same rule: an empty `order_meta` is left out rather than sent as {}.
+        if order_meta:
+            payload["order_meta"] = order_meta
 
         status_code, body = self._request("POST", "/orders", json=payload)
 
