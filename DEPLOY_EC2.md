@@ -208,6 +208,39 @@ NEXT_PUBLIC_API_BASE_URL    NEXT_PUBLIC_SITE_URL     NEXT_PUBLIC_MEDIA_BASE_URL
 NEXT_PUBLIC_RAZORPAY_KEY_ID NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 ```
 
+#### A second checkout gateway (Cashfree) — OPTIONAL
+
+None of these are required, and a deployment that omits them behaves exactly as
+it did before a second gateway existed: no selector, no second webhook. Add them
+only when you want Cashfree on the checkout.
+
+```
+PAYMENTS_ENABLED_GATEWAYS=cashfree,razorpay   which gateways may TAKE a payment
+PAYMENTS_DEFAULT_GATEWAY=cashfree             which one is pre-selected
+CASHFREE_APP_ID             CASHFREE_SECRET_KEY      CASHFREE_ENVIRONMENT
+```
+
+Three things `render-env.sh` now refuses, so each is one line before a deploy
+rather than a crash loop found in `docker compose logs`:
+
+- `PAYMENTS_ENABLED_GATEWAYS` naming `cashfree` while `CASHFREE_APP_ID` or
+  `CASHFREE_SECRET_KEY` is missing or empty — production preflight would refuse
+  to boot.
+- `PAYMENTS_ROUTE_PROVIDER=cashfree` — Cashfree cannot release payouts (Easy
+  Split is separate onboarding, and `organizations.payout_account_id` holds a
+  **Razorpay** linked-account id), so organizers would never be paid. Leave it
+  unset unless `PAYMENTS_BACKEND` is not the provider holding your linked
+  accounts.
+- A `PAYMENTS_DEFAULT_GATEWAY` that is not in the enabled set.
+
+`CASHFREE_SECRET_KEY` is **also the webhook signing key** — Cashfree has no
+separate webhook secret, unlike Razorpay. Register the webhook at
+`https://<your-host>/api/v1/payments/webhook/cashfree`; it signs
+`x-webhook-timestamp` + the raw body, base64.
+
+`NEXT_PUBLIC_CASHFREE_ENVIRONMENT` is a **GitHub repository variable**, not a
+secret in here — see the note on `NEXT_PUBLIC_*` below.
+
 `ENVIRONMENT_VARIABLES.md` is the complete reference with each variable's
 meaning. Two notes specific to this deployment:
 
@@ -258,6 +291,7 @@ makes a misconfiguration invisible to a reviewer.
 | `NEXT_PUBLIC_SITE_URL` | `https://fastride.xyz` | the frontend build |
 | `NEXT_PUBLIC_MEDIA_BASE_URL` | the host serving uploads | the frontend build |
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_test_…` | the frontend build |
+| `NEXT_PUBLIC_CASHFREE_ENVIRONMENT` | `production` (or `sandbox`) | the frontend build — **only if Cashfree is enabled** |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | the **browser** key | the frontend build |
 
 **`NEXT_PUBLIC_API_BASE_URL` is an ORIGIN, not an API path.** This table said
@@ -277,6 +311,15 @@ nobody diffs. The registry hostname is discovered at runtime by
 **No GitHub *secret* is required by any workflow.** The only credential is the
 OIDC token GitHub mints per run, and the only long-lived secret in the system
 lives in AWS Secrets Manager, where the instance reads it with its own role.
+
+`NEXT_PUBLIC_CASHFREE_ENVIRONMENT` is the only addition a second gateway needs
+here, and it is a **fallback rather than the source of truth**: `POST /bookings`
+returns `payment.environment` with every order and the browser prefers that,
+with a `sessionStorage` copy behind it for a reload. This covers the remaining
+case — a hard refresh with storage blocked — and it defaults to `sandbox`, which
+fails visibly against a production session rather than the reverse. There is no
+`NEXT_PUBLIC_CASHFREE_APP_ID`: unlike Razorpay, Cashfree's browser SDK opens on
+the order's `payment_session_id` alone and needs no public key.
 
 `NEXT_PUBLIC_RAZORPAY_KEY_ID` and `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` are
 variables and not secrets because both are **published to every visitor** in the

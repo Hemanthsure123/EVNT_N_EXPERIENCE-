@@ -33,6 +33,7 @@ from apps.ticketing.strategies import RowLockReservationStrategy
 from core.adapters.local.fake_payment import FakePaymentAdapter
 from core.adapters.local.locmem_cache import LocMemCacheAdapter
 from core.ports.payment_port import (
+    CreatedOrder,
     OrderTransfer,
     PaymentOrderRejected,
     PaymentProviderUnavailable,
@@ -63,7 +64,7 @@ class _ScriptedPayments(FakePaymentAdapter):
         receipt: str,
         notes: dict,
         transfers: list[OrderTransfer] | None = None,
-    ) -> str:
+    ) -> CreatedOrder:
         self.calls.append(transfers)
         outcome = self._script.pop(0) if self._script else None
         if outcome is not None:

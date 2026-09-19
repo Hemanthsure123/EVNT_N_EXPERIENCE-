@@ -173,6 +173,13 @@ const config: Config = {
         // `ink` is the warm neutral the light-first product is built on; it
         // replaces the old violet-tinted `canvas` ramp.
         ink: ramp('ink', [25, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]),
+        // Payment-gateway marks. Theme-independent, like `ink` — see
+        // styles/tokens.css. Only components/booking/gateway-logo.tsx uses them.
+        brand: {
+          cashfree: rgb('brand-cashfree'),
+          razorpay: rgb('brand-razorpay'),
+          'on-brand': rgb('brand-on-brand'),
+        },
         butter: ramp('butter', [50, 100, 200, 300, 800, 900, 950]),
         violet: ramp('violet', [50, 100, 200, 300, 400, 500, 600, 700, 800, 900]),
         pink: ramp('pink', [50, 300, 500, 600]),
@@ -327,6 +334,9 @@ const config: Config = {
         'bottom-nav': 'var(--bottom-nav-height)',
         'sticky-top': 'var(--sticky-top)',
         'sticky-top-lg': 'var(--sticky-top-lg)',
+        // Clears the sticky action bar, whose height is measured onto the
+        // document root at runtime. Used by the payment-gateway menu.
+        'payment-menu': 'var(--payment-menu-bottom)',
         // How tall the event poster is allowed to get. Named because the
         // number is a JUDGEMENT — enough of the viewport that the artwork
         // reads, little enough that the title and the ticket panel stay above

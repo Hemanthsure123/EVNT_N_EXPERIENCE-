@@ -375,6 +375,19 @@ export type Booking = {
   coupon_code: string | null;
   hold_expires_at: string | null;
   payment_order_id: string | null;
+  /**
+   * Which gateway this booking's order belongs to, and the browser handle for
+   * it. On EVERY booking read, not only the create response: the donation,
+   * coupon and gateway endpoints can each re-issue the order, and a screen
+   * that learned the provider once at create would go on holding a session id
+   * for an order that no longer exists.
+   *
+   * Optional here because older responses (and the e2e fixture) predate them,
+   * and a checkout that crashes on a missing field is worse than one that
+   * falls back to what it knew.
+   */
+  payment_gateway?: string;
+  payment_session_id?: string;
   items?: BookingItem[];
   created_at: string;
 };
@@ -438,15 +451,37 @@ export type MyBooking = {
   items: BookingItem[];
 };
 
-/** POST /bookings — the booking plus everything Razorpay Checkout needs. */
+/** POST /bookings — the booking plus everything the chosen checkout needs. */
 export type CreateBookingResponse = {
   booking: Booking;
   payment: {
     order_id: string | null;
     amount_minor: number;
     currency: string;
-    /** The PUBLIC Razorpay key, from the server. Empty when none is configured. */
+    /** The PUBLIC Razorpay key, from the server. Empty for any other gateway. */
     key_id: string;
+    /**
+     * Which gateway actually created this order — read off the BOOKING ROW on
+     * the server, never from a settings default. `'razorpay' | 'cashfree' |
+     * 'fake'`, widened to `string` because the API may name one this build has
+     * no SDK for, and `selectableProviders` drops those rather than rendering
+     * a row that cannot open a checkout.
+     */
+    provider: string;
+    /**
+     * The browser-side handle for gateways that need one distinct from the
+     * order id — Cashfree's `payment_session_id`. Empty for Razorpay, whose
+     * Checkout opens on the order id plus the public key.
+     */
+    session_id: string;
+    /**
+     * `'sandbox' | 'production'` for Cashfree; empty otherwise. It travels with
+     * the order rather than living in a `NEXT_PUBLIC_` var so the SDK's mode
+     * and the environment that minted the session cannot drift apart.
+     */
+    environment: string;
+    /** Every gateway this deployment may offer. What the selector draws. */
+    available_providers: string[];
   };
 };
 

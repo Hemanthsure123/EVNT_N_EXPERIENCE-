@@ -16,6 +16,7 @@ for these caches directly, it always goes through a factory call.
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -64,12 +65,45 @@ if TYPE_CHECKING:
     from apps.ticketing.services import TicketingService
 
 
+logger = logging.getLogger(__name__)
+
+
 # --- Port factories -------------------------------------------------------
 
 
-@lru_cache(maxsize=1)
-def payment_port() -> PaymentPort:
-    backend = settings.PAYMENTS_BACKEND
+@lru_cache(maxsize=4)
+def payment_port(gateway: str = "") -> PaymentPort:
+    """The adapter for one payment gateway.
+
+    ── WHY THIS TAKES AN ARGUMENT NOW ────────────────────────────────────────
+
+    It used to be `@lru_cache(maxsize=1)` over `PAYMENTS_BACKEND`, which was
+    exactly right while one process meant one provider. With a second checkout
+    gateway that assumption breaks in a specific and dangerous way: the gateway
+    that took a payment is a fact about the BOOKING, not about the deployment.
+    A webhook arriving from Cashfree must be verified with Cashfree's scheme
+    and secret; a refund for a Razorpay-collected booking must go to Razorpay,
+    whatever the default happens to be that week. Resolving the provider from
+    settings at those moments would mean refunding through a gateway that never
+    took the money.
+
+    So every path that acts on an EXISTING payment passes the gateway stored on
+    the row (`Booking.payment_gateway`), and only the initial checkout is free
+    to choose.
+
+    ── AND WHY THE NO-ARG CALL IS UNCHANGED ──────────────────────────────────
+
+    `payment_port()` still means `PAYMENTS_BACKEND`, and that is what
+    `organizations` and `settlements` are given. Those two are about the
+    platform's Route relationship — linked accounts, on-hold transfers, payout
+    release — which belongs to ONE provider and cannot be per booking. Widening
+    them would mean asking Cashfree to release a payout to a Razorpay linked
+    account id.
+
+    Cached per gateway name (`maxsize=4`, comfortably more than the three names
+    that exist) — one instance per gateway per process, never a bare global.
+    """
+    backend = gateway or settings.PAYMENTS_BACKEND
     if backend == "fake":
         from core.adapters.local.fake_payment import FakePaymentAdapter
 
@@ -84,7 +118,131 @@ def payment_port() -> PaymentPort:
             key_secret=settings.RAZORPAY_KEY_SECRET,
             webhook_secret=settings.RAZORPAY_WEBHOOK_SECRET,
         )
-    raise ValueError(f"Unknown PAYMENTS_BACKEND: {backend!r}")
+    if backend == "cashfree":
+        from core.adapters.cashfree.adapter import CashfreePaymentAdapter
+
+        return CashfreePaymentAdapter(
+            app_id=settings.CASHFREE_APP_ID,
+            secret_key=settings.CASHFREE_SECRET_KEY,
+            environment=settings.CASHFREE_ENVIRONMENT,
+        )
+    raise ValueError(f"Unknown payments gateway: {backend!r}")
+
+
+@lru_cache(maxsize=1)
+def route_payment_port() -> PaymentPort:
+    """The gateway that holds LINKED ACCOUNTS and releases PAYOUTS.
+
+    ── WHY THIS IS NOT `payment_port()` ──────────────────────────────────────
+
+    `organizations` and `settlements` used to be handed `payment_port()`, which
+    meant the payout relationship silently followed `PAYMENTS_BACKEND`. That
+    was correct while one provider did everything, and it is a trap the moment
+    a second gateway exists: flipping the default backend to Cashfree would
+    have pointed `release_payout` at a provider that has never heard of the
+    Razorpay linked-account id stored in `organizations.payout_account_id`, and
+    nothing would have reported it until a real settlement failed — weeks after
+    the event, on money an organizer is owed.
+
+    Taking a payment is a per-booking decision. Paying an organizer is not: a
+    linked account is a vendor record created ONCE, and the id in our own
+    database belongs to exactly one provider. So the two are now separate
+    settings, and this one is explicit.
+
+    Defaults to `PAYMENTS_BACKEND`, so nothing changes for a deployment that
+    never sets it.
+    """
+    return payment_port(str(settings.PAYMENTS_ROUTE_PROVIDER or settings.PAYMENTS_BACKEND))
+
+
+#: What each gateway needs before it may be offered. A gateway whose
+#: credentials are absent is DROPPED from the selector rather than shown and
+#: then failing at the press — see `enabled_payment_gateways`.
+_GATEWAY_CREDENTIALS: dict[str, tuple[str, ...]] = {
+    "razorpay": ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET"),
+    "cashfree": ("CASHFREE_APP_ID", "CASHFREE_SECRET_KEY"),
+    # The fake needs nothing, and is never listed beside a real gateway (see
+    # below) — a demo option next to a live one is a "pay nothing" button.
+    "fake": (),
+}
+
+
+def _gateway_is_usable(name: str) -> bool:
+    if name not in _GATEWAY_CREDENTIALS:
+        return False
+    return all(str(getattr(settings, key, "") or "") for key in _GATEWAY_CREDENTIALS[name])
+
+
+@lru_cache(maxsize=1)
+def enabled_payment_gateways() -> tuple[tuple[str, ...], str]:
+    """`(offerable gateway names, the default)` — the ONE place that decides
+    what a checkout may present.
+
+    Four rules, and each exists because the alternative is a checkout that
+    lies:
+
+    1. **A fake default means a fake deployment, full stop.** When
+       `PAYMENTS_BACKEND=fake` the answer is `(("fake",), "fake")` and no
+       selector is drawn, whatever `PAYMENTS_ENABLED_GATEWAYS` says. Offering
+       a choice between "Cashfree" and a simulated payment on the same screen
+       is offering a pay-nothing button; `PaymentSection` already refuses to
+       render provider branding in demo mode for the same reason.
+
+    2. **Unconfigured gateways are dropped, not displayed.** A name listed
+       without its credentials would render a logo, take the press, and fail
+       when the order call got a 401.
+
+    3. **`PAYMENTS_BACKEND` is always in the set.** It is the provider the rest
+       of the platform is built around, and a deployment that lists only
+       Cashfree still refunds and settles through Razorpay.
+
+    4. **The default must be offerable.** A `PAYMENTS_DEFAULT_GATEWAY` that is
+       not usable falls back to the first that is, rather than pre-selecting a
+       gateway whose button cannot work.
+    """
+    backend = str(settings.PAYMENTS_BACKEND)
+    if backend == "fake":
+        return ("fake",), "fake"
+
+    names: list[str] = []
+    for candidate in [backend, *settings.PAYMENTS_ENABLED_GATEWAYS]:
+        name = str(candidate).strip().lower()
+        # "fake" can never join a live set — see rule 1.
+        if not name or name == "fake" or name in names:
+            continue
+        if not _gateway_is_usable(name):
+            logger.warning(
+                "payments.gateway_not_offered",
+                extra={"gateway": name, "reason": "missing credentials"},
+            )
+            continue
+        names.append(name)
+
+    if not names:
+        # Nothing is configured. Returning the backend anyway is deliberate:
+        # the booking still gets made and `PaymentSection` renders its
+        # "payment provider not configured" notice, which is a far better
+        # outcome than a 500 on reserve.
+        return (backend,), backend
+
+    preferred = str(settings.PAYMENTS_DEFAULT_GATEWAY or "").strip().lower()
+    default = preferred if preferred in names else names[0]
+    return tuple(names), default
+
+
+def resolve_payment_gateway(requested: str) -> str:
+    """The gateway to actually use for a NEW order, given what the client asked
+    for.
+
+    The client's value is a REQUEST, never an instruction: anything not in the
+    offerable set falls back to the default rather than raising. A checkout
+    that 400s because a browser sent a stale gateway name — one this deployment
+    used to offer, cached in somebody's tab — would refuse a sale over a
+    presentational detail the customer cannot see and could not have chosen.
+    """
+    names, default = enabled_payment_gateways()
+    wanted = str(requested or "").strip().lower()
+    return wanted if wanted in names else default
 
 
 @lru_cache(maxsize=1)
@@ -483,7 +641,10 @@ def build_organization_service() -> OrganizationService:
         organizations=OrganizationRepository(),
         users=UserRepository(),
         storage=storage_port(),
-        payments=payment_port(),
+        # The ROUTE provider, not the default: `create_linked_account` writes a
+        # vendor record whose id is stored on the organization, and a payout is
+        # later released against THAT vendor.
+        payments=route_payment_port(),
         task_queue=task_queue_port(),
     )
 
@@ -863,7 +1024,9 @@ def build_settlement_service() -> SettlementService:
         attempts=PayoutAttemptRepository(),
         payments=PaymentRepository(),
         events=EventRepository(),
-        payments_port=payment_port(),
+        # The ROUTE provider: `release_payout` settles an ON-HOLD transfer to a
+        # linked account, and only the provider that issued that account can.
+        payments_port=route_payment_port(),
         task_queue=task_queue_port(),
         refund_window_hours=settings.SETTLEMENT_REFUND_WINDOW_HOURS,
         max_attempts=settings.SETTLEMENT_MAX_ATTEMPTS,

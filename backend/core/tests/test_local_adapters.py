@@ -30,10 +30,13 @@ def test_fake_payment_orders_carry_transfers_and_refunds_are_idempotent():
     adapter = FakePaymentAdapter()
 
     transfers = [OrderTransfer(account_id="acc_1", amount_minor=9000, on_hold=True)]
-    order_id = adapter.create_order(
+    created = adapter.create_order(
         amount_minor=10000, currency="INR", receipt="r1", notes={}, transfers=transfers
     )
-    assert adapter.orders[order_id]["transfers"] == transfers
+    # `create_order` returns a `CreatedOrder` now, not a bare id — a second
+    # gateway needs a browser-side checkout token alongside the order id.
+    assert adapter.orders[created.order_id]["transfers"] == transfers
+    assert created.checkout_token
 
     r1 = adapter.refund(payment_id="pay_1", amount_minor=10000, idempotency_key="refund:pay_1")
     r2 = adapter.refund(payment_id="pay_1", amount_minor=10000, idempotency_key="refund:pay_1")

@@ -26,6 +26,7 @@ import logging
 import uuid
 
 from core.ports.payment_port import (
+    CreatedOrder,
     OrderTransfer,
     PaymentPort,
     ProviderPayment,
@@ -37,6 +38,14 @@ logger = logging.getLogger(__name__)
 
 
 class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
+    #: Deliberately still "fake" and not the gateway it is standing in for.
+    #: The demo path is chosen by this NAME reaching the browser, and a fake
+    #: that called itself "cashfree" would render a live-looking Cashfree
+    #: checkout over an order no Cashfree exists to honour — the exact failure
+    #: `payment.provider` was added to prevent.
+    name = "fake"
+    supports_order_time_split = True
+
     def __init__(self, *, webhook_secret: str = "") -> None:
         self._transfer_ids = itertools.count(1)
         self._linked_account_ids = itertools.count(1)
@@ -72,7 +81,7 @@ class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
         receipt: str,
         notes: dict,
         transfers: list[OrderTransfer] | None = None,
-    ) -> str:
+    ) -> CreatedOrder:
         # A globally-unique id (like a real Razorpay order id) rather than a
         # process counter — so order ids never collide across restarts in a
         # persistent dev DB, and `booking.get_by_payment_order_id` always
@@ -86,9 +95,15 @@ class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
             "transfers": list(transfers or []),
         }
         logger.info("fake_payment.order_created", extra={"order_id": order_id})
-        return order_id
+        # A token is issued so the demo path exercises the same plumbing a
+        # session-based gateway uses — but it is never handed to a real SDK.
+        return CreatedOrder(order_id=order_id, checkout_token=f"fake_session_{order_id}")
 
-    def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
+    def verify_webhook_signature(
+        self, *, payload: bytes, signature: str, timestamp: str = ""
+    ) -> bool:
+        # Mirrors Razorpay's scheme (body alone) because that is the delivery
+        # shape the fake's tests build. Verification stays REAL HMAC either way.
         expected = hmac.new(self._webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
 
@@ -141,7 +156,7 @@ class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
         ).hexdigest()
         return f"fake_pay_{digest[:20]}"
 
-    def fetch_payment(self, *, payment_id: str) -> ProviderPayment | None:
+    def fetch_payment(self, *, payment_id: str, order_id: str = "") -> ProviderPayment | None:
         record = self.payments.get(payment_id)
         if record is None:
             # An id this adapter never issued. Same answer Razorpay gives for
@@ -178,7 +193,9 @@ class FakePaymentAdapter(PaymentPort, SimulatedPaymentPort):
             )
         return None
 
-    def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
+    def refund(
+        self, *, payment_id: str, amount_minor: int, idempotency_key: str, order_id: str = ""
+    ) -> str:
         # Idempotent: the same key always maps to the same refund id, so a
         # retried or concurrent refund never creates a second one.
         if idempotency_key in self.refunds_by_key:

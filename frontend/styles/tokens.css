@@ -145,6 +145,23 @@
   --violet-800: 91 33 182;
   --violet-900: 76 29 149;
 
+  /* Payment-gateway brand marks.
+     THEME-INDEPENDENT ON PURPOSE, like the `ink` ramp the issued ticket and the
+     pass card are drawn from: these identify somebody else's brand, and a mark
+     that changed colour when the reader flipped a theme toggle would no longer
+     be doing that job. They live here rather than as hex in a component because
+     `local-rules/no-raw-values` is right — a colour nobody can find from the
+     tokens file is a colour nobody can update.
+
+     They are used ONLY by components/booking/gateway-logo.tsx, and only for the
+     glyph itself. Nothing else in the product may take a colour from a payment
+     provider. */
+  --brand-cashfree: 78 181 67;
+  --brand-razorpay: 12 100 232;
+  /* The contrast partner both marks draw on top of. Fixed white rather than
+     `--surface`, because the tile underneath is a fixed brand colour. */
+  --brand-on-brand: 255 255 255;
+
   /* Magenta / Pink -- RETIRED from the semantic layer, kept as a primitive.
      `components/illustrations/*.tsx` and the category `tone` gradients in
      lib/discovery read these directly; deleting the names breaks files this
@@ -455,6 +472,15 @@
   /* CONTROL HEIGHTS. Named because 44px is the touch-target floor and must not
      drift, and because a pill's height and its radius have to be retunable
      together. */
+  /* Where the payment-gateway menu sits on a pointer: clear of the sticky
+     action bar, whose real height `StickyActionBar` measures onto the document
+     root at runtime. Named here rather than written inline as an arbitrary
+     value, for the same reason `--sticky-top` is — a chrome offset that lives
+     on one component silently desynchronises the moment the chrome changes
+     height. The fallback is the bar's nominal height, for the frame before the
+     layout effect has published a measurement. */
+  --payment-menu-bottom: calc(var(--sticky-action-height, 4.5rem) + var(--space-stack));
+
   --control-height-sm: 2.25rem; /* 36px */
   --control-height: 2.75rem; /* 44px -- the touch-target floor */
   --control-height-lg: 3rem; /* 48px */

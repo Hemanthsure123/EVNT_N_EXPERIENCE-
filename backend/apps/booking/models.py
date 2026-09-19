@@ -77,6 +77,34 @@ class Booking(models.Model):
     # Set after commit, outside the reserve transaction (the external payment
     # order call must never happen under a DB lock).
     payment_order_id = models.CharField(max_length=255, blank=True, default="")
+    # ── WHICH GATEWAY CREATED THAT ORDER ────────────────────────────────
+    #
+    # A COLUMN and not a settings lookup, because the gateway that took a
+    # payment is a fact about this booking and settings only ever describe the
+    # deployment's current default. Every path that acts on an existing
+    # payment — the webhook's verification, `verify_and_confirm`, the
+    # reconciliation sweep, and above all a REFUND — resolves its adapter from
+    # this value. Reading it from settings instead would mean that flipping
+    # `PAYMENTS_DEFAULT_GATEWAY`, or simply listing a second gateway, would
+    # send refunds for money Razorpay collected to Cashfree, which has never
+    # heard of the payment and would refuse it — after the customer had been
+    # told their refund was on its way.
+    #
+    # Blank on every row that predates the second gateway, and read through
+    # `gateway_or_default()` so those rows keep resolving to the provider that
+    # was the only one when they were written.
+    payment_gateway = models.CharField(max_length=32, blank=True, default="")
+    # The browser-side handle for the order, where the gateway needs one
+    # distinct from the order id (Cashfree's `payment_session_id`; empty for
+    # Razorpay, whose Checkout opens on the order id).
+    #
+    # Not a secret — it is the public, expiring handle for one order, useless
+    # without it, the same class of value as `key_id`. Stored rather than kept
+    # only in the create response because a reload of the review screen would
+    # otherwise leave the page holding an order it cannot open, which is the
+    # exact gap `rememberKeyId` exists to paper over on the Razorpay side.
+    # Rewritten whenever the order is re-issued, and cleared with it.
+    payment_session_id = models.CharField(max_length=255, blank=True, default="")
     # The verified payment reference confirm() was called with; the idempotency
     # key for ticket issuance (a webhook can fire twice).
     payment_ref = models.CharField(max_length=255, blank=True, default="")
@@ -121,6 +149,19 @@ class Booking(models.Model):
 
     def __str__(self) -> str:
         return f"Booking {self.id} ({self.status})"
+
+    def gateway_or_default(self) -> str:
+        """The gateway this booking was (or will be) paid through.
+
+        Blank means the row predates the second gateway, so the answer is
+        whatever `PAYMENTS_BACKEND` names — which for those rows is what
+        actually took the money, since it was the only option that existed.
+        Defaulting them to the CURRENT default would be wrong the moment the
+        default changes.
+        """
+        from django.conf import settings
+
+        return self.payment_gateway or str(settings.PAYMENTS_BACKEND)
 
 
 class BookingItem(models.Model):

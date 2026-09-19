@@ -14,6 +14,7 @@ import logging
 import razorpay
 
 from core.ports.payment_port import (
+    CreatedOrder,
     OrderTransfer,
     PaymentOrderRejected,
     PaymentPort,
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 class RazorpayPaymentAdapter(PaymentPort):
+    name = "razorpay"
+    #: Route attaches the organizer's on-hold share at order time. This is the
+    #: adapter the whole `_build_transfers` / `settlements` story is written
+    #: against.
+    supports_order_time_split = True
+
     def __init__(self, *, key_id: str, key_secret: str, webhook_secret: str) -> None:
         self._client = razorpay.Client(auth=(key_id, key_secret))
         self._webhook_secret = webhook_secret
@@ -57,7 +64,7 @@ class RazorpayPaymentAdapter(PaymentPort):
         receipt: str,
         notes: dict,
         transfers: list[OrderTransfer] | None = None,
-    ) -> str:
+    ) -> CreatedOrder:
         params: dict = {
             "amount": amount_minor,
             "currency": currency,
@@ -107,13 +114,20 @@ class RazorpayPaymentAdapter(PaymentPort):
             if type(exc).__name__ == "BadRequestError":
                 raise PaymentOrderRejected(reason, had_transfers=bool(transfers)) from exc
             raise PaymentProviderUnavailable(reason) from exc
-        return order["id"]
+        # No `checkout_token`: Razorpay Checkout is opened with the order id
+        # plus the public `key_id`, so there is no second handle to carry.
+        return CreatedOrder(order_id=order["id"])
 
-    def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
+    def verify_webhook_signature(
+        self, *, payload: bytes, signature: str, timestamp: str = ""
+    ) -> bool:
+        # Razorpay signs the raw body ALONE — `timestamp` is accepted for the
+        # port's shape and deliberately unused here. Folding it in would break
+        # every genuine Razorpay delivery.
         expected = hmac.new(self._webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
 
-    def fetch_payment(self, *, payment_id: str) -> ProviderPayment | None:
+    def fetch_payment(self, *, payment_id: str, order_id: str = "") -> ProviderPayment | None:
         """`GET /v1/payments/{id}` — authenticated with the same key pair that
         created the order, so the answer is Razorpay's, not the caller's.
 
@@ -177,7 +191,9 @@ class RazorpayPaymentAdapter(PaymentPort):
             )
         return None
 
-    def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
+    def refund(
+        self, *, payment_id: str, amount_minor: int, idempotency_key: str, order_id: str = ""
+    ) -> str:
         # Razorpay reverses any Route transfers when it refunds. The
         # Idempotency-Key header makes a retry/concurrent call return the same
         # refund instead of creating a second one.

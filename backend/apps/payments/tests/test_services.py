@@ -358,19 +358,25 @@ class _RealishPaymentAdapter(PaymentPort):
     def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
         return "acc_real"
 
-    def create_order(self, *, amount_minor, currency, receipt, notes, transfers=None) -> str:
-        return "order_real"
+    def create_order(self, *, amount_minor, currency, receipt, notes, transfers=None):
+        from core.ports.payment_port import CreatedOrder
 
-    def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
+        return CreatedOrder(order_id="order_real")
+
+    def verify_webhook_signature(
+        self, *, payload: bytes, signature: str, timestamp: str = ""
+    ) -> bool:
         return False
 
-    def fetch_payment(self, *, payment_id: str):
+    def fetch_payment(self, *, payment_id: str, order_id: str = ""):
         return None
 
     def captured_payment_for_order(self, *, order_id: str):
         return None
 
-    def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
+    def refund(
+        self, *, payment_id: str, amount_minor: int, idempotency_key: str, order_id: str = ""
+    ) -> str:
         return "rfnd_real"
 
     def split_transfer(

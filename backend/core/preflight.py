@@ -86,6 +86,13 @@ _ADAPTER_CREDENTIALS = {
         "RAZORPAY_KEY_SECRET",
         "RAZORPAY_WEBHOOK_SECRET",
     ),
+    # Cashfree as the DEFAULT backend. Selecting it as a SECOND gateway is
+    # checked separately below — `config.di.enabled_payment_gateways()` drops
+    # an unconfigured gateway from the selector rather than offering it, but a
+    # deployment that meant to enable it and mistyped a variable would then
+    # simply never see it, which is exactly the silent almost-working state
+    # this module exists to turn into a refusal.
+    ("PAYMENTS_BACKEND", "cashfree"): ("CASHFREE_APP_ID", "CASHFREE_SECRET_KEY"),
     ("STORAGE_BACKEND", "gcs"): ("GCP_PROJECT_ID", "GCS_BUCKET_NAME"),
     ("STORAGE_BACKEND", "s3"): (
         "S3_BUCKET_NAME",
@@ -195,8 +202,33 @@ def _module_importable(dotted: str) -> bool:
 
 
 def _check_runtime_dependencies(settings: object, problems: list[str]) -> None:
+    # ── EVERY GATEWAY THAT WILL BE USED, NOT JUST THE DEFAULT ─────────────
+    #
+    # This loop was keyed on `PAYMENTS_BACKEND` alone, which was complete while
+    # one setting selected one payment adapter. It is not any more: a gateway
+    # can now be reached because it is LISTED in `PAYMENTS_ENABLED_GATEWAYS`,
+    # or because it is the `PAYMENTS_ROUTE_PROVIDER`, without ever being the
+    # default.
+    #
+    # Left unchecked that is exactly the bug DEPLOYMENT.md records — `pip
+    # install -e .` gives base dependencies only, the vendor SDK is imported
+    # LAZILY, so nothing fails at boot or in CI and the FIRST CHECKOUT raises
+    # `ModuleNotFoundError`. `PAYMENTS_BACKEND=cashfree` with payouts still on
+    # Razorpay would have shipped an image with no razorpay package and
+    # discovered it at the first settlement.
+    selected: set[tuple[str, str]] = set()
+    for switch, _ in _ADAPTER_MODULES:
+        selected.add((switch, str(getattr(settings, switch, ""))))
+    for extra_gateway in (
+        *(getattr(settings, "PAYMENTS_ENABLED_GATEWAYS", []) or []),
+        getattr(settings, "PAYMENTS_ROUTE_PROVIDER", ""),
+    ):
+        name = str(extra_gateway).strip().lower()
+        if name:
+            selected.add(("PAYMENTS_BACKEND", name))
+
     for (switch, value), (module, extra) in _ADAPTER_MODULES.items():
-        if str(getattr(settings, switch, "")) != value:
+        if (switch, value) not in selected:
             continue
         if not _module_importable(module):
             # Fatal: the backend is selected, so the code path WILL be taken.
@@ -459,6 +491,111 @@ def check_production_settings(
             "and refund notices. Set SMS_PROVIDER=http with SMS_API_KEY, "
             "SMS_SENDER_ID and SMS_DLT_ENTITY_ID to enable delivery."
         )
+
+    # ── AN ENABLED GATEWAY THAT CANNOT TAKE A PAYMENT ─────────────────────
+    #
+    # `PAYMENTS_ENABLED_GATEWAYS` is the list a checkout may offer, and
+    # `config.di.enabled_payment_gateways()` silently DROPS any entry whose
+    # credentials are missing — correct at runtime (better an absent option
+    # than a logo that fails at the press) and exactly the kind of silent
+    # almost-working state this module exists to turn into a refusal.
+    #
+    # A PROBLEM and not a warning: somebody wrote the gateway's name into the
+    # deployment's configuration, so they intended to take money through it.
+    # Booting anyway means a checkout that quietly offers one fewer payment
+    # method than the business thinks it does, which nothing anywhere reports.
+    for gateway in getattr(settings, "PAYMENTS_ENABLED_GATEWAYS", []) or []:
+        name = str(gateway).strip().lower()
+        if not name or name == str(getattr(settings, "PAYMENTS_BACKEND", "")):
+            continue
+        if name == "fake":
+            problems.append(
+                "PAYMENTS_ENABLED_GATEWAYS contains 'fake': a simulated payment "
+                "option beside a real one is a pay-nothing button."
+            )
+            continue
+        required = _ADAPTER_CREDENTIALS.get(("PAYMENTS_BACKEND", name))
+        if required is None:
+            problems.append(f"PAYMENTS_ENABLED_GATEWAYS names an unknown gateway {name!r}.")
+            continue
+        missing = [key for key in required if not str(getattr(settings, key, "") or "")]
+        if missing:
+            problems.append(
+                f"PAYMENTS_ENABLED_GATEWAYS includes {name!r} but "
+                f"{', '.join(missing)} is unset, so it would be silently "
+                "dropped from the checkout rather than offered."
+            )
+
+    # ── A ROUTE PROVIDER THAT CANNOT ACTUALLY PAY ANYBODY ─────────────────
+    #
+    # `PAYMENTS_ROUTE_PROVIDER` decides who holds linked accounts and releases
+    # payouts. Not every gateway can: `CashfreePaymentAdapter.release_payout`
+    # RAISES, because Easy Split is a separate onboarding and
+    # `organizations.payout_account_id` holds a Razorpay id.
+    #
+    # Read from the adapter's DECLARED capability, never by calling
+    # `release_payout` to see whether it throws — on a real adapter that method
+    # is a live API request that creates a transfer, and a capability probe
+    # must not be able to move money or depend on a vendor being reachable.
+    #
+    # A PROBLEM, not a warning: the failure it prevents is invisible until it
+    # is expensive. Nothing breaks at deploy, nothing breaks at checkout, and
+    # then weeks after an event the first settlement dead-letters on money an
+    # organizer is owed.
+    route_provider = str(
+        getattr(settings, "PAYMENTS_ROUTE_PROVIDER", "")
+        or getattr(settings, "PAYMENTS_BACKEND", "")
+    )
+    if route_provider:
+        try:
+            from config.di import payment_port
+
+            port = payment_port(route_provider)
+        except Exception as exc:  # noqa: BLE001 — reported, never raised from here
+            problems.append(f"PAYMENTS_ROUTE_PROVIDER={route_provider} could not be built: {exc}")
+        else:
+            if not getattr(port, "supports_payouts", True):
+                problems.append(
+                    f"PAYMENTS_ROUTE_PROVIDER={route_provider} cannot release payouts, "
+                    "so organizers would never be paid. It may still TAKE payments — "
+                    "list it in PAYMENTS_ENABLED_GATEWAYS instead, and leave "
+                    "PAYMENTS_ROUTE_PROVIDER on a gateway that supports payouts "
+                    "(razorpay today)."
+                )
+
+        # ── AND IT NEEDS ITS OWN CREDENTIALS ──────────────────────────────
+        #
+        # `_ADAPTER_CREDENTIALS` is keyed on `PAYMENTS_BACKEND`, so it checks
+        # the DEFAULT gateway's keys and nothing else. The moment the route
+        # provider is a DIFFERENT gateway — which is the entire reason that
+        # setting exists — its credentials were checked by nobody.
+        #
+        # `PAYMENTS_BACKEND=cashfree` with payouts still on Razorpay would then
+        # boot cleanly, take payments correctly, and fail only when the first
+        # settlement tried to reach Razorpay with no key. Weeks after the event,
+        # on money an organizer is owed, which is the failure mode this whole
+        # module exists to move forward to boot time.
+        if route_provider != str(getattr(settings, "PAYMENTS_BACKEND", "")):
+            for key in _ADAPTER_CREDENTIALS.get(("PAYMENTS_BACKEND", route_provider), ()):
+                if not str(getattr(settings, key, "") or ""):
+                    problems.append(
+                        f"PAYMENTS_ROUTE_PROVIDER={route_provider} requires {key}, "
+                        "which is unset. Organizer payouts would fail at settlement "
+                        "time, long after the event."
+                    )
+
+    default_gateway = str(getattr(settings, "PAYMENTS_DEFAULT_GATEWAY", "") or "")
+    if default_gateway:
+        offered = {str(getattr(settings, "PAYMENTS_BACKEND", ""))} | {
+            str(g).strip().lower()
+            for g in (getattr(settings, "PAYMENTS_ENABLED_GATEWAYS", []) or [])
+        }
+        if default_gateway not in offered:
+            problems.append(
+                f"PAYMENTS_DEFAULT_GATEWAY={default_gateway} is not in "
+                "PAYMENTS_ENABLED_GATEWAYS (or PAYMENTS_BACKEND), so the "
+                "checkout would silently pre-select a different gateway."
+            )
 
     # ── QUEUE_BACKEND=local: NOT A FAKE, BUT NOT A QUEUE EITHER ────────────
     #

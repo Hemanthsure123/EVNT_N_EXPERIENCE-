@@ -35,6 +35,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -113,12 +114,58 @@ class PaymentService:
         self._port = payments_port
         self._task_queue = task_queue
 
+    # --- WHICH PROVIDER ANSWERS FOR A GIVEN PAYMENT ------------------------
+
+    def _port_for_gateway(self, gateway: str) -> PaymentPort:
+        """The adapter for one gateway.
+
+        `self._port` — the injected one — stays the default, so every test that
+        constructs this service with a fake adapter is unchanged and the
+        single-gateway deployment never touches the composition root.
+
+        ── WHY THIS CANNOT BE READ FROM SETTINGS ────────────────────────────
+
+        The gateway that took a payment is a fact about the BOOKING. Resolving
+        it from `PAYMENTS_BACKEND` at refund time would send a refund for money
+        Cashfree collected to Razorpay, which has never heard of the payment
+        and refuses it — after the customer has been told their refund is on
+        its way. Every method below that acts on an EXISTING payment therefore
+        resolves through here, from the row.
+        """
+        if not gateway or gateway == getattr(self._port, "name", ""):
+            return self._port
+        from config.di import payment_port
+
+        return payment_port(gateway)
+
+    def _port_for_booking(self, booking) -> PaymentPort:
+        return self._port_for_gateway(booking.gateway_or_default() if booking else "")
+
     # --- STAGE 1: webhook -> verify -> dedupe -> confirm -------------------
 
-    def handle_webhook(self, *, raw_body: bytes, signature: str) -> WebhookOutcome:
+    def handle_webhook(
+        self, *, raw_body: bytes, signature: str, gateway: str = "", timestamp: str = ""
+    ) -> WebhookOutcome:
+        """A signed delivery from a payment provider.
+
+        ── THE GATEWAY IS THE ROUTE, NOT A CLAIM IN THE BODY ────────────────
+
+        `gateway` comes from WHICH URL the provider posted to, never from
+        anything inside the payload. That matters: the body is unverified until
+        the signature passes, and choosing a verifier from an unverified field
+        would let a forger nominate the adapter whose secret they had guessed —
+        or simply the one with no secret configured. One route, one provider,
+        one secret, decided before a single byte of the body is read.
+
+        Each provider signs differently (Razorpay: hex HMAC of the body;
+        Cashfree: base64 HMAC of `timestamp + body`), which is why `timestamp`
+        is threaded through. Both are verified over the RAW bytes.
+        """
+        port = self._port_for_gateway(gateway)
+
         # 1) SIGNATURE — the only proof this is real. Reject unsigned/forged.
-        if not signature or not self._port.verify_webhook_signature(
-            payload=raw_body, signature=signature
+        if not signature or not port.verify_webhook_signature(
+            payload=raw_body, signature=signature, timestamp=timestamp
         ):
             raise InvalidWebhookSignatureError()
 
@@ -127,8 +174,7 @@ class PaymentService:
         except (ValueError, TypeError) as exc:
             raise MalformedWebhookError() from exc
 
-        event_type = event.get("event", "")
-        entity = event.get("payload", {}).get("payment", {}).get("entity", {})
+        event_type, entity = self._parse_delivery(gateway or "razorpay", event)
         rzp_payment_id = entity.get("id", "")
         if not rzp_payment_id:
             return WebhookOutcome("ignored")  # not a payment event we handle
@@ -154,7 +200,7 @@ class PaymentService:
 
     # --- STAGE 1b: verify-on-demand, for deployments with no public URL ----
 
-    def verify_and_confirm(self, *, provider_payment_id: str) -> WebhookOutcome:
+    def verify_and_confirm(self, *, provider_payment_id: str, order_id: str = "") -> WebhookOutcome:
         """Ask the provider about a payment and, if it is captured, confirm it.
 
         ── THIS IS THE SAME TRUST MODEL, NOT A WEAKER ONE ────────────────────
@@ -186,12 +232,45 @@ class PaymentService:
         needs no change here and cannot issue a second ticket for a payment
         this already fulfilled — which is exactly what the ledger is for.
         """
-        if not provider_payment_id:
+        if not provider_payment_id and not order_id:
             return WebhookOutcome("ignored")
+
+        # ── WHICH PROVIDER TO ASK ────────────────────────────────────────
+        #
+        # An `order_id` is the handle this system stores, so when one is given
+        # the booking it belongs to names the gateway that took the payment.
+        # Without it (the Razorpay path, where the browser has only a payment
+        # id) the default provider answers, exactly as before.
+        #
+        # The order id is NOT trusted as a claim: it only selects whom to ask,
+        # and every figure below still comes back from the provider. Somebody
+        # who supplies another customer's order gets a payment whose order
+        # resolves to that customer's booking, which is already paid and
+        # dedupes to nothing.
+        booking = self._bookings.get_by_payment_order_id(order_id) if order_id else None
+        port = self._port_for_booking(booking)
 
         # The provider is asked BEFORE any DB work: if it does not know this
         # id, or has not captured it, there is nothing to record.
-        payment = self._port.fetch_payment(payment_id=provider_payment_id)
+        #
+        # ── AN ORDER ID ALONE IS ENOUGH, AND IT HAS TO BE ────────────────
+        #
+        # Cashfree's modal checkout resolves with the ORDER it was opened for
+        # and does not always hand the browser a payment id — there is no
+        # `razorpay_payment_id` equivalent to forward. Without this branch the
+        # browser-side confirmation would be impossible for Cashfree, and
+        # fulfilment would rest entirely on the webhook: fine with a public
+        # HTTPS endpoint, and on a deployment without one it is exactly the
+        # "paid, nothing delivered" hole `reconcile_pending` exists to close,
+        # reopened for one gateway.
+        #
+        # It is the same question `reconcile_pending` asks, asked on demand
+        # rather than on a 120s timer, and it is no weaker: the provider still
+        # decides, and only a CAPTURED payment comes back.
+        if provider_payment_id:
+            payment = port.fetch_payment(payment_id=provider_payment_id, order_id=order_id)
+        else:
+            payment = port.captured_payment_for_order(order_id=order_id)
         if payment is None:
             logger.info(
                 "payments.verify.unknown_payment", extra={"payment_id": provider_payment_id}
@@ -356,9 +435,16 @@ class PaymentService:
 
         stats = {"checked": len(candidates), "captured": 0, "confirmed": 0, "refunding": 0}
 
-        for booking_id, order_id in candidates:
+        for booking_id, order_id, gateway in candidates:
             try:
-                payment = self._port.captured_payment_for_order(order_id=order_id)
+                # The gateway comes off the booking ROW, not settings: a
+                # deployment that has since changed its default would otherwise
+                # ask the wrong provider about every older order and conclude,
+                # wrongly and silently, that nobody had paid — turning the
+                # backstop that exists to stop "paid, nothing delivered" into
+                # the thing that guarantees it.
+                port = self._port_for_gateway(gateway)
+                payment = port.captured_payment_for_order(order_id=order_id)
             except Exception:
                 # One unreachable lookup must not stop the rest — the next tick
                 # retries it, and the candidate is still in the window.
@@ -377,7 +463,9 @@ class PaymentService:
             # captured without being fulfilled — and it buys a single trust
             # path rather than a second, subtly different one that takes a
             # pre-fetched payment on faith.
-            outcome = self.verify_and_confirm(provider_payment_id=payment.payment_id)
+            outcome = self.verify_and_confirm(
+                provider_payment_id=payment.payment_id, order_id=order_id
+            )
             if outcome.status in {"confirmed", "already_confirmed"}:
                 stats["confirmed"] += 1
             elif outcome.status == "hold_expired_refunding":
@@ -398,6 +486,65 @@ class PaymentService:
         if stats["captured"]:
             logger.warning("payments.reconcile.summary", extra=stats)
         return stats
+
+    @staticmethod
+    def _parse_delivery(gateway: str, event: dict) -> tuple[str, dict]:
+        """One provider's delivery, flattened to THIS module's own vocabulary.
+
+        ── PARSING IS THE ONLY THING THAT DIFFERS ───────────────────────────
+
+        Everything after this line — the ledger key, the amount check, the
+        idempotent confirm, the auto-refund on a lapsed hold — is one code path
+        for every provider, which is the rule `_process_captured` already
+        enforces for the webhook, `verify_and_confirm` and `reconcile_pending`:
+        no entry point gets to be the lenient one. A second provider must
+        therefore be a second PARSER and nothing more.
+
+        Returns `(event_type, entity)` in Razorpay's shape, because that is the
+        shape `_process_captured` already reads and rewriting it for a tie
+        would be churn on the money path.
+
+        Cashfree reports AMOUNTS IN RUPEES. Converted here via `Decimal` and
+        never a float: the amount check downstream compares this to
+        `booking.total_amount_minor` for exact equality, and a float round trip
+        turning 1999 into 1998 would refuse a correct payment and auto-refund
+        a customer who did nothing wrong.
+        """
+        if gateway != "cashfree":
+            entity = event.get("payload", {}).get("payment", {}).get("entity", {})
+            return event.get("event", ""), entity
+
+        data = event.get("data", {}) or {}
+        payment = data.get("payment", {}) or {}
+        order = data.get("order", {}) or {}
+        delivery_type = str(event.get("type", ""))
+        # Map Cashfree's event names onto the two this module acts on. Anything
+        # else (a refund status, a dispute) falls through to "ignored" — and is
+        # still WRITTEN to the ledger by the caller, so a provider retrying it
+        # forever does not reprocess anything.
+        status = str(payment.get("payment_status") or "")
+        if delivery_type == "PAYMENT_SUCCESS_WEBHOOK" or status == "SUCCESS":
+            event_type = _EVENT_CAPTURED
+        elif delivery_type in {"PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK"}:
+            event_type = _EVENT_FAILED
+        else:
+            event_type = delivery_type
+
+        amount = payment.get("payment_amount")
+        if amount is None:
+            amount = order.get("order_amount")
+        try:
+            amount_minor = int(
+                (Decimal(str(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            amount_minor = 0
+
+        return event_type, {
+            "id": str(payment.get("cf_payment_id") or ""),
+            "order_id": str(order.get("order_id") or ""),
+            "amount": amount_minor,
+        }
 
     def _process(self, event_type: str, entity: dict, uow: UnitOfWork) -> WebhookOutcome:
         if event_type == _EVENT_CAPTURED:
@@ -537,10 +684,18 @@ class PaymentService:
             )
             return False
 
-        rzp_refund_id = self._port.refund(
+        # THROUGH THE GATEWAY THAT COLLECTED THE MONEY, never the default.
+        # `payment.rzp_order_id` is this system's stored order handle whichever
+        # provider issued it, and Cashfree refunds are order-scoped — so both
+        # travel. Refunding through the wrong provider would be refused after
+        # the customer had already been told the money was on its way.
+        refund_booking = self._bookings.get_by_id(payment.booking_id)
+        refund_port = self._port_for_booking(refund_booking)
+        rzp_refund_id = refund_port.refund(
             payment_id=payment.rzp_payment_id,
             amount_minor=refund_amount,
             idempotency_key=f"refund:{payment.id}",
+            order_id=payment.rzp_order_id,
         )
 
         with UnitOfWork() as uow:

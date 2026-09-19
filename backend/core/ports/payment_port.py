@@ -44,6 +44,39 @@ class PaymentProviderUnavailable(Exception):
 
 
 @dataclass(frozen=True)
+class CreatedOrder:
+    """What a provider hands back when an order is opened.
+
+    ── WHY THIS IS NO LONGER JUST AN ORDER ID ────────────────────────────────
+
+    `create_order` returned a bare `str`, which was exactly right while
+    Razorpay was the only provider: Razorpay Checkout is opened with the ORDER
+    id itself, so the id was both the platform's handle and the browser's.
+
+    Cashfree splits those two things. The order id is still the handle every
+    server-side path uses — `booking.payment_order_id`, the webhook's lookup,
+    `captured_payment_for_order`, the reconciliation sweep — but the browser
+    cannot open a checkout with it. It needs a `payment_session_id`, minted
+    with the order and returned only by that one call.
+
+    So the port returns both, and `checkout_token` is EMPTY for any provider
+    whose checkout opens on the order id alone. This is the same "the first
+    real consumer needs it" port evolution `EmailPort.send` went through when
+    `notifications` needed a provider reference back — the alternative was a
+    second round trip to re-fetch a token the create call already had, on the
+    money path.
+
+    `checkout_token` is NOT a secret. It is the public handle for one order,
+    it expires, and it is useless without the order it belongs to — the same
+    class of value as a Razorpay order id or a `key_id`. The signing secret
+    never leaves the backend.
+    """
+
+    order_id: str
+    checkout_token: str = ""
+
+
+@dataclass(frozen=True)
 class OrderTransfer:
     """One Route transfer attached to an order: the organizer's share to their
     linked account. `on_hold=True` means Razorpay holds the money until
@@ -81,6 +114,44 @@ class ProviderPayment:
 
 
 class PaymentPort(ABC):
+    #: The `PAYMENTS_BACKEND`/gateway name this adapter answers to — the value
+    #: stored on `Booking.payment_gateway` and echoed to the browser. It is on
+    #: the PORT rather than inferred from the class, because every path that
+    #: resolves a second gateway later (the webhook, the refund, the
+    #: reconciliation sweep) needs the booking's own answer and must never get
+    #: it by guessing from settings, which describe the DEFAULT and not the
+    #: gateway that actually took this particular payment.
+    name: str = ""
+
+    #: Whether `create_order(transfers=...)` is honoured.
+    #:
+    #: Razorpay Route attaches the organizer's on-hold share at order time.
+    #: Cashfree's equivalent (Easy Split) is a separately-onboarded product
+    #: this platform has not enabled, so a Cashfree adapter would DROP the
+    #: transfers silently — and a silently-dropped split is money quietly not
+    #: held for an organizer. Declaring it lets `booking` skip building one
+    #: rather than build one that goes nowhere.
+    supports_order_time_split: bool = True
+
+    #: Whether `create_order` needs the buyer's contact details in `notes`.
+    #:
+    #: Razorpay does not (it collects them inside Checkout); Cashfree REFUSES
+    #: an order without a customer id and phone. Declared rather than always
+    #: supplied, because assembling them costs a lazy load of the related user
+    #: on the platform's hottest write — an extra query on every booking, for a
+    #: field one of three adapters reads.
+    requires_customer_details: bool = False
+
+    #: Whether this adapter can hold linked accounts and RELEASE PAYOUTS —
+    #: i.e. whether it may be `PAYMENTS_ROUTE_PROVIDER`.
+    #:
+    #: Declared rather than discovered by CALLING `release_payout`, which is
+    #: the obvious alternative and is wrong: on a real adapter that method is a
+    #: live API request that creates a transfer. A capability probe must never
+    #: be able to move money, and a boot-time check must never depend on a
+    #: vendor being reachable.
+    supports_payouts: bool = True
+
     @abstractmethod
     def create_linked_account(self, *, reference_id: str, name: str, email: str) -> str:
         """Create a linked/connected account (Razorpay Route linked account)
@@ -96,19 +167,40 @@ class PaymentPort(ABC):
         receipt: str,
         notes: dict,
         transfers: list[OrderTransfer] | None = None,
-    ) -> str:
-        """Create a payment order and return its order id. `transfers`, if
-        given, defines the Route split applied when the payment is captured."""
+    ) -> CreatedOrder:
+        """Create a payment order. `transfers`, if given, defines the split
+        applied when the payment is captured (Razorpay Route).
+
+        Returns the order id AND, where the provider needs one, the token its
+        browser SDK opens a checkout with — see `CreatedOrder`. A provider that
+        ignores `transfers` must say so via `supports_order_time_split`, so the
+        caller never believes a split was attached that was silently dropped."""
 
     @abstractmethod
-    def verify_webhook_signature(self, *, payload: bytes, signature: str) -> bool:
+    def verify_webhook_signature(
+        self, *, payload: bytes, signature: str, timestamp: str = ""
+    ) -> bool:
         """Return True only if `signature` is a valid vendor signature for the
         RAW `payload` bytes. This is the ONLY proof a payment is real — the
-        browser redirect is not. Never trust an unsigned/mis-signed webhook."""
+        browser redirect is not. Never trust an unsigned/mis-signed webhook.
+
+        `timestamp` is the vendor's own replay guard, sent in a header beside
+        the signature and included in the signed material. Razorpay signs the
+        body alone and ignores it; Cashfree signs `timestamp + body`, so
+        omitting it there is not a laxer check but a check that always FAILS.
+        Defaulted so every existing caller and adapter is unchanged."""
 
     @abstractmethod
-    def fetch_payment(self, *, payment_id: str) -> ProviderPayment | None:
+    def fetch_payment(self, *, payment_id: str, order_id: str = "") -> ProviderPayment | None:
         """Ask the provider what it thinks of a payment. `None` if unknown.
+
+        `order_id` is a HINT, never a claim, and it is required by some
+        providers rather than optional: Razorpay addresses a payment globally
+        (`GET /payments/{id}`) while Cashfree addresses it only within its order
+        (`GET /orders/{order}/payments/{id}`). It changes nothing about trust —
+        every figure still comes back from the provider, and a caller that
+        supplies a mismatched pair gets `None` rather than somebody else's
+        payment.
 
         ── WHY THIS EXISTS ALONGSIDE THE WEBHOOK ─────────────────────────────
 
@@ -157,11 +249,18 @@ class PaymentPort(ABC):
         """
 
     @abstractmethod
-    def refund(self, *, payment_id: str, amount_minor: int, idempotency_key: str) -> str:
+    def refund(
+        self, *, payment_id: str, amount_minor: int, idempotency_key: str, order_id: str = ""
+    ) -> str:
         """Refund a captured payment (reversing any Route transfers). Returns
         the vendor refund id. `idempotency_key` makes the call safe to retry
         and safe under concurrency — the vendor must never double-refund for
-        the same key."""
+        the same key.
+
+        `order_id` for the same reason `fetch_payment` takes one: Razorpay
+        refunds a payment id, Cashfree refunds within an order
+        (`POST /orders/{order}/refunds`) and takes the idempotency key as the
+        merchant-supplied `refund_id` that makes the call unique."""
 
     @abstractmethod
     def split_transfer(

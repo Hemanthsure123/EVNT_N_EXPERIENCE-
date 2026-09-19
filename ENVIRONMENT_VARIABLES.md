@@ -105,10 +105,16 @@ Two Supabase specifics that cost an afternoon each if missed:
 
 | Variable | Required | Default | Used By | Description |
 | --- | --- | --- | --- | --- |
-| `PAYMENTS_BACKEND` | **Production** | `fake` | `di.payment_port()` | `fake` \| `razorpay`. Production refuses `fake` — every checkout would succeed and no money would move. |
+| `PAYMENTS_BACKEND` | **Production** | `fake` | `di.payment_port()` | `fake` \| `razorpay` \| `cashfree`. The DEFAULT adapter and the gateway a booking gets when nothing else is chosen. Production refuses `fake` — every checkout would succeed and no money would move. It no longer implies who pays organizers: that is `PAYMENTS_ROUTE_PROVIDER`, which defaults to this and can be set independently. |
 | `RAZORPAY_KEY_ID` | **Production** | `""` | `RazorpayPaymentAdapter` | Dashboard → Settings → API Keys. |
 | `RAZORPAY_KEY_SECRET` | **Production** | `""` | `RazorpayPaymentAdapter` | Shown once at generation. |
 | `RAZORPAY_WEBHOOK_SECRET` | **Dev + Prod** | `""` | `RazorpayPaymentAdapter`, `FakePaymentAdapter` | Verifies the **only** proof of payment the platform accepts. Needed in dev too: the fake adapter runs the same real HMAC. |
+| `CASHFREE_APP_ID` | Optional | `""` | `CashfreePaymentAdapter` | Dashboard → Developers → API Keys. The TEST pair is prefixed `TEST`. Required when `cashfree` is the backend or is listed in `PAYMENTS_ENABLED_GATEWAYS`. |
+| `CASHFREE_SECRET_KEY` | Optional | `""` | `CashfreePaymentAdapter` | The pair to the app id, and **also the webhook signing key** — Cashfree has no separate webhook secret. Signs `x-webhook-timestamp` + the raw body. |
+| `CASHFREE_ENVIRONMENT` | Optional | `sandbox` | `CashfreePaymentAdapter`, `POST /bookings` | `sandbox` \| `production`. Selects the API host AND is sent to the browser with the order, so the JS SDK's `mode` cannot drift from the environment that minted the session. |
+| `PAYMENTS_ENABLED_GATEWAYS` | Optional | `[]` (just `PAYMENTS_BACKEND`) | `di.enabled_payment_gateways()` | Comma-separated gateways the checkout may OFFER, e.g. `cashfree,razorpay`. Empty means no selector at all — the deployment behaves exactly as it did before a second gateway existed. A gateway listed without its credentials is **refused by production preflight**, never silently dropped. `fake` is refused outright: a simulated option beside a live one is a pay-nothing button. |
+| `PAYMENTS_DEFAULT_GATEWAY` | Optional | `PAYMENTS_BACKEND` | `di.enabled_payment_gateways()` | Which gateway the checkout pre-selects. Must be in the enabled set, or preflight refuses — pre-selecting a gateway whose button cannot work is worse than pre-selecting the other. |
+| `PAYMENTS_ROUTE_PROVIDER` | Optional | `PAYMENTS_BACKEND` | `di.route_payment_port()` | Which gateway holds **linked accounts** and **releases payouts** — `organizations.link_payout_account` and `settlements.release_payout`. A THIRD question, distinct from both rows above: taking a payment is per booking, paying an organizer is not. `organizations.payout_account_id` stores one vendor's account id, and only that vendor can settle against it. Set this when `PAYMENTS_BACKEND` is **not** the provider holding your linked accounts. Cashfree cannot be the route provider today (`supports_payouts = False`); production preflight **and** `deploy/render-env.sh` both refuse that combination, because the failure is otherwise invisible until a settlement dead-letters weeks after an event. |
 
 ### Email (SMTP)
 
@@ -344,6 +350,7 @@ visitor — no backend secret ever belongs here.
 | `NEXT_PUBLIC_API_BASE_URL` | **Dev + Prod** | `http://localhost:8000` (dev only) | `lib/api/config.ts`, `app/sw.js/route.ts` | Backend origin, no trailing slash. **`next build` fails without it in production.** |
 | `NEXT_PUBLIC_SITE_URL` | **Dev + Prod** | `http://localhost:3000` (dev only) | `lib/api/config.ts`, `lib/seo/metadata.ts` | This site's public origin: canonical URLs, sitemap, OpenGraph. **`next build` fails without it in production.** |
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | Optional | `""` | `lib/booking/razorpay.ts` | Client-safe key id. Optional because `POST /bookings` returns the key its order was created with, and that one always wins; this is the hard-refresh fallback. |
+| `NEXT_PUBLIC_CASHFREE_ENVIRONMENT` | Optional | `sandbox` | `lib/booking/cashfree.ts` | `sandbox` \| `production`. Optional for the same reason the Razorpay key is: `POST /bookings` returns the environment its order was created in and that one always wins, with a session-storage memory behind it. This is only the hard-refresh-with-storage-blocked fallback, and it defaults to `sandbox` — a sandbox SDK against a production session fails visibly before money moves, and the reverse is the mistake discovered only in production. |
 | `NEXT_PUBLIC_OAUTH_BASE_URL` | Future | unset | `lib/api/auth.ts` | Turns on the Google/Apple buttons. **Leave unset until the backend endpoints exist**, or they fail against a 404 instead of explaining themselves. |
 | `NEXT_PUBLIC_PHONE_AUTH_ENABLED` | Future | unset | `lib/api/auth.ts` | Turns on phone + OTP sign-in. Same caveat. |
 | `NEXT_PUBLIC_MEDIA_BASE_URL` | Optional | unset | `next.config.mjs` | The host uploads are served from, added to `next/image`'s `remotePatterns` allow-list. Needed only when `STORAGE_BACKEND=s3\|gcs` — with `local`, uploads come through the API and `NEXT_PUBLIC_API_BASE_URL` already covers them. **`next/image` refuses any host not on that list**, so a wrong value here is every poster silently failing. |
@@ -373,6 +380,8 @@ the app uses them.
 | `MOCK_API_PORT` | `scripts/mock-api.mjs` | Fixture API port. Defaults to 8000, the real backend's port — you run one or the other. |
 | `MOCK_API_ORIGIN` | `scripts/mock-api.mjs` | Origin the fixture advertises. |
 | `MOCK_RAZORPAY_KEY_ID` | `scripts/mock-api.mjs` | Key id the fixture returns from `POST /bookings`. |
+| `MOCK_PAYMENT_GATEWAYS` | `scripts/mock-api.mjs` | Comma-separated gateways the fixture reports in `payment.available_providers`. Defaults to `razorpay` — ONE entry, because that is what a deployment with an unset `PAYMENTS_ENABLED_GATEWAYS` reports, and the fixture should show the ordinary case. Set `cashfree,razorpay` to exercise the payment selector locally. |
+| `MOCK_CASHFREE_ENVIRONMENT` | `scripts/mock-api.mjs` | `sandbox` \| `production`, returned as `payment.environment` for a Cashfree order. |
 | `CI` | `playwright.config.ts` | Standard CI flag: retries, no reuse of an existing server. |
 | `NODE_ENV` | Next.js, `lib/api/config.ts` | Set by the framework, never by hand. Gates the fail-fast URL check. |
 

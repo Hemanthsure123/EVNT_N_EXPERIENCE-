@@ -98,6 +98,18 @@ type BookingContextValue = {
    */
   paymentProvider: string;
   setPaymentProvider: (provider: string) => void;
+  /**
+   * Every gateway this deployment offers, as the server listed them on the
+   * create response. `[]` before the booking exists.
+   *
+   * It comes from the SERVER rather than an env var for the same reason
+   * `paymentProvider` does: which gateways are usable depends on which
+   * credentials are configured, and the browser cannot see those. A frontend
+   * list would eventually draw a logo for a gateway the backend had dropped —
+   * a control that fails at the press, on the checkout.
+   */
+  availableProviders: string[];
+  setAvailableProviders: (providers: string[]) => void;
   step: StepId;
   /**
    * False on the first screen of a session, true after any step change.
@@ -199,6 +211,7 @@ export function BookingProvider({
   }, []);
   const [paymentKeyId, setPaymentKeyId] = React.useState('');
   const [paymentProvider, setPaymentProvider] = React.useState('');
+  const [availableProviders, setAvailableProviders] = React.useState<string[]>([]);
 
   const step = currentStep(pathname);
   const firstStep = React.useRef(step);
@@ -336,6 +349,8 @@ export function BookingProvider({
       setPaymentKeyId,
       paymentProvider,
       setPaymentProvider,
+      availableProviders,
+      setAvailableProviders,
       step,
       hasNavigated,
       query: searchParams?.toString() ?? '',
@@ -361,6 +376,7 @@ export function BookingProvider({
       setBooking,
       paymentKeyId,
       paymentProvider,
+      availableProviders,
       step,
       hasNavigated,
       searchParams,

@@ -7,15 +7,22 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { ApiError } from '@/lib/api/errors';
 import { rememberFailure } from '@/lib/booking/payment-failure';
-import { setBookingDonation } from '@/lib/api/bookings';
+import { setBookingDonation, setBookingGateway } from '@/lib/api/bookings';
 import { simulatePayment, verifyPayment } from '@/lib/api/payments';
-import { resolveProvider } from '@/lib/booking/payment-provider';
+import { openCashfreeCheckout, resolveCashfreeMode } from '@/lib/booking/cashfree';
+import {
+  rememberProvider,
+  resolveProvider,
+  selectableProviders,
+  type PaymentProvider,
+} from '@/lib/booking/payment-provider';
 import { openCheckout, resolveKeyId } from '@/lib/booking/razorpay';
 import { formatFromPrice } from '@/lib/discovery/format';
 import type { Booking, EventDetail } from '@/lib/api/types';
 import { cn } from '@/lib/utils/cn';
 import { CTA_PILL_LG, PILL } from './cta';
 import { useBooking } from './booking-context';
+import { PaymentSelector } from './payment-selector';
 
 /**
  * Paying, ON the review screen.
@@ -103,6 +110,7 @@ export function PaymentSection({
 
   const keyId = resolveKeyId(paymentKeyId);
   const provider = resolveProvider(paymentProvider);
+  const cashfreeMode = resolveCashfreeMode('');
   const total = active.total_amount;
   const isDemo = provider === 'fake';
 
@@ -167,6 +175,70 @@ export function PaymentSection({
       );
       return;
     }
+    // ── THE GATEWAY DECIDES WHICH SDK OPENS, AND NOTHING ELSE ──────────
+    //
+    // The order's own provider, off the booking row — never the selector's
+    // current value. Those differ for exactly as long as a switch is in
+    // flight, and opening Cashfree's SDK against a Razorpay order id is a
+    // checkout that fails after the customer has committed to paying, which
+    // is the failure this whole module is arranged around.
+    const orderProvider = resolveProvider(order.payment_gateway ?? paymentProvider);
+
+    if (orderProvider === 'cashfree') {
+      const sessionId = order.payment_session_id ?? '';
+      if (!sessionId) {
+        // An order with no session is one no browser can pay for. Repairing
+        // it is the same write that repairs a missing order (see
+        // `reissueOrder`), so say so rather than opening an SDK that would
+        // reject it.
+        setBusy(false);
+        setError(
+          'We could not prepare this payment just now. Your tickets are still held and ' +
+            'nothing has been charged — please try again in a moment.',
+        );
+        return;
+      }
+      await openCashfreeCheckout({
+        paymentSessionId: sessionId,
+        mode: cashfreeMode,
+        orderId: order.payment_order_id,
+        onSuccess: (orderId) => {
+          // IDENTICAL trust model to Razorpay below: this hands the backend a
+          // lookup key and asks it to go and ask Cashfree. Cashfree's modal
+          // resolves with the ORDER rather than a payment id, so that is what
+          // travels; the server resolves the captured payment from it.
+          void verifyPayment('', orderId).catch(() => {
+            /* Best-effort nudge. The webhook and the confirmation screen's
+               poll are both still running. */
+          });
+          router.replace(
+            `/booking/${event.id}/confirmation?booking=${active.id}&order=${encodeURIComponent(
+              orderId,
+            )}`,
+          );
+        },
+        onDismiss: () => {
+          setBusy(false);
+          setError(null);
+        },
+        onFailure: (message, failure) => {
+          setBusy(false);
+          setError(message);
+          if (failure) {
+            rememberFailure(
+              active.id,
+              { message: failure.message, code: failure.code, reason: failure.reason, orderId: failure.orderId },
+              Date.now(),
+            );
+          }
+          const destination = `/booking/${event.id}/failed?booking=${encodeURIComponent(active.id)}`;
+          if (pathname?.endsWith('/failed')) router.replace(destination);
+          else router.push(destination);
+        },
+      });
+      return;
+    }
+
     await openCheckout({
       keyId,
       orderId: order.payment_order_id,
@@ -500,29 +572,94 @@ export function PaymentSection({
 }
 
 /**
- * "Pay using — Razorpay". Named, not chosen.
+ * "Pay using — Cashfree ⌄". Chosen, when there is genuinely something to choose.
  *
- * The reference design puts a payment-method picker here (`Pay Using ⌄ / Jupiter
- * UPI`). We do not have one and will not draw one: Razorpay Checkout is a hosted
- * modal, the instrument is selected INSIDE it, and a chevron on this origin
- * promising a choice we cannot honour is a control that lies about what pressing
- * it does — on the last screen before money moves, of all places.
+ * ── THIS REVERSES A DELIBERATE DECISION, SO HERE IS WHAT CHANGED ──────────
  *
- * What is true and worth saying is who handles the payment, so that is what it
- * says. In demo mode it says that instead, because claiming a provider that is
- * not connected would be the same lie in the other direction.
+ * This was plain text, and the comment here said why: the reference design put
+ * a method picker in this slot, we had one provider, and "a chevron on this
+ * origin promising a choice we cannot honour is a control that lies about what
+ * pressing it does — on the last screen before money moves, of all places."
+ *
+ * That rule has not moved an inch. What moved is the fact under it: there are
+ * two gateways, the SERVER says which are on offer, and pressing this really
+ * does re-issue the order against the one chosen. `selectableProviders` drops
+ * anything this build has no SDK for and drops `fake` outright, so on a
+ * single-gateway or demo deployment `PaymentSelector` renders exactly the text
+ * it always did, with no chevron and nothing to press. The affordance exists
+ * BECAUSE something is behind it — the same test the coupon field had to pass.
+ *
+ * ── THE SWITCH IS A SERVER WRITE, NOT A LOCAL PREFERENCE ──────────────────
+ *
+ * An order belongs to exactly one provider, and by the time this control is on
+ * screen the order already exists (the hold is taken when the review screen
+ * opens, because the countdown has to be counting something). So a press calls
+ * `POST /bookings/{id}/payment-gateway`, which moves the gateway under the
+ * booking's row lock and issues a NEW order — it never re-reserves, because a
+ * tier could be gone by the second reserve and choosing a payment method must
+ * never cost somebody their seats.
+ *
+ * The new booking is published to the context, so the Pay button beside this
+ * control and the order it opens can never disagree about which provider is
+ * being paid. A FAILED switch reverts the displayed selection rather than
+ * leaving a name on screen that the order does not match — the hold survives
+ * (the server keeps it deliberately) and the old order is still payable.
  */
 export function PayUsing() {
-  const { paymentProvider } = useBooking();
+  const {
+    paymentProvider,
+    availableProviders,
+    booking,
+    reservedFor,
+    setBooking,
+  } = useBooking();
   const provider = resolveProvider(paymentProvider);
+  const options = selectableProviders(availableProviders);
+
+  // The selection shown while a switch is in flight. Optimistic on purpose: a
+  // control that snaps back for the length of a request reads as having
+  // ignored the press, and somebody presses again — on the money path.
+  const [pendingChoice, setPendingChoice] = React.useState<PaymentProvider | null>(null);
+  const [switching, setSwitching] = React.useState(false);
+
+  const shown = pendingChoice ?? provider;
+
+  const choose = async (next: PaymentProvider) => {
+    if (!booking || switching) return;
+    setPendingChoice(next);
+    setSwitching(true);
+    try {
+      const moved = await setBookingGateway(booking.id, next);
+      setBooking(moved, reservedFor);
+      // Keep it for the session, so a reload on this screen still knows what
+      // it is talking to — `GET /bookings/{id}` carries the gateway now, but
+      // the memory is what covers the window before that read returns.
+      rememberProvider(moved.payment_gateway ?? next);
+    } catch {
+      // Silent, and deliberately so: the hold is untouched, the previous order
+      // is still payable, and the only thing that changed is that the name
+      // reverts to the provider the order actually belongs to. An error banner
+      // here would announce a failure on a screen whose Pay button still works.
+      setPendingChoice(null);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  // Once the server's answer arrives, the optimistic value has done its job.
+  // Clearing it here rather than in `choose` keeps ONE source of truth for
+  // what is displayed: the booking row, as soon as it agrees.
+  React.useEffect(() => {
+    if (pendingChoice && !switching && provider === pendingChoice) setPendingChoice(null);
+  }, [pendingChoice, switching, provider]);
+
   return (
-    <div className="flex min-w-0 flex-col">
-      <span className="text-caption text-muted-foreground">
-        {provider === 'fake' ? 'No provider connected' : 'Pay using'}
-      </span>
-      <span className="truncate text-body-sm font-semibold text-foreground">
-        {provider === 'fake' ? 'Demo mode' : 'Razorpay'}
-      </span>
-    </div>
+    <PaymentSelector
+      value={shown}
+      options={options}
+      onSelect={(next) => void choose(next)}
+      busy={switching}
+      disabled={!booking}
+    />
   );
 }
