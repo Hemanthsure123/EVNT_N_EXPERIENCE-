@@ -210,6 +210,52 @@ export type CashfreeFailure = {
   orderId?: string;
 };
 
+/**
+ * The SDK's own modal container, and the page style it sets.
+ *
+ * Both read off `cashfree.js` rather than guessed: it appends an element with
+ * id `cashfree-modal-container`, and on the iframe's `onload` it sets
+ * `document.body.style.setProperty("overflow","hidden","important")`. Its
+ * `_closeIframeModal` is the only thing that undoes either.
+ */
+const CASHFREE_MODAL_IDS = ['cashfree-modal-container', 'cashfreePrivateAtomDiv'] as const;
+
+/**
+ * Remove anything the SDK left on the page.
+ *
+ * ── WHY THE CALLER HAS TO DO THIS ────────────────────────────────────────
+ *
+ * The SDK removes its modal in `_closeIframeModal`, which runs when the modal
+ * CLOSES. A modal that never opened never closes — so a blocked form submit, a
+ * refused session, a dropped network or a browser extension leaves
+ * `#cashfree-modal-container` sitting on the page.
+ *
+ * That container is a full-screen overlay appended to `<body>`, OUTSIDE React's
+ * tree. So it survives every client-side navigation: the customer sees the
+ * whole application dimmed and unresponsive, on the checkout and on every
+ * screen they move to afterwards, until they hard-refresh. That is a far worse
+ * outcome than the payment failing, and it is entirely ours to prevent — we
+ * cannot patch a third-party SDK, but we can refuse to leave its wreckage up.
+ *
+ * Idempotent and total: it runs after EVERY checkout attempt, successful or
+ * not, because "the modal closed normally" is not a thing this code can verify.
+ * Removing an element the SDK has already removed is a no-op.
+ */
+export function dismissCashfreeOverlay(): void {
+  if (typeof document === 'undefined') return;
+  try {
+    for (const id of CASHFREE_MODAL_IDS) {
+      document.getElementById(id)?.remove();
+    }
+    // Set with `important` by the SDK, so it must be REMOVED rather than
+    // overwritten — assigning '' to an !important property does nothing.
+    document.body?.style.removeProperty('overflow');
+    document.documentElement?.style.removeProperty('overflow');
+  } catch {
+    /* A cleanup that throws would be worse than the mess it is clearing. */
+  }
+}
+
 export async function openCashfreeCheckout(args: CashfreeCheckoutArgs): Promise<void> {
   const ready = await loadCashfree();
   if (!ready) {
@@ -241,6 +287,10 @@ export async function openCashfreeCheckout(args: CashfreeCheckoutArgs): Promise<
         : 'The payment did not go through. No money has been taken.',
     );
     return;
+  } finally {
+    // Whatever happened — resolved, rejected, or resolved with an error — the
+    // SDK's modal must not outlive this call. See `dismissCashfreeOverlay`.
+    dismissCashfreeOverlay();
   }
 
   if (result?.error) {

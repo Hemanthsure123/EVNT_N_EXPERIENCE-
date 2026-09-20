@@ -1705,6 +1705,13 @@ const server = createServer((req, res) => {
       if (booking.payment_gateway === 'cashfree') {
         booking.payment_session_id = `session_fixture_${booking.payment_order_id}`;
       }
+      // Derived on the server from the gateway; mirrored here so the fixture is
+      // exactly as generous as the contract. Blank for a gateway with no
+      // environment split, which is what the serializer returns.
+      booking.payment_environment =
+        booking.payment_gateway === 'cashfree'
+          ? (process.env.MOCK_CASHFREE_ENVIRONMENT ?? 'sandbox')
+          : '';
       bookings.set(booking.id, booking);
       // Hold the stock, so the next read of this event's tiers reflects it.
       for (const item of items) {
@@ -2249,6 +2256,8 @@ const server = createServer((req, res) => {
       // `CreatedOrder.checkout_token` does.
       booking.payment_session_id =
         next === 'cashfree' ? `session_fixture_${booking.payment_order_id}` : '';
+      booking.payment_environment =
+        next === 'cashfree' ? (process.env.MOCK_CASHFREE_ENVIRONMENT ?? 'sandbox') : '';
       const { user_email: _ignored, ...payload } = booking;
       sendJson(req, res, 200, payload, 'private, no-store');
     });

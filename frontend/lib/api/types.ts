@@ -388,6 +388,17 @@ export type Booking = {
    */
   payment_gateway?: string;
   payment_session_id?: string;
+  /**
+   * `'sandbox' | 'production'` for a gateway whose SDK is constructed with an
+   * environment (Cashfree); empty otherwise.
+   *
+   * On the BOOKING rather than only the create response, because the browser
+   * needs it wherever it opens a checkout — including after a reload, and for
+   * a hold adopted from `?booking=`, neither of which ran the reserve that
+   * used to be the only place it was published. A mode that disagrees with the
+   * session opens against the wrong API and is refused.
+   */
+  payment_environment?: string;
   items?: BookingItem[];
   created_at: string;
 };

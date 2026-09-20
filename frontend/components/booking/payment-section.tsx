@@ -9,7 +9,11 @@ import { ApiError } from '@/lib/api/errors';
 import { rememberFailure } from '@/lib/booking/payment-failure';
 import { setBookingDonation, setBookingGateway } from '@/lib/api/bookings';
 import { simulatePayment, verifyPayment } from '@/lib/api/payments';
-import { openCashfreeCheckout, resolveCashfreeMode } from '@/lib/booking/cashfree';
+import {
+  dismissCashfreeOverlay,
+  openCashfreeCheckout,
+  resolveCashfreeMode,
+} from '@/lib/booking/cashfree';
 import {
   rememberProvider,
   resolveProvider,
@@ -110,7 +114,16 @@ export function PaymentSection({
 
   const keyId = resolveKeyId(paymentKeyId);
   const provider = resolveProvider(paymentProvider);
-  const cashfreeMode = resolveCashfreeMode('');
+  const cashfreeMode = resolveCashfreeMode(active.payment_environment ?? '');
+
+  // ── NEVER LEAVE THE PROVIDER'S MODAL BEHIND ────────────────────────────
+  //
+  // `openCashfreeCheckout` clears it when the call settles, which covers the
+  // ordinary paths. This covers the one it cannot: the customer pressing
+  // browser BACK while the modal is open. React unmounts this screen, the
+  // SDK's container is a child of <body> that React never owned, and it would
+  // stay — dimming every screen they visit next until a hard refresh.
+  React.useEffect(() => dismissCashfreeOverlay, []);
   const total = active.total_amount;
   const isDemo = provider === 'fake';
 
