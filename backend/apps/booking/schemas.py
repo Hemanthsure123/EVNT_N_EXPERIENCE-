@@ -134,6 +134,36 @@ class BookingSummarySerializer(serializers.ModelSerializer):
         redemption = getattr(obj, "coupon_redemption", None)
         return redemption.coupon.code if redemption is not None else None
 
+    payment_environment = serializers.SerializerMethodField()
+
+    def get_payment_environment(self, obj) -> str:
+        """Which of the gateway's two environments minted this order's session.
+
+        ── WHY IT TRAVELS WITH THE BOOKING ──────────────────────────────────
+
+        Cashfree's browser SDK is constructed with a `mode`, and a mode that
+        disagrees with the environment that minted the `payment_session_id`
+        opens against the wrong API and is refused. The frontend used to take
+        it from a `sessionStorage` copy written during the reserve, falling
+        back to a build-time env var.
+
+        Both of those go missing in ordinary use: a reload clears nothing but a
+        private window does, and a booking ADOPTED from `?booking=` by the
+        hold guard never ran the reserve that wrote the copy. The fallback was
+        then a `NEXT_PUBLIC_` value that is easy to leave unset — and being
+        wrong here is a checkout that will not open.
+
+        Derived, never stored: it is a property of the deployment that issued
+        the order, and a column would be a second copy free to drift from the
+        setting the adapter actually uses. Blank for any gateway that has no
+        such split, so the field makes no claim where there is nothing to say.
+        """
+        from django.conf import settings
+
+        if obj.gateway_or_default() != "cashfree":
+            return ""
+        return str(settings.CASHFREE_ENVIRONMENT or "sandbox")
+
     class Meta:
         model = Booking
         fields = [
@@ -161,6 +191,7 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             # `private, no-store` and owner-scoped regardless.
             "payment_gateway",
             "payment_session_id",
+            "payment_environment",
             "created_at",
         ]
         read_only_fields = fields
@@ -216,6 +247,36 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         redemption = getattr(obj, "coupon_redemption", None)
         return redemption.coupon.code if redemption is not None else None
 
+    payment_environment = serializers.SerializerMethodField()
+
+    def get_payment_environment(self, obj) -> str:
+        """Which of the gateway's two environments minted this order's session.
+
+        ── WHY IT TRAVELS WITH THE BOOKING ──────────────────────────────────
+
+        Cashfree's browser SDK is constructed with a `mode`, and a mode that
+        disagrees with the environment that minted the `payment_session_id`
+        opens against the wrong API and is refused. The frontend used to take
+        it from a `sessionStorage` copy written during the reserve, falling
+        back to a build-time env var.
+
+        Both of those go missing in ordinary use: a reload clears nothing but a
+        private window does, and a booking ADOPTED from `?booking=` by the
+        hold guard never ran the reserve that wrote the copy. The fallback was
+        then a `NEXT_PUBLIC_` value that is easy to leave unset — and being
+        wrong here is a checkout that will not open.
+
+        Derived, never stored: it is a property of the deployment that issued
+        the order, and a column would be a second copy free to drift from the
+        setting the adapter actually uses. Blank for any gateway that has no
+        such split, so the field makes no claim where there is nothing to say.
+        """
+        from django.conf import settings
+
+        if obj.gateway_or_default() != "cashfree":
+            return ""
+        return str(settings.CASHFREE_ENVIRONMENT or "sandbox")
+
     class Meta:
         model = Booking
         fields = [
@@ -236,6 +297,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             # than depending on session storage the way `key_id` has to.
             "payment_gateway",
             "payment_session_id",
+            "payment_environment",
             "items",
             "tickets",
             "created_at",

@@ -806,7 +806,30 @@ class BookingService:
             self._bookings.save(booking)
             uow.publish(
                 BOOKING_CANCELLED,
-                {"booking_id": str(booking.id), "reason": "payment_order_failed"},
+                {
+                    "booking_id": str(booking.id),
+                    "reason": "payment_order_failed",
+                    # ── WHAT THE PROVIDER ACTUALLY SAID ──────────────────
+                    #
+                    # The customer sees "We could not hold your tickets", which
+                    # names no provider and carries no reference — correct for
+                    # them, and useless for diagnosing it. The real reason was
+                    # reachable only by getting a shell on the box and reading
+                    # `docker compose logs`, which is a long way to travel to
+                    # learn that a payment key was rejected.
+                    #
+                    # The outbox IS the admin activity feed, so putting it here
+                    # makes the cause visible in `/admin/activity` to staff,
+                    # which is where somebody debugging a dead checkout already
+                    # is. Truncated because a provider can return an arbitrarily
+                    # long body, and this is one column in a feed.
+                    #
+                    # Safe to record: it is the PROVIDER's description of why it
+                    # refused (an auth failure, a rejected field), never a
+                    # credential — the adapter builds it from the response body,
+                    # and nothing in that body is a secret of ours.
+                    "provider_reason": str(reason)[:300],
+                },
                 aggregate_id=str(booking.id),
             )
         logger.error(

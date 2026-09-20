@@ -159,10 +159,36 @@ const nextConfig = {
               // Flash/Java embeds. Nothing here uses them; leaving the door
               // open costs nothing to close.
               "object-src 'none'",
-              // Razorpay is listed because Checkout hands control back by
-              // form POST on some flows. Omitting it would break payment for
-              // exactly the visitors this platform must not fail.
-              "form-action 'self' https://api.razorpay.com https://checkout.razorpay.com",
+              // ── EVERY PAYMENT PROVIDER MUST BE LISTED HERE ──────────────
+              //
+              // Razorpay was listed because Checkout hands control back by
+              // form POST on some flows. Cashfree does the same and was NOT
+              // listed, which broke its checkout completely and in a way that
+              // pointed nowhere near CSP:
+              //
+              //   cashfree.js — `createForm` builds a <form> in THIS document
+              //   with `action` = a Cashfree URL and `target` = its modal
+              //   iframe, then submits it. `form-action` blocks that submit.
+              //   The SDK had already appended `#cashfree-modal-container`, and
+              //   it only removes that in `_closeIframeModal`, which never runs
+              //   because the iframe never loaded.
+              //
+              // The visible symptom was the whole app going dim and staying
+              // dim — including after navigating away, because the container
+              // is a direct child of <body> that React never owned. Nothing in
+              // it mentioned payments or CSP.
+              //
+              // A wildcard for Cashfree rather than an enumerated list: a
+              // gateway routes through several subdomains (sandbox, payments,
+              // api) and adds more over time, and a subdomain missed here is a
+              // dead checkout discovered by a customer. Enumerating hosts
+              // under a domain already trusted to take the money buys close to
+              // nothing. Razorpay stays explicit because those two hosts are
+              // known to be the whole of its flow.
+              //
+              // Adding a gateway to `PAYMENTS_ENABLED_GATEWAYS` WITHOUT adding
+              // it here produces exactly this bug again.
+              "form-action 'self' https://api.razorpay.com https://checkout.razorpay.com https://cashfree.com https://*.cashfree.com",
             ].join('; '),
           },
           // Browsers still honour this and it is not expressible in CSP.
